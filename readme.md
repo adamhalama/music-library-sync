@@ -2,6 +2,9 @@
 
 # update-downloads
 
+Point of this script is to have an easy and convinient way to always have a local library that is synced with my SounCloud and Spotify likes/playlists.
+Running the script will update the local library in an easy way.
+
 One Bash script that:
 1. Enters a directory,
 2. Runs the given downloader,
