@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Jan Adam Halama
+#
+# update-downloads
+#
+# A single script that:
+#   1) cds into each directory
+#   2) runs the specified command
+#   3) uses spotDL’s sync mode to only grab new tracks
+#   4) prints everything directly to the CLI (stdout/stderr)
+#
+# set -euo pipefail
+
+echo "===== Starting all downloads: $(date '+%Y-%m-%d %H:%M:%S') ====="
+
+# ─────────────────────────────────────────────────────────────
+# Helper: run a command inside a directory
+run_in_dir() {
+  local target_dir="$1"; shift
+  local cmd=( "$@" )
+
+  echo ""
+  echo "----"
+  echo "Entering directory: $target_dir"
+  cd "$target_dir" || { echo "ERROR: could not cd into $target_dir"; return 1; }
+
+  echo "Running: ${cmd[*]}"
+  echo ""
+  "${cmd[@]}"
+
+  cd - >/dev/null 2>&1
+  echo "----"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Hardcoded statefiles directory (next to your script)
+STATE_DIR="$HOME/dev/music-down/statefiles"
+mkdir -p "$STATE_DIR"
+
+# ─────────────────────────────────────────────────────────────
+# Shared spotDL options
+SPOTDL_OPTS=(
+  --threads 2                      # gentle parallelism
+  --bitrate 256k                   # desired quality
+  --archive archive.txt           # log successes & failures
+  # --add-unavailable                # mark missing tracks as done
+  --print-errors                   # summary at the end
+)
+
+# ─────────────────────────────────────────────────────────────
+# Helper: sync a Spotify playlist
+# $1 = download-directory
+# $2 = playlist-URL
+# $3 = absolute path to the .sync.spotdl file
+sync_playlist() {
+  local dir="$1"
+  local url="$2"
+  local state_file="$3"
+
+  if [[ -f "$state_file" ]]; then
+    run_in_dir "$dir" \
+      spotdl sync "$state_file" "${SPOTDL_OPTS[@]}"
+  else
+    run_in_dir "$dir" \
+      spotdl sync "$url" \
+        --save-file "$state_file" \
+        "${SPOTDL_OPTS[@]}"
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────
+# 1) SoundCloud “likes”
+run_in_dir "$HOME/Music/downloaded/sc-likes" \
+  scdl -l "https://soundcloud.com/jamadaam/likes" -f
+
+# ─────────────────────────────────────────────────────────────
+# 2) Spotify “Technicko” playlist
+sync_playlist \
+  "$HOME/Music/downloaded/spotify-technicko" \
+  "https://open.spotify.com/playlist/0vO3PgmFMIvAuuQrjKo1XG" \
+  "$STATE_DIR/technicko.sync.spotdl"
+
+# 3) Spotify “FunkyBounce” playlist
+sync_playlist \
+  "$HOME/Music/downloaded/spotify-funkybounce" \
+  "https://open.spotify.com/playlist/0rhzW83MTzundrEEsIbLgr" \
+  "$STATE_DIR/funkybounce.sync.spotdl"
+
+# 4) Spotify “Technochill” playlist
+sync_playlist \
+  "$HOME/Music/downloaded/spotify-technochill" \
+  "https://open.spotify.com/playlist/6OmLOgWjwddWVXYNc6Fu5s" \
+  "$STATE_DIR/technochill.sync.spotdl"
+
+echo ""
+echo "===== All downloads finished: $(date '+%Y-%m-%d %H:%M:%S') ====="

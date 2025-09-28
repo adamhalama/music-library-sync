@@ -1,0 +1,5 @@
+*.DS_Store
+statefiles/
+*.sync.spotdl
+archive.txt
+*.log
