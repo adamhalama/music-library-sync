@@ -41,7 +41,7 @@ mkdir -p "$STATE_DIR"
 # ─────────────────────────────────────────────────────────────
 # Shared spotDL options
 SPOTDL_OPTS=(
-  --threads 2                      # gentle parallelism
+  --threads 1                      # gentle parallelism
   --bitrate 256k                   # desired quality
   --archive archive.txt           # log successes & failures
   # --add-unavailable                # mark missing tracks as done
@@ -72,22 +72,29 @@ sync_playlist() {
 # ─────────────────────────────────────────────────────────────
 # 1) SoundCloud “likes”
 run_in_dir "$HOME/Music/downloaded/sc-likes" \
-  scdl -l "https://soundcloud.com/jamadaam/likes" -f
+  scdl -l "https://soundcloud.com/janxadam/likes" -f
 
 # ─────────────────────────────────────────────────────────────
 # 2) Spotify “Technicko” playlist
+sync_playlist \
+  "$HOME/Music/downloaded/spotify-groove" \
+  "https://open.spotify.com/playlist/3yp4tiwWn1r0FE7jtvWhbb?si=e1617c735daf4c2b" \
+  "$STATE_DIR/groovik.sync.spotdl"
+  
+# ─────────────────────────────────────────────────────────────
+# 3) Spotify “Technicko” playlist
 sync_playlist \
   "$HOME/Music/downloaded/spotify-technicko" \
   "https://open.spotify.com/playlist/0vO3PgmFMIvAuuQrjKo1XG" \
   "$STATE_DIR/technicko.sync.spotdl"
 
-# 3) Spotify “FunkyBounce” playlist
+# 4) Spotify “FunkyBounce” playlist
 sync_playlist \
   "$HOME/Music/downloaded/spotify-funkybounce" \
   "https://open.spotify.com/playlist/0rhzW83MTzundrEEsIbLgr" \
   "$STATE_DIR/funkybounce.sync.spotdl"
 
-# 4) Spotify “Technochill” playlist
+# 5) Spotify “Technochill” playlist
 sync_playlist \
   "$HOME/Music/downloaded/spotify-technochill" \
   "https://open.spotify.com/playlist/6OmLOgWjwddWVXYNc6Fu5s" \
