@@ -37,11 +37,29 @@ ln -sfn "$PWD/bin/update-downloads" "$HOME/bin/update-downloads"
 ```
 
 
-Configure
+## Configuration
 
-    Edit playlist URLs and download directories in the script.
+### Environment Variables
 
-    State files default to: ~/dev/music-down/statefiles/
+The script requires the following environment variable to be set:
+
+- **`SCDL_CLIENT_ID`** — Your SoundCloud client ID (required for `scdl`)
+
+You can obtain a SoundCloud client ID by:
+1. Opening SoundCloud in your browser
+2. Opening Developer Tools (F12) → Network tab
+3. Playing any track and looking for API requests containing `client_id`
+
+Set it in your shell profile (e.g., `~/.zshrc` or `~/.bashrc`):
+
+```bash
+export SCDL_CLIENT_ID="your_client_id_here"
+```
+
+### Other Settings
+
+- Edit playlist URLs and download directories in the script.
+- State files default to: `~/dev/music-down/statefiles/`
 
     .gitignore ideas for your clone:
 

@@ -71,9 +71,22 @@ sync_playlist() {
 }
 
 # ─────────────────────────────────────────────────────────────
-# 1) SoundCloud “likes”
+# 1) SoundCloud “likes” 
+# Requires SCDL_CLIENT_ID environment variable to be set
+if [[ -z "${SCDL_CLIENT_ID:-}" ]]; then
+  echo "ERROR: SCDL_CLIENT_ID environment variable is not set."
+  echo "Please set it to your SoundCloud client ID."
+  echo "Example: export SCDL_CLIENT_ID=your_client_id_here"
+  exit 1
+fi
+
+# SCDL v3
 run_in_dir "$HOME/Music/downloaded/sc-likes" \
-  scdl -l "https://soundcloud.com/janxadam/likes" -f
+  scdl -l "https://soundcloud.com/janxadam" -f --client-id "$SCDL_CLIENT_ID" --yt-dlp-args "--embed-thumbnail --embed-metadata --download-archive scdl-archive.txt --no-overwrites --break-on-existing"
+
+# SCDL v2
+# run_in_dir "$HOME/Music/downloaded/sc-likes" \
+  # scdl -l "https://soundcloud.com/janxadam/likes" -f
 
 # ─────────────────────────────────────────────────────────────
 # 2) Spotify “Groove” playlist

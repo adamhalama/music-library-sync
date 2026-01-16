@@ -3,3 +3,5 @@ statefiles/
 *.sync.spotdl
 archive.txt
 *.log
+
+.github
