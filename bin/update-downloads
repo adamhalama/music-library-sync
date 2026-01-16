@@ -43,20 +43,21 @@ mkdir -p "$STATE_DIR"
 SPOTDL_OPTS=(
   --threads 1                      # gentle parallelism
   --bitrate 256k                   # desired quality
-  --archive archive.txt           # log successes & failures
-  # --add-unavailable                # mark missing tracks as done
+  --archive archive.txt            # log successes & failures
+  # --add-unavailable              # mark missing tracks as done
   --print-errors                   # summary at the end
+  --headless                       # prevents browser popup if auth is needed
 )
 
 # ─────────────────────────────────────────────────────────────
 # Helper: sync a Spotify playlist
-# $1 = download-directory
-# $2 = playlist-URL
-# $3 = absolute path to the .sync.spotdl file
 sync_playlist() {
   local dir="$1"
   local url="$2"
   local state_file="$3"
+
+  # Sleep briefly between playlists to be polite to the API
+  sleep 2
 
   if [[ -f "$state_file" ]]; then
     run_in_dir "$dir" \
@@ -75,7 +76,7 @@ run_in_dir "$HOME/Music/downloaded/sc-likes" \
   scdl -l "https://soundcloud.com/janxadam/likes" -f
 
 # ─────────────────────────────────────────────────────────────
-# 2) Spotify “Technicko” playlist
+# 2) Spotify “Groove” playlist
 sync_playlist \
   "$HOME/Music/downloaded/spotify-groove" \
   "https://open.spotify.com/playlist/3yp4tiwWn1r0FE7jtvWhbb?si=e1617c735daf4c2b" \
