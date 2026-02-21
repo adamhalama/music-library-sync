@@ -55,3 +55,30 @@ func TestCompactLogWriterFlushesWarningLineWithoutTrailingNewline(t *testing.T) 
 		t.Fatalf("expected buffered line to flush, got: %s", buf.String())
 	}
 }
+
+func TestCompactLogWriterInteractiveRendersProgressBar(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+
+	payload := strings.Join([]string{
+		"[download] Downloading item 1 of 1",
+		"[download] Destination: /tmp/Track One.m4a",
+		"[download]  25.0% of ~   2.51MiB at    6.88KiB/s ETA Unknown (frag 1/26)",
+		"[download] 100% of    5.00MiB in 00:00:02 at 1.98MiB/s",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "25.0%") || !strings.Contains(out, "[####") {
+		t.Fatalf("expected progress bar and percent in output, got: %s", out)
+	}
+	if !strings.Contains(out, "[done] Track One") {
+		t.Fatalf("expected final done line, got: %s", out)
+	}
+}

@@ -12,6 +12,7 @@ import (
 )
 
 var noisyDownloadProgressPattern = regexp.MustCompile(`^\[download\]\s+[0-9]+(?:\.[0-9]+)?%.*\(frag\s+[0-9]+/[0-9]+\)$`)
+var fragmentProgressPattern = regexp.MustCompile(`^\[download\]\s+([0-9]+(?:\.[0-9]+)?)%.*\(frag\s+[0-9]+/[0-9]+\)$`)
 var downloadItemPattern = regexp.MustCompile(`^\[download\] Downloading item ([0-9]+) of ([0-9]+)$`)
 var downloadDestinationPattern = regexp.MustCompile(`^\[download\] Destination: (.+)$`)
 var alreadyDownloadedPattern = regexp.MustCompile(`^\[download\] (.+) has already been downloaded$`)
@@ -37,6 +38,8 @@ type trackState struct {
 	Name               string
 	HasThumbnail       bool
 	HasMetadata        bool
+	ProgressKnown      bool
+	ProgressPercent    float64
 	CompletionObserved bool
 	AlreadyPresent     bool
 }
@@ -111,10 +114,6 @@ func (w *CompactLogWriter) flushLineLocked() error {
 }
 
 func (w *CompactLogWriter) handleLineLocked(line string) error {
-	if noisyDownloadProgressPattern.MatchString(line) {
-		return nil
-	}
-
 	if match := downloadItemPattern.FindStringSubmatch(line); len(match) == 3 {
 		if err := w.finalizeTrackLocked(); err != nil {
 			return err
@@ -131,6 +130,8 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		w.track.Name = trackNameFromPath(match[1])
 		w.track.CompletionObserved = false
 		w.track.AlreadyPresent = false
+		w.track.ProgressKnown = false
+		w.track.ProgressPercent = 0
 		return w.renderStatusLocked("downloading")
 	}
 
@@ -139,8 +140,24 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 			w.track.Name = trackNameFromPath(match[1])
 		}
 		w.track.AlreadyPresent = true
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = 100
 		w.track.CompletionObserved = true
 		return w.renderStatusLocked("already present")
+	}
+
+	if match := fragmentProgressPattern.FindStringSubmatch(line); len(match) == 2 {
+		percent, _ := strconv.ParseFloat(match[1], 64)
+		clamped := clampPercent(percent)
+		if w.track.ProgressKnown && clamped < w.track.ProgressPercent {
+			clamped = w.track.ProgressPercent
+		}
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = clamped
+		return w.renderStatusLocked("downloading")
+	}
+	if noisyDownloadProgressPattern.MatchString(line) {
+		return nil
 	}
 
 	if strings.HasPrefix(line, "[info] Writing video thumbnail") {
@@ -156,6 +173,8 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 	}
 
 	if strings.HasPrefix(line, "[download] 100% of ") {
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = 100
 		w.track.CompletionObserved = true
 		return w.renderStatusLocked("finalizing")
 	}
@@ -196,6 +215,9 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 	}
 	if len(bits) > 0 {
 		status = status + " (" + strings.Join(bits, ", ") + ")"
+	}
+	if w.track.ProgressKnown && !w.track.AlreadyPresent {
+		status += " " + renderProgress(w.track.ProgressPercent)
 	}
 
 	if status == w.activeLine {
@@ -289,4 +311,28 @@ func trackNameFromPath(pathLike string) string {
 		base = strings.TrimSuffix(base, ext)
 	}
 	return base
+}
+
+func renderProgress(percent float64) string {
+	clamped := clampPercent(percent)
+	const width = 16
+	filled := int((clamped / 100) * float64(width))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	bar := strings.Repeat("#", filled) + strings.Repeat("-", width-filled)
+	return fmt.Sprintf("[%s] %5.1f%%", bar, clamped)
+}
+
+func clampPercent(percent float64) float64 {
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
 }
