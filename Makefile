@@ -3,6 +3,7 @@
 GO ?= go
 PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /usr/local)
 BINDIR := $(PREFIX)/bin
+OS := $(shell uname -s)
 
 NAME := udl
 CMD := ./cmd/udl
@@ -26,6 +27,9 @@ install: build
 	@mkdir -p "$(BINDIR)"
 	@cp "$(OUT)" "$(BINDIR)/$(NAME)"
 	@chmod +x "$(BINDIR)/$(NAME)"
+ifeq ($(OS),Darwin)
+	@codesign --force --sign - "$(BINDIR)/$(NAME)" >/dev/null
+endif
 	@echo "Installed -> $(BINDIR)/$(NAME)"
 
 uninstall:
