@@ -17,6 +17,10 @@ type SubprocessRunner struct {
 	Stderr io.Writer
 }
 
+type flushWriter interface {
+	Flush() error
+}
+
 func NewSubprocessRunner(stdout, stderr io.Writer) *SubprocessRunner {
 	return &SubprocessRunner{Stdout: stdout, Stderr: stderr}
 }
@@ -40,6 +44,8 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	cmd.Stderr = r.Stderr
 
 	err := cmd.Run()
+	flushWriterIfSupported(r.Stdout)
+	flushWriterIfSupported(r.Stderr)
 	result := ExecResult{Duration: time.Since(start), Err: err}
 	if err == nil {
 		result.ExitCode = 0
@@ -68,4 +74,10 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 
 	result.ExitCode = 1
 	return result
+}
+
+func flushWriterIfSupported(w io.Writer) {
+	if f, ok := w.(flushWriter); ok {
+		_ = f.Flush()
+	}
 }

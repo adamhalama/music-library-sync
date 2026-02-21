@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/signal"
 	"time"
 
@@ -43,6 +44,13 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			runnerStderr := app.IO.ErrOut
 			if app.Opts.JSON {
 				runnerStdout = app.IO.ErrOut
+			}
+			if app.Opts.Quiet {
+				runnerStdout = io.Discard
+				runnerStderr = io.Discard
+			} else if !app.Opts.Verbose {
+				runnerStdout = output.NewCompactLogWriter(runnerStdout)
+				runnerStderr = output.NewCompactLogWriter(runnerStderr)
 			}
 			runner := engine.NewSubprocessRunner(runnerStdout, runnerStderr)
 
