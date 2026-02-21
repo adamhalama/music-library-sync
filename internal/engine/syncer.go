@@ -382,7 +382,7 @@ func ensureSourcePaths(cfg config.Config, source config.Source) error {
 func artifactSuffixesForAdapter(adapterKind string) []string {
 	suffixes := []string{".part", ".ytdl"}
 	if adapterKind == "scdl" {
-		suffixes = append(suffixes, ".scdl.lock")
+		suffixes = append(suffixes, ".scdl.lock", ".jpg", ".jpeg", ".png", ".webp")
 	}
 	return suffixes
 }

@@ -42,6 +42,7 @@ func (interruptedRunnerWithArtifacts) Run(ctx context.Context, spec ExecSpec) Ex
 	_ = os.WriteFile(filepath.Join(spec.Dir, "track.m4a.part"), []byte("partial"), 0o644)
 	_ = os.WriteFile(filepath.Join(spec.Dir, "track.m4a.ytdl"), []byte("state"), 0o644)
 	_ = os.WriteFile(filepath.Join(spec.Dir, "123456.scdl.lock"), []byte("lock"), 0o644)
+	_ = os.WriteFile(filepath.Join(spec.Dir, "track.jpg"), []byte("thumb"), 0o644)
 	return ExecResult{ExitCode: 130, Interrupted: true}
 }
 
@@ -152,6 +153,9 @@ func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(targetDir, "123456.scdl.lock")); !os.IsNotExist(statErr) {
 		t.Fatalf("expected .scdl.lock to be removed, stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(targetDir, "track.jpg")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected track.jpg to be removed, stat err=%v", statErr)
 	}
 	if _, statErr := os.Stat(preexistingPart); statErr != nil {
 		t.Fatalf("expected preexisting artifact to be preserved, stat err=%v", statErr)
