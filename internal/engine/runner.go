@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -114,10 +113,8 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	if r.Stderr != nil {
 		stderrSink = io.MultiWriter(r.Stderr, stderrTail)
 	}
-	if shouldDetectSpotifyRateLimit(spec.Bin) {
-		stdoutSink = newLineObserverWriter(stdoutSink, abortForRateLimit)
-		stderrSink = newLineObserverWriter(stderrSink, abortForRateLimit)
-	}
+	stdoutSink = newLineObserverWriter(stdoutSink, abortForRateLimit)
+	stderrSink = newLineObserverWriter(stderrSink, abortForRateLimit)
 	cmd.Stdout = stdoutSink
 	cmd.Stderr = stderrSink
 
@@ -189,7 +186,12 @@ func (w *lineObserverWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	n, err := w.dst.Write(p)
-	w.consumeLines(p)
+	if n > len(p) {
+		n = len(p)
+	}
+	if n > 0 {
+		w.consumeLines(p[:n])
+	}
 	return n, err
 }
 
@@ -212,11 +214,6 @@ func (w *lineObserverWriter) consumeLines(p []byte) {
 			w.buf = append(w.buf, b)
 		}
 	}
-}
-
-func shouldDetectSpotifyRateLimit(bin string) bool {
-	base := strings.ToLower(filepath.Base(strings.TrimSpace(bin)))
-	return base == "spotdl"
 }
 
 func parseSpotifyRateLimitRetryAfterSeconds(line string) (int, bool) {
