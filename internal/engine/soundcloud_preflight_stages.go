@@ -197,11 +197,16 @@ func planSoundCloudPreflightStage(input soundCloudPlanStageInput) soundCloudPlan
 	}
 }
 
-func needsSoundCloudLocalIndex(remoteTracks []soundCloudRemoteTrack, state soundCloudSyncState, archiveKnownIDs idSet) bool {
+func needsSoundCloudLocalIndex(remoteTracks []soundCloudRemoteTrack, state soundCloudSyncState, archiveKnownIDs idSet, targetDir string) bool {
 	for _, track := range remoteTracks {
-		_, knownFromState := state.ByID[track.ID]
+		entry, knownFromState := state.ByID[track.ID]
 		_, knownFromArchive := archiveKnownIDs[track.ID]
 		if knownFromArchive && !knownFromState {
+			return true
+		}
+		// Preserve original behavior: when a state entry no longer points to an
+		// existing file, we need the title index fallback to detect local matches.
+		if knownFromState && !stateEntryHasLocalFile(entry.FilePath, targetDir) {
 			return true
 		}
 	}

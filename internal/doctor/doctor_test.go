@@ -120,6 +120,51 @@ func TestDoctorRequiresYTDLPForSoundCloud(t *testing.T) {
 	}
 }
 
+func TestDoctorDoesNotRequireYTDLPWhenNoSourcesConfigured(t *testing.T) {
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              "/tmp/state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{},
+	}
+
+	checker := &Checker{
+		LookPath: func(name string) (string, error) {
+			if name == "yt-dlp" {
+				return "", fmt.Errorf("not found")
+			}
+			return "/usr/bin/" + name, nil
+		},
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			switch {
+			case strings.Contains(binary, "spotdl"):
+				return "spotdl 4.5.0", nil
+			case strings.Contains(binary, "scdl"):
+				return "scdl 3.0.3", nil
+			default:
+				return "0.0.0", nil
+			}
+		},
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+	}
+
+	report := checker.Check(context.Background(), cfg)
+	if report.HasErrors() {
+		t.Fatalf("did not expect missing yt-dlp to fail doctor with no sources, got %+v", report.Checks)
+	}
+	for _, check := range report.Checks {
+		if strings.Contains(strings.ToLower(check.Message), "yt-dlp") {
+			t.Fatalf("did not expect yt-dlp check when no sources are configured, got %+v", report.Checks)
+		}
+	}
+}
+
 func TestDoctorSoundCloudDependencyMatrixCompatible(t *testing.T) {
 	checker := &Checker{
 		LookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },

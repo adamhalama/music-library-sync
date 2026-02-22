@@ -413,22 +413,12 @@ func requiredBinaries(cfg config.Config, matrix map[string]dependencyMatrixRule)
 		if rule := matrixRulePointer(matrix, "scdl"); rule != nil && strings.TrimSpace(rule.MinVersion) != "" {
 			scdlMin = rule.MinVersion
 		}
-		ytdlpMin := "0.0.0"
-		if rule := matrixRulePointer(matrix, "yt-dlp"); rule != nil && strings.TrimSpace(rule.MinVersion) != "" {
-			ytdlpMin = rule.MinVersion
-		}
 		seen["spotdl"] = dependency{Key: "spotdl", Binary: resolveSpotDLBinaryForDoctor(), MinVersion: "4.0.0"}
 		seen["scdl"] = dependency{
 			Key:        "scdl",
 			Binary:     "scdl",
 			MinVersion: scdlMin,
 			Matrix:     matrixRulePointer(matrix, "scdl"),
-		}
-		seen["yt-dlp"] = dependency{
-			Key:        "yt-dlp",
-			Binary:     "yt-dlp",
-			MinVersion: ytdlpMin,
-			Matrix:     matrixRulePointer(matrix, "yt-dlp"),
 		}
 	}
 

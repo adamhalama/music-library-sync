@@ -716,7 +716,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	archiveKnownIDs := archiveStage.KnownIDs
 
 	cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
-	needsLocalIndex := needsSoundCloudLocalIndex(tracks, state, archiveKnownIDs)
+	needsLocalIndex := needsSoundCloudLocalIndex(tracks, state, archiveKnownIDs, targetDir)
 	localIndexStage, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
 		SourceID:  source.ID,
 		TargetDir: targetDir,

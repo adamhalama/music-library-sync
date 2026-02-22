@@ -279,24 +279,40 @@ func TestWriteFilteredArchiveFileDropsMissingIDs(t *testing.T) {
 }
 
 func TestNeedsSoundCloudLocalIndex(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	statePath := filepath.Join(targetDir, "one.m4a")
+	if err := os.WriteFile(statePath, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
 	remote := []soundCloudRemoteTrack{
 		{ID: "111"},
 		{ID: "222"},
 	}
 	state := soundCloudSyncState{
 		ByID: map[string]soundCloudSyncEntry{
-			"111": {ID: "111", FilePath: "/tmp/one.m4a"},
+			"111": {ID: "111", FilePath: statePath},
 		},
 	}
 	archiveKnown := idSet{
 		"111": {},
 	}
-	if needsSoundCloudLocalIndex(remote, state, archiveKnown) {
+	if needsSoundCloudLocalIndex(remote, state, archiveKnown, targetDir) {
 		t.Fatalf("did not expect local index scan when no archive-only known entries exist")
 	}
 
+	state.ByID["111"] = soundCloudSyncEntry{ID: "111", FilePath: filepath.Join(targetDir, "missing.m4a")}
+	if !needsSoundCloudLocalIndex(remote, state, archiveKnown, targetDir) {
+		t.Fatalf("expected local index scan when state file fallback is needed")
+	}
+
+	state.ByID["111"] = soundCloudSyncEntry{ID: "111", FilePath: statePath}
 	archiveKnown["222"] = struct{}{}
-	if !needsSoundCloudLocalIndex(remote, state, archiveKnown) {
+	if !needsSoundCloudLocalIndex(remote, state, archiveKnown, targetDir) {
 		t.Fatalf("expected local index scan when archive-only known entries exist")
 	}
 }

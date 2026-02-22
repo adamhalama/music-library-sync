@@ -277,7 +277,7 @@ func buildSoundCloudPreflight(
 	mode SoundCloudMode,
 ) (SoundCloudPreflight, map[string]struct{}, map[string]struct{}, map[string]struct{}) {
 	localIndex := map[string]int{}
-	if needsSoundCloudLocalIndex(remoteTracks, state, archiveKnownIDs) {
+	if needsSoundCloudLocalIndex(remoteTracks, state, archiveKnownIDs, targetDir) {
 		localIndex = scanLocalMediaTitleIndex(targetDir)
 	}
 
