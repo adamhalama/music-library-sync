@@ -113,6 +113,31 @@ func TestCompactLogWriterUsesPreflightPlannedCountForGlobalProgress(t *testing.T
 	}
 }
 
+func TestCompactLogWriterKeepsGlobalBarVisibleBetweenTracks(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+
+	payload := strings.Join([]string{
+		"[soundcloud-clean-test] preflight: remote=1041 known=12 gaps=1029 known_gaps=3 first_existing=4 planned=3 mode=break",
+		"[download] Downloading item 1 of 4",
+		"[download] Destination: /tmp/PICHI - BO FUNK [FREE DL].m4a",
+		"[download] 100% of    5.00MiB in 00:00:02 at 1.98MiB/s",
+		"[download] Downloading item 2 of 4",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "waiting for next track (1/3 done)") {
+		t.Fatalf("expected idle live status between tracks, got: %s", out)
+	}
+}
+
 func TestCompactLogWriterSuppressesBreakOnExistingTraceback(t *testing.T) {
 	buf := &bytes.Buffer{}
 	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})

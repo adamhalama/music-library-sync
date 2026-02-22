@@ -35,6 +35,7 @@ type CompactLogWriter struct {
 	itemIndex    int
 	itemTotal    int
 	plannedTotal int
+	completed    int
 	track        trackState
 	barWidth     int
 
@@ -126,6 +127,7 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		w.itemIndex = 0
 		w.itemTotal = 0
 		w.plannedTotal = 0
+		w.completed = 0
 		w.track = trackState{}
 	}
 
@@ -137,7 +139,11 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		w.plannedTotal = planned
 		w.itemIndex = 0
 		w.itemTotal = 0
+		w.completed = 0
 		w.track = trackState{}
+		if planned > 0 {
+			return w.renderIdleStatusLocked()
+		}
 	}
 
 	if match := downloadItemPattern.FindStringSubmatch(line); len(match) == 3 {
@@ -242,7 +248,8 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 		return nil
 	}
 
-	index, total := w.currentTrackCounters()
+	total := w.effectiveItemTotal()
+	index := w.currentTrackIndex(total)
 	trackLine := fmt.Sprintf("[track] %s", w.track.Name)
 	if total > 0 {
 		trackLine = fmt.Sprintf("[track %d/%d] %s", index, total, w.track.Name)
@@ -277,6 +284,32 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 	return w.renderLiveLinesLocked(trackLine, globalLine)
 }
 
+func (w *CompactLogWriter) renderIdleStatusLocked() error {
+	if !w.interactive {
+		return nil
+	}
+	total := w.effectiveItemTotal()
+	if total <= 0 {
+		return nil
+	}
+	done := w.completed
+	if done < 0 {
+		done = 0
+	}
+	if done > total {
+		done = total
+	}
+	trackLine := fmt.Sprintf("[track] waiting for next track (%d/%d done)", done, total)
+	if done >= total {
+		trackLine = fmt.Sprintf("[track] all planned tracks complete (%d/%d)", done, total)
+	}
+	globalLine := fmt.Sprintf("[overall] %s (%d/%d)", renderProgressWithWidth(w.globalProgressPercent(), w.globalBarWidth()), done, total)
+	if trackLine == w.activeTrack && globalLine == w.activeTotal {
+		return nil
+	}
+	return w.renderLiveLinesLocked(trackLine, globalLine)
+}
+
 func (w *CompactLogWriter) finalizeTrackLocked() error {
 	if !w.track.CompletionObserved || strings.TrimSpace(w.track.Name) == "" {
 		w.track = trackState{}
@@ -303,8 +336,14 @@ func (w *CompactLogWriter) finalizeTrackLocked() error {
 		line += " (" + strings.Join(flags, ", ") + ")"
 	}
 
+	if total := w.effectiveItemTotal(); total > 0 && w.completed < total {
+		w.completed++
+	}
 	w.track = trackState{}
-	return w.printPersistentLocked(line)
+	if err := w.printPersistentLocked(line); err != nil {
+		return err
+	}
+	return w.renderIdleStatusLocked()
 }
 
 func (w *CompactLogWriter) printPersistentLocked(line string) error {
@@ -426,7 +465,7 @@ func (w *CompactLogWriter) globalProgressPercent() float64 {
 	if total <= 0 {
 		return 0
 	}
-	completedItems := w.itemIndex - 1
+	completedItems := w.completed
 	if completedItems < 0 {
 		completedItems = 0
 	}
@@ -454,19 +493,18 @@ func (w *CompactLogWriter) effectiveItemTotal() int {
 	return w.itemTotal
 }
 
-func (w *CompactLogWriter) currentTrackCounters() (int, int) {
-	total := w.effectiveItemTotal()
+func (w *CompactLogWriter) currentTrackIndex(total int) int {
 	if total <= 0 {
-		return 0, 0
+		return 0
 	}
-	index := w.itemIndex
+	index := w.completed + 1
 	if index < 1 {
 		index = 1
 	}
 	if index > total {
 		index = total
 	}
-	return index, total
+	return index
 }
 
 func (w *CompactLogWriter) globalBarWidth() int {
