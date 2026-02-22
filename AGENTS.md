@@ -7,7 +7,9 @@
 
 
 ## Commit & Pull Request Guidelines
-- Commit messages follow the existing short, imperative style; optional scoped prefixes (`menu:`, `settings:`, `tests:`, `fix:`). Keep them concise; present tense; no trailing period.
+- Use short, imperative prefixes for both commit messages and PR titles: `feat:`, `fix:`, `test:`, `docs:`, `chore:`, `refactor:`.
+- Keep commit/PR titles concise, present tense, and without a trailing period. Example: `test: cover scdl binary selection fallback`.
+- PRs should include a brief summary, linked issue/ticket (if any), terminal output snippet or short clip for CLI UX/output changes, and the exact validation commands run (for example: `go test ./...`, `go vet ./...`, `go test -race ./...`, plus any manual `udl ...` checks).
 
 
 ## Security & Configuration Tips
@@ -20,4 +22,3 @@ Do not quietly change security-sensitive behavior. Call it out.
 ## A Note To The Agent
 
 We are building this together. When you learn something non-obvious, add it here so future changes go faster.
-
