@@ -85,3 +85,41 @@ func TestLoadExplicitPathRequired(t *testing.T) {
 		t.Fatalf("expected error for missing explicit config path")
 	}
 }
+
+func TestLoadNormalizesSoundCloudDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	payload := `version: 1
+defaults:
+  state_dir: "` + filepath.Join(tmp, "state") + `"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "soundcloud-likes"
+    type: "soundcloud"
+    enabled: true
+    target_dir: "/tmp/music"
+    url: "https://soundcloud.com/user"
+    adapter:
+      kind: "scdl"
+`
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(LoadOptions{ExplicitPath: configPath})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Sources[0].StateFile != "soundcloud-likes.sync.scdl" {
+		t.Fatalf("expected default soundcloud state_file, got %q", cfg.Sources[0].StateFile)
+	}
+	if cfg.Sources[0].Sync.BreakOnExisting == nil || !*cfg.Sources[0].Sync.BreakOnExisting {
+		t.Fatalf("expected break_on_existing default true")
+	}
+	if cfg.Sources[0].Sync.AskOnExisting == nil || *cfg.Sources[0].Sync.AskOnExisting {
+		t.Fatalf("expected ask_on_existing default false")
+	}
+}

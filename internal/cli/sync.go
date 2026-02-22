@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/signal"
 	"time"
 
@@ -20,6 +21,9 @@ import (
 func newSyncCommand(app *AppContext) *cobra.Command {
 	var sourceIDs []string
 	var timeout time.Duration
+	var askOnExisting bool
+	var scanGaps bool
+	var noPreflight bool
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -64,9 +68,17 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			defer stop()
 
 			result, runErr := syncer.Sync(ctx, cfg, engine.SyncOptions{
-				SourceIDs:       sourceIDs,
-				DryRun:          app.Opts.DryRun,
-				TimeoutOverride: timeout,
+				SourceIDs:        sourceIDs,
+				DryRun:           app.Opts.DryRun,
+				TimeoutOverride:  timeout,
+				AskOnExisting:    askOnExisting,
+				AskOnExistingSet: cmd.Flags().Changed("ask-on-existing"),
+				ScanGaps:         scanGaps,
+				NoPreflight:      noPreflight,
+				AllowPrompt:      !app.Opts.NoInput && isTTY(os.Stdin),
+				PromptOnExisting: func(sourceID string, preflight engine.SoundCloudPreflight) (bool, error) {
+					return promptYesNo(app, fmt.Sprintf("[%s] Existing track found at position %d of %d. Continue scanning for gaps?", sourceID, preflight.FirstExistingIndex, preflight.RemoteTotal))
+				},
 			})
 			if runErr != nil {
 				var selectionErr *engine.SelectionError
@@ -92,5 +104,8 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 
 	cmd.Flags().StringArrayVar(&sourceIDs, "source", nil, "Run only selected source id (repeatable)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Override per-source command timeout (e.g. 10m, 1h)")
+	cmd.Flags().BoolVar(&askOnExisting, "ask-on-existing", false, "Prompt once when first existing track is found and optionally continue with gap scan")
+	cmd.Flags().BoolVar(&scanGaps, "scan-gaps", false, "Continue full remote scan to fill archive and local-file gaps")
+	cmd.Flags().BoolVar(&noPreflight, "no-preflight", false, "Skip SoundCloud remote preflight diff stage")
 	return cmd
 }

@@ -82,3 +82,30 @@ func TestCompactLogWriterInteractiveRendersProgressBar(t *testing.T) {
 		t.Fatalf("expected final done line, got: %s", out)
 	}
 }
+
+func TestCompactLogWriterSuppressesBreakOnExistingTraceback(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+
+	payload := strings.Join([]string{
+		"[download] 2210531636: PICHI - BO FUNK [FREE DL] has already been recorded in the archive",
+		"Traceback (most recent call last):",
+		"File \"/opt/homebrew/bin/scdl\", line 7, in <module>",
+		"yt_dlp.utils.ExistingVideoReached: Encountered a video that is already in the archive, stopping due to --break-on-existing",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[stop] reached existing track in archive (break_on_existing)") {
+		t.Fatalf("expected compact stop message, got: %s", out)
+	}
+	if strings.Contains(out, "Traceback") || strings.Contains(out, "ExistingVideoReached") {
+		t.Fatalf("expected traceback to be suppressed, got: %s", out)
+	}
+}

@@ -38,7 +38,13 @@ type fileSource struct {
 	TargetDir string          `yaml:"target_dir"`
 	URL       string          `yaml:"url"`
 	StateFile string          `yaml:"state_file"`
+	Sync      fileSyncPolicy  `yaml:"sync"`
 	Adapter   fileAdapterSpec `yaml:"adapter"`
+}
+
+type fileSyncPolicy struct {
+	BreakOnExisting *bool `yaml:"break_on_existing"`
+	AskOnExisting   *bool `yaml:"ask_on_existing"`
 }
 
 type fileAdapterSpec struct {
@@ -141,6 +147,10 @@ func mergeFile(cfg *Config, path string, required bool) error {
 				TargetDir: strings.TrimSpace(fs.TargetDir),
 				URL:       strings.TrimSpace(fs.URL),
 				StateFile: strings.TrimSpace(fs.StateFile),
+				Sync: SyncPolicy{
+					BreakOnExisting: copyBoolPtr(fs.Sync.BreakOnExisting),
+					AskOnExisting:   copyBoolPtr(fs.Sync.AskOnExisting),
+				},
 				Adapter: AdapterSpec{
 					Kind:       strings.TrimSpace(fs.Adapter.Kind),
 					ExtraArgs:  append([]string{}, fs.Adapter.ExtraArgs...),
@@ -193,6 +203,17 @@ func normalize(cfg *Config) {
 		if cfg.Sources[i].Type == SourceTypeSpotify && strings.TrimSpace(cfg.Sources[i].StateFile) == "" && cfg.Sources[i].ID != "" {
 			cfg.Sources[i].StateFile = cfg.Sources[i].ID + ".sync.spotdl"
 		}
+		if cfg.Sources[i].Type == SourceTypeSoundCloud && strings.TrimSpace(cfg.Sources[i].StateFile) == "" && cfg.Sources[i].ID != "" {
+			cfg.Sources[i].StateFile = cfg.Sources[i].ID + ".sync.scdl"
+		}
+		if cfg.Sources[i].Type == SourceTypeSoundCloud {
+			if cfg.Sources[i].Sync.BreakOnExisting == nil {
+				cfg.Sources[i].Sync.BreakOnExisting = boolPtr(true)
+			}
+			if cfg.Sources[i].Sync.AskOnExisting == nil {
+				cfg.Sources[i].Sync.AskOnExisting = boolPtr(false)
+			}
+		}
 	}
 }
 
@@ -224,4 +245,16 @@ func EnsureConfigDir(path string) error {
 		return fmt.Errorf("create config directory %s: %w", dir, err)
 	}
 	return nil
+}
+
+func copyBoolPtr(in *bool) *bool {
+	if in == nil {
+		return nil
+	}
+	value := *in
+	return &value
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

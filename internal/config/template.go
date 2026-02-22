@@ -16,6 +16,10 @@ sources:
     enabled: true
     target_dir: "~/Music/downloaded/sc-likes"
     url: "https://soundcloud.com/your-user"
+    state_file: "soundcloud-likes.sync.scdl"
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
     adapter:
       kind: "scdl"
       extra_args: ["-f"]

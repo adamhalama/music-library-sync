@@ -19,6 +19,8 @@ type ExecResult struct {
 	Duration    time.Duration
 	Interrupted bool
 	TimedOut    bool
+	StdoutTail  string
+	StderrTail  string
 	Err         error
 }
 
@@ -32,9 +34,15 @@ type Adapter interface {
 }
 
 type SyncOptions struct {
-	SourceIDs       []string
-	DryRun          bool
-	TimeoutOverride time.Duration
+	SourceIDs        []string
+	DryRun           bool
+	TimeoutOverride  time.Duration
+	AskOnExisting    bool
+	AskOnExistingSet bool
+	ScanGaps         bool
+	NoPreflight      bool
+	AllowPrompt      bool
+	PromptOnExisting func(sourceID string, preflight SoundCloudPreflight) (bool, error)
 }
 
 type SyncResult struct {
@@ -45,4 +53,21 @@ type SyncResult struct {
 	Skipped            int
 	DependencyFailures int
 	Interrupted        bool
+}
+
+type SoundCloudMode string
+
+const (
+	SoundCloudModeBreak    SoundCloudMode = "break"
+	SoundCloudModeScanGaps SoundCloudMode = "scan_gaps"
+)
+
+type SoundCloudPreflight struct {
+	RemoteTotal          int
+	KnownCount           int
+	ArchiveGapCount      int
+	KnownGapCount        int
+	FirstExistingIndex   int
+	PlannedDownloadCount int
+	Mode                 SoundCloudMode
 }

@@ -104,8 +104,12 @@ func TestSyncerDryRunDeterministicJSON(t *testing.T) {
 func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
 	}
 
 	preexistingPart := filepath.Join(targetDir, "preexisting.part")
@@ -116,7 +120,7 @@ func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 	cfg := config.Config{
 		Version: 1,
 		Defaults: config.Defaults{
-			StateDir:              filepath.Join(tmp, "state"),
+			StateDir:              stateDir,
 			ArchiveFile:           "archive.txt",
 			Threads:               1,
 			ContinueOnError:       true,
@@ -129,6 +133,7 @@ func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 				Enabled:   true,
 				TargetDir: targetDir,
 				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-source.sync.scdl",
 				Adapter:   config.AdapterSpec{Kind: "scdl"},
 			},
 		},
@@ -140,7 +145,7 @@ func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 		interruptedRunnerWithArtifacts{},
 		output.NewHumanEmitter(buf, buf, false, true),
 	)
-	_, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	_, err := syncer.Sync(context.Background(), cfg, SyncOptions{NoPreflight: true})
 	if err == nil || err != ErrInterrupted {
 		t.Fatalf("expected ErrInterrupted, got %v", err)
 	}
@@ -162,5 +167,70 @@ func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "cleaned") {
 		t.Fatalf("expected cleanup message in output, got %s", buf.String())
+	}
+}
+
+func TestResolveAskOnExisting_UsesConfigWhenFlagUnset(t *testing.T) {
+	source := config.Source{
+		Sync: config.SyncPolicy{
+			AskOnExisting: boolPtrSyncer(true),
+		},
+	}
+	got := resolveAskOnExisting(source, SyncOptions{})
+	if !got {
+		t.Fatalf("expected config ask_on_existing to be respected when flag is unset")
+	}
+}
+
+func TestResolveAskOnExisting_FlagOverridesConfig(t *testing.T) {
+	source := config.Source{
+		Sync: config.SyncPolicy{
+			AskOnExisting: boolPtrSyncer(true),
+		},
+	}
+	got := resolveAskOnExisting(source, SyncOptions{
+		AskOnExisting:    false,
+		AskOnExistingSet: true,
+	})
+	if got {
+		t.Fatalf("expected explicit --ask-on-existing=false to override config true")
+	}
+}
+
+func boolPtrSyncer(v bool) *bool {
+	return &v
+}
+
+func TestIsGracefulBreakOnExistingStopRecognizesKnownMarker(t *testing.T) {
+	source := config.Source{
+		Type: config.SourceTypeSoundCloud,
+		Sync: config.SyncPolicy{
+			BreakOnExisting: boolPtrSyncer(true),
+		},
+	}
+	execResult := ExecResult{
+		ExitCode:   1,
+		StderrTail: "yt_dlp.utils.ExistingVideoReached: Encountered a video that is already in the archive, stopping due to --break-on-existing",
+	}
+
+	if !isGracefulBreakOnExistingStop(source, nil, execResult) {
+		t.Fatalf("expected graceful break-on-existing detection")
+	}
+}
+
+func TestIsGracefulBreakOnExistingStopFalseWhenDisabled(t *testing.T) {
+	source := config.Source{
+		Type: config.SourceTypeSoundCloud,
+		Sync: config.SyncPolicy{
+			BreakOnExisting: boolPtrSyncer(false),
+		},
+	}
+	execResult := ExecResult{
+		ExitCode:   1,
+		StderrTail: "yt_dlp.utils.ExistingVideoReached: ...",
+	}
+
+	if isGracefulBreakOnExistingStop(source, nil, execResult) {
+		t.Fatalf("expected no graceful break detection when break mode is disabled")
 	}
 }

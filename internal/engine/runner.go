@@ -17,6 +17,41 @@ type SubprocessRunner struct {
 	Stderr io.Writer
 }
 
+type tailBuffer struct {
+	buf []byte
+	max int
+}
+
+func newTailBuffer(max int) *tailBuffer {
+	if max <= 0 {
+		max = 64 * 1024
+	}
+	return &tailBuffer{
+		buf: make([]byte, 0, max),
+		max: max,
+	}
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return len(p), nil
+	}
+	overflow := len(t.buf) + len(p) - t.max
+	if overflow > 0 {
+		t.buf = append(t.buf[:0], t.buf[overflow:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	return string(t.buf)
+}
+
 type flushWriter interface {
 	Flush() error
 }
@@ -40,13 +75,30 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 
 	cmd := exec.CommandContext(runCtx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Stdout = r.Stdout
-	cmd.Stderr = r.Stderr
+
+	stdoutTail := newTailBuffer(64 * 1024)
+	stderrTail := newTailBuffer(64 * 1024)
+
+	if r.Stdout != nil {
+		cmd.Stdout = io.MultiWriter(r.Stdout, stdoutTail)
+	} else {
+		cmd.Stdout = stdoutTail
+	}
+	if r.Stderr != nil {
+		cmd.Stderr = io.MultiWriter(r.Stderr, stderrTail)
+	} else {
+		cmd.Stderr = stderrTail
+	}
 
 	err := cmd.Run()
 	flushWriterIfSupported(r.Stdout)
 	flushWriterIfSupported(r.Stderr)
-	result := ExecResult{Duration: time.Since(start), Err: err}
+	result := ExecResult{
+		Duration:   time.Since(start),
+		StdoutTail: stdoutTail.String(),
+		StderrTail: stderrTail.String(),
+		Err:        err,
+	}
 	if err == nil {
 		result.ExitCode = 0
 		return result

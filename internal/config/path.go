@@ -68,3 +68,35 @@ func ResolveStateFile(defaultStateDir string, stateFile string) (string, error) 
 
 	return filepath.Clean(filepath.Join(expandedStateDir, expandedStateFile)), nil
 }
+
+func ResolveArchiveFile(defaultStateDir string, archiveFile string, sourceID string) (string, error) {
+	candidate := strings.TrimSpace(archiveFile)
+	if candidate == "" {
+		candidate = "archive.txt"
+	}
+
+	expandedArchiveFile, err := ExpandPath(candidate)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(expandedArchiveFile) {
+		return filepath.Clean(expandedArchiveFile), nil
+	}
+
+	expandedStateDir, err := ExpandPath(defaultStateDir)
+	if err != nil {
+		return "", err
+	}
+
+	// Keep nested relative archive paths as provided.
+	if strings.ContainsRune(expandedArchiveFile, filepath.Separator) {
+		return filepath.Clean(filepath.Join(expandedStateDir, expandedArchiveFile)), nil
+	}
+
+	// For simple filenames, namespace per-source to avoid cross-source collisions.
+	if strings.TrimSpace(sourceID) != "" {
+		return filepath.Clean(filepath.Join(expandedStateDir, sourceID+"."+expandedArchiveFile)), nil
+	}
+
+	return filepath.Clean(filepath.Join(expandedStateDir, expandedArchiveFile)), nil
+}

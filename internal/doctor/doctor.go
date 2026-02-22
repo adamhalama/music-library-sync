@@ -170,6 +170,19 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is writable", source.ID)})
 			}
 		}
+		if source.Type == config.SourceTypeSoundCloud {
+			stateFile, stateErr := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
+			if stateErr != nil {
+				report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s state_file is invalid: %v", source.ID, stateErr)})
+				continue
+			}
+			stateDir := filepath.Dir(stateFile)
+			if err := c.CheckWritable(stateDir); err != nil {
+				report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is not writable: %v", source.ID, err)})
+			} else {
+				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is writable", source.ID)})
+			}
+		}
 	}
 
 	if len(cfg.Sources) == 0 {
@@ -195,6 +208,7 @@ func requiredBinaries(cfg config.Config) []dependency {
 			seen["spotdl"] = dependency{Binary: "spotdl", MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "4.0.0")}
 		case "scdl":
 			seen["scdl"] = dependency{Binary: "scdl", MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "3.0.0")}
+			seen["yt-dlp"] = dependency{Binary: "yt-dlp", MinVersion: "0.0.0"}
 		}
 	}
 

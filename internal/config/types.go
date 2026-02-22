@@ -22,13 +22,20 @@ type Defaults struct {
 }
 
 type Source struct {
-	ID        string      `yaml:"id"`
-	Type      SourceType  `yaml:"type"`
-	Enabled   bool        `yaml:"enabled"`
-	TargetDir string      `yaml:"target_dir"`
-	URL       string      `yaml:"url"`
-	StateFile string      `yaml:"state_file,omitempty"`
-	Adapter   AdapterSpec `yaml:"adapter"`
+	ID                  string      `yaml:"id"`
+	Type                SourceType  `yaml:"type"`
+	Enabled             bool        `yaml:"enabled"`
+	TargetDir           string      `yaml:"target_dir"`
+	URL                 string      `yaml:"url"`
+	StateFile           string      `yaml:"state_file,omitempty"`
+	DownloadArchivePath string      `yaml:"-"`
+	Sync                SyncPolicy  `yaml:"sync,omitempty"`
+	Adapter             AdapterSpec `yaml:"adapter"`
+}
+
+type SyncPolicy struct {
+	BreakOnExisting *bool `yaml:"break_on_existing,omitempty"`
+	AskOnExisting   *bool `yaml:"ask_on_existing,omitempty"`
 }
 
 type AdapterSpec struct {

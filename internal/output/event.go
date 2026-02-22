@@ -13,11 +13,12 @@ const (
 type EventName string
 
 const (
-	EventSyncStarted    EventName = "sync_started"
-	EventSourceStarted  EventName = "source_started"
-	EventSourceFinished EventName = "source_finished"
-	EventSourceFailed   EventName = "source_failed"
-	EventSyncFinished   EventName = "sync_finished"
+	EventSyncStarted     EventName = "sync_started"
+	EventSourcePreflight EventName = "source_preflight"
+	EventSourceStarted   EventName = "source_started"
+	EventSourceFinished  EventName = "source_finished"
+	EventSourceFailed    EventName = "source_failed"
+	EventSyncFinished    EventName = "sync_finished"
 )
 
 type Event struct {

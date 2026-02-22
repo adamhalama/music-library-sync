@@ -105,6 +105,17 @@ func Validate(cfg Config) error {
 		if source.Type == SourceTypeSpotify && strings.TrimSpace(source.StateFile) == "" {
 			problems = append(problems, fmt.Sprintf("source %q state_file is required for spotify", source.ID))
 		}
+		if source.Type == SourceTypeSoundCloud && strings.TrimSpace(source.StateFile) == "" {
+			problems = append(problems, fmt.Sprintf("source %q state_file is required for soundcloud", source.ID))
+		}
+		if source.Type != SourceTypeSoundCloud {
+			if source.Sync.BreakOnExisting != nil {
+				problems = append(problems, fmt.Sprintf("source %q sync.break_on_existing is only supported for soundcloud", source.ID))
+			}
+			if source.Sync.AskOnExisting != nil {
+				problems = append(problems, fmt.Sprintf("source %q sync.ask_on_existing is only supported for soundcloud", source.ID))
+			}
+		}
 	}
 
 	if len(problems) > 0 {

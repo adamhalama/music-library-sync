@@ -32,6 +32,9 @@ type CompactLogWriter struct {
 	itemIndex int
 	itemTotal int
 	track     trackState
+
+	breakOnExistingDetected bool
+	breakStopPrinted        bool
 }
 
 type trackState struct {
@@ -118,6 +121,8 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		if err := w.finalizeTrackLocked(); err != nil {
 			return err
 		}
+		w.breakOnExistingDetected = false
+		w.breakStopPrinted = false
 		index, _ := strconv.Atoi(match[1])
 		total, _ := strconv.Atoi(match[2])
 		w.itemIndex = index
@@ -179,6 +184,22 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		return w.renderStatusLocked("finalizing")
 	}
 
+	if isBreakOnExistingLine(line) {
+		w.breakOnExistingDetected = true
+		if w.breakStopPrinted {
+			return nil
+		}
+		w.breakStopPrinted = true
+		return w.printPersistentLocked("[stop] reached existing track in archive (break_on_existing)")
+	}
+
+	if w.breakOnExistingDetected && isBreakOnExistingTraceLine(line) {
+		return nil
+	}
+	if w.breakOnExistingDetected && !strings.HasPrefix(strings.TrimSpace(line), "[") {
+		return nil
+	}
+
 	if shouldSuppressSCDLNoise(line) {
 		return nil
 	}
@@ -200,7 +221,7 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 
 	status := fmt.Sprintf("[in-progress] %s", w.track.Name)
 	if w.itemIndex > 0 && w.itemTotal > 0 {
-		status = fmt.Sprintf("[in-progress %d/%d] %s", w.itemIndex, w.itemTotal, w.track.Name)
+		status = fmt.Sprintf("[in-progress %d/%d %4.1f%%] %s", w.itemIndex, w.itemTotal, w.globalProgressPercent(), w.track.Name)
 	}
 
 	bits := []string{}
@@ -295,6 +316,23 @@ func shouldSuppressSCDLNoise(line string) bool {
 		strings.HasPrefix(line, "Skipping embedding the thumbnail")
 }
 
+func isBreakOnExistingLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	return strings.Contains(lower, "has already been recorded in the archive") ||
+		strings.Contains(lower, "stopping due to --break-on-existing") ||
+		strings.Contains(lower, "existingvideoreached")
+}
+
+func isBreakOnExistingTraceLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(trimmed, "Traceback (most recent call last):") ||
+		strings.HasPrefix(trimmed, "File \"") ||
+		strings.HasPrefix(trimmed, "^^^^^^^^") ||
+		strings.HasPrefix(lower, "yt_dlp.utils.existingvideoreached:") ||
+		strings.Contains(lower, "stopping due to --break-on-existing")
+}
+
 func looksLikeWarningOrError(line string) bool {
 	lower := strings.ToLower(line)
 	return strings.HasPrefix(lower, "warning:") ||
@@ -325,6 +363,26 @@ func renderProgress(percent float64) string {
 	}
 	bar := strings.Repeat("#", filled) + strings.Repeat("-", width-filled)
 	return fmt.Sprintf("[%s] %5.1f%%", bar, clamped)
+}
+
+func (w *CompactLogWriter) globalProgressPercent() float64 {
+	if w.itemTotal <= 0 {
+		return 0
+	}
+	completedItems := w.itemIndex - 1
+	if completedItems < 0 {
+		completedItems = 0
+	}
+
+	partial := 0.0
+	switch {
+	case w.track.AlreadyPresent || w.track.CompletionObserved:
+		partial = 1.0
+	case w.track.ProgressKnown:
+		partial = w.track.ProgressPercent / 100.0
+	}
+
+	return clampPercent(((float64(completedItems) + partial) / float64(w.itemTotal)) * 100.0)
 }
 
 func clampPercent(percent float64) float64 {

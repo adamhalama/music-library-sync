@@ -77,6 +77,7 @@ func TestDoctorMissingSoundCloudEnv(t *testing.T) {
 				Enabled:   true,
 				TargetDir: "/tmp/music",
 				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-a.sync.scdl",
 				Adapter:   config.AdapterSpec{Kind: "scdl"},
 			},
 		},
@@ -92,6 +93,47 @@ func TestDoctorMissingSoundCloudEnv(t *testing.T) {
 	report := checker.Check(context.Background(), cfg)
 	if !report.HasErrors() {
 		t.Fatalf("expected auth error when SCDL_CLIENT_ID is missing")
+	}
+}
+
+func TestDoctorRequiresYTDLPForSoundCloud(t *testing.T) {
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              "/tmp/state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-a",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: "/tmp/music",
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-a.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+
+	checker := &Checker{
+		LookPath: func(name string) (string, error) {
+			if name == "yt-dlp" {
+				return "", fmt.Errorf("not found")
+			}
+			return "/usr/bin/" + name, nil
+		},
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "3.0.0", nil },
+		Getenv:        func(key string) string { return "set" },
+		CheckWritable: func(path string) error { return nil },
+	}
+
+	report := checker.Check(context.Background(), cfg)
+	if !report.HasErrors() {
+		t.Fatalf("expected missing yt-dlp dependency to be reported")
 	}
 }
 

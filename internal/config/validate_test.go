@@ -22,6 +22,19 @@ func TestValidateSuccess(t *testing.T) {
 				StateFile: "groove.sync.spotdl",
 				Adapter:   AdapterSpec{Kind: "spotdl"},
 			},
+			{
+				ID:        "soundcloud-likes",
+				Type:      SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: "/tmp/music-sc",
+				URL:       "https://soundcloud.com/user",
+				StateFile: "soundcloud-likes.sync.scdl",
+				Sync: SyncPolicy{
+					BreakOnExisting: testBoolPtr(true),
+					AskOnExisting:   testBoolPtr(false),
+				},
+				Adapter: AdapterSpec{Kind: "scdl"},
+			},
 		},
 	}
 
@@ -58,6 +71,18 @@ func TestValidateFailure(t *testing.T) {
 				StateFile: "",
 				Adapter:   AdapterSpec{Kind: "spotdl"},
 			},
+			{
+				ID:        "spotify-with-sync",
+				Type:      SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: "/tmp/music-2",
+				URL:       "https://open.spotify.com/playlist/xyz",
+				StateFile: "x.sync.spotdl",
+				Sync: SyncPolicy{
+					BreakOnExisting: testBoolPtr(true),
+				},
+				Adapter: AdapterSpec{Kind: "spotdl"},
+			},
 		},
 	}
 
@@ -72,4 +97,8 @@ func TestValidateFailure(t *testing.T) {
 	if len(validationErr.Problems) < 5 {
 		t.Fatalf("expected multiple problems, got %v", validationErr.Problems)
 	}
+}
+
+func testBoolPtr(v bool) *bool {
+	return &v
 }

@@ -21,6 +21,7 @@ The legacy script remains available during migration: `bin/update-downloads`.
 Runtime tools:
 - `spotdl`
 - `scdl`
+- `yt-dlp` (required for SoundCloud preflight diff mode)
 
 Environment:
 - `SCDL_CLIENT_ID` (required for SoundCloud sources)
@@ -103,6 +104,9 @@ Global flags:
 `sync` flags:
 - `--source <id>` (repeatable)
 - `--timeout <duration>`
+- `--ask-on-existing`
+- `--scan-gaps`
+- `--no-preflight`
 
 ## Config
 
@@ -137,6 +141,10 @@ sources:
     enabled: true
     target_dir: "~/Music/downloaded/sc-likes"
     url: "https://soundcloud.com/your-user"
+    state_file: "soundcloud-likes.sync.scdl"
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
     adapter:
       kind: "scdl"
       extra_args: ["-f"]
@@ -154,6 +162,11 @@ sources:
 
 Notes:
 - For SoundCloud sources, `udl` injects `--yt-dlp-args "--embed-thumbnail --embed-metadata"` automatically when `--yt-dlp-args` is not explicitly provided.
+- `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
+- SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.
+- Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.
+- Default SoundCloud behavior breaks at first existing track; use `--scan-gaps` to scan full remote list and repair gaps. `--ask-on-existing` prompts once per source (TTY only, unless `--no-input`).
+- When preflight in break mode finds `planned=0`, `udl` marks the source up-to-date and skips launching `scdl`.
 - If a sync is interrupted or a source command fails, `udl` automatically cleans newly created partial artifacts (`*.part`, `*.ytdl`, and `*.scdl.lock` for `scdl`).
 
 ## Exit Codes
