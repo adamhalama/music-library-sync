@@ -59,7 +59,7 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			} else {
 				emitter = output.NewHumanEmitter(humanStdout, humanStderr, app.Opts.Quiet, app.Opts.Verbose)
 			}
-			runner := engine.NewSubprocessRunner(runnerStdout, runnerStderr)
+			runner := engine.NewSubprocessRunner(app.IO.In, runnerStdout, runnerStderr)
 
 			registry := map[string]engine.Adapter{
 				"spotdl": spotdl.New(),

@@ -13,6 +13,7 @@ type ExecRunner interface {
 }
 
 type SubprocessRunner struct {
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -56,8 +57,8 @@ type flushWriter interface {
 	Flush() error
 }
 
-func NewSubprocessRunner(stdout, stderr io.Writer) *SubprocessRunner {
-	return &SubprocessRunner{Stdout: stdout, Stderr: stderr}
+func NewSubprocessRunner(stdin io.Reader, stdout, stderr io.Writer) *SubprocessRunner {
+	return &SubprocessRunner{Stdin: stdin, Stdout: stdout, Stderr: stderr}
 }
 
 func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
@@ -75,6 +76,7 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 
 	cmd := exec.CommandContext(runCtx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
+	cmd.Stdin = r.Stdin
 
 	stdoutTail := newTailBuffer(64 * 1024)
 	stderrTail := newTailBuffer(64 * 1024)
