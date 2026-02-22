@@ -3,6 +3,9 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jaa/update-downloads/internal/config"
@@ -148,5 +151,84 @@ func TestDoctorUnwritableDirectory(t *testing.T) {
 	report := checker.Check(context.Background(), spotifyConfig())
 	if !report.HasErrors() {
 		t.Fatalf("expected filesystem error for unwritable path")
+	}
+}
+
+func TestDoctorWarnsOnSharedSpotDLCredentials(t *testing.T) {
+	checker := &Checker{
+		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "spotdl 4.5.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		HomeDir:       func() (string, error) { return "/home/tester", nil },
+		ReadFile: func(path string) ([]byte, error) {
+			if path != "/home/tester/.spotdl/config.json" {
+				return nil, fmt.Errorf("unexpected path: %s", path)
+			}
+			return []byte(`{"client_id":"5f573c9620494bae87890c0f08a60293","client_secret":"212476d9b0f3472eaa762d90b19b0ba8"}`), nil
+		},
+	}
+
+	report := checker.Check(context.Background(), spotifyConfig())
+	if report.HasErrors() {
+		t.Fatalf("did not expect doctor errors")
+	}
+	if !hasWarnContaining(report, "shared default Spotify credentials") {
+		t.Fatalf("expected warning for shared spotdl credentials, got %+v", report.Checks)
+	}
+}
+
+func TestDoctorSkipsSharedCredentialWarningForCustomCredentials(t *testing.T) {
+	checker := &Checker{
+		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "spotdl 4.5.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		HomeDir:       func() (string, error) { return "/home/tester", nil },
+		ReadFile: func(path string) ([]byte, error) {
+			return []byte(`{"client_id":"custom-client","client_secret":"custom-secret"}`), nil
+		},
+	}
+
+	report := checker.Check(context.Background(), spotifyConfig())
+	if hasWarnContaining(report, "shared default Spotify credentials") {
+		t.Fatalf("unexpected shared credential warning, got %+v", report.Checks)
+	}
+}
+
+func hasWarnContaining(report Report, snippet string) bool {
+	for _, check := range report.Checks {
+		if check.Severity != SeverityWarn {
+			continue
+		}
+		if strings.Contains(check.Message, snippet) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestResolveSpotDLBinaryForDoctorPrefersOverride(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "/custom/spotdl")
+	if got := resolveSpotDLBinaryForDoctor(); got != "/custom/spotdl" {
+		t.Fatalf("expected override, got %q", got)
+	}
+}
+
+func TestResolveSpotDLBinaryForDoctorPrefersManagedVenv(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	managed := filepath.Join(tmpHome, ".venvs", "udl-spotdl", "bin", "spotdl")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatalf("mkdir managed dir: %v", err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\necho test\n"), 0o755); err != nil {
+		t.Fatalf("write managed binary: %v", err)
+	}
+
+	if got := resolveSpotDLBinaryForDoctor(); got != managed {
+		t.Fatalf("expected managed path %q, got %q", managed, got)
 	}
 }

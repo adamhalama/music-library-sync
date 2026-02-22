@@ -124,6 +124,8 @@ Supported config env overrides:
 - `UDL_THREADS`
 - `UDL_CONTINUE_ON_ERROR`
 - `UDL_COMMAND_TIMEOUT_SECONDS`
+- `UDL_SPOTDL_BIN`
+- `UDL_SCDL_BIN`
 
 Example:
 
@@ -161,6 +163,8 @@ sources:
 ```
 
 Notes:
+- Spotify sources use `spotdl` and prefer a managed binary at `~/.venvs/udl-spotdl/bin/spotdl` when present (or `UDL_SPOTDL_BIN` when set), falling back to `spotdl` from `PATH`.
+- If Spotify returns `Valid user authentication required` and prompts are allowed (TTY, no `--no-input`), `udl` retries the source once with `spotdl --user-auth`.
 - For SoundCloud sources, `udl` injects `--yt-dlp-args "--embed-thumbnail --embed-metadata"` automatically when `--yt-dlp-args` is not explicitly provided.
 - `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
 - SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.

@@ -17,6 +17,10 @@ var downloadItemPattern = regexp.MustCompile(`^\[download\] Downloading item ([0
 var downloadDestinationPattern = regexp.MustCompile(`^\[download\] Destination: (.+)$`)
 var alreadyDownloadedPattern = regexp.MustCompile(`^\[download\] (.+) has already been downloaded$`)
 var preflightSummaryPattern = regexp.MustCompile(`^\[[^\]]+\]\s+preflight:\s+.*\bplanned=([0-9]+)\b`)
+var spotDLFoundSongsPattern = regexp.MustCompile(`^Found ([0-9]+) songs in .+$`)
+var spotDLDownloadedPattern = regexp.MustCompile(`^Downloaded "(.+)":\s+https?://.+$`)
+var spotDLLookupErrorPattern = regexp.MustCompile(`^LookupError: No results found for song: (.+)$`)
+var spotDLAudioProviderPattern = regexp.MustCompile(`^AudioProviderError: YT-DLP download error -.*$`)
 
 type CompactLogOptions struct {
 	Interactive bool
@@ -145,6 +149,29 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 			return w.renderIdleStatusLocked()
 		}
 	}
+	if match := spotDLFoundSongsPattern.FindStringSubmatch(line); len(match) == 2 {
+		total, _ := strconv.Atoi(match[1])
+		if total < 0 {
+			total = 0
+		}
+		w.itemTotal = total
+		w.plannedTotal = 0
+		w.completed = 0
+		w.track = trackState{}
+		if total > 0 {
+			return w.renderIdleStatusLocked()
+		}
+		return nil
+	}
+	if match := spotDLDownloadedPattern.FindStringSubmatch(line); len(match) == 2 {
+		return w.recordSpotDLCompletedTrackLocked(strings.TrimSpace(match[1]))
+	}
+	if match := spotDLLookupErrorPattern.FindStringSubmatch(line); len(match) == 2 {
+		return w.recordSpotDLFailedTrackLocked(strings.TrimSpace(match[1]), "no-match")
+	}
+	if spotDLAudioProviderPattern.MatchString(line) {
+		return w.recordSpotDLFailedTrackLocked(w.nextSpotDLTrackLabelLocked(), "download-error")
+	}
 
 	if match := downloadItemPattern.FindStringSubmatch(line); len(match) == 3 {
 		if err := w.finalizeTrackLocked(); err != nil {
@@ -226,6 +253,12 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		return nil
 	}
 	if w.breakOnExistingDetected && !strings.HasPrefix(strings.TrimSpace(line), "[") {
+		return nil
+	}
+	if shouldSuppressPythonTracebackNoise(line) {
+		return nil
+	}
+	if shouldSuppressSpotDLSpotifyNoise(line) {
 		return nil
 	}
 
@@ -346,6 +379,66 @@ func (w *CompactLogWriter) finalizeTrackLocked() error {
 	return w.renderIdleStatusLocked()
 }
 
+func (w *CompactLogWriter) recordSpotDLCompletedTrackLocked(name string) error {
+	if strings.TrimSpace(name) == "" {
+		name = w.nextSpotDLTrackLabelLocked()
+	}
+	if err := w.finalizeTrackLocked(); err != nil {
+		return err
+	}
+	w.track = trackState{
+		Name:               name,
+		ProgressKnown:      true,
+		ProgressPercent:    100,
+		CompletionObserved: true,
+	}
+	if err := w.renderStatusLocked("downloaded"); err != nil {
+		return err
+	}
+	return w.finalizeTrackLocked()
+}
+
+func (w *CompactLogWriter) recordSpotDLFailedTrackLocked(name string, reason string) error {
+	if strings.TrimSpace(name) == "" {
+		name = w.nextSpotDLTrackLabelLocked()
+	}
+	if err := w.finalizeTrackLocked(); err != nil {
+		return err
+	}
+	w.track = trackState{
+		Name:            name,
+		ProgressKnown:   true,
+		ProgressPercent: 100,
+	}
+	if err := w.renderStatusLocked("failed"); err != nil {
+		return err
+	}
+	if total := w.effectiveItemTotal(); total > 0 && w.completed < total {
+		w.completed++
+	}
+	w.track = trackState{}
+	line := fmt.Sprintf("[skip] %s", name)
+	if strings.TrimSpace(reason) != "" {
+		line = fmt.Sprintf("%s (%s)", line, reason)
+	}
+	if err := w.printPersistentLocked(line); err != nil {
+		return err
+	}
+	return w.renderIdleStatusLocked()
+}
+
+func (w *CompactLogWriter) nextSpotDLTrackLabelLocked() string {
+	total := w.effectiveItemTotal()
+	index := w.currentTrackIndex(total)
+	if total > 0 {
+		return fmt.Sprintf("track %d/%d", index, total)
+	}
+	if index > 0 {
+		return fmt.Sprintf("track %d", index)
+	}
+	return "track"
+}
+
 func (w *CompactLogWriter) printPersistentLocked(line string) error {
 	if err := w.clearLiveLinesLocked(); err != nil {
 		return err
@@ -403,6 +496,49 @@ func shouldSuppressSCDLNoise(line string) bool {
 		strings.HasPrefix(line, "[EmbedThumbnail] ") ||
 		strings.HasPrefix(line, "[Mutagen] ") ||
 		strings.HasPrefix(line, "Skipping embedding the thumbnail")
+}
+
+func shouldSuppressPythonTracebackNoise(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(trimmed, "Traceback (most recent call last):") ||
+		strings.HasPrefix(trimmed, "During handling of the above exception, another exception occurred:") ||
+		strings.HasPrefix(trimmed, "File \"") ||
+		strings.HasPrefix(trimmed, "╭") ||
+		strings.HasPrefix(trimmed, "╰") ||
+		strings.HasPrefix(trimmed, "│") ||
+		strings.HasPrefix(trimmed, "╮") ||
+		strings.HasPrefix(trimmed, "╯") ||
+		strings.HasPrefix(lower, "nameerror: name 'raw_input' is not defined") ||
+		strings.HasPrefix(lower, "eoferror: eof when reading a line")
+}
+
+func shouldSuppressSpotDLSpotifyNoise(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return trimmed == "An error occurred" ||
+		strings.HasPrefix(trimmed, "Processing query:") ||
+		strings.HasPrefix(trimmed, "https://open.spotify.com/playlist/") ||
+		strings.Contains(lower, "rate/request limit") ||
+		spotDLFoundSongsPattern.MatchString(trimmed) ||
+		spotDLDownloadedPattern.MatchString(trimmed) ||
+		spotDLLookupErrorPattern.MatchString(trimmed) ||
+		spotDLAudioProviderPattern.MatchString(trimmed) ||
+		strings.HasPrefix(trimmed, "found for song: ") ||
+		strings.HasPrefix(trimmed, "YT-DLP download error - ") ||
+		strings.HasPrefix(trimmed, "https://www.youtube.com/watch?v=") ||
+		strings.HasPrefix(trimmed, "https://music.youtube.com/watch?v=") ||
+		strings.HasPrefix(trimmed, "Nothing to delete...") ||
+		strings.HasPrefix(trimmed, "Saved archive with ") ||
+		(strings.HasPrefix(trimmed, "https://open.spotify.com/track/") && strings.Contains(trimmed, " - LookupError:")) ||
+		(strings.HasPrefix(trimmed, "https://open.spotify.com/track/") && strings.Contains(trimmed, " - AudioProviderError:")) ||
+		strings.HasPrefix(lower, "http error for get to https://api.spotify.com/") ||
+		(strings.HasPrefix(lower, "httperror: 401 client error:") && strings.Contains(lower, "api.spotify.com")) ||
+		(strings.HasPrefix(lower, "httperror: 403 client error:") && strings.Contains(lower, "api.spotify.com")) ||
+		(strings.HasPrefix(lower, "spotifyexception: http status: 401") && strings.Contains(lower, "api.spotify.com")) ||
+		(strings.HasPrefix(lower, "spotifyexception: http status: 403") && strings.Contains(lower, "api.spotify.com")) ||
+		(strings.Contains(lower, "valid user authentication required") && strings.Contains(lower, "reason: none")) ||
+		(strings.HasPrefix(lower, "forbidden, reason: none"))
 }
 
 func isBreakOnExistingLine(line string) bool {

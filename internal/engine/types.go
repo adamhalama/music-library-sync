@@ -34,15 +34,16 @@ type Adapter interface {
 }
 
 type SyncOptions struct {
-	SourceIDs        []string
-	DryRun           bool
-	TimeoutOverride  time.Duration
-	AskOnExisting    bool
-	AskOnExistingSet bool
-	ScanGaps         bool
-	NoPreflight      bool
-	AllowPrompt      bool
-	PromptOnExisting func(sourceID string, preflight SoundCloudPreflight) (bool, error)
+	SourceIDs           []string
+	DryRun              bool
+	TimeoutOverride     time.Duration
+	AskOnExisting       bool
+	AskOnExistingSet    bool
+	ScanGaps            bool
+	NoPreflight         bool
+	AllowPrompt         bool
+	PromptOnExisting    func(sourceID string, preflight SoundCloudPreflight) (bool, error)
+	PromptOnSpotifyAuth func(sourceID string) (bool, error)
 }
 
 type SyncResult struct {

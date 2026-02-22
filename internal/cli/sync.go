@@ -59,7 +59,7 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			} else {
 				emitter = output.NewHumanEmitter(humanStdout, humanStderr, app.Opts.Quiet, app.Opts.Verbose)
 			}
-			runner := engine.NewSubprocessRunner(runnerStdout, runnerStderr)
+			runner := engine.NewSubprocessRunner(app.IO.In, runnerStdout, runnerStderr)
 
 			registry := map[string]engine.Adapter{
 				"spotdl": spotdl.New(),
@@ -78,9 +78,12 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 				AskOnExistingSet: cmd.Flags().Changed("ask-on-existing"),
 				ScanGaps:         scanGaps,
 				NoPreflight:      noPreflight,
-				AllowPrompt:      !app.Opts.NoInput && isTTY(os.Stdin),
+				AllowPrompt:      !app.Opts.NoInput && !app.Opts.JSON && isTTY(os.Stdin),
 				PromptOnExisting: func(sourceID string, preflight engine.SoundCloudPreflight) (bool, error) {
 					return promptYesNo(app, fmt.Sprintf("[%s] Existing track found at position %d of %d. Continue scanning for gaps?", sourceID, preflight.FirstExistingIndex, preflight.RemoteTotal))
+				},
+				PromptOnSpotifyAuth: func(sourceID string) (bool, error) {
+					return promptYesNoDefault(app, fmt.Sprintf("[%s] Spotify login required. Open browser now?", sourceID), true)
 				},
 			})
 			if runErr != nil {

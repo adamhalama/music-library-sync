@@ -271,6 +271,17 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			continue
 		}
 
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourcePreflight,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] downloading to %s", source.ID, spec.Dir),
+			Details: map[string]any{
+				"target_dir": spec.Dir,
+			},
+		})
+
 		result.Attempted++
 		_ = s.Emitter.Emit(output.Event{
 			Timestamp: s.Now(),
@@ -349,6 +360,110 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 				},
 			})
 			break
+		}
+
+		if shouldRetrySpotifyWithUserAuth(sourceForExec, execResult, opts) {
+			retrySource, opensBrowser, promptErr := planSpotifyUserAuthRetry(sourceForExec, opts)
+			if promptErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] unable to read Spotify auth prompt response: %v", source.ID, promptErr),
+				})
+				retrySource = withSpotDLUserAuth(sourceForExec)
+				opensBrowser = false
+			}
+			retrySpec, retryErr := adapter.BuildExecSpec(retrySource, cfg.Defaults, timeout)
+			if retryErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] spotify auth retry setup failed: %v", source.ID, retryErr),
+				})
+			} else {
+				retryHint := "paste redirected URL in terminal when prompted"
+				retryMode := "manual"
+				if opensBrowser {
+					retryHint = "browser login enabled"
+					retryMode = "browser"
+				}
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelInfo,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] spotify login required; retrying once with --user-auth (%s)", source.ID, retryHint),
+					Details: map[string]any{
+						"command": retrySpec.DisplayCommand,
+						"dir":     retrySpec.Dir,
+						"retry":   true,
+						"mode":    retryMode,
+					},
+				})
+				execResult = s.Runner.Run(ctx, retrySpec)
+				spec = retrySpec
+				sourceForExec = retrySource
+				if execResult.Interrupted {
+					s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
+					if err := cleanupTempStateFiles(stateSwap); err != nil {
+						_ = s.Emitter.Emit(output.Event{
+							Timestamp: s.Now(),
+							Level:     output.LevelWarn,
+							Event:     output.EventSourceFailed,
+							SourceID:  source.ID,
+							Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+						})
+					}
+					result.Interrupted = true
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelError,
+						Event:     output.EventSourceFailed,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] interrupted", source.ID),
+						Details: map[string]any{
+							"exit_code":   execResult.ExitCode,
+							"duration_ms": execResult.Duration.Milliseconds(),
+						},
+					})
+					break
+				}
+			}
+		}
+
+		if execResult.ExitCode != 0 && isSpotifyUserAuthRequired(sourceForExec, execResult) {
+			guidance := "spotify login required; rerun in an interactive terminal once with --user-auth to refresh ~/.spotdl/.spotipy"
+			if opts.AllowPrompt {
+				guidance = "spotify login required and retry did not complete; rerun sync and finish the OAuth prompt"
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] %s", source.ID, guidance),
+			})
+		}
+		if execResult.ExitCode != 0 && isSpotifyRateLimited(sourceForExec, execResult) {
+			rateLimitMessage := fmt.Sprintf("[%s] spotify API rate limit detected; use your own Spotify app credentials and rerun", source.ID)
+			if cachePath, ok := resolveSpotDLOAuthCachePath(); ok {
+				rateLimitMessage = fmt.Sprintf(
+					"[%s] spotify API rate limit detected; OAuth cache is present at %s, so auth is configured and this is likely app quota throttling. Use your own Spotify app credentials and rerun",
+					source.ID,
+					cachePath,
+				)
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   rateLimitMessage,
+			})
 		}
 
 		if execResult.ExitCode != 0 {
@@ -710,6 +825,135 @@ func isGracefulBreakOnExistingStop(
 	}
 
 	return false
+}
+
+func shouldRetrySpotifyWithUserAuth(source config.Source, execResult ExecResult, opts SyncOptions) bool {
+	if !opts.AllowPrompt {
+		return false
+	}
+	if source.Type != config.SourceTypeSpotify {
+		return false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted || execResult.TimedOut {
+		return false
+	}
+	if hasSpotDLUserAuthArg(source.Adapter.ExtraArgs) {
+		return false
+	}
+	return isSpotifyUserAuthRequired(source, execResult)
+}
+
+func planSpotifyUserAuthRetry(source config.Source, opts SyncOptions) (config.Source, bool, error) {
+	retrySource := withSpotDLUserAuth(source)
+	if !hasSpotDLHeadlessArg(retrySource.Adapter.ExtraArgs) {
+		return retrySource, true, nil
+	}
+	if opts.PromptOnSpotifyAuth == nil {
+		return retrySource, false, nil
+	}
+	openBrowser, err := opts.PromptOnSpotifyAuth(source.ID)
+	if err != nil {
+		return retrySource, false, err
+	}
+	if openBrowser {
+		retrySource = withoutSpotDLHeadless(retrySource)
+	}
+	return retrySource, openBrowser, nil
+}
+
+func isSpotifyUserAuthRequired(source config.Source, execResult ExecResult) bool {
+	if source.Type != config.SourceTypeSpotify {
+		return false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted {
+		return false
+	}
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+	return strings.Contains(combined, "valid user authentication required") ||
+		(strings.Contains(combined, "user authentication required") && strings.Contains(combined, "api.spotify.com"))
+}
+
+func isSpotifyRateLimited(source config.Source, execResult ExecResult) bool {
+	if source.Type != config.SourceTypeSpotify {
+		return false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted {
+		return false
+	}
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+	return strings.Contains(combined, "rate/request limit") &&
+		strings.Contains(combined, "retry will occur after:")
+}
+
+func hasSpotDLHeadlessArg(args []string) bool {
+	for _, candidate := range args {
+		if isSpotDLHeadlessArg(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSpotDLUserAuthArg(args []string) bool {
+	for _, candidate := range args {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "--user-auth" {
+			return true
+		}
+	}
+	return false
+}
+
+func withSpotDLUserAuth(source config.Source) config.Source {
+	if hasSpotDLUserAuthArg(source.Adapter.ExtraArgs) {
+		return source
+	}
+	cloned := append([]string{}, source.Adapter.ExtraArgs...)
+	cloned = append(cloned, "--user-auth")
+	source.Adapter.ExtraArgs = cloned
+	return source
+}
+
+func withoutSpotDLHeadless(source config.Source) config.Source {
+	if !hasSpotDLHeadlessArg(source.Adapter.ExtraArgs) {
+		return source
+	}
+	filtered := make([]string, 0, len(source.Adapter.ExtraArgs))
+	for _, candidate := range source.Adapter.ExtraArgs {
+		if isSpotDLHeadlessArg(candidate) {
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	source.Adapter.ExtraArgs = filtered
+	return source
+}
+
+func isSpotDLHeadlessArg(candidate string) bool {
+	trimmed := strings.TrimSpace(candidate)
+	return trimmed == "--headless" || strings.HasPrefix(trimmed, "--headless=")
+}
+
+func resolveSpotDLOAuthCachePath() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	candidates := []string{
+		filepath.Join(home, ".spotdl", ".spotipy"),
+		filepath.Join(home, ".spotdl", ".spotify_cache"),
+	}
+	for _, candidate := range candidates {
+		info, statErr := os.Stat(candidate)
+		if statErr != nil || info.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(candidate, home) {
+			return "~" + strings.TrimPrefix(candidate, home), true
+		}
+		return candidate, true
+	}
+	return "", false
 }
 
 func cleanupTempFile(path string) error {
