@@ -21,3 +21,5 @@ Do not quietly change security-sensitive behavior. Call it out.
 
 We are building this together. When you learn something non-obvious, add it here so future changes go faster.
 
+- For Spotify sources, `spotdl` shared/default client credentials can get globally throttled (`Retry after: 86400`) before any download starts. Prefer user-owned Spotify app credentials in `~/.spotdl/config.json`.
+- As of Spotify Web API changes (Feb 2026), upstream `spotdl` `4.4.3` can fail on playlist metadata (`/playlists/{id}/tracks` 403) and missing artist fields (for example `genres`). A patched build from PR #2610 commit `27f3a0e33174170cbeebbcc0738ceb41a9baf947` works in local validation.

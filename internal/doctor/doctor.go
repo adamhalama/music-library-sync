@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,6 +56,8 @@ type Checker struct {
 	ReadVersion   func(context.Context, string) (string, error)
 	Getenv        func(string) string
 	CheckWritable func(string) error
+	ReadFile      func(string) ([]byte, error)
+	HomeDir       func() (string, error)
 }
 
 func NewChecker() *Checker {
@@ -65,6 +68,8 @@ func NewChecker() *Checker {
 		CheckWritable: func(path string) error {
 			return checkDirWritable(path)
 		},
+		ReadFile: os.ReadFile,
+		HomeDir:  os.UserHomeDir,
 	}
 }
 
@@ -123,6 +128,12 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			Name:     "dependency",
 			Message:  fmt.Sprintf("%s version %s is compatible", dep.Binary, version),
 		})
+	}
+
+	if hasEnabledSpotifySource(cfg.Sources) {
+		if check, ok := c.sharedSpotDLCredentialsCheck(); ok {
+			report.Checks = append(report.Checks, check)
+		}
 	}
 
 	for _, source := range cfg.Sources {
@@ -190,6 +201,74 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 	}
 
 	return report
+}
+
+type spotDLConfig struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+func hasEnabledSpotifySource(sources []config.Source) bool {
+	for _, source := range sources {
+		if source.Enabled && source.Type == config.SourceTypeSpotify {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Checker) sharedSpotDLCredentialsCheck() (Check, bool) {
+	readFile := c.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	homeDir := c.HomeDir
+	if homeDir == nil {
+		homeDir = os.UserHomeDir
+	}
+	home, err := homeDir()
+	if err != nil {
+		return Check{}, false
+	}
+	configPath := filepath.Join(home, ".spotdl", "config.json")
+	raw, err := readFile(configPath)
+	if err != nil {
+		return Check{}, false
+	}
+
+	var cfg spotDLConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return Check{}, false
+	}
+
+	if !usesSharedSpotDLCredentials(cfg.ClientID, cfg.ClientSecret) {
+		return Check{}, false
+	}
+
+	return Check{
+		Severity: SeverityWarn,
+		Name:     "auth",
+		Message:  fmt.Sprintf("spotdl config at %s is using shared default Spotify credentials; set your own app client_id/client_secret to avoid API throttling", configPath),
+	}, true
+}
+
+func usesSharedSpotDLCredentials(clientID string, clientSecret string) bool {
+	clientID = strings.TrimSpace(clientID)
+	clientSecret = strings.TrimSpace(clientSecret)
+	if clientID == "" || clientSecret == "" {
+		return false
+	}
+
+	knownPairs := [][2]string{
+		{"5f573c9620494bae87890c0f08a60293", "212476d9b0f3472eaa762d90b19b0ba8"},
+		{"f8a606e5583643beaa27ce62c48e3fc1", "f6f4c8f73f0649939286cf417c811607"},
+	}
+	for _, pair := range knownPairs {
+		if clientID == pair[0] && clientSecret == pair[1] {
+			return true
+		}
+	}
+	return false
 }
 
 type dependency struct {
