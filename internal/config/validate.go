@@ -88,14 +88,17 @@ func Validate(cfg Config) error {
 
 		if strings.TrimSpace(source.Adapter.Kind) == "" {
 			problems = append(problems, fmt.Sprintf("source %q adapter.kind must be set", source.ID))
+			if source.Type == SourceTypeSpotify {
+				problems = append(problems, fmt.Sprintf("source %q spotify type requires explicit adapter.kind (deemix or spotdl)", source.ID))
+			}
 		} else {
 			switch source.Adapter.Kind {
-			case "spotdl", "scdl":
+			case "spotdl", "scdl", "deemix":
 			default:
 				problems = append(problems, fmt.Sprintf("source %q has unsupported adapter.kind %q", source.ID, source.Adapter.Kind))
 			}
-			if source.Type == SourceTypeSpotify && source.Adapter.Kind != "spotdl" {
-				problems = append(problems, fmt.Sprintf("source %q spotify type requires spotdl adapter", source.ID))
+			if source.Type == SourceTypeSpotify && source.Adapter.Kind != "spotdl" && source.Adapter.Kind != "deemix" {
+				problems = append(problems, fmt.Sprintf("source %q spotify type requires spotdl or deemix adapter", source.ID))
 			}
 			if source.Type == SourceTypeSoundCloud && source.Adapter.Kind != "scdl" {
 				problems = append(problems, fmt.Sprintf("source %q soundcloud type requires scdl adapter", source.ID))
@@ -108,12 +111,14 @@ func Validate(cfg Config) error {
 		if source.Type == SourceTypeSoundCloud && strings.TrimSpace(source.StateFile) == "" {
 			problems = append(problems, fmt.Sprintf("source %q state_file is required for soundcloud", source.ID))
 		}
-		if source.Type != SourceTypeSoundCloud {
+		supportsSyncPolicy := source.Type == SourceTypeSoundCloud ||
+			(source.Type == SourceTypeSpotify && source.Adapter.Kind == "deemix")
+		if !supportsSyncPolicy {
 			if source.Sync.BreakOnExisting != nil {
-				problems = append(problems, fmt.Sprintf("source %q sync.break_on_existing is only supported for soundcloud", source.ID))
+				problems = append(problems, fmt.Sprintf("source %q sync.break_on_existing is only supported for soundcloud or spotify+deemix", source.ID))
 			}
 			if source.Sync.AskOnExisting != nil {
-				problems = append(problems, fmt.Sprintf("source %q sync.ask_on_existing is only supported for soundcloud", source.ID))
+				problems = append(problems, fmt.Sprintf("source %q sync.ask_on_existing is only supported for soundcloud or spotify+deemix", source.ID))
 			}
 			if source.Sync.LocalIndexCache != nil {
 				problems = append(problems, fmt.Sprintf("source %q sync.local_index_cache is only supported for soundcloud", source.ID))

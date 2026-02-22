@@ -9,6 +9,12 @@ import (
 )
 
 func Execute(build BuildInfo, streams IOStreams) int {
+	if wd, err := os.Getwd(); err == nil {
+		if envErr := loadDotEnvFiles(wd, os.Environ(), os.Setenv); envErr != nil {
+			fmt.Fprintln(streams.ErrOut, "WARN:", envErr)
+		}
+	}
+
 	app := &AppContext{Build: build, IO: streams}
 	root := newRootCommand(app)
 

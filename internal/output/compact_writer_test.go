@@ -344,3 +344,218 @@ func TestCompactLogWriterSuppressesWrappedSpotDLErrorFragments(t *testing.T) {
 		t.Fatalf("expected wrapped error fragments to be suppressed, got: %s", out)
 	}
 }
+
+func TestCompactLogWriterNormalizesDeemixTrackEvents(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+
+	payload := strings.Join([]string{
+		"[spotify-deemix] deemix track 1/2 1abc234def",
+		"[spotify-deemix] [done] 1abc234def",
+		"[spotify-deemix] deemix track 2/2 2abc234def",
+		"ERROR: [spotify-deemix] command failed with exit code 1",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[done] 1abc234def") {
+		t.Fatalf("expected normalized deemix completion line, got: %s", out)
+	}
+	if !strings.Contains(out, "[fail] 2abc234def (exit-1)") {
+		t.Fatalf("expected normalized deemix failure line, got: %s", out)
+	}
+	if strings.Contains(out, "deemix track 1/2") || strings.Contains(out, "[spotify-deemix] [done]") {
+		t.Fatalf("expected raw deemix progress chatter to be suppressed, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterSuppressesRawDeemixDownloadLines(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+
+	payload := strings.Join([]string{
+		"[spotify-deemix] deemix track 1/1 41gXFhitx4whS6PsoXREzy",
+		"[Permean] Downloading: 2%",
+		"[Permean] Downloading: 50%",
+		"[Permean] Download complete",
+		"[spotify-deemix] [done] 41gXFhitx4whS6PsoXREzy",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "[Permean] Downloading:") || strings.Contains(out, "[Permean] Download complete") {
+		t.Fatalf("expected raw deemix subprocess lines to be suppressed, got: %s", out)
+	}
+	if !strings.Contains(out, "[done] Permean") {
+		t.Fatalf("expected normalized done line to use deemix track title, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterInteractiveShowsDeemixTrackAndGlobalProgress(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+
+	payload := strings.Join([]string{
+		"[spotify-deemix] preflight: remote=2 known=0 gaps=2 known_gaps=0 first_existing=0 planned=2 mode=break",
+		"[spotify-deemix] deemix track 1/2 41gXFhitx4whS6PsoXREzy",
+		"[Permean] Downloading: 2%",
+		"[Permean] Downloading: 50%",
+		"[Permean] Download complete",
+		"[spotify-deemix] [done] 41gXFhitx4whS6PsoXREzy",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[track 1/2] Permean") {
+		t.Fatalf("expected per-track live line for deemix download, got: %s", out)
+	}
+	if !strings.Contains(out, "[overall]") || !strings.Contains(out, "25.0%") {
+		t.Fatalf("expected global progress for first of two deemix tracks, got: %s", out)
+	}
+	if !strings.Contains(out, "50.0%") {
+		t.Fatalf("expected live deemix percent updates to be rendered, got: %s", out)
+	}
+	if !strings.Contains(out, "[done] Permean") {
+		t.Fatalf("expected normalized done line to persist, got: %s", out)
+	}
+	if !strings.Contains(out, "waiting for next track (1/2 done)") {
+		t.Fatalf("expected idle status after deemix completion, got: %s", out)
+	}
+	if strings.Contains(out, "[Permean] Downloading:") {
+		t.Fatalf("expected raw deemix progress lines to be suppressed, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterUsesDeemixDoneLabelWhenProvided(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+
+	payload := strings.Join([]string{
+		"[spotify-deemix] deemix track 1/1 41gXFhitx4whS6PsoXREzy",
+		"[spotify-deemix] [done] 41gXFhitx4whS6PsoXREzy (Regent - Permean)",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[done] Regent - Permean") {
+		t.Fatalf("expected normalized done label from sync event, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterShowsPreflightSummaryByDefault(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+
+	payload := "[spotify-deemix] preflight: remote=19 known=4 gaps=15 known_gaps=0 first_existing=1 planned=15 mode=break\n"
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "preflight: remote=19 known=4 gaps=15") {
+		t.Fatalf("expected preflight summary line to be preserved, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterCanSuppressPreflightSummary(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{
+		Interactive:      false,
+		PreflightSummary: CompactPreflightNever,
+	})
+
+	payload := "[spotify-deemix] preflight: remote=19 known=4 gaps=15 known_gaps=0 first_existing=1 planned=15 mode=break\n"
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "preflight: remote=19") {
+		t.Fatalf("expected preflight summary to be suppressed, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterTrackStatusCountMode(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{
+		Interactive: false,
+		TrackStatus: CompactTrackStatusCount,
+	})
+
+	payload := strings.Join([]string{
+		"[spotify-deemix] preflight: remote=2 known=0 gaps=2 known_gaps=0 first_existing=0 planned=2 mode=break",
+		"[spotify-deemix] deemix track 1/2 41gXFhitx4whS6PsoXREzy (Regent - Permean)",
+		"[spotify-deemix] [done] 41gXFhitx4whS6PsoXREzy (Regent - Permean)",
+		"[spotify-deemix] deemix track 2/2 5onvWxBJehSONyspmnrvhD (Regent - Encoder)",
+		"[spotify-deemix] [done] 5onvWxBJehSONyspmnrvhD (Regent - Encoder)",
+	}, "\n") + "\n"
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[done] track 1/2") || !strings.Contains(out, "[done] track 2/2") {
+		t.Fatalf("expected count-style done lines, got: %s", out)
+	}
+	if strings.Contains(out, "Regent - Permean") || strings.Contains(out, "Regent - Encoder") {
+		t.Fatalf("did not expect track names in count mode, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterSuppressesDeemixUnavailableStackNoise(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+
+	payload := strings.Join([]string{
+		"[spotify-deemix] [skip] 27375CASeros2Z5JaxJ8j0 (Unknown Track) (unavailable-on-deezer)",
+		"GWAPIError: Track unavailable on Deezer",
+		"at GW.api_call (/snapshot/cli/dist/main.cjs)",
+	}, "\n") + "\n"
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[skip] Unknown Track (unavailable-on-deezer)") {
+		t.Fatalf("expected normalized unavailable-track skip line, got: %s", out)
+	}
+	if strings.Contains(out, "GWAPIError") || strings.Contains(out, "at GW.api_call") {
+		t.Fatalf("expected raw deemix stack noise to be suppressed, got: %s", out)
+	}
+}

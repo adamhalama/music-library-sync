@@ -88,3 +88,13 @@ func promptYesNoDefault(app *AppContext, prompt string, defaultYes bool) (bool, 
 	}
 	return response == "y" || response == "yes", nil
 }
+
+func promptLine(app *AppContext, prompt string) (string, error) {
+	fmt.Fprintf(app.IO.Out, "%s: ", prompt)
+	reader := bufio.NewReader(app.IO.In)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}

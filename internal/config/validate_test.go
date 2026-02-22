@@ -19,8 +19,12 @@ func TestValidateSuccess(t *testing.T) {
 				Enabled:   true,
 				TargetDir: "/tmp/music",
 				URL:       "https://open.spotify.com/playlist/abc",
-				StateFile: "groove.sync.spotdl",
-				Adapter:   AdapterSpec{Kind: "spotdl"},
+				StateFile: "groove.sync.spotify",
+				Adapter:   AdapterSpec{Kind: "deemix"},
+				Sync: SyncPolicy{
+					BreakOnExisting: testBoolPtr(true),
+					AskOnExisting:   testBoolPtr(false),
+				},
 			},
 			{
 				ID:        "soundcloud-likes",
@@ -70,7 +74,7 @@ func TestValidateFailure(t *testing.T) {
 				TargetDir: "/tmp/music",
 				URL:       "https://open.spotify.com/playlist/abc",
 				StateFile: "",
-				Adapter:   AdapterSpec{Kind: "spotdl"},
+				Adapter:   AdapterSpec{},
 			},
 			{
 				ID:        "spotify-with-sync",
@@ -78,7 +82,7 @@ func TestValidateFailure(t *testing.T) {
 				Enabled:   true,
 				TargetDir: "/tmp/music-2",
 				URL:       "https://open.spotify.com/playlist/xyz",
-				StateFile: "x.sync.spotdl",
+				StateFile: "x.sync.spotify",
 				Sync: SyncPolicy{
 					BreakOnExisting: testBoolPtr(true),
 					LocalIndexCache: testBoolPtr(true),

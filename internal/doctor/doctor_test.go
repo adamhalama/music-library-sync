@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 )
 
@@ -54,6 +55,30 @@ func soundcloudConfig() config.Config {
 				URL:       "https://soundcloud.com/user",
 				StateFile: "sc-a.sync.scdl",
 				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+}
+
+func spotifyDeemixConfig() config.Config {
+	return config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              "/tmp/state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-deemix",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: "/tmp/music",
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-deemix.sync.spotify",
+				Adapter:   config.AdapterSpec{Kind: "deemix"},
 			},
 		},
 	}
@@ -365,5 +390,67 @@ func TestResolveSpotDLBinaryForDoctorPrefersManagedVenv(t *testing.T) {
 
 	if got := resolveSpotDLBinaryForDoctor(); got != managed {
 		t.Fatalf("expected managed path %q, got %q", managed, got)
+	}
+}
+
+func TestResolveDeemixBinaryForDoctorPrefersOverride(t *testing.T) {
+	t.Setenv("UDL_DEEMIX_BIN", "/custom/deemix")
+	if got := resolveDeemixBinaryForDoctor(); got != "/custom/deemix" {
+		t.Fatalf("expected deemix override, got %q", got)
+	}
+}
+
+func TestDoctorSpotifyDeemixReportsMissingARLAndCredentials(t *testing.T) {
+	checker := &Checker{
+		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "deemix 0.1.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		ResolveDeemixARL: func() (string, error) {
+			return "", auth.ErrDeemixARLNotFound
+		},
+		ResolveSpotifyCredentials: func() (auth.SpotifyCredentials, error) {
+			return auth.SpotifyCredentials{}, auth.ErrSpotifyCredentialsNotFound
+		},
+	}
+
+	report := checker.Check(context.Background(), spotifyDeemixConfig())
+	if !hasErrorContaining(report, "require Deezer ARL") {
+		t.Fatalf("expected deemix ARL auth error, got %+v", report.Checks)
+	}
+	if !hasErrorContaining(report, "require Spotify app credentials") {
+		t.Fatalf("expected spotify credentials auth error, got %+v", report.Checks)
+	}
+	if !hasWarnContaining(report, "upstream transport may use insecure request paths") {
+		t.Fatalf("expected deemix transport risk warning, got %+v", report.Checks)
+	}
+}
+
+func TestDoctorSpotifyDeemixAuthChecksPassWhenCredentialsPresent(t *testing.T) {
+	checker := &Checker{
+		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "deemix 0.1.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		ResolveDeemixARL: func() (string, error) {
+			return "arl", nil
+		},
+		ResolveSpotifyCredentials: func() (auth.SpotifyCredentials, error) {
+			return auth.SpotifyCredentials{ClientID: "id", ClientSecret: "secret"}, nil
+		},
+	}
+
+	report := checker.Check(context.Background(), spotifyDeemixConfig())
+	if hasErrorContaining(report, "require Deezer ARL") || hasErrorContaining(report, "require Spotify app credentials") {
+		t.Fatalf("did not expect deemix auth errors, got %+v", report.Checks)
+	}
+	if !hasInfoContaining(report, "deemix Deezer ARL is available") {
+		t.Fatalf("expected deemix ARL info check, got %+v", report.Checks)
+	}
+	if !hasInfoContaining(report, "Spotify app credentials are available for deemix conversion") {
+		t.Fatalf("expected spotify credential info check, got %+v", report.Checks)
+	}
+	if !hasWarnContaining(report, "upstream transport may use insecure request paths") {
+		t.Fatalf("expected deemix transport risk warning, got %+v", report.Checks)
 	}
 }

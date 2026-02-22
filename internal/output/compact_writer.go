@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,8 +13,20 @@ import (
 	compactstate "github.com/jaa/update-downloads/internal/output/compact"
 )
 
+var preflightSummaryPattern = regexp.MustCompile(`^\[[^\]]+\]\s+preflight:\s+.*\bplanned=([0-9]+)\b`)
+var deemixTrackProgressPattern = regexp.MustCompile(`^\[[^\]]+\]\s+deemix track ([0-9]+)\/([0-9]+)\s+([A-Za-z0-9]{10,32})(?:\s+\((.+)\))?$`)
+var deemixTrackDonePattern = regexp.MustCompile(`^\[[^\]]+\]\s+\[done\]\s+([A-Za-z0-9]{10,32})(?:\s+\(([^)]+)\))?$`)
+var deemixTrackSkipPattern = regexp.MustCompile(`^\[[^\]]+\]\s+\[skip\]\s+([A-Za-z0-9]{10,32})(?:\s+\(([^)]+)\))?(?:\s+\(([^)]+)\))?$`)
+var deemixTrackFailurePattern = regexp.MustCompile(`^(?:ERROR:\s*)?\[[^\]]+\]\s+command failed with exit code ([0-9]+)$`)
+var deemixDownloadProgressPattern = regexp.MustCompile(`^\[([^\]]+)\]\s+Downloading:\s+([0-9]+(?:\.[0-9]+)?)%$`)
+var deemixDownloadCompletePattern = regexp.MustCompile(`^\[([^\]]+)\]\s+Download complete$`)
+var deemixTrackIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{10,32}$`)
+var sourceCompletedPattern = regexp.MustCompile(`^\[[^\]]+\]\s+completed$`)
+
 type CompactLogOptions struct {
-	Interactive bool
+	Interactive      bool
+	PreflightSummary string
+	TrackStatus      string
 }
 
 type CompactLogWriter struct {
@@ -32,7 +45,23 @@ type CompactLogWriter struct {
 
 	breakOnExistingDetected bool
 	breakStopPrinted        bool
+	activeAdapter           string
+	deemixTrackTitle        string
+	preflightSummaryMode    string
+	trackStatusMode         string
 }
+
+const (
+	CompactPreflightAuto   = "auto"
+	CompactPreflightAlways = "always"
+	CompactPreflightNever  = "never"
+)
+
+const (
+	CompactTrackStatusNames = "names"
+	CompactTrackStatusCount = "count"
+	CompactTrackStatusNone  = "none"
+)
 
 type trackState struct {
 	Name               string
@@ -46,16 +75,40 @@ type trackState struct {
 
 func NewCompactLogWriter(dst io.Writer) *CompactLogWriter {
 	return NewCompactLogWriterWithOptions(dst, CompactLogOptions{
-		Interactive: SupportsInPlaceUpdates(dst),
+		Interactive:      SupportsInPlaceUpdates(dst),
+		PreflightSummary: CompactPreflightAuto,
+		TrackStatus:      CompactTrackStatusNames,
 	})
 }
 
 func NewCompactLogWriterWithOptions(dst io.Writer, opts CompactLogOptions) *CompactLogWriter {
+	preflightSummary := strings.TrimSpace(strings.ToLower(opts.PreflightSummary))
+	switch preflightSummary {
+	case "", CompactPreflightAuto, CompactPreflightAlways, CompactPreflightNever:
+	default:
+		preflightSummary = CompactPreflightAuto
+	}
+	if preflightSummary == "" {
+		preflightSummary = CompactPreflightAuto
+	}
+
+	trackStatus := strings.TrimSpace(strings.ToLower(opts.TrackStatus))
+	switch trackStatus {
+	case "", CompactTrackStatusNames, CompactTrackStatusCount, CompactTrackStatusNone:
+	default:
+		trackStatus = CompactTrackStatusNames
+	}
+	if trackStatus == "" {
+		trackStatus = CompactTrackStatusNames
+	}
+
 	return &CompactLogWriter{
-		dst:         dst,
-		interactive: opts.Interactive,
-		buf:         make([]byte, 0, 256),
-		progress:    compactstate.NewStateMachine(),
+		dst:                  dst,
+		interactive:          opts.Interactive,
+		buf:                  make([]byte, 0, 256),
+		progress:             compactstate.NewStateMachine(),
+		preflightSummaryMode: preflightSummary,
+		trackStatusMode:      trackStatus,
 	}
 }
 
@@ -110,6 +163,8 @@ func (w *CompactLogWriter) ObserveEvent(event Event) {
 		w.track = trackState{}
 		w.breakOnExistingDetected = false
 		w.breakStopPrinted = false
+		w.activeAdapter = ""
+		w.deemixTrackTitle = ""
 	case EventSourcePreflight:
 		planned, ok := eventDetailInt(event.Details, "planned_download_count")
 		if !ok {
@@ -147,11 +202,171 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 	if strings.HasPrefix(line, "sync started (") {
 		w.progress.Reset()
 		w.track = trackState{}
+		w.activeAdapter = ""
+		w.deemixTrackTitle = ""
+	}
+
+	if match := preflightSummaryPattern.FindStringSubmatch(line); len(match) == 2 {
+		planned, _ := strconv.Atoi(match[1])
+		if planned < 0 {
+			planned = 0
+		}
+		w.progress.SetPlanningSource("", planned)
+		w.track = trackState{}
+		if w.showPreflightSummaryLocked() {
+			if err := w.printPersistentLocked(line); err != nil {
+				return err
+			}
+		}
+		if planned > 0 {
+			return w.renderIdleStatusLocked()
+		}
+		return nil
+	}
+
+	if match := deemixTrackProgressPattern.FindStringSubmatch(line); len(match) >= 4 {
+		if err := w.finalizeTrackLocked(); err != nil {
+			return err
+		}
+		index, _ := strconv.Atoi(match[1])
+		total, _ := strconv.Atoi(match[2])
+		if index < 1 {
+			index = 1
+		}
+		if total < 0 {
+			total = 0
+		}
+		w.activeAdapter = "deemix"
+		w.deemixTrackTitle = ""
+		w.progress.SetItemIndex(index, total)
+		trackName := strings.TrimSpace(match[3])
+		if len(match) >= 5 {
+			label := strings.TrimSpace(match[4])
+			if label != "" {
+				trackName = label
+			}
+		}
+		w.track = trackState{Name: trackName}
+		return w.renderStatusLocked("downloading")
+	}
+
+	if match := deemixTrackDonePattern.FindStringSubmatch(line); len(match) >= 2 {
+		w.activeAdapter = "deemix"
+		label := ""
+		if len(match) >= 3 {
+			label = strings.TrimSpace(match[2])
+		}
+		if label != "" && (strings.TrimSpace(w.track.Name) == "" || deemixTrackIDPattern.MatchString(strings.TrimSpace(w.track.Name))) {
+			w.track.Name = label
+		}
+		if w.deemixTrackTitle != "" && (strings.TrimSpace(w.track.Name) == "" || deemixTrackIDPattern.MatchString(strings.TrimSpace(w.track.Name))) {
+			w.track.Name = w.deemixTrackTitle
+		}
+		if strings.TrimSpace(w.track.Name) == "" {
+			w.track.Name = strings.TrimSpace(match[1])
+		}
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = 100
+		w.track.CompletionObserved = true
+		w.deemixTrackTitle = ""
+		if err := w.renderStatusLocked("downloaded"); err != nil {
+			return err
+		}
+		return w.finalizeTrackLocked()
+	}
+
+	if match := deemixTrackSkipPattern.FindStringSubmatch(line); len(match) >= 2 {
+		w.activeAdapter = "deemix"
+		label := ""
+		if len(match) >= 3 {
+			label = strings.TrimSpace(match[2])
+		}
+		reason := ""
+		if len(match) >= 4 {
+			reason = strings.TrimSpace(match[3])
+		}
+		trackName := label
+		if trackName == "" {
+			trackName = strings.TrimSpace(match[1])
+		}
+		if strings.TrimSpace(w.track.Name) != "" && !deemixTrackIDPattern.MatchString(strings.TrimSpace(w.track.Name)) {
+			trackName = strings.TrimSpace(w.track.Name)
+		}
+		if strings.TrimSpace(trackName) == "" {
+			trackName = w.nextSpotDLTrackLabelLocked()
+		}
+		w.progress.CompleteTrack()
+		w.track = trackState{}
+		w.deemixTrackTitle = ""
+		lineOut := w.compactTrackResultLineLocked("[skip]", trackName)
+		if reason != "" {
+			lineOut = fmt.Sprintf("%s (%s)", lineOut, reason)
+		}
+		if w.trackStatusMode != CompactTrackStatusNone {
+			if err := w.printPersistentLocked(lineOut); err != nil {
+				return err
+			}
+		}
+		return w.renderIdleStatusLocked()
+	}
+
+	if match := deemixTrackFailurePattern.FindStringSubmatch(line); len(match) == 2 && w.activeAdapter == "deemix" {
+		trackName := strings.TrimSpace(w.track.Name)
+		if trackName == "" {
+			trackName = w.nextSpotDLTrackLabelLocked()
+		}
+		w.progress.CompleteTrack()
+		w.track = trackState{}
+		w.deemixTrackTitle = ""
+		if w.trackStatusMode != CompactTrackStatusNone {
+			lineOut := fmt.Sprintf("%s (exit-%s)", w.compactTrackResultLineLocked("[fail]", trackName), match[1])
+			if err := w.printPersistentLocked(lineOut); err != nil {
+				return err
+			}
+		}
+		return w.renderIdleStatusLocked()
+	}
+
+	if match := deemixDownloadProgressPattern.FindStringSubmatch(line); len(match) == 3 && w.activeAdapter == "deemix" {
+		title := strings.TrimSpace(match[1])
+		if title != "" {
+			w.deemixTrackTitle = title
+		}
+		if title != "" && (strings.TrimSpace(w.track.Name) == "" || deemixTrackIDPattern.MatchString(strings.TrimSpace(w.track.Name))) {
+			w.track.Name = title
+		}
+		percent, _ := strconv.ParseFloat(match[2], 64)
+		clamped := compactstate.ClampPercent(percent)
+		if w.track.ProgressKnown && clamped < w.track.ProgressPercent {
+			clamped = w.track.ProgressPercent
+		}
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = clamped
+		return w.renderStatusLocked("downloading")
+	}
+
+	if match := deemixDownloadCompletePattern.FindStringSubmatch(line); len(match) == 2 && w.activeAdapter == "deemix" {
+		title := strings.TrimSpace(match[1])
+		if title != "" {
+			w.deemixTrackTitle = title
+		}
+		if title != "" && (strings.TrimSpace(w.track.Name) == "" || deemixTrackIDPattern.MatchString(strings.TrimSpace(w.track.Name))) {
+			w.track.Name = title
+		}
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = 100
+		return w.renderStatusLocked("downloading")
+	}
+
+	if sourceCompletedPattern.MatchString(line) {
+		w.activeAdapter = ""
 	}
 
 	if parsed, ok := compactstate.ParseLine(line); ok {
 		switch parsed.Kind {
 		case compactstate.LineEventSpotDLFoundSongs:
+			w.activeAdapter = "spotdl"
+			w.deemixTrackTitle = ""
 			w.progress.SetItemTotal(parsed.Total)
 			w.track = trackState{}
 			if parsed.Total > 0 {
@@ -168,6 +383,8 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 			if err := w.finalizeTrackLocked(); err != nil {
 				return err
 			}
+			w.activeAdapter = "scdl"
+			w.deemixTrackTitle = ""
 			w.breakOnExistingDetected = false
 			w.breakStopPrinted = false
 			w.progress.SetItemIndex(parsed.Index, parsed.Total)
@@ -240,6 +457,9 @@ func (w *CompactLogWriter) handleLineLocked(line string) error {
 		return nil
 	}
 	if shouldSuppressSpotDLSpotifyNoise(line) {
+		return nil
+	}
+	if shouldSuppressDeemixNoise(line) {
 		return nil
 	}
 
@@ -319,7 +539,7 @@ func (w *CompactLogWriter) finalizeTrackLocked() error {
 		result = "[skip]"
 	}
 
-	line := fmt.Sprintf("%s %s", result, w.track.Name)
+	display := w.track.Name
 	flags := []string{}
 	if w.track.HasThumbnail {
 		flags = append(flags, "thumb")
@@ -331,13 +551,15 @@ func (w *CompactLogWriter) finalizeTrackLocked() error {
 		flags = append(flags, "already-present")
 	}
 	if len(flags) > 0 {
-		line += " (" + strings.Join(flags, ", ") + ")"
+		display += " (" + strings.Join(flags, ", ") + ")"
 	}
 
 	w.progress.CompleteTrack()
 	w.track = trackState{}
-	if err := w.printPersistentLocked(line); err != nil {
-		return err
+	if w.trackStatusMode != CompactTrackStatusNone {
+		if err := w.printPersistentLocked(w.compactTrackResultLineLocked(result, display)); err != nil {
+			return err
+		}
 	}
 	return w.renderIdleStatusLocked()
 }
@@ -378,12 +600,14 @@ func (w *CompactLogWriter) recordSpotDLFailedTrackLocked(name string, reason str
 	}
 	w.progress.CompleteTrack()
 	w.track = trackState{}
-	line := fmt.Sprintf("[skip] %s", name)
+	line := w.compactTrackResultLineLocked("[skip]", name)
 	if strings.TrimSpace(reason) != "" {
 		line = fmt.Sprintf("%s (%s)", line, reason)
 	}
-	if err := w.printPersistentLocked(line); err != nil {
-		return err
+	if w.trackStatusMode != CompactTrackStatusNone {
+		if err := w.printPersistentLocked(line); err != nil {
+			return err
+		}
 	}
 	return w.renderIdleStatusLocked()
 }
@@ -398,6 +622,46 @@ func (w *CompactLogWriter) nextSpotDLTrackLabelLocked() string {
 		return fmt.Sprintf("track %d", index)
 	}
 	return "track"
+}
+
+func (w *CompactLogWriter) showPreflightSummaryLocked() bool {
+	switch w.preflightSummaryMode {
+	case CompactPreflightNever:
+		return false
+	case CompactPreflightAlways:
+		return true
+	default:
+		return true
+	}
+}
+
+func (w *CompactLogWriter) compactTrackResultLineLocked(prefix string, display string) string {
+	name := strings.TrimSpace(display)
+	switch w.trackStatusMode {
+	case CompactTrackStatusCount:
+		name = w.completedTrackLabelLocked()
+	case CompactTrackStatusNone:
+		name = ""
+	}
+	if name == "" {
+		return strings.TrimSpace(prefix)
+	}
+	return fmt.Sprintf("%s %s", prefix, name)
+}
+
+func (w *CompactLogWriter) completedTrackLabelLocked() string {
+	total := w.effectiveItemTotal()
+	done := w.progress.Completed()
+	if done < 1 {
+		done = 1
+	}
+	if total > 0 {
+		if done > total {
+			done = total
+		}
+		return fmt.Sprintf("track %d/%d", done, total)
+	}
+	return fmt.Sprintf("track %d", done)
 }
 
 func (w *CompactLogWriter) printPersistentLocked(line string) error {
@@ -500,6 +764,28 @@ func shouldSuppressSpotDLSpotifyNoise(line string) bool {
 		(strings.HasPrefix(lower, "spotifyexception: http status: 403") && strings.Contains(lower, "api.spotify.com")) ||
 		(strings.Contains(lower, "valid user authentication required") && strings.Contains(lower, "reason: none")) ||
 		(strings.HasPrefix(lower, "forbidden, reason: none"))
+}
+
+func shouldSuppressDeemixNoise(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+
+	if strings.HasPrefix(lower, "gwapierror: track unavailable on deezer") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "at ") && strings.Contains(trimmed, "/snapshot/cli/dist/main.cjs") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "at process.processTicksAndRejections") {
+		return true
+	}
+	if strings.HasPrefix(lower, "typeerror: cannot read properties of undefined") {
+		return true
+	}
+	if strings.Contains(lower, "spotifyplugin.gettrack") && strings.Contains(trimmed, "/snapshot/cli/dist/main.cjs") {
+		return true
+	}
+	return false
 }
 
 func isBreakOnExistingLine(line string) bool {

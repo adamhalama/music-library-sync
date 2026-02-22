@@ -403,25 +403,35 @@ func writeFilteredArchiveFile(originalPath string, removeIDs map[string]struct{}
 
 func scanLocalMediaTitleIndex(targetDir string) map[string]int {
 	index := map[string]int{}
-	entries, err := os.ReadDir(targetDir)
-	if err != nil {
+	root := strings.TrimSpace(targetDir)
+	if root == "" {
 		return index
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	if _, err := os.Stat(root); err != nil {
+		return index
+	}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		name := entry.Name()
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
 		ext := strings.ToLower(filepath.Ext(name))
 		if !isMediaExt(ext) {
-			continue
+			return nil
 		}
 		stem := strings.TrimSpace(strings.TrimSuffix(name, ext))
 		key := normalizeTrackKey(stem)
 		if key == "" {
-			continue
+			return nil
 		}
 		index[key]++
+		return nil
+	})
+	if err != nil {
+		return index
 	}
 	return index
 }

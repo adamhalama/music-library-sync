@@ -203,7 +203,7 @@ func normalize(cfg *Config) {
 			cfg.Sources[i].Adapter.Kind = defaultAdapterKind(cfg.Sources[i].Type)
 		}
 		if cfg.Sources[i].Type == SourceTypeSpotify && strings.TrimSpace(cfg.Sources[i].StateFile) == "" && cfg.Sources[i].ID != "" {
-			cfg.Sources[i].StateFile = cfg.Sources[i].ID + ".sync.spotdl"
+			cfg.Sources[i].StateFile = cfg.Sources[i].ID + ".sync.spotify"
 		}
 		if cfg.Sources[i].Type == SourceTypeSoundCloud && strings.TrimSpace(cfg.Sources[i].StateFile) == "" && cfg.Sources[i].ID != "" {
 			cfg.Sources[i].StateFile = cfg.Sources[i].ID + ".sync.scdl"
@@ -224,8 +224,6 @@ func normalize(cfg *Config) {
 
 func defaultAdapterKind(sourceType SourceType) string {
 	switch sourceType {
-	case SourceTypeSpotify:
-		return "spotdl"
 	case SourceTypeSoundCloud:
 		return "scdl"
 	default:

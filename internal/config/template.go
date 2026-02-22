@@ -30,9 +30,23 @@ sources:
     enabled: true
     target_dir: "~/Music/downloaded/spotify-groove"
     url: "https://open.spotify.com/playlist/replace-me"
-    state_file: "spotify-groove.sync.spotdl"
+    state_file: "spotify-groove.sync.spotify"
     adapter:
-      kind: "spotdl"
-      extra_args: ["--headless", "--print-errors"]
+      kind: "deemix"
+      extra_args: []
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
+
+  # Optional legacy spotify adapter:
+  # - id: "spotify-groove-legacy"
+  #   type: "spotify"
+  #   enabled: false
+  #   target_dir: "~/Music/downloaded/spotify-groove"
+  #   url: "https://open.spotify.com/playlist/replace-me"
+  #   state_file: "spotify-groove-legacy.sync.spotify"
+  #   adapter:
+  #     kind: "spotdl"
+  #     extra_args: ["--headless", "--print-errors"]
 `, defaultStateDir(), "archive.txt", 1, 900)
 }

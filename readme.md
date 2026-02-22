@@ -13,14 +13,15 @@ The legacy script remains available during migration: `bin/update-downloads`.
 ## Current Status
 
 - CLI name: `udl`
-- v1 model: Go app orchestrating external adapters (`spotdl`, `scdl`)
+- v1 model: Go app orchestrating external adapters (`deemix`, `spotdl`, `scdl`)
 - Scope: `init`, `validate`, `doctor`, `sync`, `version`
 
 ## Requirements
 
 Runtime tools:
-- `spotdl`
 - `scdl`
+- `deemix` (recommended for Spotify)
+- `spotdl` (legacy/fallback Spotify path)
 - `yt-dlp` (required for SoundCloud preflight diff mode)
 
 Dependency policy:
@@ -30,6 +31,8 @@ Dependency policy:
 
 Environment:
 - `SCDL_CLIENT_ID` (required for SoundCloud sources)
+- `UDL_DEEMIX_ARL` (or macOS Keychain item `service=udl.deemix account=default`) for Spotify+deemix
+- `UDL_SPOTIFY_CLIENT_ID` + `UDL_SPOTIFY_CLIENT_SECRET` for Spotify+deemix conversion (fallback: `~/.spotdl/config.json`)
 
 Build tooling:
 - Go 1.22+
@@ -112,6 +115,9 @@ Global flags:
 - `--ask-on-existing`
 - `--scan-gaps`
 - `--no-preflight`
+- `--progress <auto|always|never>`
+- `--preflight-summary <auto|always|never>`
+- `--track-status <names|count|none>`
 
 ## Config
 
@@ -131,6 +137,15 @@ Supported config env overrides:
 - `UDL_COMMAND_TIMEOUT_SECONDS`
 - `UDL_SPOTDL_BIN`
 - `UDL_SCDL_BIN`
+- `UDL_DEEMIX_BIN`
+- `UDL_DEEMIX_ARL`
+- `UDL_SPOTIFY_CLIENT_ID`
+- `UDL_SPOTIFY_CLIENT_SECRET`
+
+`udl` also loads `.env` and `.env.local` from the current working directory at startup.
+- `.env.local` is intended for developer-machine overrides (for example `UDL_DEEMIX_BIN=/Users/you/.local/bin/deemix-bambanah`).
+- Existing process env vars still win (dotenv files do not override already-set variables).
+- Keep secrets out of committed files; `.env.local` is gitignored in this repo.
 
 Example:
 
@@ -162,15 +177,44 @@ sources:
     enabled: true
     target_dir: "~/Music/downloaded/spotify-groove"
     url: "https://open.spotify.com/playlist/replace-me"
-    state_file: "spotify-groove.sync.spotdl"
+    state_file: "spotify-groove.sync.spotify"
     adapter:
-      kind: "spotdl"
-      extra_args: ["--headless", "--print-errors"]
+      kind: "deemix"
+      extra_args: []
+
+  # Optional legacy Spotify source using spotdl:
+  # - id: "spotify-groove-legacy"
+  #   type: "spotify"
+  #   enabled: false
+  #   target_dir: "~/Music/downloaded/spotify-groove"
+  #   url: "https://open.spotify.com/playlist/replace-me"
+  #   state_file: "spotify-groove-legacy.sync.spotify"
+  #   adapter:
+  #     kind: "spotdl"
+  #     extra_args: ["--headless", "--print-errors"]
 ```
 
 Notes:
-- Spotify sources use `spotdl` and prefer a managed binary at `~/.venvs/udl-spotdl/bin/spotdl` when present (or `UDL_SPOTDL_BIN` when set), falling back to `spotdl` from `PATH`.
-- If Spotify returns `Valid user authentication required` and prompts are allowed (TTY, no `--no-input`), `udl` retries the source once with `spotdl --user-auth`.
+- Spotify sources must explicitly set `adapter.kind` (`deemix` or `spotdl`); there is no silent default for Spotify.
+- Recommended Spotify path is `adapter.kind: deemix`; `spotdl` remains available as fallback/legacy.
+- Spotify+`deemix` supports the same preflight planning controls as SoundCloud (`break_on_existing`, `ask_on_existing`, `--scan-gaps`, `--no-preflight`) and tracks known Spotify IDs in the source state file.
+- Spotify+`deemix` preflight now treats known tracks missing from `target_dir` as `known_gaps` (SCDL-style), so deleted local files are re-planned automatically.
+- In default compact mode, Spotify+`deemix` progress is rendered as live per-track/global bars with persistent `[done]/[skip]/[fail]` lines. Raw deemix stack/progress chatter is suppressed; use `--verbose` for raw subprocess output.
+- Compact mode now preserves source preflight summary lines by default. Use `--preflight-summary never` to hide them.
+- Use `--progress` to control bar rendering (`auto` by TTY, `always`, `never`).
+- Use `--track-status` to control persistent per-track lines (`names`, `count`, `none`).
+- For Spotify playlists with `--no-preflight`, `udl` still enumerates public playlist tracks and executes deemix per track so metadata cache priming remains active.
+- `deemix` binary resolution prefers `UDL_DEEMIX_BIN`, then `deemix` from `PATH`.
+- Deezer ARL resolution order is `UDL_DEEMIX_ARL` then macOS Keychain (`service=udl.deemix account=default`). Interactive sync can prompt and store ARL in Keychain.
+- Spotify app credential resolution order for deemix conversion is `UDL_SPOTIFY_CLIENT_ID`/`UDL_SPOTIFY_CLIENT_SECRET`, then macOS Keychain (`service=udl.spotify` accounts `client_id` and `client_secret`), then `~/.spotdl/config.json` (`client_id`/`client_secret`).
+- For Spotify+`deemix`, `udl` primes deemix's Spotify cache per track (title/artist/album) before each run to avoid known upstream Spotify plugin crash paths.
+- For Spotify+`deemix`, `udl` now treats `GWAPIError: Track unavailable on Deezer` as a per-track skip (keeps source running, does not append skipped IDs to state).
+- Spotify state entries now persist optional metadata (`title`, `path`) for stronger local-existence detection when Spotify API metadata is unavailable.
+- If Spotify Web API playlist preflight is blocked (for example `403`), `udl` falls back to parsing public playlist HTML to enumerate track IDs and keep deterministic planning.
+- Upstream `deemix`/`deezer-sdk` transport behavior is security-sensitive (historically includes insecure request paths). Treat Deezer ARL and Spotify app credentials as secrets and run only on trusted networks.
+- Use `bin/setup-udl-secrets.sh` to store ARL and optional Spotify credentials in Keychain.
+- Legacy Spotify path uses `spotdl` and prefers a managed binary at `~/.venvs/udl-spotdl/bin/spotdl` when present (or `UDL_SPOTDL_BIN` when set), falling back to `spotdl` from `PATH`.
+- If `spotdl` reports `Valid user authentication required` and prompts are allowed (TTY, no `--no-input`), `udl` retries once with `--user-auth`.
 - For SoundCloud sources, `udl` injects `--yt-dlp-args "--embed-thumbnail --embed-metadata"` automatically when `--yt-dlp-args` is not explicitly provided.
 - `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
 - SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.
