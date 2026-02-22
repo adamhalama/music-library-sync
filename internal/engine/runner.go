@@ -88,6 +88,7 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	cmd := exec.CommandContext(runCtx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Stdin = r.Stdin
+	configureCommandForTermination(cmd)
 
 	stdoutTail := newTailBuffer(64 * 1024)
 	stderrTail := newTailBuffer(64 * 1024)
@@ -117,6 +118,16 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	stderrSink = newLineObserverWriter(stderrSink, abortForRateLimit)
 	cmd.Stdout = stdoutSink
 	cmd.Stderr = stderrSink
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-runCtx.Done():
+			terminateCommand(cmd)
+		case <-done:
+		}
+	}()
 
 	err := cmd.Run()
 	flushWriterIfSupported(r.Stdout)
@@ -213,6 +224,9 @@ func (w *lineObserverWriter) consumeLines(p []byte) {
 		default:
 			w.buf = append(w.buf, b)
 		}
+	}
+	if len(w.buf) > 0 {
+		w.onLine(strings.TrimSpace(string(w.buf)))
 	}
 }
 

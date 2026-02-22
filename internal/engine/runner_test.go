@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestSubprocessRunnerPassesStdinToCommand(t *testing.T) {
@@ -58,20 +57,18 @@ func TestSubprocessRunnerAbortsSpotDLOnLargeRateLimitRetryWindow(t *testing.T) {
 	tmp := t.TempDir()
 	scriptPath := filepath.Join(tmp, "spotdl")
 	script := "#!/bin/sh\n" +
-		"echo 'Your application has reached a rate/request limit. Retry will occur after: 600 s'\n" +
-		"sleep 5\n"
+		"echo 'Your application has reached a rate/request limit. Retry will occur after: 600 s' >&2\n" +
+		"sleep 1\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
-	start := time.Now()
 	result := runner.Run(context.Background(), ExecSpec{
 		Bin:     scriptPath,
 		Args:    nil,
 		Dir:     ".",
 		Timeout: 0,
 	})
-	duration := time.Since(start)
 
 	if result.ExitCode == 0 {
 		t.Fatalf("expected non-zero exit code when rate-limit guard aborts process")
@@ -79,7 +76,7 @@ func TestSubprocessRunnerAbortsSpotDLOnLargeRateLimitRetryWindow(t *testing.T) {
 	if result.Interrupted {
 		t.Fatalf("expected rate-limit abort to not be marked as interrupted")
 	}
-	if duration >= 4*time.Second {
-		t.Fatalf("expected early abort before sleep finished, duration=%s", duration)
+	if !strings.Contains(result.StderrTail, "rate/request limit") {
+		t.Fatalf("expected stderr tail to include rate-limit marker, got %q", result.StderrTail)
 	}
 }

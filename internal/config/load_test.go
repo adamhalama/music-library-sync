@@ -122,4 +122,7 @@ sources:
 	if cfg.Sources[0].Sync.AskOnExisting == nil || *cfg.Sources[0].Sync.AskOnExisting {
 		t.Fatalf("expected ask_on_existing default false")
 	}
+	if cfg.Sources[0].Sync.LocalIndexCache == nil || *cfg.Sources[0].Sync.LocalIndexCache {
+		t.Fatalf("expected local_index_cache default false")
+	}
 }

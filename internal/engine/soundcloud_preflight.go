@@ -276,80 +276,20 @@ func buildSoundCloudPreflight(
 	targetDir string,
 	mode SoundCloudMode,
 ) (SoundCloudPreflight, map[string]struct{}, map[string]struct{}, map[string]struct{}) {
-	knownGapIDs := map[string]struct{}{}
-	archiveGapIDs := map[string]struct{}{}
-	localMediaByTitle := scanLocalMediaTitleIndex(targetDir)
-	availableLocalTitles := copyTitleCountMap(localMediaByTitle)
-
-	knownCount := 0
-	firstExisting := 0
-	for i, track := range remoteTracks {
-		entry, knownFromState := state.ByID[track.ID]
-		_, knownFromArchive := archiveKnownIDs[track.ID]
-		if !knownFromState && !knownFromArchive {
-			archiveGapIDs[track.ID] = struct{}{}
-			continue
-		}
-
-		knownCount++
-		hasLocal := false
-
-		// Known gaps are informational only. They represent items already known
-		// in archive/state but not currently present as local media.
-		if knownFromState {
-			if stateEntryHasLocalFile(entry.FilePath, targetDir) {
-				hasLocal = true
-			}
-			if !hasLocal && consumeLocalTitleMatch(availableLocalTitles, track.Title) {
-				hasLocal = true
-			}
-		} else if consumeLocalTitleMatch(availableLocalTitles, track.Title) {
-			hasLocal = true
-		}
-		if hasLocal {
-			if firstExisting == 0 {
-				firstExisting = i + 1
-			}
-		} else {
-			knownGapIDs[track.ID] = struct{}{}
-		}
+	localIndex := map[string]int{}
+	if needsSoundCloudLocalIndex(remoteTracks, state, archiveKnownIDs) {
+		localIndex = scanLocalMediaTitleIndex(targetDir)
 	}
 
-	planned := map[string]struct{}{}
-	switch mode {
-	case SoundCloudModeScanGaps:
-		for id := range archiveGapIDs {
-			planned[id] = struct{}{}
-		}
-		for id := range knownGapIDs {
-			planned[id] = struct{}{}
-		}
-	default:
-		limit := len(remoteTracks)
-		if firstExisting > 0 {
-			limit = firstExisting - 1
-		}
-		for i := 0; i < limit; i++ {
-			id := remoteTracks[i].ID
-			if _, gap := archiveGapIDs[id]; gap {
-				planned[id] = struct{}{}
-			}
-			if _, knownGap := knownGapIDs[id]; knownGap {
-				planned[id] = struct{}{}
-			}
-		}
-	}
-
-	preflight := SoundCloudPreflight{
-		RemoteTotal:          len(remoteTracks),
-		KnownCount:           knownCount,
-		ArchiveGapCount:      len(archiveGapIDs),
-		KnownGapCount:        len(knownGapIDs),
-		FirstExistingIndex:   firstExisting,
-		PlannedDownloadCount: len(planned),
-		Mode:                 mode,
-	}
-	return preflight, archiveGapIDs, knownGapIDs, planned
+	plan := planSoundCloudPreflightStage(soundCloudPlanStageInput{
+		RemoteTracks:   remoteTracks,
+		State:          state,
+		ArchiveKnownID: archiveKnownIDs,
+		LocalIndex:     localIndex,
+		TargetDir:      targetDir,
+		Mode:           mode,
+	})
+	return plan.Preflight, plan.ArchiveGapID, plan.KnownGapID, plan.PlannedID
 }
 
 func stateEntryHasLocalFile(rawPath, targetDir string) bool {

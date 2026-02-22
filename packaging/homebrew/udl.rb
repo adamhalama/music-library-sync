@@ -18,6 +18,9 @@ class Udl < Formula
     sha256 "REPLACE_WITH_SHA256_LINUX_AMD64"
   end
 
+  depends_on "scdl"
+  depends_on "yt-dlp"
+
   def install
     bin.install cached_download => "udl"
   end

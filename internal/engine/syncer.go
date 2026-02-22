@@ -688,31 +688,57 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 		return plan, nil
 	}
 
-	tracks, err := enumerateSoundCloudTracks(ctx, source)
+	enumerateStage, err := enumerateSoundCloudStage(ctx, soundCloudEnumerateStageInput{Source: source})
 	if err != nil {
 		return plan, err
 	}
+	tracks := enumerateStage.Tracks
 
 	targetDir, err := config.ExpandPath(source.TargetDir)
 	if err != nil {
 		return plan, fmt.Errorf("resolve target_dir: %w", err)
 	}
 
-	state, err := parseSoundCloudSyncState(stateFilePath)
+	stateStage, err := loadSoundCloudStateStage(soundCloudStateStageInput{StateFilePath: stateFilePath})
 	if err != nil {
 		return plan, fmt.Errorf("parse sync state file: %w", err)
 	}
+	state := stateStage.State
 
-	archivePath, err := resolveSoundCloudArchivePath(source, cfg.Defaults)
-	if err != nil {
-		return plan, fmt.Errorf("resolve archive file: %w", err)
-	}
-	archiveKnownIDs, err := parseSoundCloudArchive(archivePath)
+	archiveStage, err := loadSoundCloudArchiveStage(soundCloudArchiveStageInput{
+		Source:   source,
+		Defaults: cfg.Defaults,
+	})
 	if err != nil {
 		return plan, fmt.Errorf("parse archive file: %w", err)
 	}
+	archivePath := archiveStage.ArchivePath
+	archiveKnownIDs := archiveStage.KnownIDs
 
-	preflight, _, knownGapIDs, plannedIDs := buildSoundCloudPreflight(tracks, state, archiveKnownIDs, targetDir, mode)
+	cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
+	needsLocalIndex := needsSoundCloudLocalIndex(tracks, state, archiveKnownIDs)
+	localIndexStage, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+		SourceID:  source.ID,
+		TargetDir: targetDir,
+		StateDir:  cfg.Defaults.StateDir,
+		NeedScan:  needsLocalIndex,
+		UseCache:  cacheEnabled,
+	})
+	if err != nil {
+		return plan, fmt.Errorf("build local index: %w", err)
+	}
+
+	planStage := planSoundCloudPreflightStage(soundCloudPlanStageInput{
+		RemoteTracks:   tracks,
+		State:          state,
+		ArchiveKnownID: archiveKnownIDs,
+		LocalIndex:     localIndexStage.Index,
+		TargetDir:      targetDir,
+		Mode:           mode,
+	})
+	preflight := planStage.Preflight
+	knownGapIDs := planStage.KnownGapID
+	plannedIDs := planStage.PlannedID
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&
 		preflight.FirstExistingIndex > 0 &&
@@ -724,7 +750,17 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 		}
 		if shouldScanGaps {
 			mode = SoundCloudModeScanGaps
-			preflight, _, knownGapIDs, plannedIDs = buildSoundCloudPreflight(tracks, state, archiveKnownIDs, targetDir, mode)
+			planStage = planSoundCloudPreflightStage(soundCloudPlanStageInput{
+				RemoteTracks:   tracks,
+				State:          state,
+				ArchiveKnownID: archiveKnownIDs,
+				LocalIndex:     localIndexStage.Index,
+				TargetDir:      targetDir,
+				Mode:           mode,
+			})
+			preflight = planStage.Preflight
+			knownGapIDs = planStage.KnownGapID
+			plannedIDs = planStage.PlannedID
 		}
 	}
 
