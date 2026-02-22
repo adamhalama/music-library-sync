@@ -27,3 +27,6 @@ We are building this together. When you learn something non-obvious, add it here
 - As of Spotify Web API changes (Feb 2026), upstream `spotdl` `4.4.3` can fail on playlist metadata (`/playlists/{id}/tracks` 403) and missing artist fields (for example `genres`). A patched build from PR #2610 commit `27f3a0e33174170cbeebbcc0738ceb41a9baf947` works in local validation.
 - `udl` now retries Spotify sources once with `--user-auth` when `spotdl` reports `Valid user authentication required` (TTY only; disabled by `--no-input`).
 - Spotify adapter binary resolution now prefers `UDL_SPOTDL_BIN`, then `~/.venvs/udl-spotdl/bin/spotdl`, then `spotdl` from `PATH`.
+- If Spotify retries run with `--headless`, OAuth stays in manual copy/paste mode; removing `--headless` on the retry allows browser-led auth and is much clearer for interactive `udl sync` flows.
+- `udl` now fails fast when SpotDL reports a long Spotify API retry window (`rate/request limit ... Retry will occur after ...`) instead of waiting for that full backoff period.
+- Compact mode now normalizes SpotDL progress to `[done]/[skip]` lines and suppresses noisy SpotDL traceback/chatter by default; use `--verbose` for raw subprocess output.

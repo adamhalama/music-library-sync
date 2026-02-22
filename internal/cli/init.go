@@ -68,12 +68,23 @@ func newInitCommand(app *AppContext) *cobra.Command {
 }
 
 func promptYesNo(app *AppContext, prompt string) (bool, error) {
-	fmt.Fprintf(app.IO.Out, "%s [y/N]: ", prompt)
+	return promptYesNoDefault(app, prompt, false)
+}
+
+func promptYesNoDefault(app *AppContext, prompt string, defaultYes bool) (bool, error) {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
+	fmt.Fprintf(app.IO.Out, "%s %s: ", prompt, suffix)
 	reader := bufio.NewReader(app.IO.In)
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return false, err
 	}
 	response := strings.ToLower(strings.TrimSpace(line))
+	if response == "" {
+		return defaultYes, nil
+	}
 	return response == "y" || response == "yes", nil
 }

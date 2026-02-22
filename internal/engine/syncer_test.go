@@ -387,3 +387,182 @@ func TestSyncerDoesNotRetrySpotifyAuthWithoutPrompt(t *testing.T) {
 		t.Fatalf("expected one runner call, got %d", len(runner.specs))
 	}
 }
+
+func TestSyncerSpotifyRetryDropsHeadlessWhenBrowserChosen(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-source",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-source.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "spotdlfake", ExtraArgs: []string{"--headless", "--print-errors"}},
+			},
+		},
+	}
+
+	runner := &sequenceRunner{
+		results: []ExecResult{
+			{
+				ExitCode:   1,
+				StderrTail: "HTTP Error ... returned 401 due to Valid user authentication required",
+			},
+			{
+				ExitCode: 0,
+			},
+		},
+	}
+	syncer := NewSyncer(map[string]Adapter{"spotdlfake": fakeSpotifyAdapter{}}, runner, output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true))
+
+	prompted := false
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
+		AllowPrompt: true,
+		PromptOnSpotifyAuth: func(sourceID string) (bool, error) {
+			prompted = true
+			return true, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful retry result, got %+v", result)
+	}
+	if !prompted {
+		t.Fatalf("expected spotify auth callback to be called")
+	}
+	if len(runner.specs) != 2 {
+		t.Fatalf("expected two runner calls, got %d", len(runner.specs))
+	}
+	retryArgs := runner.specs[1].Args
+	retryJoined := strings.Join(retryArgs, " ")
+	if !strings.Contains(retryJoined, "--user-auth") {
+		t.Fatalf("expected --user-auth in retry args, got %v", retryArgs)
+	}
+	if strings.Contains(retryJoined, "--headless") {
+		t.Fatalf("expected --headless to be removed when browser auth is chosen, got %v", retryArgs)
+	}
+}
+
+func TestSyncerSpotifyRetryKeepsHeadlessWhenBrowserDeclined(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-source",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-source.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "spotdlfake", ExtraArgs: []string{"--headless", "--print-errors"}},
+			},
+		},
+	}
+
+	runner := &sequenceRunner{
+		results: []ExecResult{
+			{
+				ExitCode:   1,
+				StderrTail: "HTTP Error ... returned 401 due to Valid user authentication required",
+			},
+			{
+				ExitCode: 0,
+			},
+		},
+	}
+	syncer := NewSyncer(map[string]Adapter{"spotdlfake": fakeSpotifyAdapter{}}, runner, output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true))
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
+		AllowPrompt: true,
+		PromptOnSpotifyAuth: func(sourceID string) (bool, error) {
+			return false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful retry result, got %+v", result)
+	}
+	if len(runner.specs) != 2 {
+		t.Fatalf("expected two runner calls, got %d", len(runner.specs))
+	}
+	retryArgs := runner.specs[1].Args
+	retryJoined := strings.Join(retryArgs, " ")
+	if !strings.Contains(retryJoined, "--user-auth") {
+		t.Fatalf("expected --user-auth in retry args, got %v", retryArgs)
+	}
+	if !strings.Contains(retryJoined, "--headless") {
+		t.Fatalf("expected --headless to remain for manual auth flow, got %v", retryArgs)
+	}
+}
+
+func TestIsSpotifyRateLimited(t *testing.T) {
+	source := config.Source{Type: config.SourceTypeSpotify}
+	execResult := ExecResult{
+		ExitCode:   1,
+		StderrTail: "Your application has reached a rate/request limit. Retry will occur after: 71747 s",
+	}
+
+	if !isSpotifyRateLimited(source, execResult) {
+		t.Fatalf("expected spotify rate-limit detection to return true")
+	}
+}
+
+func TestResolveSpotDLOAuthCachePath(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	cachePath := filepath.Join(tmpHome, ".spotdl", ".spotipy")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("token"), 0o600); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+
+	got, ok := resolveSpotDLOAuthCachePath()
+	if !ok {
+		t.Fatalf("expected cache path to be detected")
+	}
+	if got != "~/.spotdl/.spotipy" {
+		t.Fatalf("expected normalized cache path, got %q", got)
+	}
+}
