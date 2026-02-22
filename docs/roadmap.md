@@ -52,6 +52,12 @@
 - [ ] Introduce optional persisted local index (source-level cache) to avoid full target-dir rescans on every run; rebuild automatically on cache miss/invalid hash.
 - [ ] Add deterministic perf regression guardrails in CI (benchmark thresholds or trend checks).
 
+### Phase 10: Output architecture hardening (P2, after current compact UX is stable)
+- [ ] Stop deriving compact progress state from human log text (`preflight: ... planned=...`); pass planned/global progress inputs as structured state from engine/emitters.
+- [ ] Define a typed internal progress model for compact rendering (source lifecycle, track lifecycle, per-track progress, global totals).
+- [ ] Split compact output implementation into parser/ingest + renderer + state machine packages to reduce coupling and make new live modes safer to add.
+- [ ] Add contract tests around structured progress events so renderer behavior cannot silently drift if human message wording changes.
+
 ## Finalization acceptance checklist
 1. `go test ./...`
 2. `go test -race ./...`
