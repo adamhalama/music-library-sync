@@ -33,30 +33,34 @@
 - [ ] Add a short release checklist doc to keep tags reproducible and low-risk.
 
 ### Phase 8: Adapter dependency packaging strategy (P1/P2)
-- [ ] Evaluate practical delivery options for `scdl`/`yt-dlp` pinning:
+- [x] Evaluate practical delivery options for `scdl`/`yt-dlp` pinning:
   - bundled per-platform toolchain inside release assets
   - first-run installer into a managed tools directory
   - strict external dependency contract with tested version matrix
-- [ ] Choose one default strategy and document upgrade/rollback behavior.
-- [ ] Add `udl doctor` compatibility checks against the pinned/supported matrix.
-- [ ] Decide Homebrew behavior: depend on external formulas vs install/use managed adapter binaries.
+- [x] Choose one default strategy and document upgrade/rollback behavior.
+- [x] Add `udl doctor` compatibility checks against the pinned/supported matrix.
+- [x] Decide Homebrew behavior: depend on external formulas vs install/use managed adapter binaries.
+- [x] Scope this cycle to `scdl`/`yt-dlp` compatibility matrix enforcement; keep `spotdl` stable and transitional.
 
 ### Phase 9: Preflight performance and code cleanup (P2, after archive behavior freeze)
-- [ ] Add benchmarks for preflight on realistic libraries (1k/5k/10k tracks) covering:
+- [x] Add benchmarks for preflight on realistic libraries (1k/5k/10k tracks) covering:
   - remote list parse time
   - archive/state parse time
   - local directory scan time
   - full preflight planning time
-- [ ] Split preflight pipeline into explicit stages (`enumerate`, `load-state`, `load-archive`, `local-index`, `plan`) with narrow data contracts to reduce coupling in `/Users/jaa/dev/utils/update-downloads/internal/engine`.
-- [ ] Avoid unnecessary local media scans when no archive-only known entries exist for a source.
-- [ ] Introduce optional persisted local index (source-level cache) to avoid full target-dir rescans on every run; rebuild automatically on cache miss/invalid hash.
-- [ ] Add deterministic perf regression guardrails in CI (benchmark thresholds or trend checks).
+- [x] Split preflight pipeline into explicit stages (`enumerate`, `load-state`, `load-archive`, `local-index`, `plan`) with narrow data contracts to reduce coupling in `/Users/jaa/dev/utils/update-downloads/internal/engine`.
+- [x] Avoid unnecessary local media scans when no archive-only known entries exist for a source.
+- [x] Introduce optional persisted local index (source-level cache) to avoid full target-dir rescans on every run; rebuild automatically on cache miss/invalid hash.
+- [x] Add deterministic perf regression guardrails in CI (benchmark thresholds or trend checks).
 
 ### Phase 10: Output architecture hardening (P2, after current compact UX is stable)
-- [ ] Stop deriving compact progress state from human log text (`preflight: ... planned=...`); pass planned/global progress inputs as structured state from engine/emitters.
-- [ ] Define a typed internal progress model for compact rendering (source lifecycle, track lifecycle, per-track progress, global totals).
-- [ ] Split compact output implementation into parser/ingest + renderer + state machine packages to reduce coupling and make new live modes safer to add.
-- [ ] Add contract tests around structured progress events so renderer behavior cannot silently drift if human message wording changes.
+- [x] Stop deriving compact progress state from human log text (`preflight: ... planned=...`); pass planned/global progress inputs as structured state from engine/emitters.
+- [x] Define a typed internal progress model for compact rendering (source lifecycle, track lifecycle, per-track progress, global totals).
+- [x] Split compact output implementation into parser/ingest + renderer + state machine packages to reduce coupling and make new live modes safer to add.
+- [x] Add contract tests around structured progress events so renderer behavior cannot silently drift if human message wording changes.
+
+### Future task: Maximum shielding (bundled adapter toolchain)
+- [ ] Future: bundled per-platform adapter toolchain (full version pinning + rollback), including release asset strategy and signature verification.
 
 ## Finalization acceptance checklist
 1. `go test ./...`

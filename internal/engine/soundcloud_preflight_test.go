@@ -277,3 +277,169 @@ func TestWriteFilteredArchiveFileDropsMissingIDs(t *testing.T) {
 		t.Fatalf("expected non-soundcloud archive lines to be preserved, got %q", text)
 	}
 }
+
+func TestNeedsSoundCloudLocalIndex(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	statePath := filepath.Join(targetDir, "one.m4a")
+	if err := os.WriteFile(statePath, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	remote := []soundCloudRemoteTrack{
+		{ID: "111"},
+		{ID: "222"},
+	}
+	state := soundCloudSyncState{
+		ByID: map[string]soundCloudSyncEntry{
+			"111": {ID: "111", FilePath: statePath},
+		},
+	}
+	archiveKnown := idSet{
+		"111": {},
+	}
+	if needsSoundCloudLocalIndex(remote, state, archiveKnown, targetDir) {
+		t.Fatalf("did not expect local index scan when no archive-only known entries exist")
+	}
+
+	state.ByID["111"] = soundCloudSyncEntry{ID: "111", FilePath: filepath.Join(targetDir, "missing.m4a")}
+	if !needsSoundCloudLocalIndex(remote, state, archiveKnown, targetDir) {
+		t.Fatalf("expected local index scan when state file fallback is needed")
+	}
+
+	state.ByID["111"] = soundCloudSyncEntry{ID: "111", FilePath: statePath}
+	archiveKnown["222"] = struct{}{}
+	if !needsSoundCloudLocalIndex(remote, state, archiveKnown, targetDir) {
+		t.Fatalf("expected local index scan when archive-only known entries exist")
+	}
+}
+
+func TestLoadSoundCloudLocalIndexStageUsesCacheWhenValid(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "Track One.m4a"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write track: %v", err)
+	}
+
+	first, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+		SourceID:  "sc-a",
+		TargetDir: targetDir,
+		StateDir:  stateDir,
+		NeedScan:  true,
+		UseCache:  true,
+	})
+	if err != nil {
+		t.Fatalf("first stage run: %v", err)
+	}
+	if !first.Scanned || first.CacheHit {
+		t.Fatalf("expected first run to scan and miss cache, got %+v", first)
+	}
+	if first.Index["track one"] != 1 {
+		t.Fatalf("expected cached index key for track one, got %+v", first.Index)
+	}
+
+	second, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+		SourceID:  "sc-a",
+		TargetDir: targetDir,
+		StateDir:  stateDir,
+		NeedScan:  true,
+		UseCache:  true,
+	})
+	if err != nil {
+		t.Fatalf("second stage run: %v", err)
+	}
+	if second.Scanned || !second.CacheHit {
+		t.Fatalf("expected second run to hit cache without scan, got %+v", second)
+	}
+	if second.Index["track one"] != 1 {
+		t.Fatalf("expected cached index key for track one, got %+v", second.Index)
+	}
+}
+
+func TestLoadSoundCloudLocalIndexStageRebuildsOnSignatureChange(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "Track One.m4a"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write track: %v", err)
+	}
+
+	if _, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+		SourceID:  "sc-a",
+		TargetDir: targetDir,
+		StateDir:  stateDir,
+		NeedScan:  true,
+		UseCache:  true,
+	}); err != nil {
+		t.Fatalf("initial stage run: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(targetDir, "Track Two.m4a"), []byte("b"), 0o644); err != nil {
+		t.Fatalf("write second track: %v", err)
+	}
+
+	afterChange, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+		SourceID:  "sc-a",
+		TargetDir: targetDir,
+		StateDir:  stateDir,
+		NeedScan:  true,
+		UseCache:  true,
+	})
+	if err != nil {
+		t.Fatalf("stage after signature change: %v", err)
+	}
+	if !afterChange.Scanned || afterChange.CacheHit {
+		t.Fatalf("expected cache miss and rebuild after signature change, got %+v", afterChange)
+	}
+	if afterChange.Index["track two"] != 1 {
+		t.Fatalf("expected rebuilt index to include new track, got %+v", afterChange.Index)
+	}
+}
+
+func TestLoadSoundCloudLocalIndexStageSkipsScanWhenNotNeeded(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "Track One.m4a"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write media: %v", err)
+	}
+
+	result, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+		SourceID:  "sc-a",
+		TargetDir: targetDir,
+		StateDir:  stateDir,
+		NeedScan:  false,
+		UseCache:  true,
+	})
+	if err != nil {
+		t.Fatalf("load local index stage: %v", err)
+	}
+	if result.Scanned || result.CacheHit {
+		t.Fatalf("expected no scan/cache hit when scan is not needed, got %+v", result)
+	}
+	if len(result.Index) != 0 {
+		t.Fatalf("expected empty index when scan skipped, got %+v", result.Index)
+	}
+}

@@ -5,22 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
-)
 
-var noisyDownloadProgressPattern = regexp.MustCompile(`^\[download\]\s+[0-9]+(?:\.[0-9]+)?%.*\(frag\s+[0-9]+/[0-9]+\)$`)
-var fragmentProgressPattern = regexp.MustCompile(`^\[download\]\s+([0-9]+(?:\.[0-9]+)?)%.*\(frag\s+[0-9]+/[0-9]+\)$`)
-var downloadItemPattern = regexp.MustCompile(`^\[download\] Downloading item ([0-9]+) of ([0-9]+)$`)
-var downloadDestinationPattern = regexp.MustCompile(`^\[download\] Destination: (.+)$`)
-var alreadyDownloadedPattern = regexp.MustCompile(`^\[download\] (.+) has already been downloaded$`)
-var preflightSummaryPattern = regexp.MustCompile(`^\[[^\]]+\]\s+preflight:\s+.*\bplanned=([0-9]+)\b`)
-var spotDLFoundSongsPattern = regexp.MustCompile(`^Found ([0-9]+) songs in .+$`)
-var spotDLDownloadedPattern = regexp.MustCompile(`^Downloaded "(.+)":\s+https?://.+$`)
-var spotDLLookupErrorPattern = regexp.MustCompile(`^LookupError: No results found for song: (.+)$`)
-var spotDLAudioProviderPattern = regexp.MustCompile(`^AudioProviderError: YT-DLP download error -.*$`)
+	compactstate "github.com/jaa/update-downloads/internal/output/compact"
+)
 
 type CompactLogOptions struct {
 	Interactive bool
@@ -36,12 +26,9 @@ type CompactLogWriter struct {
 	activeTotal string
 	liveVisible bool
 
-	itemIndex    int
-	itemTotal    int
-	plannedTotal int
-	completed    int
-	track        trackState
-	barWidth     int
+	progress *compactstate.StateMachine
+	track    trackState
+	barWidth int
 
 	breakOnExistingDetected bool
 	breakStopPrinted        bool
@@ -68,6 +55,7 @@ func NewCompactLogWriterWithOptions(dst io.Writer, opts CompactLogOptions) *Comp
 		dst:         dst,
 		interactive: opts.Interactive,
 		buf:         make([]byte, 0, 256),
+		progress:    compactstate.NewStateMachine(),
 	}
 }
 
@@ -112,6 +100,35 @@ func (w *CompactLogWriter) Flush() error {
 	return w.clearLiveLinesLocked()
 }
 
+func (w *CompactLogWriter) ObserveEvent(event Event) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	switch event.Event {
+	case EventSyncStarted:
+		w.progress.Reset()
+		w.track = trackState{}
+		w.breakOnExistingDetected = false
+		w.breakStopPrinted = false
+	case EventSourcePreflight:
+		planned, ok := eventDetailInt(event.Details, "planned_download_count")
+		if !ok {
+			return
+		}
+		w.progress.SetPlanningSource(event.SourceID, planned)
+		w.track = trackState{}
+		if planned > 0 {
+			_ = w.renderIdleStatusLocked()
+		}
+	case EventSourceStarted:
+		w.progress.BeginSource(event.SourceID)
+	case EventSourceFinished:
+		w.progress.FinishSource(event.SourceID, false)
+	case EventSourceFailed:
+		w.progress.FinishSource(event.SourceID, true)
+	}
+}
+
 func (w *CompactLogWriter) flushLineLocked() error {
 	if len(w.buf) == 0 {
 		return nil
@@ -128,97 +145,61 @@ func (w *CompactLogWriter) flushLineLocked() error {
 
 func (w *CompactLogWriter) handleLineLocked(line string) error {
 	if strings.HasPrefix(line, "sync started (") {
-		w.itemIndex = 0
-		w.itemTotal = 0
-		w.plannedTotal = 0
-		w.completed = 0
+		w.progress.Reset()
 		w.track = trackState{}
 	}
 
-	if match := preflightSummaryPattern.FindStringSubmatch(line); len(match) == 2 {
-		planned, _ := strconv.Atoi(match[1])
-		if planned < 0 {
-			planned = 0
+	if parsed, ok := compactstate.ParseLine(line); ok {
+		switch parsed.Kind {
+		case compactstate.LineEventSpotDLFoundSongs:
+			w.progress.SetItemTotal(parsed.Total)
+			w.track = trackState{}
+			if parsed.Total > 0 {
+				return w.renderIdleStatusLocked()
+			}
+			return nil
+		case compactstate.LineEventSpotDLDownloaded:
+			return w.recordSpotDLCompletedTrackLocked(parsed.Text)
+		case compactstate.LineEventSpotDLLookupError:
+			return w.recordSpotDLFailedTrackLocked(parsed.Text, "no-match")
+		case compactstate.LineEventSpotDLAudioProvider:
+			return w.recordSpotDLFailedTrackLocked(w.nextSpotDLTrackLabelLocked(), "download-error")
+		case compactstate.LineEventDownloadItem:
+			if err := w.finalizeTrackLocked(); err != nil {
+				return err
+			}
+			w.breakOnExistingDetected = false
+			w.breakStopPrinted = false
+			w.progress.SetItemIndex(parsed.Index, parsed.Total)
+			w.track = trackState{}
+			return w.renderStatusLocked("preparing track")
+		case compactstate.LineEventDownloadDestination:
+			w.track.Name = trackNameFromPath(parsed.Text)
+			w.track.CompletionObserved = false
+			w.track.AlreadyPresent = false
+			w.track.ProgressKnown = false
+			w.track.ProgressPercent = 0
+			return w.renderStatusLocked("downloading")
+		case compactstate.LineEventAlreadyDownloaded:
+			if w.track.Name == "" {
+				w.track.Name = trackNameFromPath(parsed.Text)
+			}
+			w.track.AlreadyPresent = true
+			w.track.ProgressKnown = true
+			w.track.ProgressPercent = 100
+			w.track.CompletionObserved = true
+			return w.renderStatusLocked("already present")
+		case compactstate.LineEventFragmentProgress:
+			clamped := compactstate.ClampPercent(parsed.Percent)
+			if w.track.ProgressKnown && clamped < w.track.ProgressPercent {
+				clamped = w.track.ProgressPercent
+			}
+			w.track.ProgressKnown = true
+			w.track.ProgressPercent = clamped
+			return w.renderStatusLocked("downloading")
+		case compactstate.LineEventNoisyDownloadProgress:
+			return nil
 		}
-		w.plannedTotal = planned
-		w.itemIndex = 0
-		w.itemTotal = 0
-		w.completed = 0
-		w.track = trackState{}
-		if planned > 0 {
-			return w.renderIdleStatusLocked()
-		}
-	}
-	if match := spotDLFoundSongsPattern.FindStringSubmatch(line); len(match) == 2 {
-		total, _ := strconv.Atoi(match[1])
-		if total < 0 {
-			total = 0
-		}
-		w.itemTotal = total
-		w.plannedTotal = 0
-		w.completed = 0
-		w.track = trackState{}
-		if total > 0 {
-			return w.renderIdleStatusLocked()
-		}
-		return nil
-	}
-	if match := spotDLDownloadedPattern.FindStringSubmatch(line); len(match) == 2 {
-		return w.recordSpotDLCompletedTrackLocked(strings.TrimSpace(match[1]))
-	}
-	if match := spotDLLookupErrorPattern.FindStringSubmatch(line); len(match) == 2 {
-		return w.recordSpotDLFailedTrackLocked(strings.TrimSpace(match[1]), "no-match")
-	}
-	if spotDLAudioProviderPattern.MatchString(line) {
-		return w.recordSpotDLFailedTrackLocked(w.nextSpotDLTrackLabelLocked(), "download-error")
-	}
-
-	if match := downloadItemPattern.FindStringSubmatch(line); len(match) == 3 {
-		if err := w.finalizeTrackLocked(); err != nil {
-			return err
-		}
-		w.breakOnExistingDetected = false
-		w.breakStopPrinted = false
-		index, _ := strconv.Atoi(match[1])
-		total, _ := strconv.Atoi(match[2])
-		w.itemIndex = index
-		w.itemTotal = total
-		w.track = trackState{}
-		return w.renderStatusLocked("preparing track")
-	}
-
-	if match := downloadDestinationPattern.FindStringSubmatch(line); len(match) == 2 {
-		w.track.Name = trackNameFromPath(match[1])
-		w.track.CompletionObserved = false
-		w.track.AlreadyPresent = false
-		w.track.ProgressKnown = false
-		w.track.ProgressPercent = 0
-		return w.renderStatusLocked("downloading")
-	}
-
-	if match := alreadyDownloadedPattern.FindStringSubmatch(line); len(match) == 2 {
-		if w.track.Name == "" {
-			w.track.Name = trackNameFromPath(match[1])
-		}
-		w.track.AlreadyPresent = true
-		w.track.ProgressKnown = true
-		w.track.ProgressPercent = 100
-		w.track.CompletionObserved = true
-		return w.renderStatusLocked("already present")
-	}
-
-	if match := fragmentProgressPattern.FindStringSubmatch(line); len(match) == 2 {
-		percent, _ := strconv.ParseFloat(match[1], 64)
-		clamped := clampPercent(percent)
-		if w.track.ProgressKnown && clamped < w.track.ProgressPercent {
-			clamped = w.track.ProgressPercent
-		}
-		w.track.ProgressKnown = true
-		w.track.ProgressPercent = clamped
-		return w.renderStatusLocked("downloading")
-	}
-	if noisyDownloadProgressPattern.MatchString(line) {
-		return nil
 	}
 
 	if strings.HasPrefix(line, "[info] Writing video thumbnail") {
@@ -283,33 +264,20 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 
 	total := w.effectiveItemTotal()
 	index := w.currentTrackIndex(total)
-	trackLine := fmt.Sprintf("[track] %s", w.track.Name)
-	if total > 0 {
-		trackLine = fmt.Sprintf("[track %d/%d] %s", index, total, w.track.Name)
-	}
-
-	bits := []string{}
-	if stage != "" {
-		bits = append(bits, stage)
-	}
-	if w.track.HasThumbnail {
-		bits = append(bits, "thumb:yes")
-	}
-	if w.track.HasMetadata {
-		bits = append(bits, "meta:yes")
-	}
-	if len(bits) > 0 {
-		trackLine = trackLine + " (" + strings.Join(bits, ", ") + ")"
-	}
-	if w.track.ProgressKnown && !w.track.AlreadyPresent {
-		trackLine += " " + renderProgress(w.track.ProgressPercent)
-	}
+	trackLine := compactstate.RenderTrackLine(
+		w.track.Name,
+		stage,
+		w.track.HasThumbnail,
+		w.track.HasMetadata,
+		w.track.ProgressKnown,
+		w.track.ProgressPercent,
+		w.track.AlreadyPresent,
+		index,
+		total,
+	)
 
 	overallPercent := w.globalProgressPercent()
-	globalLine := fmt.Sprintf("[overall] %s (%d/%d)", renderProgressWithWidth(overallPercent, w.globalBarWidth()), index, total)
-	if total <= 0 {
-		globalLine = fmt.Sprintf("[overall] %s", renderProgressWithWidth(overallPercent, w.globalBarWidth()))
-	}
+	globalLine := compactstate.RenderGlobalLine(overallPercent, w.globalBarWidth(), index, total)
 
 	if trackLine == w.activeTrack && globalLine == w.activeTotal {
 		return nil
@@ -325,18 +293,15 @@ func (w *CompactLogWriter) renderIdleStatusLocked() error {
 	if total <= 0 {
 		return nil
 	}
-	done := w.completed
+	done := w.progress.Completed()
 	if done < 0 {
 		done = 0
 	}
 	if done > total {
 		done = total
 	}
-	trackLine := fmt.Sprintf("[track] waiting for next track (%d/%d done)", done, total)
-	if done >= total {
-		trackLine = fmt.Sprintf("[track] all planned tracks complete (%d/%d)", done, total)
-	}
-	globalLine := fmt.Sprintf("[overall] %s (%d/%d)", renderProgressWithWidth(w.globalProgressPercent(), w.globalBarWidth()), done, total)
+	trackLine := compactstate.RenderIdleTrackLine(done, total)
+	globalLine := compactstate.RenderGlobalLine(w.globalProgressPercent(), w.globalBarWidth(), done, total)
 	if trackLine == w.activeTrack && globalLine == w.activeTotal {
 		return nil
 	}
@@ -369,9 +334,7 @@ func (w *CompactLogWriter) finalizeTrackLocked() error {
 		line += " (" + strings.Join(flags, ", ") + ")"
 	}
 
-	if total := w.effectiveItemTotal(); total > 0 && w.completed < total {
-		w.completed++
-	}
+	w.progress.CompleteTrack()
 	w.track = trackState{}
 	if err := w.printPersistentLocked(line); err != nil {
 		return err
@@ -413,9 +376,7 @@ func (w *CompactLogWriter) recordSpotDLFailedTrackLocked(name string, reason str
 	if err := w.renderStatusLocked("failed"); err != nil {
 		return err
 	}
-	if total := w.effectiveItemTotal(); total > 0 && w.completed < total {
-		w.completed++
-	}
+	w.progress.CompleteTrack()
 	w.track = trackState{}
 	line := fmt.Sprintf("[skip] %s", name)
 	if strings.TrimSpace(reason) != "" {
@@ -520,10 +481,10 @@ func shouldSuppressSpotDLSpotifyNoise(line string) bool {
 		strings.HasPrefix(trimmed, "Processing query:") ||
 		strings.HasPrefix(trimmed, "https://open.spotify.com/playlist/") ||
 		strings.Contains(lower, "rate/request limit") ||
-		spotDLFoundSongsPattern.MatchString(trimmed) ||
-		spotDLDownloadedPattern.MatchString(trimmed) ||
-		spotDLLookupErrorPattern.MatchString(trimmed) ||
-		spotDLAudioProviderPattern.MatchString(trimmed) ||
+		compactstate.MatchesSpotDLFoundSongs(trimmed) ||
+		compactstate.MatchesSpotDLDownloaded(trimmed) ||
+		compactstate.MatchesSpotDLLookupError(trimmed) ||
+		compactstate.MatchesSpotDLAudioProvider(trimmed) ||
 		strings.HasPrefix(trimmed, "found for song: ") ||
 		strings.HasPrefix(trimmed, "YT-DLP download error - ") ||
 		strings.HasPrefix(trimmed, "https://www.youtube.com/watch?v=") ||
@@ -576,41 +537,13 @@ func trackNameFromPath(pathLike string) string {
 	return base
 }
 
-func renderProgress(percent float64) string {
-	return renderProgressWithWidth(percent, 16)
-}
-
-func renderProgressWithWidth(percent float64, width int) string {
-	clamped := clampPercent(percent)
-	if width <= 0 {
-		width = 16
-	}
-	filled := int((clamped / 100) * float64(width))
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > width {
-		filled = width
-	}
-	bar := strings.Repeat("#", filled) + strings.Repeat("-", width-filled)
-	return fmt.Sprintf("[%s] %5.1f%%", bar, clamped)
-}
-
 func (w *CompactLogWriter) globalProgressPercent() float64 {
 	total := w.effectiveItemTotal()
 	if total <= 0 {
 		return 0
 	}
-	completedItems := w.completed
-	if completedItems < 0 {
-		completedItems = 0
-	}
-	if completedItems > total {
-		completedItems = total
-	}
-
 	partial := 0.0
-	if completedItems < total {
+	if w.progress.Completed() < total {
 		switch {
 		case w.track.AlreadyPresent || w.track.CompletionObserved:
 			partial = 1.0
@@ -618,29 +551,18 @@ func (w *CompactLogWriter) globalProgressPercent() float64 {
 			partial = w.track.ProgressPercent / 100.0
 		}
 	}
-
-	return clampPercent(((float64(completedItems) + partial) / float64(total)) * 100.0)
+	return w.progress.GlobalProgressPercent(partial)
 }
 
 func (w *CompactLogWriter) effectiveItemTotal() int {
-	if w.plannedTotal > 0 {
-		return w.plannedTotal
-	}
-	return w.itemTotal
+	return w.progress.EffectiveTotal()
 }
 
 func (w *CompactLogWriter) currentTrackIndex(total int) int {
 	if total <= 0 {
 		return 0
 	}
-	index := w.completed + 1
-	if index < 1 {
-		index = 1
-	}
-	if index > total {
-		index = total
-	}
-	return index
+	return w.progress.CurrentIndex()
 }
 
 func (w *CompactLogWriter) globalBarWidth() int {
@@ -662,12 +584,28 @@ func (w *CompactLogWriter) globalBarWidth() int {
 	return width
 }
 
-func clampPercent(percent float64) float64 {
-	if percent < 0 {
-		return 0
+func eventDetailInt(details map[string]any, key string) (int, bool) {
+	if details == nil {
+		return 0, false
 	}
-	if percent > 100 {
-		return 100
+	raw, ok := details[key]
+	if !ok {
+		return 0, false
 	}
-	return percent
+	switch v := raw.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }

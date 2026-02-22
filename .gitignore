@@ -6,3 +6,4 @@ archive.txt
 bin/udl
 dist/
 .github/copilot-instructions.md
+.VSCodeCounter/

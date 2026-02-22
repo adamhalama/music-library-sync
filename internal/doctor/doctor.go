@@ -58,6 +58,7 @@ type Checker struct {
 	CheckWritable func(string) error
 	ReadFile      func(string) ([]byte, error)
 	HomeDir       func() (string, error)
+	Matrix        map[string]dependencyMatrixRule
 }
 
 func NewChecker() *Checker {
@@ -70,13 +71,14 @@ func NewChecker() *Checker {
 		},
 		ReadFile: os.ReadFile,
 		HomeDir:  os.UserHomeDir,
+		Matrix:   defaultDependencyMatrix(),
 	}
 }
 
 func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 	report := Report{Checks: []Check{}}
 
-	requiredBinaries := requiredBinaries(cfg)
+	requiredBinaries := requiredBinaries(cfg, c.matrix())
 	for _, dep := range requiredBinaries {
 		location, err := c.LookPath(dep.Binary)
 		if err != nil {
@@ -119,6 +121,48 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 				Severity: SeverityError,
 				Name:     "dependency",
 				Message:  fmt.Sprintf("%s version %s is below minimum %s", dep.Binary, version, dep.MinVersion),
+			})
+			continue
+		}
+
+		if dep.Matrix != nil {
+			if reason, knownBad := dep.Matrix.KnownBad[version]; knownBad {
+				message := fmt.Sprintf("%s version %s is blocked by compatibility matrix", dep.Binary, version)
+				if strings.TrimSpace(reason) != "" {
+					message = fmt.Sprintf("%s: %s", message, reason)
+				}
+				report.Checks = append(report.Checks, Check{
+					Severity: SeverityError,
+					Name:     "dependency",
+					Message:  message,
+				})
+				continue
+			}
+			if strings.TrimSpace(dep.Matrix.MaxVersionExclusive) != "" &&
+				compareVersions(version, dep.Matrix.MaxVersionExclusive) >= 0 {
+				report.Checks = append(report.Checks, Check{
+					Severity: SeverityError,
+					Name:     "dependency",
+					Message: fmt.Sprintf(
+						"%s version %s is outside supported matrix >=%s and <%s",
+						dep.Binary,
+						version,
+						dep.MinVersion,
+						dep.Matrix.MaxVersionExclusive,
+					),
+				})
+				continue
+			}
+			report.Checks = append(report.Checks, Check{
+				Severity: SeverityInfo,
+				Name:     "dependency",
+				Message: fmt.Sprintf(
+					"%s version %s is compatible with supported matrix >=%s and <%s",
+					dep.Binary,
+					version,
+					dep.MinVersion,
+					dep.Matrix.MaxVersionExclusive,
+				),
 			})
 			continue
 		}
@@ -272,28 +316,110 @@ func usesSharedSpotDLCredentials(clientID string, clientSecret string) bool {
 }
 
 type dependency struct {
+	Key        string
 	Binary     string
 	MinVersion string
+	Matrix     *dependencyMatrixRule
 }
 
-func requiredBinaries(cfg config.Config) []dependency {
+type dependencyMatrixRule struct {
+	MinVersion          string
+	MaxVersionExclusive string
+	KnownBad            map[string]string
+}
+
+func defaultDependencyMatrix() map[string]dependencyMatrixRule {
+	return map[string]dependencyMatrixRule{
+		"scdl": {
+			MinVersion:          "3.0.0",
+			MaxVersionExclusive: "4.0.0",
+			KnownBad:            map[string]string{},
+		},
+		"yt-dlp": {
+			MinVersion:          "2024.1.0",
+			MaxVersionExclusive: "2027.0.0",
+			KnownBad:            map[string]string{},
+		},
+	}
+}
+
+func cloneDependencyMatrix(input map[string]dependencyMatrixRule) map[string]dependencyMatrixRule {
+	cloned := make(map[string]dependencyMatrixRule, len(input))
+	for key, rule := range input {
+		bad := make(map[string]string, len(rule.KnownBad))
+		for version, reason := range rule.KnownBad {
+			bad[version] = reason
+		}
+		cloned[key] = dependencyMatrixRule{
+			MinVersion:          rule.MinVersion,
+			MaxVersionExclusive: rule.MaxVersionExclusive,
+			KnownBad:            bad,
+		}
+	}
+	return cloned
+}
+
+func (c *Checker) matrix() map[string]dependencyMatrixRule {
+	if len(c.Matrix) == 0 {
+		return defaultDependencyMatrix()
+	}
+	return cloneDependencyMatrix(c.Matrix)
+}
+
+func requiredBinaries(cfg config.Config, matrix map[string]dependencyMatrixRule) []dependency {
 	seen := map[string]dependency{}
+
+	scdlRule, hasSCDLRule := matrix["scdl"]
+	ytdlpRule, hasYTDLPRule := matrix["yt-dlp"]
 	for _, source := range cfg.Sources {
 		if !source.Enabled {
 			continue
 		}
 		switch source.Adapter.Kind {
 		case "spotdl":
-			seen["spotdl"] = dependency{Binary: resolveSpotDLBinaryForDoctor(), MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "4.0.0")}
+			seen["spotdl"] = dependency{
+				Key:        "spotdl",
+				Binary:     resolveSpotDLBinaryForDoctor(),
+				MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "4.0.0"),
+			}
 		case "scdl":
-			seen["scdl"] = dependency{Binary: "scdl", MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "3.0.0")}
-			seen["yt-dlp"] = dependency{Binary: "yt-dlp", MinVersion: "0.0.0"}
+			scdlMin := "3.0.0"
+			if hasSCDLRule && strings.TrimSpace(scdlRule.MinVersion) != "" {
+				scdlMin = scdlRule.MinVersion
+			}
+			scdlMin = maxVersion(scdlMin, minVersionOrDefault(source.Adapter.MinVersion, scdlMin))
+			seen["scdl"] = dependency{
+				Key:        "scdl",
+				Binary:     "scdl",
+				MinVersion: scdlMin,
+				Matrix:     matrixRulePointer(matrix, "scdl"),
+			}
+
+			ytdlpMin := "0.0.0"
+			if hasYTDLPRule && strings.TrimSpace(ytdlpRule.MinVersion) != "" {
+				ytdlpMin = ytdlpRule.MinVersion
+			}
+			seen["yt-dlp"] = dependency{
+				Key:        "yt-dlp",
+				Binary:     "yt-dlp",
+				MinVersion: ytdlpMin,
+				Matrix:     matrixRulePointer(matrix, "yt-dlp"),
+			}
 		}
 	}
 
 	if len(seen) == 0 {
-		seen["spotdl"] = dependency{Binary: resolveSpotDLBinaryForDoctor(), MinVersion: "4.0.0"}
-		seen["scdl"] = dependency{Binary: "scdl", MinVersion: "3.0.0"}
+		scdlMin := "3.0.0"
+		if rule := matrixRulePointer(matrix, "scdl"); rule != nil && strings.TrimSpace(rule.MinVersion) != "" {
+			scdlMin = rule.MinVersion
+		}
+		seen["spotdl"] = dependency{Key: "spotdl", Binary: resolveSpotDLBinaryForDoctor(), MinVersion: "4.0.0"}
+		seen["scdl"] = dependency{
+			Key:        "scdl",
+			Binary:     "scdl",
+			MinVersion: scdlMin,
+			Matrix:     matrixRulePointer(matrix, "scdl"),
+		}
 	}
 
 	result := make([]dependency, 0, len(seen))
@@ -301,6 +427,29 @@ func requiredBinaries(cfg config.Config) []dependency {
 		result = append(result, dep)
 	}
 	return result
+}
+
+func matrixRulePointer(matrix map[string]dependencyMatrixRule, key string) *dependencyMatrixRule {
+	rule, ok := matrix[key]
+	if !ok {
+		return nil
+	}
+	cloned := dependencyMatrixRule{
+		MinVersion:          rule.MinVersion,
+		MaxVersionExclusive: rule.MaxVersionExclusive,
+		KnownBad:            map[string]string{},
+	}
+	for version, reason := range rule.KnownBad {
+		cloned.KnownBad[version] = reason
+	}
+	return &cloned
+}
+
+func maxVersion(lhs string, rhs string) string {
+	if compareVersions(lhs, rhs) >= 0 {
+		return lhs
+	}
+	return rhs
 }
 
 func resolveSpotDLBinaryForDoctor() string {

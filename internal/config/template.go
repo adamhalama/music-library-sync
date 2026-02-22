@@ -20,6 +20,7 @@ sources:
     sync:
       break_on_existing: true
       ask_on_existing: false
+      local_index_cache: false
     adapter:
       kind: "scdl"
       extra_args: ["-f"]

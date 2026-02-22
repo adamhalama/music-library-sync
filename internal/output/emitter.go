@@ -11,6 +11,10 @@ type EventEmitter interface {
 	Emit(event Event) error
 }
 
+type EventObserver interface {
+	ObserveEvent(event Event)
+}
+
 type JSONEmitter struct {
 	enc *json.Encoder
 	mu  sync.Mutex
@@ -82,4 +86,26 @@ func (e *MultiEmitter) Emit(event Event) error {
 		}
 	}
 	return nil
+}
+
+type ObservingEmitter struct {
+	observer EventObserver
+	next     EventEmitter
+}
+
+func NewObservingEmitter(observer EventObserver, next EventEmitter) *ObservingEmitter {
+	return &ObservingEmitter{
+		observer: observer,
+		next:     next,
+	}
+}
+
+func (e *ObservingEmitter) Emit(event Event) error {
+	if e.observer != nil {
+		e.observer.ObserveEvent(event)
+	}
+	if e.next == nil {
+		return nil
+	}
+	return e.next.Emit(event)
 }
