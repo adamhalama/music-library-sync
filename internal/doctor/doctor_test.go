@@ -3,6 +3,8 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -204,4 +206,29 @@ func hasWarnContaining(report Report, snippet string) bool {
 		}
 	}
 	return false
+}
+
+func TestResolveSpotDLBinaryForDoctorPrefersOverride(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "/custom/spotdl")
+	if got := resolveSpotDLBinaryForDoctor(); got != "/custom/spotdl" {
+		t.Fatalf("expected override, got %q", got)
+	}
+}
+
+func TestResolveSpotDLBinaryForDoctorPrefersManagedVenv(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	managed := filepath.Join(tmpHome, ".venvs", "udl-spotdl", "bin", "spotdl")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatalf("mkdir managed dir: %v", err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\necho test\n"), 0o755); err != nil {
+		t.Fatalf("write managed binary: %v", err)
+	}
+
+	if got := resolveSpotDLBinaryForDoctor(); got != managed {
+		t.Fatalf("expected managed path %q, got %q", managed, got)
+	}
 }

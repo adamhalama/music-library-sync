@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ func (a *Adapter) Kind() string {
 }
 
 func (a *Adapter) Binary() string {
-	return "spotdl"
+	return resolveSpotDLBinary()
 }
 
 func (a *Adapter) MinVersion() string {
@@ -76,12 +77,13 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 	args = append(args, source.Adapter.ExtraArgs...)
 	displayArgs = append(displayArgs, source.Adapter.ExtraArgs...)
 
+	bin := a.Binary()
 	return engine.ExecSpec{
-		Bin:            a.Binary(),
+		Bin:            bin,
 		Args:           args,
 		Dir:            targetDir,
 		Timeout:        timeout,
-		DisplayCommand: formatCommand(a.Binary(), displayArgs),
+		DisplayCommand: formatCommand(bin, displayArgs),
 	}, nil
 }
 
@@ -99,4 +101,22 @@ func sanitizeURL(raw string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String()
+}
+
+func resolveSpotDLBinary() string {
+	if override := strings.TrimSpace(os.Getenv("UDL_SPOTDL_BIN")); override != "" {
+		return override
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "spotdl"
+	}
+	managed := filepath.Join(home, ".venvs", "udl-spotdl", "bin", "spotdl")
+	info, err := os.Stat(managed)
+	if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return managed
+	}
+
+	return "spotdl"
 }

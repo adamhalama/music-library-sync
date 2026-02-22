@@ -351,6 +351,75 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			break
 		}
 
+		if shouldRetrySpotifyWithUserAuth(sourceForExec, execResult, opts) {
+			retrySource := withSpotDLUserAuth(sourceForExec)
+			retrySpec, retryErr := adapter.BuildExecSpec(retrySource, cfg.Defaults, timeout)
+			if retryErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] spotify auth retry setup failed: %v", source.ID, retryErr),
+				})
+			} else {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelInfo,
+					Event:     output.EventSourceStarted,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] spotify API requires user auth, retrying with --user-auth", source.ID),
+					Details: map[string]any{
+						"command": retrySpec.DisplayCommand,
+						"dir":     retrySpec.Dir,
+						"retry":   true,
+					},
+				})
+				execResult = s.Runner.Run(ctx, retrySpec)
+				spec = retrySpec
+				sourceForExec = retrySource
+				if execResult.Interrupted {
+					s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
+					if err := cleanupTempStateFiles(stateSwap); err != nil {
+						_ = s.Emitter.Emit(output.Event{
+							Timestamp: s.Now(),
+							Level:     output.LevelWarn,
+							Event:     output.EventSourceFailed,
+							SourceID:  source.ID,
+							Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+						})
+					}
+					result.Interrupted = true
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelError,
+						Event:     output.EventSourceFailed,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] interrupted", source.ID),
+						Details: map[string]any{
+							"exit_code":   execResult.ExitCode,
+							"duration_ms": execResult.Duration.Milliseconds(),
+						},
+					})
+					break
+				}
+			}
+		}
+
+		if execResult.ExitCode != 0 && isSpotifyUserAuthRequired(sourceForExec, execResult) {
+			guidance := "spotify API requires user authentication; rerun in an interactive terminal once with --user-auth to refresh ~/.spotdl/.spotipy"
+			if opts.AllowPrompt {
+				guidance = "spotify API requires user authentication and retry did not succeed; complete spotdl OAuth once and rerun sync"
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] %s", source.ID, guidance),
+			})
+		}
+
 		if execResult.ExitCode != 0 {
 			if isGracefulBreakOnExistingStop(sourceForExec, sourcePreflight, execResult) {
 				if err := commitTempStateFiles(stateSwap); err != nil {
@@ -710,6 +779,54 @@ func isGracefulBreakOnExistingStop(
 	}
 
 	return false
+}
+
+func shouldRetrySpotifyWithUserAuth(source config.Source, execResult ExecResult, opts SyncOptions) bool {
+	if !opts.AllowPrompt {
+		return false
+	}
+	if source.Type != config.SourceTypeSpotify {
+		return false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted || execResult.TimedOut {
+		return false
+	}
+	if hasSpotDLUserAuthArg(source.Adapter.ExtraArgs) {
+		return false
+	}
+	return isSpotifyUserAuthRequired(source, execResult)
+}
+
+func isSpotifyUserAuthRequired(source config.Source, execResult ExecResult) bool {
+	if source.Type != config.SourceTypeSpotify {
+		return false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted {
+		return false
+	}
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+	return strings.Contains(combined, "valid user authentication required") ||
+		(strings.Contains(combined, "user authentication required") && strings.Contains(combined, "api.spotify.com"))
+}
+
+func hasSpotDLUserAuthArg(args []string) bool {
+	for _, candidate := range args {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "--user-auth" {
+			return true
+		}
+	}
+	return false
+}
+
+func withSpotDLUserAuth(source config.Source) config.Source {
+	if hasSpotDLUserAuthArg(source.Adapter.ExtraArgs) {
+		return source
+	}
+	cloned := append([]string{}, source.Adapter.ExtraArgs...)
+	cloned = append(cloned, "--user-auth")
+	source.Adapter.ExtraArgs = cloned
+	return source
 }
 
 func cleanupTempFile(path string) error {

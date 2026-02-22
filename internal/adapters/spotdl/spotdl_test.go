@@ -76,3 +76,38 @@ func TestBuildExecSpecWithMissingStateFile(t *testing.T) {
 		t.Fatalf("expected --save-file when state is missing, got %v", spec.Args)
 	}
 }
+
+func TestResolveSpotDLBinaryPrefersOverrideEnv(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "/custom/spotdl")
+	if got := resolveSpotDLBinary(); got != "/custom/spotdl" {
+		t.Fatalf("expected override binary, got %q", got)
+	}
+}
+
+func TestResolveSpotDLBinaryPrefersManagedVenvWhenPresent(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	managed := filepath.Join(tmpHome, ".venvs", "udl-spotdl", "bin", "spotdl")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatalf("mkdir managed bin dir: %v", err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\necho test\n"), 0o755); err != nil {
+		t.Fatalf("write managed spotdl: %v", err)
+	}
+
+	if got := resolveSpotDLBinary(); got != managed {
+		t.Fatalf("expected managed venv binary %q, got %q", managed, got)
+	}
+}
+
+func TestResolveSpotDLBinaryFallsBackToPATHBinary(t *testing.T) {
+	t.Setenv("UDL_SPOTDL_BIN", "")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	if got := resolveSpotDLBinary(); got != "spotdl" {
+		t.Fatalf("expected fallback binary 'spotdl', got %q", got)
+	}
+}

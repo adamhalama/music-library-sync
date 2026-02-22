@@ -284,7 +284,7 @@ func requiredBinaries(cfg config.Config) []dependency {
 		}
 		switch source.Adapter.Kind {
 		case "spotdl":
-			seen["spotdl"] = dependency{Binary: "spotdl", MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "4.0.0")}
+			seen["spotdl"] = dependency{Binary: resolveSpotDLBinaryForDoctor(), MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "4.0.0")}
 		case "scdl":
 			seen["scdl"] = dependency{Binary: "scdl", MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "3.0.0")}
 			seen["yt-dlp"] = dependency{Binary: "yt-dlp", MinVersion: "0.0.0"}
@@ -292,7 +292,7 @@ func requiredBinaries(cfg config.Config) []dependency {
 	}
 
 	if len(seen) == 0 {
-		seen["spotdl"] = dependency{Binary: "spotdl", MinVersion: "4.0.0"}
+		seen["spotdl"] = dependency{Binary: resolveSpotDLBinaryForDoctor(), MinVersion: "4.0.0"}
 		seen["scdl"] = dependency{Binary: "scdl", MinVersion: "3.0.0"}
 	}
 
@@ -301,6 +301,22 @@ func requiredBinaries(cfg config.Config) []dependency {
 		result = append(result, dep)
 	}
 	return result
+}
+
+func resolveSpotDLBinaryForDoctor() string {
+	if override := strings.TrimSpace(os.Getenv("UDL_SPOTDL_BIN")); override != "" {
+		return override
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "spotdl"
+	}
+	candidate := filepath.Join(home, ".venvs", "udl-spotdl", "bin", "spotdl")
+	info, err := os.Stat(candidate)
+	if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return candidate
+	}
+	return "spotdl"
 }
 
 func minVersionOrDefault(candidate string, fallback string) string {

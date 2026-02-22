@@ -46,6 +46,40 @@ func (interruptedRunnerWithArtifacts) Run(ctx context.Context, spec ExecSpec) Ex
 	return ExecResult{ExitCode: 130, Interrupted: true}
 }
 
+type sequenceRunner struct {
+	results []ExecResult
+	specs   []ExecSpec
+}
+
+func (r *sequenceRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	r.specs = append(r.specs, spec)
+	if len(r.results) == 0 {
+		return ExecResult{ExitCode: 0}
+	}
+	result := r.results[0]
+	r.results = r.results[1:]
+	return result
+}
+
+type fakeSpotifyAdapter struct{}
+
+func (a fakeSpotifyAdapter) Kind() string                              { return "spotdlfake" }
+func (a fakeSpotifyAdapter) Binary() string                            { return "spotdl" }
+func (a fakeSpotifyAdapter) MinVersion() string                        { return "4.0.0" }
+func (a fakeSpotifyAdapter) RequiredEnv(source config.Source) []string { return nil }
+func (a fakeSpotifyAdapter) Validate(source config.Source) error       { return nil }
+func (a fakeSpotifyAdapter) BuildExecSpec(source config.Source, defaults config.Defaults, timeout time.Duration) (ExecSpec, error) {
+	args := []string{"sync", source.URL}
+	args = append(args, source.Adapter.ExtraArgs...)
+	return ExecSpec{
+		Bin:            "spotdl",
+		Args:           args,
+		Dir:            source.TargetDir,
+		Timeout:        timeout,
+		DisplayCommand: "spotdl " + strings.Join(args, " "),
+	}, nil
+}
+
 func TestSyncerDryRunDeterministicJSON(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
@@ -232,5 +266,124 @@ func TestIsGracefulBreakOnExistingStopFalseWhenDisabled(t *testing.T) {
 
 	if isGracefulBreakOnExistingStop(source, nil, execResult) {
 		t.Fatalf("expected no graceful break detection when break mode is disabled")
+	}
+}
+
+func TestSyncerRetriesSpotifyWithUserAuthWhenRequired(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-source",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-source.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "spotdlfake", ExtraArgs: []string{"--headless"}},
+			},
+		},
+	}
+
+	runner := &sequenceRunner{
+		results: []ExecResult{
+			{
+				ExitCode:   1,
+				StderrTail: "HTTP Error ... returned 401 due to Valid user authentication required",
+			},
+			{
+				ExitCode: 0,
+			},
+		},
+	}
+	syncer := NewSyncer(map[string]Adapter{"spotdlfake": fakeSpotifyAdapter{}}, runner, output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true))
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{AllowPrompt: true})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful retry result, got %+v", result)
+	}
+	if len(runner.specs) != 2 {
+		t.Fatalf("expected two runner calls, got %d", len(runner.specs))
+	}
+	if strings.Contains(strings.Join(runner.specs[0].Args, " "), "--user-auth") {
+		t.Fatalf("did not expect first run to include --user-auth")
+	}
+	if !strings.Contains(strings.Join(runner.specs[1].Args, " "), "--user-auth") {
+		t.Fatalf("expected retry run to include --user-auth, got %v", runner.specs[1].Args)
+	}
+}
+
+func TestSyncerDoesNotRetrySpotifyAuthWithoutPrompt(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-source",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-source.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "spotdlfake", ExtraArgs: []string{"--headless"}},
+			},
+		},
+	}
+
+	runner := &sequenceRunner{
+		results: []ExecResult{
+			{
+				ExitCode:   1,
+				StderrTail: "HTTP Error ... returned 401 due to Valid user authentication required",
+			},
+		},
+	}
+	syncer := NewSyncer(map[string]Adapter{"spotdlfake": fakeSpotifyAdapter{}}, runner, output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true))
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{AllowPrompt: false})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Failed != 1 || result.Succeeded != 0 {
+		t.Fatalf("expected failed source without retry, got %+v", result)
+	}
+	if len(runner.specs) != 1 {
+		t.Fatalf("expected one runner call, got %d", len(runner.specs))
 	}
 }
