@@ -46,3 +46,4 @@ We are building this together. When you learn something non-obvious, add it here
 - Compact mode now keeps Spotify/SoundCloud `preflight:` summary lines visible by default; operators can hide with `--preflight-summary never`.
 - Spotify deemix now treats `GWAPIError: Track unavailable on Deezer` as a per-track skip (`[skip] ... (unavailable-on-deezer)`), continues the source run, and does not append skipped IDs to `<source>.sync.spotify`.
 - Spotify state file format supports v2 metadata lines (`<id>\ttitle=...\tpath=...`) and remains backward-compatible with v1 ID-only lines; v2 metadata improves local-file detection when Spotify preflight metadata is sparse (for example HTML fallback).
+- Shell-based subprocess tests can buffer stdout unexpectedly; for deterministic rate-limit guard tests, emit the trigger line on stderr so `SubprocessRunner` observers see it immediately.

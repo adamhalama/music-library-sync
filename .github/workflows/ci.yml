@@ -19,3 +19,6 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - name: Enforce preflight benchmark budgets
+        run: ./.github/scripts/check_preflight_bench.sh

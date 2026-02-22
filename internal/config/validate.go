@@ -120,6 +120,9 @@ func Validate(cfg Config) error {
 			if source.Sync.AskOnExisting != nil {
 				problems = append(problems, fmt.Sprintf("source %q sync.ask_on_existing is only supported for soundcloud or spotify+deemix", source.ID))
 			}
+			if source.Sync.LocalIndexCache != nil {
+				problems = append(problems, fmt.Sprintf("source %q sync.local_index_cache is only supported for soundcloud", source.ID))
+			}
 		}
 	}
 

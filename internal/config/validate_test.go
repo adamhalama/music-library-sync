@@ -36,6 +36,7 @@ func TestValidateSuccess(t *testing.T) {
 				Sync: SyncPolicy{
 					BreakOnExisting: testBoolPtr(true),
 					AskOnExisting:   testBoolPtr(false),
+					LocalIndexCache: testBoolPtr(true),
 				},
 				Adapter: AdapterSpec{Kind: "scdl"},
 			},
@@ -84,6 +85,7 @@ func TestValidateFailure(t *testing.T) {
 				StateFile: "x.sync.spotify",
 				Sync: SyncPolicy{
 					BreakOnExisting: testBoolPtr(true),
+					LocalIndexCache: testBoolPtr(true),
 				},
 				Adapter: AdapterSpec{Kind: "spotdl"},
 			},

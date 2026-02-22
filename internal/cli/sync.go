@@ -59,6 +59,7 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			humanStderr := app.IO.ErrOut
 			runnerStdout := app.IO.Out
 			runnerStderr := app.IO.ErrOut
+			var compactWriter *output.CompactLogWriter
 			if app.Opts.JSON {
 				runnerStdout = app.IO.ErrOut
 			} else if app.Opts.Quiet {
@@ -72,21 +73,26 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 				case "never":
 					interactive = false
 				}
-				compact := output.NewCompactLogWriterWithOptions(app.IO.Out, output.CompactLogOptions{
+				compactWriter = output.NewCompactLogWriterWithOptions(app.IO.Out, output.CompactLogOptions{
 					Interactive:      interactive,
 					PreflightSummary: parsedPreflightSummaryMode,
 					TrackStatus:      string(parsedTrackStatusMode),
 				})
-				humanStdout = compact
-				runnerStdout = compact
-				runnerStderr = compact
+				humanStdout = compactWriter
+				runnerStdout = compactWriter
+				runnerStderr = compactWriter
 			}
 
 			var emitter output.EventEmitter
 			if app.Opts.JSON {
 				emitter = output.NewJSONEmitter(app.IO.Out)
 			} else {
-				emitter = output.NewHumanEmitter(humanStdout, humanStderr, app.Opts.Quiet, app.Opts.Verbose)
+				humanEmitter := output.NewHumanEmitter(humanStdout, humanStderr, app.Opts.Quiet, app.Opts.Verbose)
+				if compactWriter != nil {
+					emitter = output.NewObservingEmitter(compactWriter, humanEmitter)
+				} else {
+					emitter = humanEmitter
+				}
 			}
 			runner := engine.NewSubprocessRunner(app.IO.In, runnerStdout, runnerStderr)
 

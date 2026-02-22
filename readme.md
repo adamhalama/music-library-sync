@@ -24,6 +24,11 @@ Runtime tools:
 - `spotdl` (legacy/fallback Spotify path)
 - `yt-dlp` (required for SoundCloud preflight diff mode)
 
+Dependency policy:
+- `scdl`/`yt-dlp` are managed as strict external dependencies with a supported compatibility matrix enforced by `udl doctor`.
+- See `docs/dependency-matrix.md` for supported ranges, upgrade flow, and rollback behavior.
+- `spotdl` remains supported but is transitional and outside the strict matrix scope for this phase.
+
 Environment:
 - `SCDL_CLIENT_ID` (required for SoundCloud sources)
 - `UDL_DEEMIX_ARL` (or macOS Keychain item `service=udl.deemix account=default`) for Spotify+deemix
@@ -162,6 +167,7 @@ sources:
     sync:
       break_on_existing: true
       ask_on_existing: false
+      local_index_cache: false
     adapter:
       kind: "scdl"
       extra_args: ["-f"]
@@ -213,9 +219,12 @@ Notes:
 - `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
 - SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.
 - Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.
+- SoundCloud preflight is split into explicit stages (`enumerate`, `load-state`, `load-archive`, `local-index`, `plan`) and skips local media scans when there are no archive-only known entries for a source.
+- `sync.local_index_cache` enables a persisted local index cache (per source under `defaults.state_dir`) to avoid repeated full target-dir rescans; cache rebuilds on miss, schema mismatch, hash mismatch, or target signature change.
 - Default SoundCloud behavior breaks at first existing track; use `--scan-gaps` to scan full remote list and repair gaps. `--ask-on-existing` prompts once per source (TTY only, unless `--no-input`).
 - When preflight in break mode finds `planned=0`, `udl` marks the source up-to-date and skips launching `scdl`.
 - If a sync is interrupted or a source command fails, `udl` automatically cleans newly created partial artifacts (`*.part`, `*.ytdl`, and `*.scdl.lock` for `scdl`).
+- Compact mode progress now derives planned/global totals from structured engine events rather than parsing human log text.
 
 ## Exit Codes
 

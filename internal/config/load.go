@@ -45,6 +45,7 @@ type fileSource struct {
 type fileSyncPolicy struct {
 	BreakOnExisting *bool `yaml:"break_on_existing"`
 	AskOnExisting   *bool `yaml:"ask_on_existing"`
+	LocalIndexCache *bool `yaml:"local_index_cache"`
 }
 
 type fileAdapterSpec struct {
@@ -150,6 +151,7 @@ func mergeFile(cfg *Config, path string, required bool) error {
 				Sync: SyncPolicy{
 					BreakOnExisting: copyBoolPtr(fs.Sync.BreakOnExisting),
 					AskOnExisting:   copyBoolPtr(fs.Sync.AskOnExisting),
+					LocalIndexCache: copyBoolPtr(fs.Sync.LocalIndexCache),
 				},
 				Adapter: AdapterSpec{
 					Kind:       strings.TrimSpace(fs.Adapter.Kind),
@@ -212,6 +214,9 @@ func normalize(cfg *Config) {
 			}
 			if cfg.Sources[i].Sync.AskOnExisting == nil {
 				cfg.Sources[i].Sync.AskOnExisting = boolPtr(false)
+			}
+			if cfg.Sources[i].Sync.LocalIndexCache == nil {
+				cfg.Sources[i].Sync.LocalIndexCache = boolPtr(false)
 			}
 		}
 	}

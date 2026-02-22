@@ -89,9 +89,16 @@ func TestCompactLogWriterInteractiveRendersProgressBar(t *testing.T) {
 func TestCompactLogWriterUsesPreflightPlannedCountForGlobalProgress(t *testing.T) {
 	buf := &bytes.Buffer{}
 	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+	writer.ObserveEvent(Event{
+		Event:    EventSourcePreflight,
+		SourceID: "soundcloud-clean-test",
+		Details: map[string]any{
+			"planned_download_count": 3,
+		},
+		Message: "[soundcloud-clean-test] preflight complete",
+	})
 
 	payload := strings.Join([]string{
-		"[soundcloud-clean-test] preflight: remote=1041 known=12 gaps=1029 known_gaps=3 first_existing=4 planned=3 mode=break",
 		"[download] Downloading item 1 of 4",
 		"[download] Destination: /tmp/PICHI - BO FUNK [FREE DL].m4a",
 		"[download]  25.0% of ~   2.51MiB at    6.88KiB/s ETA Unknown (frag 1/26)",
@@ -116,9 +123,16 @@ func TestCompactLogWriterUsesPreflightPlannedCountForGlobalProgress(t *testing.T
 func TestCompactLogWriterKeepsGlobalBarVisibleBetweenTracks(t *testing.T) {
 	buf := &bytes.Buffer{}
 	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+	writer.ObserveEvent(Event{
+		Event:    EventSourcePreflight,
+		SourceID: "soundcloud-clean-test",
+		Details: map[string]any{
+			"planned_download_count": 3,
+		},
+		Message: "[soundcloud-clean-test] preflight complete",
+	})
 
 	payload := strings.Join([]string{
-		"[soundcloud-clean-test] preflight: remote=1041 known=12 gaps=1029 known_gaps=3 first_existing=4 planned=3 mode=break",
 		"[download] Downloading item 1 of 4",
 		"[download] Destination: /tmp/PICHI - BO FUNK [FREE DL].m4a",
 		"[download] 100% of    5.00MiB in 00:00:02 at 1.98MiB/s",
@@ -135,6 +149,37 @@ func TestCompactLogWriterKeepsGlobalBarVisibleBetweenTracks(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "waiting for next track (1/3 done)") {
 		t.Fatalf("expected idle live status between tracks, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterStructuredPreflightContractIgnoresMessageWording(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+	writer.ObserveEvent(Event{
+		Event:    EventSourcePreflight,
+		SourceID: "sc-source",
+		Details: map[string]any{
+			"planned_download_count": 3,
+		},
+		Message: "completely different wording",
+	})
+
+	payload := strings.Join([]string{
+		"[download] Downloading item 1 of 9",
+		"[download] Destination: /tmp/Track One.m4a",
+		"[download]  25.0% of ~   2.51MiB at    6.88KiB/s ETA Unknown (frag 1/26)",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "8.3%") {
+		t.Fatalf("expected planned total from structured event (8.3%%), got: %s", out)
 	}
 }
 

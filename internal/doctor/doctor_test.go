@@ -36,6 +36,30 @@ func spotifyConfig() config.Config {
 	}
 }
 
+func soundcloudConfig() config.Config {
+	return config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              "/tmp/state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-a",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: "/tmp/music",
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-a.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+}
+
 func spotifyDeemixConfig() config.Config {
 	return config.Config{
 		Version: 1,
@@ -89,28 +113,6 @@ func TestDoctorBadVersion(t *testing.T) {
 }
 
 func TestDoctorMissingSoundCloudEnv(t *testing.T) {
-	cfg := config.Config{
-		Version: 1,
-		Defaults: config.Defaults{
-			StateDir:              "/tmp/state",
-			ArchiveFile:           "archive.txt",
-			Threads:               1,
-			ContinueOnError:       true,
-			CommandTimeoutSeconds: 900,
-		},
-		Sources: []config.Source{
-			{
-				ID:        "sc-a",
-				Type:      config.SourceTypeSoundCloud,
-				Enabled:   true,
-				TargetDir: "/tmp/music",
-				URL:       "https://soundcloud.com/user",
-				StateFile: "sc-a.sync.scdl",
-				Adapter:   config.AdapterSpec{Kind: "scdl"},
-			},
-		},
-	}
-
 	checker := &Checker{
 		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "scdl 3.0.0", nil },
@@ -118,35 +120,13 @@ func TestDoctorMissingSoundCloudEnv(t *testing.T) {
 		CheckWritable: func(path string) error { return nil },
 	}
 
-	report := checker.Check(context.Background(), cfg)
+	report := checker.Check(context.Background(), soundcloudConfig())
 	if !report.HasErrors() {
 		t.Fatalf("expected auth error when SCDL_CLIENT_ID is missing")
 	}
 }
 
 func TestDoctorRequiresYTDLPForSoundCloud(t *testing.T) {
-	cfg := config.Config{
-		Version: 1,
-		Defaults: config.Defaults{
-			StateDir:              "/tmp/state",
-			ArchiveFile:           "archive.txt",
-			Threads:               1,
-			ContinueOnError:       true,
-			CommandTimeoutSeconds: 900,
-		},
-		Sources: []config.Source{
-			{
-				ID:        "sc-a",
-				Type:      config.SourceTypeSoundCloud,
-				Enabled:   true,
-				TargetDir: "/tmp/music",
-				URL:       "https://soundcloud.com/user",
-				StateFile: "sc-a.sync.scdl",
-				Adapter:   config.AdapterSpec{Kind: "scdl"},
-			},
-		},
-	}
-
 	checker := &Checker{
 		LookPath: func(name string) (string, error) {
 			if name == "yt-dlp" {
@@ -159,9 +139,140 @@ func TestDoctorRequiresYTDLPForSoundCloud(t *testing.T) {
 		CheckWritable: func(path string) error { return nil },
 	}
 
-	report := checker.Check(context.Background(), cfg)
+	report := checker.Check(context.Background(), soundcloudConfig())
 	if !report.HasErrors() {
 		t.Fatalf("expected missing yt-dlp dependency to be reported")
+	}
+}
+
+func TestDoctorDoesNotRequireYTDLPWhenNoSourcesConfigured(t *testing.T) {
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              "/tmp/state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{},
+	}
+
+	checker := &Checker{
+		LookPath: func(name string) (string, error) {
+			if name == "yt-dlp" {
+				return "", fmt.Errorf("not found")
+			}
+			return "/usr/bin/" + name, nil
+		},
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			switch {
+			case strings.Contains(binary, "spotdl"):
+				return "spotdl 4.5.0", nil
+			case strings.Contains(binary, "scdl"):
+				return "scdl 3.0.3", nil
+			default:
+				return "0.0.0", nil
+			}
+		},
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+	}
+
+	report := checker.Check(context.Background(), cfg)
+	if report.HasErrors() {
+		t.Fatalf("did not expect missing yt-dlp to fail doctor with no sources, got %+v", report.Checks)
+	}
+	for _, check := range report.Checks {
+		if strings.Contains(strings.ToLower(check.Message), "yt-dlp") {
+			t.Fatalf("did not expect yt-dlp check when no sources are configured, got %+v", report.Checks)
+		}
+	}
+}
+
+func TestDoctorSoundCloudDependencyMatrixCompatible(t *testing.T) {
+	checker := &Checker{
+		LookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			switch binary {
+			case "scdl":
+				return "scdl 3.0.3", nil
+			case "yt-dlp":
+				return "yt-dlp 2026.2.4", nil
+			default:
+				return "0.0.0", nil
+			}
+		},
+		Getenv:        func(key string) string { return "set" },
+		CheckWritable: func(path string) error { return nil },
+		Matrix:        defaultDependencyMatrix(),
+	}
+
+	report := checker.Check(context.Background(), soundcloudConfig())
+	if report.HasErrors() {
+		t.Fatalf("did not expect dependency matrix errors: %+v", report.Checks)
+	}
+	if !hasInfoContaining(report, "compatible with supported matrix") {
+		t.Fatalf("expected matrix compatibility info message, got %+v", report.Checks)
+	}
+}
+
+func TestDoctorSoundCloudDependencyMatrixKnownBadVersion(t *testing.T) {
+	matrix := defaultDependencyMatrix()
+	scdlRule := matrix["scdl"]
+	scdlRule.KnownBad["3.0.2"] = "regression in yt-dlp argument passthrough"
+	matrix["scdl"] = scdlRule
+
+	checker := &Checker{
+		LookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			switch binary {
+			case "scdl":
+				return "scdl 3.0.2", nil
+			case "yt-dlp":
+				return "yt-dlp 2026.2.4", nil
+			default:
+				return "0.0.0", nil
+			}
+		},
+		Getenv:        func(key string) string { return "set" },
+		CheckWritable: func(path string) error { return nil },
+		Matrix:        matrix,
+	}
+
+	report := checker.Check(context.Background(), soundcloudConfig())
+	if !report.HasErrors() {
+		t.Fatalf("expected known-bad matrix version to fail")
+	}
+	if !hasErrorContaining(report, "blocked by compatibility matrix") {
+		t.Fatalf("expected known-bad matrix error message, got %+v", report.Checks)
+	}
+}
+
+func TestDoctorSoundCloudDependencyMatrixRejectsOutOfRangeVersion(t *testing.T) {
+	checker := &Checker{
+		LookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			switch binary {
+			case "scdl":
+				return "scdl 4.0.1", nil
+			case "yt-dlp":
+				return "yt-dlp 2026.2.4", nil
+			default:
+				return "0.0.0", nil
+			}
+		},
+		Getenv:        func(key string) string { return "set" },
+		CheckWritable: func(path string) error { return nil },
+		Matrix:        defaultDependencyMatrix(),
+	}
+
+	report := checker.Check(context.Background(), soundcloudConfig())
+	if !report.HasErrors() {
+		t.Fatalf("expected out-of-range matrix version to fail")
+	}
+	if !hasErrorContaining(report, "outside supported matrix") {
+		t.Fatalf("expected out-of-range matrix error message, got %+v", report.Checks)
 	}
 }
 
@@ -233,6 +344,30 @@ func hasWarnContaining(report Report, snippet string) bool {
 	return false
 }
 
+func hasInfoContaining(report Report, snippet string) bool {
+	for _, check := range report.Checks {
+		if check.Severity != SeverityInfo {
+			continue
+		}
+		if strings.Contains(check.Message, snippet) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasErrorContaining(report Report, snippet string) bool {
+	for _, check := range report.Checks {
+		if check.Severity != SeverityError {
+			continue
+		}
+		if strings.Contains(check.Message, snippet) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestResolveSpotDLBinaryForDoctorPrefersOverride(t *testing.T) {
 	t.Setenv("UDL_SPOTDL_BIN", "/custom/spotdl")
 	if got := resolveSpotDLBinaryForDoctor(); got != "/custom/spotdl" {
@@ -267,13 +402,13 @@ func TestResolveDeemixBinaryForDoctorPrefersOverride(t *testing.T) {
 
 func TestDoctorSpotifyDeemixReportsMissingARLAndCredentials(t *testing.T) {
 	checker := &Checker{
-		LookPath:    func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		ReadVersion: func(ctx context.Context, binary string) (string, error) { return "deemix 0.1.0", nil },
-		Getenv:      func(key string) string { return "" },
-		CheckWritable: func(path string) error {
-			return nil
+		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "deemix 0.1.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		ResolveDeemixARL: func() (string, error) {
+			return "", auth.ErrDeemixARLNotFound
 		},
-		ResolveDeemixARL: func() (string, error) { return "", auth.ErrDeemixARLNotFound },
 		ResolveSpotifyCredentials: func() (auth.SpotifyCredentials, error) {
 			return auth.SpotifyCredentials{}, auth.ErrSpotifyCredentialsNotFound
 		},
@@ -293,13 +428,13 @@ func TestDoctorSpotifyDeemixReportsMissingARLAndCredentials(t *testing.T) {
 
 func TestDoctorSpotifyDeemixAuthChecksPassWhenCredentialsPresent(t *testing.T) {
 	checker := &Checker{
-		LookPath:    func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		ReadVersion: func(ctx context.Context, binary string) (string, error) { return "deemix 0.1.0", nil },
-		Getenv:      func(key string) string { return "" },
-		CheckWritable: func(path string) error {
-			return nil
+		LookPath:      func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "deemix 0.1.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		ResolveDeemixARL: func() (string, error) {
+			return "arl", nil
 		},
-		ResolveDeemixARL: func() (string, error) { return "arl", nil },
 		ResolveSpotifyCredentials: func() (auth.SpotifyCredentials, error) {
 			return auth.SpotifyCredentials{ClientID: "id", ClientSecret: "secret"}, nil
 		},
@@ -318,28 +453,4 @@ func TestDoctorSpotifyDeemixAuthChecksPassWhenCredentialsPresent(t *testing.T) {
 	if !hasWarnContaining(report, "upstream transport may use insecure request paths") {
 		t.Fatalf("expected deemix transport risk warning, got %+v", report.Checks)
 	}
-}
-
-func hasErrorContaining(report Report, snippet string) bool {
-	for _, check := range report.Checks {
-		if check.Severity != SeverityError {
-			continue
-		}
-		if strings.Contains(check.Message, snippet) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasInfoContaining(report Report, snippet string) bool {
-	for _, check := range report.Checks {
-		if check.Severity != SeverityInfo {
-			continue
-		}
-		if strings.Contains(check.Message, snippet) {
-			return true
-		}
-	}
-	return false
 }

@@ -40,6 +40,7 @@ type Source struct {
 type SyncPolicy struct {
 	BreakOnExisting *bool `yaml:"break_on_existing,omitempty"`
 	AskOnExisting   *bool `yaml:"ask_on_existing,omitempty"`
+	LocalIndexCache *bool `yaml:"local_index_cache,omitempty"`
 }
 
 type AdapterSpec struct {
