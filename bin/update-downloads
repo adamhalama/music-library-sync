@@ -4,6 +4,8 @@
 #
 # update-downloads
 #
+# NOTE: legacy script kept for migration. New CLI entrypoint is `udl`.
+#
 # A single script that:
 #   1) cds into each directory
 #   2) runs the specified command

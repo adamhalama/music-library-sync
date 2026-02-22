@@ -1,0 +1,63 @@
+version: 1
+defaults:
+  state_dir: "~/dev/music-down/statefiles"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "soundcloud-likes"
+    type: "soundcloud"
+    enabled: true
+    target_dir: "~/Music/downloaded/sc-likes"
+    url: "https://soundcloud.com/janxadam"
+    state_file: "soundcloud-likes.sync.scdl"
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
+    adapter:
+      kind: "scdl"
+      extra_args:
+        - "-f"
+        - "--yt-dlp-args"
+        - "--embed-thumbnail --embed-metadata --download-archive scdl-archive.txt --no-overwrites --break-on-existing"
+
+  - id: "spotify-groovik"
+    type: "spotify"
+    enabled: true
+    target_dir: "~/Music/downloaded/spotify-groove"
+    url: "https://open.spotify.com/playlist/3yp4tiwWn1r0FE7jtvWhbb?si=e1617c735daf4c2b"
+    state_file: "groovik.sync.spotdl"
+    adapter:
+      kind: "spotdl"
+      extra_args: ["--headless", "--print-errors"]
+
+  - id: "spotify-technicko"
+    type: "spotify"
+    enabled: true
+    target_dir: "~/Music/downloaded/spotify-technicko"
+    url: "https://open.spotify.com/playlist/0vO3PgmFMIvAuuQrjKo1XG"
+    state_file: "technicko.sync.spotdl"
+    adapter:
+      kind: "spotdl"
+      extra_args: ["--headless", "--print-errors"]
+
+  - id: "spotify-funkybounce"
+    type: "spotify"
+    enabled: true
+    target_dir: "~/Music/downloaded/spotify-funkybounce"
+    url: "https://open.spotify.com/playlist/0rhzW83MTzundrEEsIbLgr"
+    state_file: "funkybounce.sync.spotdl"
+    adapter:
+      kind: "spotdl"
+      extra_args: ["--headless", "--print-errors"]
+
+  - id: "spotify-technochill"
+    type: "spotify"
+    enabled: true
+    target_dir: "~/Music/downloaded/spotify-technochill"
+    url: "https://open.spotify.com/playlist/6OmLOgWjwddWVXYNc6Fu5s"
+    state_file: "technochill.sync.spotdl"
+    adapter:
+      kind: "spotdl"
+      extra_args: ["--headless", "--print-errors"]

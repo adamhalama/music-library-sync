@@ -1,0 +1,17 @@
+version: 1
+defaults:
+  state_dir: "/tmp/udl-state"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "spotify-groove"
+    type: "spotify"
+    enabled: true
+    target_dir: "/tmp/music/spotify-groove"
+    url: "https://open.spotify.com/playlist/example"
+    state_file: "spotify-groove.sync.spotdl"
+    adapter:
+      kind: "spotdl"
+      extra_args: ["--headless", "--print-errors"]

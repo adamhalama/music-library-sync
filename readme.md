@@ -1,78 +1,206 @@
-### `update-downloads/README.md`
+# update-downloads (`udl`)
 
-# update-downloads
+`udl` is a production-style CLI for syncing local music folders from configured SoundCloud and Spotify sources.
 
-Point of this script is to have an easy and convinient way to always have a local library that is synced with my SounCloud and Spotify likes/playlists.
-Running the script will update the local library in an easy way.
+It replaces hardcoded orchestration with:
+- YAML config (XDG user config + optional project override)
+- Validation and doctor checks
+- Deterministic sync execution
+- Human output by default and structured `--json` output for automation
 
-One Bash script that:
-1. Enters a directory,
-2. Runs the given downloader,
-3. Uses `spotdl sync` to only grab new tracks,
-4. Streams output to your terminal.
+The legacy script remains available during migration: `bin/update-downloads`.
 
-It currently runs:
-- `scdl` for SoundCloud likes
-- `spotdl` for a few Spotify playlists (can use `.sync.spotdl` state files)
+## Current Status
+
+- CLI name: `udl`
+- v1 model: Go app orchestrating external adapters (`spotdl`, `scdl`)
+- Scope: `init`, `validate`, `doctor`, `sync`, `version`
 
 ## Requirements
-- [spotDL](https://github.com/spotDL/spotify-downloader) (MIT)
-- [scdl](https://github.com/scdl-org/scdl) (GPL-2.0)
-- macOS/Linux shell with `bash`
 
-> Note: Service Terms of Service apply. This repo just automates **your own** use of those tools.
+Runtime tools:
+- `spotdl`
+- `scdl`
+- `yt-dlp` (required for SoundCloud preflight diff mode)
+
+Environment:
+- `SCDL_CLIENT_ID` (required for SoundCloud sources)
+
+Build tooling:
+- Go 1.22+
 
 ## Install
-Make the script executable and symlink it onto your `PATH`:
+
+Build and install the CLI:
 
 ```bash
-chmod +x bin/update-downloads
-
-# user-local
-mkdir -p "$HOME/bin"
-ln -sfn "$PWD/bin/update-downloads" "$HOME/bin/update-downloads"
-
-# or system-wide (macOS)
-/usr/bin/sudo ln -sfn "$PWD/bin/update-downloads" /usr/local/bin/update-downloads
+make install
 ```
 
+This installs `udl` into your local Homebrew prefix `bin` directory (for example `/opt/homebrew/bin/udl` or `/usr/local/bin/udl`).
 
-## Configuration
-
-### Environment Variables
-
-The script requires the following environment variable to be set:
-
-- **`SCDL_CLIENT_ID`** — Your SoundCloud client ID (required for `scdl`)
-
-You can obtain a SoundCloud client ID by:
-1. Opening SoundCloud in your browser
-2. Opening Developer Tools (F12) → Network tab
-3. Playing any track and looking for API requests containing `client_id`
-
-Set it in your shell profile (e.g., `~/.zshrc` or `~/.bashrc`):
+Legacy script install (optional during migration):
 
 ```bash
-export SCDL_CLIENT_ID="your_client_id_here"
+make legacy-install
 ```
 
-### Other Settings
+## Quick Start
 
-- Edit playlist URLs and download directories in the script.
-- State files default to: `~/dev/music-down/statefiles/`
+Create starter config:
 
-    .gitignore ideas for your clone:
+```bash
+udl init
+```
 
-    statefiles/
-    *.sync.spotdl
-    archive.txt
-    *.log
+Validate config:
 
-Run
+```bash
+udl validate
+```
 
-update-downloads
+Run environment and dependency diagnostics:
 
-It will process each source, printing progress and a summary at the end.
-License
+```bash
+udl doctor
+```
 
-MIT — see LICENSE.
+Dry-run execution plan:
+
+```bash
+udl sync --dry-run
+```
+
+Run sync:
+
+```bash
+udl sync
+```
+
+## Command Surface
+
+```text
+udl [global flags] <command>
+
+Commands:
+  init
+  validate
+  doctor
+  sync
+  version
+  help
+```
+
+Global flags:
+- `-c, --config <path>`
+- `--json`
+- `-q, --quiet`
+- `-v, --verbose`
+- `--no-color`
+- `--no-input`
+- `-n, --dry-run`
+- `--version`
+
+`sync` flags:
+- `--source <id>` (repeatable)
+- `--timeout <duration>`
+- `--ask-on-existing`
+- `--scan-gaps`
+- `--no-preflight`
+
+## Config
+
+Precedence (highest to lowest):
+1. flags
+2. environment variables
+3. project config (`./udl.yaml`)
+4. user config (`$XDG_CONFIG_HOME/udl/config.yaml` or `~/.config/udl/config.yaml`)
+5. defaults
+
+Supported config env overrides:
+- `UDL_CONFIG`
+- `UDL_STATE_DIR`
+- `UDL_ARCHIVE_FILE`
+- `UDL_THREADS`
+- `UDL_CONTINUE_ON_ERROR`
+- `UDL_COMMAND_TIMEOUT_SECONDS`
+
+Example:
+
+```yaml
+version: 1
+defaults:
+  state_dir: "~/.local/state/udl"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "soundcloud-likes"
+    type: "soundcloud"
+    enabled: true
+    target_dir: "~/Music/downloaded/sc-likes"
+    url: "https://soundcloud.com/your-user"
+    state_file: "soundcloud-likes.sync.scdl"
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
+    adapter:
+      kind: "scdl"
+      extra_args: ["-f"]
+
+  - id: "spotify-groove"
+    type: "spotify"
+    enabled: true
+    target_dir: "~/Music/downloaded/spotify-groove"
+    url: "https://open.spotify.com/playlist/replace-me"
+    state_file: "spotify-groove.sync.spotdl"
+    adapter:
+      kind: "spotdl"
+      extra_args: ["--headless", "--print-errors"]
+```
+
+Notes:
+- For SoundCloud sources, `udl` injects `--yt-dlp-args "--embed-thumbnail --embed-metadata"` automatically when `--yt-dlp-args` is not explicitly provided.
+- `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
+- SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.
+- Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.
+- Default SoundCloud behavior breaks at first existing track; use `--scan-gaps` to scan full remote list and repair gaps. `--ask-on-existing` prompts once per source (TTY only, unless `--no-input`).
+- When preflight in break mode finds `planned=0`, `udl` marks the source up-to-date and skips launching `scdl`.
+- If a sync is interrupted or a source command fails, `udl` automatically cleans newly created partial artifacts (`*.part`, `*.ytdl`, and `*.scdl.lock` for `scdl`).
+
+## Exit Codes
+
+- `0` success
+- `1` runtime failure
+- `2` invalid usage
+- `3` invalid config
+- `4` missing dependency/auth prerequisite
+- `5` partial success (at least one source failed)
+- `130` interrupted
+
+## Testing
+
+Run all tests:
+
+```bash
+make test
+```
+
+## Distribution
+
+- CI test workflow: `.github/workflows/ci.yml`
+- Tagged release build workflow: `.github/workflows/release.yml`
+- Homebrew formula template: `packaging/homebrew/udl.rb`
+
+## Migration Notes
+
+Dual-run transition is supported:
+1. Keep using `bin/update-downloads` while configuring `udl`.
+2. Validate parity with `udl sync --dry-run` and then `udl sync`.
+3. Switch to `udl` as the default command.
+4. Remove legacy script after stable releases.
+
+## License
+
+MIT — see `LICENCE`.

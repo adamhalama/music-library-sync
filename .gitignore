@@ -3,5 +3,6 @@ statefiles/
 *.sync.spotdl
 archive.txt
 *.log
-
-.github
+bin/udl
+dist/
+.github/copilot-instructions.md
