@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/output"
 )
@@ -31,6 +33,16 @@ type Syncer struct {
 	Emitter  output.EventEmitter
 	Now      func() time.Time
 }
+
+var (
+	resolveSpotifyCredentialsFn = auth.ResolveSpotifyCredentials
+	resolveDeemixARLFn          = auth.ResolveDeemixARL
+	saveDeemixARLFn             = auth.SaveDeemixARL
+	enumerateSpotifyTracksFn    = enumerateSpotifyPlaylistTracks
+	enumerateSpotifyViaPageFn   = enumerateSpotifyPlaylistTracksViaPage
+	fetchSpotifyTrackMetadataFn = fetchSpotifyTrackMetadataFromPage
+	deemixTitlePattern          = regexp.MustCompile(`\[(.+?)\]\s+Download(?:ing:\s+[0-9]+(?:\.[0-9]+)?%| complete)`)
+)
 
 func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.EventEmitter) *Syncer {
 	if emitter == nil {
@@ -209,6 +221,368 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 					},
 				})
 			}
+		}
+
+		if source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
+			plan, planErr := s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
+			if planErr != nil {
+				result.Failed++
+				result.Attempted++
+				if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
+					errors.Is(planErr, auth.ErrDeemixARLNotFound) {
+					result.DependencyFailures++
+				}
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelError,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
+				})
+				if !cfg.Defaults.ContinueOnError {
+					break
+				}
+				continue
+			}
+			sourceForExec = plan.Source
+			sourcePreflight = plan.Preflight
+			if plan.Preflight != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelInfo,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message: fmt.Sprintf(
+						"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
+						source.ID,
+						plan.Preflight.RemoteTotal,
+						plan.Preflight.KnownCount,
+						plan.Preflight.ArchiveGapCount,
+						plan.Preflight.KnownGapCount,
+						plan.Preflight.FirstExistingIndex,
+						plan.Preflight.PlannedDownloadCount,
+						plan.Preflight.Mode,
+					),
+					Details: map[string]any{
+						"remote_total":           plan.Preflight.RemoteTotal,
+						"known_count":            plan.Preflight.KnownCount,
+						"archive_gap_count":      plan.Preflight.ArchiveGapCount,
+						"known_gap_count":        plan.Preflight.KnownGapCount,
+						"first_existing_index":   plan.Preflight.FirstExistingIndex,
+						"planned_download_count": plan.Preflight.PlannedDownloadCount,
+						"mode":                   plan.Preflight.Mode,
+					},
+				})
+			}
+			emitSpotifyDeemixExistingTrackStatus(s, source.ID, plan, opts.TrackStatus)
+
+			timeout := time.Duration(cfg.Defaults.CommandTimeoutSeconds) * time.Second
+			if opts.TimeoutOverride > 0 {
+				timeout = opts.TimeoutOverride
+			}
+
+			if opts.DryRun {
+				result.Attempted++
+				result.Succeeded++
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelInfo,
+					Event:     output.EventSourceFinished,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] dry-run complete", source.ID),
+				})
+				continue
+			}
+
+			if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 {
+				result.Attempted++
+				result.Succeeded++
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelInfo,
+					Event:     output.EventSourceFinished,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] up-to-date (no downloads planned)", source.ID),
+					Details: map[string]any{
+						"planned_download_count": 0,
+						"mode":                   sourcePreflight.Mode,
+					},
+				})
+				continue
+			}
+
+			plannedTrackIDs := append([]string(nil), plan.PlannedTrackIDs...)
+			if len(plannedTrackIDs) == 0 {
+				if trackID := extractSpotifyTrackID(sourceForExec.URL); trackID != "" {
+					plannedTrackIDs = []string{trackID}
+				} else if playlistID, playlistErr := resolveSpotifyPlaylistID(sourceForExec.URL); playlistErr == nil {
+					pageTracks, pageErr := enumerateSpotifyViaPageFn(ctx, playlistID)
+					if pageErr != nil || len(pageTracks) == 0 {
+						plannedTrackIDs = []string{""}
+					} else {
+						plannedTrackIDs = make([]string, 0, len(pageTracks))
+						for _, track := range pageTracks {
+							plannedTrackIDs = append(plannedTrackIDs, track.ID)
+						}
+						metadata := buildSpotifyTrackMetadataIndex(pageTracks)
+						if len(metadata) > 0 {
+							if plan.TrackMetadata == nil {
+								plan.TrackMetadata = metadata
+							} else {
+								for id, value := range metadata {
+									plan.TrackMetadata[id] = value
+								}
+							}
+						}
+						_ = s.Emitter.Emit(output.Event{
+							Timestamp: s.Now(),
+							Level:     output.LevelWarn,
+							Event:     output.EventSourcePreflight,
+							SourceID:  source.ID,
+							Message:   fmt.Sprintf("[%s] no-preflight playlist run using public playlist page track enumeration (%d track(s))", source.ID, len(plannedTrackIDs)),
+						})
+					}
+				} else {
+					plannedTrackIDs = []string{""}
+				}
+			}
+
+			result.Attempted++
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourceStarted,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] running deemix for %d track(s)", source.ID, len(plannedTrackIDs)),
+			})
+
+			runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
+			sourceFailed := false
+			var sourceFailureMessage string
+			var sourceFailureDetails map[string]any
+			skippedUnavailable := 0
+			spotifyTargetDir, targetDirErr := config.ExpandPath(sourceForExec.TargetDir)
+			if targetDirErr != nil {
+				sourceFailed = true
+				sourceFailureMessage = fmt.Sprintf("[%s] resolve target_dir: %v", source.ID, targetDirErr)
+			}
+			for idx, trackID := range plannedTrackIDs {
+				if sourceFailed {
+					break
+				}
+				trackSource := sourceForExec
+				if trackID != "" {
+					trackSource.URL = spotifyTrackURL(trackID)
+				}
+				trackLabel := spotifyTrackDisplayNameFromState(trackID, plan.TrackMetadata, plan.State)
+				spec, buildErr := adapter.BuildExecSpec(trackSource, cfg.Defaults, timeout)
+				if buildErr != nil {
+					sourceFailed = true
+					sourceFailureMessage = fmt.Sprintf("[%s] cannot build command: %v", source.ID, buildErr)
+					break
+				}
+				if runtimeDir == "" {
+					runtimeDir = spec.Dir
+					sourceForExec.DeemixRuntimeDir = spec.Dir
+				}
+				trackSource.DeemixRuntimeDir = runtimeDir
+				spec.Dir = runtimeDir
+
+				if trackID != "" && strings.TrimSpace(runtimeDir) != "" {
+					metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata)
+					if metadataErr != nil {
+						_ = s.Emitter.Emit(output.Event{
+							Timestamp: s.Now(),
+							Level:     output.LevelWarn,
+							Event:     output.EventSourcePreflight,
+							SourceID:  source.ID,
+							Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
+						})
+					} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
+						_ = s.Emitter.Emit(output.Event{
+							Timestamp: s.Now(),
+							Level:     output.LevelWarn,
+							Event:     output.EventSourcePreflight,
+							SourceID:  source.ID,
+							Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
+						})
+					}
+				}
+
+				if trackID != "" {
+					message := fmt.Sprintf("[%s] deemix track %d/%d %s", source.ID, idx+1, len(plannedTrackIDs), trackID)
+					if trackLabel != "" {
+						message = fmt.Sprintf("[%s] deemix track %d/%d %s (%s)", source.ID, idx+1, len(plannedTrackIDs), trackID, trackLabel)
+					}
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelInfo,
+						Event:     output.EventSourcePreflight,
+						SourceID:  source.ID,
+						Message:   message,
+					})
+				}
+
+				var mediaBefore map[string]mediaFileSnapshot
+				if trackID != "" {
+					before, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
+					if snapshotErr != nil {
+						_ = s.Emitter.Emit(output.Event{
+							Timestamp: s.Now(),
+							Level:     output.LevelWarn,
+							Event:     output.EventSourcePreflight,
+							SourceID:  source.ID,
+							Message:   fmt.Sprintf("[%s] unable to snapshot target directory before track run: %v", source.ID, snapshotErr),
+						})
+					} else {
+						mediaBefore = before
+					}
+				}
+
+				execResult := s.Runner.Run(ctx, spec)
+				if execResult.Interrupted {
+					_ = cleanupRuntimeDir(runtimeDir)
+					result.Interrupted = true
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelError,
+						Event:     output.EventSourceFailed,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] interrupted", source.ID),
+						Details: map[string]any{
+							"exit_code":   execResult.ExitCode,
+							"duration_ms": execResult.Duration.Milliseconds(),
+						},
+					})
+					break
+				}
+
+				if unavailable, reason := deemixReportedTrackUnavailable(execResult); unavailable {
+					skippedUnavailable++
+					display := trackLabel
+					if display == "" {
+						display = deemixTrackDisplayName(execResult)
+					}
+					if display == "" {
+						display = trackID
+					}
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelInfo,
+						Event:     output.EventSourcePreflight,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason),
+					})
+					continue
+				}
+
+				if execResult.ExitCode != 0 {
+					sourceFailed = true
+					sourceFailureMessage = fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode)
+					sourceFailureDetails = map[string]any{
+						"command":     spec.DisplayCommand,
+						"exit_code":   execResult.ExitCode,
+						"duration_ms": execResult.Duration.Milliseconds(),
+						"timed_out":   execResult.TimedOut,
+					}
+					break
+				}
+				if failed, reason := deemixReportedFailure(execResult); failed {
+					sourceFailed = true
+					sourceFailureMessage = fmt.Sprintf(
+						"[%s] deemix reported runtime failure despite exit code 0 (%s); check Spotify app credentials/quota and consider fallback to spotdl for this source",
+						source.ID,
+						reason,
+					)
+					sourceFailureDetails = map[string]any{
+						"command":     spec.DisplayCommand,
+						"exit_code":   execResult.ExitCode,
+						"duration_ms": execResult.Duration.Milliseconds(),
+						"stdout_tail": execResult.StdoutTail,
+						"stderr_tail": execResult.StderrTail,
+					}
+					break
+				}
+
+				if trackID != "" {
+					entryLabel := trackLabel
+					if entryLabel == "" {
+						entryLabel = deemixTrackDisplayName(execResult)
+					}
+					localPath := ""
+					if mediaBefore != nil {
+						after, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
+						if snapshotErr == nil {
+							localPath = detectUpdatedMediaPath(mediaBefore, after)
+						}
+					}
+					doneMessage := fmt.Sprintf("[%s] [done] %s", source.ID, trackID)
+					if entryLabel != "" {
+						doneMessage = fmt.Sprintf("[%s] [done] %s (%s)", source.ID, trackID, entryLabel)
+					}
+					if appendErr := appendSpotifySyncStateEntry(sourceForExec.StateFile, trackID, entryLabel, localPath); appendErr != nil {
+						sourceFailed = true
+						sourceFailureMessage = fmt.Sprintf("[%s] failed to update spotify state file: %v", source.ID, appendErr)
+						break
+					}
+					plan.State.KnownIDs[trackID] = struct{}{}
+					entry := plan.State.Entries[trackID]
+					if entryLabel != "" {
+						entry.DisplayName = entryLabel
+					}
+					if localPath != "" {
+						entry.LocalPath = localPath
+					}
+					if entry.DisplayName != "" || entry.LocalPath != "" {
+						plan.State.Entries[trackID] = entry
+					}
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelInfo,
+						Event:     output.EventSourcePreflight,
+						SourceID:  source.ID,
+						Message:   doneMessage,
+					})
+				}
+			}
+
+			_ = cleanupRuntimeDir(runtimeDir)
+
+			if result.Interrupted {
+				break
+			}
+			if sourceFailed {
+				result.Failed++
+				if sourceFailureMessage == "" {
+					sourceFailureMessage = fmt.Sprintf("[%s] command failed", source.ID)
+				}
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelError,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   sourceFailureMessage,
+					Details:   sourceFailureDetails,
+				})
+				if !cfg.Defaults.ContinueOnError {
+					break
+				}
+				continue
+			}
+
+			result.Succeeded++
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourceFinished,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] completed", source.ID),
+				Details: map[string]any{
+					"planned_download_count": len(plannedTrackIDs),
+					"skipped_unavailable":    skippedUnavailable,
+				},
+			})
+			continue
 		}
 
 		timeout := time.Duration(cfg.Defaults.CommandTimeoutSeconds) * time.Second
@@ -646,6 +1020,15 @@ type soundCloudExecutionPlan struct {
 	StateSwap soundCloudStateSwap
 }
 
+type spotifyDeemixExecutionPlan struct {
+	Source           config.Source
+	Preflight        *SoundCloudPreflight
+	PlannedTrackIDs  []string
+	ExistingTrackIDs []string
+	TrackMetadata    map[string]spotifyTrackMetadata
+	State            spotifySyncState
+}
+
 func (s *Syncer) prepareSoundCloudExecutionPlan(
 	ctx context.Context,
 	cfg config.Config,
@@ -765,6 +1148,138 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	return plan, nil
 }
 
+func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	opts SyncOptions,
+) (spotifyDeemixExecutionPlan, error) {
+	plan := spotifyDeemixExecutionPlan{
+		Source: source,
+		State: spotifySyncState{
+			KnownIDs: map[string]struct{}{},
+			Entries:  map[string]spotifyStateEntry{},
+		},
+	}
+
+	stateFilePath, err := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
+	if err != nil {
+		return plan, fmt.Errorf("resolve state_file: %w", err)
+	}
+	plan.Source.StateFile = stateFilePath
+
+	spotifyCreds, err := resolveSpotifyCredentialsFn()
+	if err != nil {
+		return plan, err
+	}
+	plan.Source.SpotifyClientID = spotifyCreds.ClientID
+	plan.Source.SpotifyClientSecret = spotifyCreds.ClientSecret
+
+	arl, err := resolveDeemixARLFn()
+	if err != nil && !errors.Is(err, auth.ErrDeemixARLNotFound) {
+		return plan, err
+	}
+	if strings.TrimSpace(arl) == "" && opts.AllowPrompt && opts.PromptOnDeemixARL != nil {
+		prompted, promptErr := opts.PromptOnDeemixARL(source.ID)
+		if promptErr != nil {
+			return plan, promptErr
+		}
+		arl = strings.TrimSpace(prompted)
+		if arl != "" {
+			if saveErr := saveDeemixARLFn(arl); saveErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] unable to save Deezer ARL to keychain: %v", source.ID, saveErr),
+				})
+			}
+		}
+	}
+	arl = strings.TrimSpace(arl)
+	if arl == "" {
+		return plan, auth.ErrDeemixARLNotFound
+	}
+	plan.Source.DeezerARL = arl
+
+	mode := determineSoundCloudMode(source, opts)
+	askOnExisting := resolveAskOnExisting(source, opts)
+	breakOnExisting := mode == SoundCloudModeBreak
+	plan.Source.Sync.BreakOnExisting = &breakOnExisting
+
+	if opts.NoPreflight {
+		if askOnExisting {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] ask-on-existing ignored because preflight is disabled", source.ID),
+			})
+		}
+		if mode == SoundCloudModeScanGaps {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] scan-gaps without preflight disables remote diff planning", source.ID),
+			})
+		}
+		return plan, nil
+	}
+
+	tracks := []spotifyRemoteTrack{}
+	if trackID := extractSpotifyTrackID(source.URL); trackID != "" {
+		tracks = append(tracks, spotifyRemoteTrack{
+			ID:    trackID,
+			URL:   spotifyTrackURL(trackID),
+			Title: trackID,
+		})
+	} else {
+		tracks, err = enumerateSpotifyTracksFn(ctx, source, spotifyCreds)
+		if err != nil {
+			return plan, err
+		}
+	}
+	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
+
+	state, err := parseSpotifySyncState(stateFilePath)
+	if err != nil {
+		return plan, fmt.Errorf("parse spotify sync state file: %w", err)
+	}
+	plan.State = state
+
+	targetDir, err := config.ExpandPath(source.TargetDir)
+	if err != nil {
+		return plan, fmt.Errorf("resolve target_dir: %w", err)
+	}
+
+	preflight, _, _, plannedTrackIDs, existingTrackIDs := buildSpotifyPreflight(tracks, state, targetDir, mode)
+	if askOnExisting &&
+		mode == SoundCloudModeBreak &&
+		preflight.FirstExistingIndex > 0 &&
+		opts.AllowPrompt &&
+		opts.PromptOnExisting != nil {
+		shouldScanGaps, promptErr := opts.PromptOnExisting(source.ID, preflight)
+		if promptErr != nil {
+			return plan, promptErr
+		}
+		if shouldScanGaps {
+			mode = SoundCloudModeScanGaps
+			preflight, _, _, plannedTrackIDs, existingTrackIDs = buildSpotifyPreflight(tracks, state, targetDir, mode)
+		}
+	}
+
+	plan.Preflight = &preflight
+	plan.PlannedTrackIDs = plannedTrackIDs
+	plan.ExistingTrackIDs = existingTrackIDs
+	breakOnExisting = mode == SoundCloudModeBreak
+	plan.Source.Sync.BreakOnExisting = &breakOnExisting
+	return plan, nil
+}
+
 func determineSoundCloudMode(source config.Source, opts SyncOptions) SoundCloudMode {
 	if opts.ScanGaps {
 		return SoundCloudModeScanGaps
@@ -834,6 +1349,9 @@ func shouldRetrySpotifyWithUserAuth(source config.Source, execResult ExecResult,
 	if source.Type != config.SourceTypeSpotify {
 		return false
 	}
+	if source.Adapter.Kind != "spotdl" {
+		return false
+	}
 	if execResult.ExitCode == 0 || execResult.Interrupted || execResult.TimedOut {
 		return false
 	}
@@ -865,6 +1383,9 @@ func isSpotifyUserAuthRequired(source config.Source, execResult ExecResult) bool
 	if source.Type != config.SourceTypeSpotify {
 		return false
 	}
+	if source.Adapter.Kind != "spotdl" {
+		return false
+	}
 	if execResult.ExitCode == 0 || execResult.Interrupted {
 		return false
 	}
@@ -875,6 +1396,9 @@ func isSpotifyUserAuthRequired(source config.Source, execResult ExecResult) bool
 
 func isSpotifyRateLimited(source config.Source, execResult ExecResult) bool {
 	if source.Type != config.SourceTypeSpotify {
+		return false
+	}
+	if source.Adapter.Kind != "spotdl" {
 		return false
 	}
 	if execResult.ExitCode == 0 || execResult.Interrupted {
@@ -934,6 +1458,155 @@ func isSpotDLHeadlessArg(candidate string) bool {
 	return trimmed == "--headless" || strings.HasPrefix(trimmed, "--headless=")
 }
 
+func deemixReportedFailure(execResult ExecResult) (bool, string) {
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+
+	switch {
+	case strings.Contains(combined, "cannot read properties of undefined") &&
+		strings.Contains(combined, "spotifyplugin."):
+		return true, "spotify-plugin-exception"
+	case strings.Contains(combined, "pluginnotenablederror") ||
+		strings.Contains(combined, "populate spotify app credentials to download spotify links"):
+		return true, "spotify-credentials-missing"
+	case strings.Contains(combined, "not logged in"):
+		return true, "deezer-auth-failed"
+	case strings.Contains(combined, "typeerror:") && strings.Contains(combined, "spotifyplugin"):
+		return true, "spotify-plugin-typeerror"
+	default:
+		return false, ""
+	}
+}
+
+func deemixReportedTrackUnavailable(execResult ExecResult) (bool, string) {
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+	if strings.Contains(combined, "track unavailable on deezer") {
+		return true, "unavailable-on-deezer"
+	}
+	return false, ""
+}
+
+func deemixTrackDisplayName(execResult ExecResult) string {
+	combined := execResult.StdoutTail + "\n" + execResult.StderrTail
+	matches := deemixTitlePattern.FindAllStringSubmatch(combined, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	for i := len(matches) - 1; i >= 0; i-- {
+		if len(matches[i]) < 2 {
+			continue
+		}
+		title := strings.TrimSpace(matches[i][1])
+		if title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func spotifyTrackDisplayName(trackID string, metadata map[string]spotifyTrackMetadata) string {
+	id := extractSpotifyTrackID(trackID)
+	if id == "" || metadata == nil {
+		return ""
+	}
+	item, ok := metadata[id]
+	if !ok {
+		return ""
+	}
+
+	title := strings.TrimSpace(item.Title)
+	artist := strings.TrimSpace(item.Artist)
+	name := title
+	if artist != "" && title != "" {
+		name = artist + " - " + title
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if extractSpotifyTrackID(name) != "" {
+		return ""
+	}
+	return name
+}
+
+func spotifyTrackDisplayNameFromState(trackID string, metadata map[string]spotifyTrackMetadata, state spotifySyncState) string {
+	if label := spotifyTrackDisplayName(trackID, metadata); label != "" {
+		return label
+	}
+	id := extractSpotifyTrackID(trackID)
+	if id == "" {
+		return ""
+	}
+	entry, ok := state.Entries[id]
+	if !ok {
+		return ""
+	}
+	label := strings.TrimSpace(entry.DisplayName)
+	if label == "" {
+		return ""
+	}
+	if extractSpotifyTrackID(label) != "" {
+		return ""
+	}
+	return label
+}
+
+func normalizeTrackStatusMode(mode TrackStatusMode) TrackStatusMode {
+	switch mode {
+	case TrackStatusNames, TrackStatusCount, TrackStatusNone:
+		return mode
+	default:
+		return TrackStatusNames
+	}
+}
+
+func emitSpotifyDeemixExistingTrackStatus(s *Syncer, sourceID string, plan spotifyDeemixExecutionPlan, mode TrackStatusMode) {
+	statusMode := normalizeTrackStatusMode(mode)
+	if statusMode == TrackStatusNone || len(plan.ExistingTrackIDs) == 0 {
+		return
+	}
+
+	if statusMode == TrackStatusCount {
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourcePreflight,
+			SourceID:  sourceID,
+			Message:   fmt.Sprintf("[%s] already-present locally: %d track(s)", sourceID, len(plan.ExistingTrackIDs)),
+		})
+		return
+	}
+
+	const maxDetailed = 20
+	limit := len(plan.ExistingTrackIDs)
+	if limit > maxDetailed {
+		limit = maxDetailed
+	}
+	for i := 0; i < limit; i++ {
+		id := plan.ExistingTrackIDs[i]
+		label := spotifyTrackDisplayNameFromState(id, plan.TrackMetadata, plan.State)
+		if strings.TrimSpace(label) == "" {
+			label = id
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourcePreflight,
+			SourceID:  sourceID,
+			Message:   fmt.Sprintf("[%s] [skip] %s (%s) (already-present)", sourceID, id, label),
+		})
+	}
+	if len(plan.ExistingTrackIDs) > limit {
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourcePreflight,
+			SourceID:  sourceID,
+			Message:   fmt.Sprintf("[%s] [skip] ... and %d more already-present track(s)", sourceID, len(plan.ExistingTrackIDs)-limit),
+		})
+	}
+}
+
 func resolveSpotDLOAuthCachePath() (string, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -956,6 +1629,77 @@ func resolveSpotDLOAuthCachePath() (string, bool) {
 	return "", false
 }
 
+type mediaFileSnapshot struct {
+	Size    int64
+	ModTime time.Time
+}
+
+func snapshotMediaFiles(dir string) (map[string]mediaFileSnapshot, error) {
+	snapshots := map[string]mediaFileSnapshot{}
+	root := strings.TrimSpace(dir)
+	if root == "" {
+		return snapshots, nil
+	}
+	if _, err := os.Stat(root); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return snapshots, nil
+		}
+		return nil, err
+	}
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if !isMediaExt(ext) {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		snapshots[rel] = mediaFileSnapshot{
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
+func detectUpdatedMediaPath(before map[string]mediaFileSnapshot, after map[string]mediaFileSnapshot) string {
+	bestPath := ""
+	bestTime := time.Time{}
+	for path, current := range after {
+		previous, existed := before[path]
+		changed := !existed ||
+			current.Size != previous.Size ||
+			current.ModTime.After(previous.ModTime)
+		if !changed {
+			continue
+		}
+		if bestPath == "" ||
+			current.ModTime.After(bestTime) ||
+			(current.ModTime.Equal(bestTime) && path < bestPath) {
+			bestPath = path
+			bestTime = current.ModTime
+		}
+	}
+	return bestPath
+}
+
 func cleanupTempFile(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
@@ -964,6 +1708,14 @@ func cleanupTempFile(path string) error {
 		return err
 	}
 	return nil
+}
+
+func cleanupRuntimeDir(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return nil
+	}
+	return os.RemoveAll(trimmed)
 }
 
 func cleanupTempStateFiles(stateSwap soundCloudStateSwap) error {

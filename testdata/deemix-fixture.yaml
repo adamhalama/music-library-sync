@@ -1,0 +1,20 @@
+version: 1
+defaults:
+  state_dir: "~/.local/state/udl"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "spotify-deemix-fixture"
+    type: "spotify"
+    enabled: true
+    target_dir: "/tmp/udl-music/spotify-deemix-fixture"
+    url: "https://open.spotify.com/playlist/3yp4tiwWn1r0FE7jtvWhbb"
+    state_file: "spotify-deemix-fixture.sync.spotify"
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
+    adapter:
+      kind: "deemix"
+      extra_args: []

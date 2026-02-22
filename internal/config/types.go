@@ -29,6 +29,10 @@ type Source struct {
 	URL                 string      `yaml:"url"`
 	StateFile           string      `yaml:"state_file,omitempty"`
 	DownloadArchivePath string      `yaml:"-"`
+	DeezerARL           string      `yaml:"-"`
+	SpotifyClientID     string      `yaml:"-"`
+	SpotifyClientSecret string      `yaml:"-"`
+	DeemixRuntimeDir    string      `yaml:"-"`
 	Sync                SyncPolicy  `yaml:"sync,omitempty"`
 	Adapter             AdapterSpec `yaml:"adapter"`
 }

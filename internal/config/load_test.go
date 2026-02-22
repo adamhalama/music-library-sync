@@ -123,3 +123,36 @@ sources:
 		t.Fatalf("expected ask_on_existing default false")
 	}
 }
+
+func TestLoadSpotifyDefaultsDoNotSetAdapterKind(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	payload := `version: 1
+defaults:
+  state_dir: "` + filepath.Join(tmp, "state") + `"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "spotify-list"
+    type: "spotify"
+    enabled: true
+    target_dir: "/tmp/music"
+    url: "https://open.spotify.com/playlist/abc123"
+`
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(LoadOptions{ExplicitPath: configPath})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Sources[0].StateFile != "spotify-list.sync.spotify" {
+		t.Fatalf("expected default spotify state_file, got %q", cfg.Sources[0].StateFile)
+	}
+	if cfg.Sources[0].Adapter.Kind != "" {
+		t.Fatalf("expected spotify adapter kind to remain explicit-only, got %q", cfg.Sources[0].Adapter.Kind)
+	}
+}

@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
+	"github.com/jaa/update-downloads/internal/adapters/deemix"
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
 	"github.com/jaa/update-downloads/internal/adapters/spotdl"
 	"github.com/jaa/update-downloads/internal/config"
@@ -24,11 +26,27 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 	var askOnExisting bool
 	var scanGaps bool
 	var noPreflight bool
+	var progressMode string
+	var preflightSummaryMode string
+	var trackStatusMode string
 
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Run enabled sources in deterministic order",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			parsedProgressMode, err := parseProgressMode(progressMode)
+			if err != nil {
+				return withExitCode(exitcode.InvalidUsage, err)
+			}
+			parsedPreflightSummaryMode, err := parsePreflightSummaryMode(preflightSummaryMode)
+			if err != nil {
+				return withExitCode(exitcode.InvalidUsage, err)
+			}
+			parsedTrackStatusMode, err := parseTrackStatusMode(trackStatusMode)
+			if err != nil {
+				return withExitCode(exitcode.InvalidUsage, err)
+			}
+
 			cfg, err := loadConfig(app)
 			if err != nil {
 				return withExitCode(exitcode.InvalidConfig, err)
@@ -47,7 +65,18 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 				runnerStdout = io.Discard
 				runnerStderr = io.Discard
 			} else if !app.Opts.Verbose {
-				compact := output.NewCompactLogWriter(app.IO.Out)
+				interactive := output.SupportsInPlaceUpdates(app.IO.Out)
+				switch parsedProgressMode {
+				case "always":
+					interactive = true
+				case "never":
+					interactive = false
+				}
+				compact := output.NewCompactLogWriterWithOptions(app.IO.Out, output.CompactLogOptions{
+					Interactive:      interactive,
+					PreflightSummary: parsedPreflightSummaryMode,
+					TrackStatus:      string(parsedTrackStatusMode),
+				})
 				humanStdout = compact
 				runnerStdout = compact
 				runnerStderr = compact
@@ -62,6 +91,7 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			runner := engine.NewSubprocessRunner(app.IO.In, runnerStdout, runnerStderr)
 
 			registry := map[string]engine.Adapter{
+				"deemix": deemix.New(),
 				"spotdl": spotdl.New(),
 				"scdl":   scdl.New(),
 			}
@@ -85,6 +115,10 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 				PromptOnSpotifyAuth: func(sourceID string) (bool, error) {
 					return promptYesNoDefault(app, fmt.Sprintf("[%s] Spotify login required. Open browser now?", sourceID), true)
 				},
+				PromptOnDeemixARL: func(sourceID string) (string, error) {
+					return promptLine(app, fmt.Sprintf("[%s] Enter your Deezer ARL for deemix", sourceID))
+				},
+				TrackStatus: parsedTrackStatusMode,
 			})
 			if runErr != nil {
 				var selectionErr *engine.SelectionError
@@ -112,6 +146,48 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Override per-source command timeout (e.g. 10m, 1h)")
 	cmd.Flags().BoolVar(&askOnExisting, "ask-on-existing", false, "Prompt once when first existing track is found and optionally continue with gap scan")
 	cmd.Flags().BoolVar(&scanGaps, "scan-gaps", false, "Continue full remote scan to fill archive and local-file gaps")
-	cmd.Flags().BoolVar(&noPreflight, "no-preflight", false, "Skip SoundCloud remote preflight diff stage")
+	cmd.Flags().BoolVar(&noPreflight, "no-preflight", false, "Skip remote preflight diff stage for supported adapters")
+	cmd.Flags().StringVar(&progressMode, "progress", "auto", "Progress rendering mode: auto, always, or never")
+	cmd.Flags().StringVar(&preflightSummaryMode, "preflight-summary", "auto", "Preflight summary output: auto, always, or never")
+	cmd.Flags().StringVar(&trackStatusMode, "track-status", "names", "Per-track status output: names, count, or none")
 	return cmd
+}
+
+func parseProgressMode(raw string) (string, error) {
+	mode := strings.TrimSpace(strings.ToLower(raw))
+	switch mode {
+	case "", "auto", "always", "never":
+		if mode == "" {
+			return "auto", nil
+		}
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid --progress mode %q (expected: auto, always, never)", raw)
+	}
+}
+
+func parsePreflightSummaryMode(raw string) (string, error) {
+	mode := strings.TrimSpace(strings.ToLower(raw))
+	switch mode {
+	case "", output.CompactPreflightAuto, output.CompactPreflightAlways, output.CompactPreflightNever:
+		if mode == "" {
+			return output.CompactPreflightAuto, nil
+		}
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid --preflight-summary mode %q (expected: auto, always, never)", raw)
+	}
+}
+
+func parseTrackStatusMode(raw string) (engine.TrackStatusMode, error) {
+	mode := strings.TrimSpace(strings.ToLower(raw))
+	switch mode {
+	case "", string(engine.TrackStatusNames), string(engine.TrackStatusCount), string(engine.TrackStatusNone):
+		if mode == "" {
+			return engine.TrackStatusNames, nil
+		}
+		return engine.TrackStatusMode(mode), nil
+	default:
+		return "", fmt.Errorf("invalid --track-status mode %q (expected: names, count, none)", raw)
+	}
 }

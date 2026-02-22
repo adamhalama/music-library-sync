@@ -44,6 +44,8 @@ type SyncOptions struct {
 	AllowPrompt         bool
 	PromptOnExisting    func(sourceID string, preflight SoundCloudPreflight) (bool, error)
 	PromptOnSpotifyAuth func(sourceID string) (bool, error)
+	PromptOnDeemixARL   func(sourceID string) (string, error)
+	TrackStatus         TrackStatusMode
 }
 
 type SyncResult struct {
@@ -72,3 +74,11 @@ type SoundCloudPreflight struct {
 	PlannedDownloadCount int
 	Mode                 SoundCloudMode
 }
+
+type TrackStatusMode string
+
+const (
+	TrackStatusNames TrackStatusMode = "names"
+	TrackStatusCount TrackStatusMode = "count"
+	TrackStatusNone  TrackStatusMode = "none"
+)

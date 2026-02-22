@@ -58,7 +58,7 @@ func TestSubprocessRunnerAbortsSpotDLOnLargeRateLimitRetryWindow(t *testing.T) {
 	tmp := t.TempDir()
 	scriptPath := filepath.Join(tmp, "spotdl")
 	script := "#!/bin/sh\n" +
-		"echo 'Your application has reached a rate/request limit. Retry will occur after: 600 s'\n" +
+		"/bin/echo 'Your application has reached a rate/request limit. Retry will occur after: 600 s' >&2\n" +
 		"sleep 5\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)

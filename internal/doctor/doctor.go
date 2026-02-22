@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 )
 
@@ -52,12 +53,14 @@ func (r Report) ErrorCount() int {
 }
 
 type Checker struct {
-	LookPath      func(string) (string, error)
-	ReadVersion   func(context.Context, string) (string, error)
-	Getenv        func(string) string
-	CheckWritable func(string) error
-	ReadFile      func(string) ([]byte, error)
-	HomeDir       func() (string, error)
+	LookPath                  func(string) (string, error)
+	ReadVersion               func(context.Context, string) (string, error)
+	Getenv                    func(string) string
+	CheckWritable             func(string) error
+	ReadFile                  func(string) ([]byte, error)
+	HomeDir                   func() (string, error)
+	ResolveSpotifyCredentials func() (auth.SpotifyCredentials, error)
+	ResolveDeemixARL          func() (string, error)
 }
 
 func NewChecker() *Checker {
@@ -68,8 +71,10 @@ func NewChecker() *Checker {
 		CheckWritable: func(path string) error {
 			return checkDirWritable(path)
 		},
-		ReadFile: os.ReadFile,
-		HomeDir:  os.UserHomeDir,
+		ReadFile:                  os.ReadFile,
+		HomeDir:                   os.UserHomeDir,
+		ResolveSpotifyCredentials: auth.ResolveSpotifyCredentials,
+		ResolveDeemixARL:          auth.ResolveDeemixARL,
 	}
 }
 
@@ -135,6 +140,13 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			report.Checks = append(report.Checks, check)
 		}
 	}
+	if hasEnabledSpotifyDeemixSource(cfg.Sources) {
+		report.Checks = append(report.Checks, Check{
+			Severity: SeverityWarn,
+			Name:     "security",
+			Message:  "deemix/deezer-sdk upstream transport may use insecure request paths; treat Deezer ARL and Spotify credentials as sensitive and run only on trusted networks",
+		})
+	}
 
 	for _, source := range cfg.Sources {
 		if !source.Enabled {
@@ -180,6 +192,44 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			} else {
 				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is writable", source.ID)})
 			}
+
+			if source.Adapter.Kind == "deemix" {
+				resolveARL := c.ResolveDeemixARL
+				if resolveARL == nil {
+					resolveARL = auth.ResolveDeemixARL
+				}
+				if _, arlErr := resolveARL(); arlErr != nil {
+					report.Checks = append(report.Checks, Check{
+						Severity: SeverityError,
+						Name:     "auth",
+						Message:  "deemix Spotify sources require Deezer ARL (set UDL_DEEMIX_ARL or save keychain item service=udl.deemix account=default)",
+					})
+				} else {
+					report.Checks = append(report.Checks, Check{
+						Severity: SeverityInfo,
+						Name:     "auth",
+						Message:  "deemix Deezer ARL is available",
+					})
+				}
+
+				resolveSpotifyCreds := c.ResolveSpotifyCredentials
+				if resolveSpotifyCreds == nil {
+					resolveSpotifyCreds = auth.ResolveSpotifyCredentials
+				}
+				if _, credsErr := resolveSpotifyCreds(); credsErr != nil {
+					report.Checks = append(report.Checks, Check{
+						Severity: SeverityError,
+						Name:     "auth",
+						Message:  "deemix Spotify sources require Spotify app credentials (set UDL_SPOTIFY_CLIENT_ID/UDL_SPOTIFY_CLIENT_SECRET, save keychain service=udl.spotify accounts=client_id/client_secret, or use ~/.spotdl/config.json)",
+					})
+				} else {
+					report.Checks = append(report.Checks, Check{
+						Severity: SeverityInfo,
+						Name:     "auth",
+						Message:  "Spotify app credentials are available for deemix conversion",
+					})
+				}
+			}
 		}
 		if source.Type == config.SourceTypeSoundCloud {
 			stateFile, stateErr := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
@@ -211,6 +261,15 @@ type spotDLConfig struct {
 func hasEnabledSpotifySource(sources []config.Source) bool {
 	for _, source := range sources {
 		if source.Enabled && source.Type == config.SourceTypeSpotify {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnabledSpotifyDeemixSource(sources []config.Source) bool {
+	for _, source := range sources {
+		if source.Enabled && source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
 			return true
 		}
 	}
@@ -285,6 +344,8 @@ func requiredBinaries(cfg config.Config) []dependency {
 		switch source.Adapter.Kind {
 		case "spotdl":
 			seen["spotdl"] = dependency{Binary: resolveSpotDLBinaryForDoctor(), MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "4.0.0")}
+		case "deemix":
+			seen["deemix"] = dependency{Binary: resolveDeemixBinaryForDoctor(), MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "0.1.0")}
 		case "scdl":
 			seen["scdl"] = dependency{Binary: "scdl", MinVersion: minVersionOrDefault(source.Adapter.MinVersion, "3.0.0")}
 			seen["yt-dlp"] = dependency{Binary: "yt-dlp", MinVersion: "0.0.0"}
@@ -317,6 +378,13 @@ func resolveSpotDLBinaryForDoctor() string {
 		return candidate
 	}
 	return "spotdl"
+}
+
+func resolveDeemixBinaryForDoctor() string {
+	if override := strings.TrimSpace(os.Getenv("UDL_DEEMIX_BIN")); override != "" {
+		return override
+	}
+	return "deemix"
 }
 
 func minVersionOrDefault(candidate string, fallback string) string {
