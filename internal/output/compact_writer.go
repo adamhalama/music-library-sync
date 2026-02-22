@@ -16,6 +16,7 @@ var fragmentProgressPattern = regexp.MustCompile(`^\[download\]\s+([0-9]+(?:\.[0
 var downloadItemPattern = regexp.MustCompile(`^\[download\] Downloading item ([0-9]+) of ([0-9]+)$`)
 var downloadDestinationPattern = regexp.MustCompile(`^\[download\] Destination: (.+)$`)
 var alreadyDownloadedPattern = regexp.MustCompile(`^\[download\] (.+) has already been downloaded$`)
+var preflightSummaryPattern = regexp.MustCompile(`^\[[^\]]+\]\s+preflight:\s+.*\bplanned=([0-9]+)\b`)
 
 type CompactLogOptions struct {
 	Interactive bool
@@ -25,13 +26,17 @@ type CompactLogWriter struct {
 	dst         io.Writer
 	interactive bool
 
-	mu         sync.Mutex
-	buf        []byte
-	activeLine string
+	mu          sync.Mutex
+	buf         []byte
+	activeTrack string
+	activeTotal string
+	liveVisible bool
 
-	itemIndex int
-	itemTotal int
-	track     trackState
+	itemIndex    int
+	itemTotal    int
+	plannedTotal int
+	track        trackState
+	barWidth     int
 
 	breakOnExistingDetected bool
 	breakStopPrinted        bool
@@ -99,7 +104,7 @@ func (w *CompactLogWriter) Flush() error {
 	if err := w.finalizeTrackLocked(); err != nil {
 		return err
 	}
-	return w.clearActiveLineLocked()
+	return w.clearLiveLinesLocked()
 }
 
 func (w *CompactLogWriter) flushLineLocked() error {
@@ -117,6 +122,24 @@ func (w *CompactLogWriter) flushLineLocked() error {
 }
 
 func (w *CompactLogWriter) handleLineLocked(line string) error {
+	if strings.HasPrefix(line, "sync started (") {
+		w.itemIndex = 0
+		w.itemTotal = 0
+		w.plannedTotal = 0
+		w.track = trackState{}
+	}
+
+	if match := preflightSummaryPattern.FindStringSubmatch(line); len(match) == 2 {
+		planned, _ := strconv.Atoi(match[1])
+		if planned < 0 {
+			planned = 0
+		}
+		w.plannedTotal = planned
+		w.itemIndex = 0
+		w.itemTotal = 0
+		w.track = trackState{}
+	}
+
 	if match := downloadItemPattern.FindStringSubmatch(line); len(match) == 3 {
 		if err := w.finalizeTrackLocked(); err != nil {
 			return err
@@ -219,9 +242,10 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 		return nil
 	}
 
-	status := fmt.Sprintf("[in-progress] %s", w.track.Name)
-	if w.itemIndex > 0 && w.itemTotal > 0 {
-		status = fmt.Sprintf("[in-progress %d/%d %4.1f%%] %s", w.itemIndex, w.itemTotal, w.globalProgressPercent(), w.track.Name)
+	index, total := w.currentTrackCounters()
+	trackLine := fmt.Sprintf("[track] %s", w.track.Name)
+	if total > 0 {
+		trackLine = fmt.Sprintf("[track %d/%d] %s", index, total, w.track.Name)
 	}
 
 	bits := []string{}
@@ -235,18 +259,22 @@ func (w *CompactLogWriter) renderStatusLocked(stage string) error {
 		bits = append(bits, "meta:yes")
 	}
 	if len(bits) > 0 {
-		status = status + " (" + strings.Join(bits, ", ") + ")"
+		trackLine = trackLine + " (" + strings.Join(bits, ", ") + ")"
 	}
 	if w.track.ProgressKnown && !w.track.AlreadyPresent {
-		status += " " + renderProgress(w.track.ProgressPercent)
+		trackLine += " " + renderProgress(w.track.ProgressPercent)
 	}
 
-	if status == w.activeLine {
+	overallPercent := w.globalProgressPercent()
+	globalLine := fmt.Sprintf("[overall] %s (%d/%d)", renderProgressWithWidth(overallPercent, w.globalBarWidth()), index, total)
+	if total <= 0 {
+		globalLine = fmt.Sprintf("[overall] %s", renderProgressWithWidth(overallPercent, w.globalBarWidth()))
+	}
+
+	if trackLine == w.activeTrack && globalLine == w.activeTotal {
 		return nil
 	}
-	w.activeLine = status
-	_, err := fmt.Fprintf(w.dst, "\r\033[2K%s", status)
-	return err
+	return w.renderLiveLinesLocked(trackLine, globalLine)
 }
 
 func (w *CompactLogWriter) finalizeTrackLocked() error {
@@ -280,19 +308,41 @@ func (w *CompactLogWriter) finalizeTrackLocked() error {
 }
 
 func (w *CompactLogWriter) printPersistentLocked(line string) error {
-	if err := w.clearActiveLineLocked(); err != nil {
+	if err := w.clearLiveLinesLocked(); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(w.dst, line)
 	return err
 }
 
-func (w *CompactLogWriter) clearActiveLineLocked() error {
-	if !w.interactive || w.activeLine == "" {
+func (w *CompactLogWriter) renderLiveLinesLocked(trackLine, globalLine string) error {
+	if !w.interactive {
 		return nil
 	}
-	w.activeLine = ""
-	_, err := fmt.Fprint(w.dst, "\r\033[2K")
+	// Cursor is kept on the track line while rendering two dynamic lines:
+	// track status (line 1) + overall progress (line 2).
+	if w.liveVisible {
+		if _, err := fmt.Fprint(w.dst, "\r\033[2K"); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w.dst, "%s\n\033[2K%s\033[1A", trackLine, globalLine); err != nil {
+		return err
+	}
+	w.liveVisible = true
+	w.activeTrack = trackLine
+	w.activeTotal = globalLine
+	return nil
+}
+
+func (w *CompactLogWriter) clearLiveLinesLocked() error {
+	if !w.interactive || !w.liveVisible {
+		return nil
+	}
+	w.activeTrack = ""
+	w.activeTotal = ""
+	w.liveVisible = false
+	_, err := fmt.Fprint(w.dst, "\r\033[2K\033[1B\r\033[2K\033[1A\r")
 	return err
 }
 
@@ -352,8 +402,14 @@ func trackNameFromPath(pathLike string) string {
 }
 
 func renderProgress(percent float64) string {
+	return renderProgressWithWidth(percent, 16)
+}
+
+func renderProgressWithWidth(percent float64, width int) string {
 	clamped := clampPercent(percent)
-	const width = 16
+	if width <= 0 {
+		width = 16
+	}
 	filled := int((clamped / 100) * float64(width))
 	if filled < 0 {
 		filled = 0
@@ -366,23 +422,70 @@ func renderProgress(percent float64) string {
 }
 
 func (w *CompactLogWriter) globalProgressPercent() float64 {
-	if w.itemTotal <= 0 {
+	total := w.effectiveItemTotal()
+	if total <= 0 {
 		return 0
 	}
 	completedItems := w.itemIndex - 1
 	if completedItems < 0 {
 		completedItems = 0
 	}
-
-	partial := 0.0
-	switch {
-	case w.track.AlreadyPresent || w.track.CompletionObserved:
-		partial = 1.0
-	case w.track.ProgressKnown:
-		partial = w.track.ProgressPercent / 100.0
+	if completedItems > total {
+		completedItems = total
 	}
 
-	return clampPercent(((float64(completedItems) + partial) / float64(w.itemTotal)) * 100.0)
+	partial := 0.0
+	if completedItems < total {
+		switch {
+		case w.track.AlreadyPresent || w.track.CompletionObserved:
+			partial = 1.0
+		case w.track.ProgressKnown:
+			partial = w.track.ProgressPercent / 100.0
+		}
+	}
+
+	return clampPercent(((float64(completedItems) + partial) / float64(total)) * 100.0)
+}
+
+func (w *CompactLogWriter) effectiveItemTotal() int {
+	if w.plannedTotal > 0 {
+		return w.plannedTotal
+	}
+	return w.itemTotal
+}
+
+func (w *CompactLogWriter) currentTrackCounters() (int, int) {
+	total := w.effectiveItemTotal()
+	if total <= 0 {
+		return 0, 0
+	}
+	index := w.itemIndex
+	if index < 1 {
+		index = 1
+	}
+	if index > total {
+		index = total
+	}
+	return index, total
+}
+
+func (w *CompactLogWriter) globalBarWidth() int {
+	if w.barWidth > 0 {
+		return w.barWidth
+	}
+	width := 44
+	if cols, err := strconv.Atoi(strings.TrimSpace(os.Getenv("COLUMNS"))); err == nil && cols > 0 {
+		candidate := cols - 26
+		if candidate < 20 {
+			candidate = 20
+		}
+		if candidate > 80 {
+			candidate = 80
+		}
+		width = candidate
+	}
+	w.barWidth = width
+	return width
 }
 
 func clampPercent(percent float64) float64 {

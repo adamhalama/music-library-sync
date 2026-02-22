@@ -78,8 +78,38 @@ func TestCompactLogWriterInteractiveRendersProgressBar(t *testing.T) {
 	if !strings.Contains(out, "25.0%") || !strings.Contains(out, "[####") {
 		t.Fatalf("expected progress bar and percent in output, got: %s", out)
 	}
+	if !strings.Contains(out, "[overall]") {
+		t.Fatalf("expected global progress line in output, got: %s", out)
+	}
 	if !strings.Contains(out, "[done] Track One") {
 		t.Fatalf("expected final done line, got: %s", out)
+	}
+}
+
+func TestCompactLogWriterUsesPreflightPlannedCountForGlobalProgress(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: true})
+
+	payload := strings.Join([]string{
+		"[soundcloud-clean-test] preflight: remote=1041 known=12 gaps=1029 known_gaps=3 first_existing=4 planned=3 mode=break",
+		"[download] Downloading item 1 of 4",
+		"[download] Destination: /tmp/PICHI - BO FUNK [FREE DL].m4a",
+		"[download]  25.0% of ~   2.51MiB at    6.88KiB/s ETA Unknown (frag 1/26)",
+	}, "\n") + "\n"
+
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[overall]") {
+		t.Fatalf("expected overall live line, got: %s", out)
+	}
+	if !strings.Contains(out, "8.3%") {
+		t.Fatalf("expected global progress to use planned=3 denominator (8.3%%), got: %s", out)
 	}
 }
 

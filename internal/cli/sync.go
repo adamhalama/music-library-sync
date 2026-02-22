@@ -37,24 +37,27 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 				return withExitCode(exitcode.InvalidConfig, err)
 			}
 
-			var emitter output.EventEmitter
-			if app.Opts.JSON {
-				emitter = output.NewJSONEmitter(app.IO.Out)
-			} else {
-				emitter = output.NewHumanEmitter(app.IO.Out, app.IO.ErrOut, app.Opts.Quiet, app.Opts.Verbose)
-			}
-
+			humanStdout := app.IO.Out
+			humanStderr := app.IO.ErrOut
 			runnerStdout := app.IO.Out
 			runnerStderr := app.IO.ErrOut
 			if app.Opts.JSON {
 				runnerStdout = app.IO.ErrOut
-			}
-			if app.Opts.Quiet {
+			} else if app.Opts.Quiet {
 				runnerStdout = io.Discard
 				runnerStderr = io.Discard
 			} else if !app.Opts.Verbose {
-				runnerStdout = output.NewCompactLogWriter(runnerStdout)
-				runnerStderr = output.NewCompactLogWriter(runnerStderr)
+				compact := output.NewCompactLogWriter(app.IO.Out)
+				humanStdout = compact
+				runnerStdout = compact
+				runnerStderr = compact
+			}
+
+			var emitter output.EventEmitter
+			if app.Opts.JSON {
+				emitter = output.NewJSONEmitter(app.IO.Out)
+			} else {
+				emitter = output.NewHumanEmitter(humanStdout, humanStderr, app.Opts.Quiet, app.Opts.Verbose)
 			}
 			runner := engine.NewSubprocessRunner(runnerStdout, runnerStderr)
 
