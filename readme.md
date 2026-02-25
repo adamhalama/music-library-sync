@@ -19,10 +19,10 @@ The legacy script remains available during migration: `bin/update-downloads`.
 ## Requirements
 
 Runtime tools:
-- `scdl`
+- `scdl` (required for `adapter.kind: scdl`)
 - `deemix` (recommended for Spotify)
 - `spotdl` (legacy/fallback Spotify path)
-- `yt-dlp` (required for SoundCloud preflight diff mode)
+- `yt-dlp` (required for SoundCloud preflight diff mode and `adapter.kind: scdl-freedl`)
 
 Dependency policy:
 - `scdl`/`yt-dlp` are managed as strict external dependencies with a supported compatibility matrix enforced by `udl doctor`.
@@ -172,6 +172,16 @@ sources:
       kind: "scdl"
       extra_args: ["-f"]
 
+  # Optional separate SoundCloud free-download flow:
+  # - id: "soundcloud-likes-free"
+  #   type: "soundcloud"
+  #   enabled: false
+  #   target_dir: "~/Music/downloaded/sc-likes-free"
+  #   url: "https://soundcloud.com/your-user"
+  #   state_file: "soundcloud-likes-free.sync.scdl"
+  #   adapter:
+  #     kind: "scdl-freedl"
+
   - id: "spotify-groove"
     type: "spotify"
     enabled: true
@@ -196,6 +206,7 @@ sources:
 
 Notes:
 - Spotify sources must explicitly set `adapter.kind` (`deemix` or `spotdl`); there is no silent default for Spotify.
+- SoundCloud sources support `adapter.kind: scdl` (default stream-rip flow) and `adapter.kind: scdl-freedl` (separate free-download-link flow).
 - Recommended Spotify path is `adapter.kind: deemix`; `spotdl` remains available as fallback/legacy.
 - Spotify+`deemix` supports the same preflight planning controls as SoundCloud (`break_on_existing`, `ask_on_existing`, `--scan-gaps`, `--no-preflight`) and tracks known Spotify IDs in the source state file.
 - Spotify+`deemix` preflight now treats known tracks missing from `target_dir` as `known_gaps` (SCDL-style), so deleted local files are re-planned automatically.
@@ -218,6 +229,16 @@ Notes:
 - For SoundCloud sources, `udl` injects `--yt-dlp-args "--embed-thumbnail --embed-metadata"` automatically when `--yt-dlp-args` is not explicitly provided.
 - `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
 - SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.
+- SoundCloud sources support two separate adapter flows:
+  - `adapter.kind: scdl` (current/default stream-rip flow)
+  - `adapter.kind: scdl-freedl` (new free-download-link flow using each track's SoundCloud `FREE DL`/purchase URL)
+- `scdl-freedl` keeps deterministic preflight/state/archive behavior but skips tracks that do not expose a free-download link.
+- `scdl-freedl` currently downloads only HypeEdit free-DL links (browser handoff opens the gate URL and waits for a completed file in `~/Downloads`). Non-HypeEdit free-DL hosts are skipped.
+- `scdl-freedl` tags downloaded files with track metadata and attempts to embed SoundCloud artwork thumbnails into the resulting media file.
+- Override watched browser download directory with `UDL_FREEDL_BROWSER_DOWNLOAD_DIR`.
+- On macOS, set `UDL_FREEDL_BROWSER_APP` (for example `Helium`) to force a specific browser app for HypeEdit handoff.
+- HypeEdit browser handoff now uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
+- Override idle timeout with `UDL_FREEDL_BROWSER_IDLE_TIMEOUT` (Go duration format, for example `45s` or `90s`).
 - Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.
 - SoundCloud preflight is split into explicit stages (`enumerate`, `load-state`, `load-archive`, `local-index`, `plan`) and skips local media scans when there are no archive-only known entries for a source.
 - `sync.local_index_cache` enables a persisted local index cache (per source under `defaults.state_dir`) to avoid repeated full target-dir rescans; cache rebuilds on miss, schema mismatch, hash mismatch, or target signature change.

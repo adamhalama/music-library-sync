@@ -4,7 +4,9 @@
 
 ## Scope
 
-- Enforced tools: `scdl`, `yt-dlp`
+- Enforced tools:
+  - `scdl` for `adapter.kind: scdl`
+  - `yt-dlp` for both `adapter.kind: scdl` and `adapter.kind: scdl-freedl`
 - Enforcement point: `udl doctor`
 - Transitional tool: `spotdl` remains supported but is outside strict matrix enforcement in this phase.
 
@@ -12,8 +14,8 @@
 
 | Tool | Supported range | Notes |
 |---|---|---|
-| `scdl` | `>= 3.0.0` and `< 4.0.0` | Must support `--yt-dlp-args` passthrough for `udl` SoundCloud flow. |
-| `yt-dlp` | `>= 2024.1.0` and `< 2027.0.0` | Used for remote playlist enumeration and archive-aware preflight behavior. |
+| `scdl` | `>= 3.0.0` and `< 4.0.0` | Required only for `adapter.kind: scdl`; must support `--yt-dlp-args` passthrough. |
+| `yt-dlp` | `>= 2024.1.0` and `< 2027.0.0` | Used for SoundCloud preflight and `scdl-freedl` execution. |
 
 Known-bad versions can be blocked explicitly in doctor matrix rules as regressions are discovered.
 

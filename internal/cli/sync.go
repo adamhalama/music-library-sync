@@ -12,6 +12,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/adapters/deemix"
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
+	"github.com/jaa/update-downloads/internal/adapters/scdlfreedl"
 	"github.com/jaa/update-downloads/internal/adapters/spotdl"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
@@ -97,9 +98,10 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			runner := engine.NewSubprocessRunner(app.IO.In, runnerStdout, runnerStderr)
 
 			registry := map[string]engine.Adapter{
-				"deemix": deemix.New(),
-				"spotdl": spotdl.New(),
-				"scdl":   scdl.New(),
+				"deemix":      deemix.New(),
+				"spotdl":      spotdl.New(),
+				"scdl":        scdl.New(),
+				"scdl-freedl": scdlfreedl.New(),
 			}
 			syncer := engine.NewSyncer(registry, runner, emitter)
 

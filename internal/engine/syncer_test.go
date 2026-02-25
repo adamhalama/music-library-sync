@@ -62,6 +62,32 @@ func (r *sequenceRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	return result
 }
 
+type freeDownloadRunner struct {
+	specs      []ExecSpec
+	filesByURL map[string]string
+	exitByURL  map[string]int
+}
+
+func (r *freeDownloadRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	r.specs = append(r.specs, spec)
+	if len(spec.Args) == 0 {
+		return ExecResult{ExitCode: 1, StderrTail: "missing url"}
+	}
+	sourceURL := spec.Args[len(spec.Args)-1]
+	if code, ok := r.exitByURL[sourceURL]; ok && code != 0 {
+		return ExecResult{ExitCode: code, StderrTail: "forced failure"}
+	}
+	filename := r.filesByURL[sourceURL]
+	if strings.TrimSpace(filename) == "" {
+		filename = "downloaded.m4a"
+	}
+	path := filepath.Join(spec.Dir, filename)
+	if err := os.WriteFile(path, []byte("audio"), 0o644); err != nil {
+		return ExecResult{ExitCode: 1, StderrTail: err.Error()}
+	}
+	return ExecResult{ExitCode: 0, StdoutTail: path}
+}
+
 type cacheInspectRunner struct {
 	t             *testing.T
 	expectSnippet string
@@ -1438,6 +1464,617 @@ func TestSyncerSpotifyDeemixPlansKnownGapsWhenKnownTracksAreMissingLocally(t *te
 	}
 	if _, ok := state.KnownIDs["2abc234def"]; !ok {
 		t.Fatalf("expected second id in state, got %+v", state.KnownIDs)
+	}
+}
+
+func TestSyncerSoundCloudFreeDLRunsSeparateFlowAndUpdatesStateArchive(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	downloadsDir := filepath.Join(tmp, "downloads")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origApplyMetadata := applySoundCloudTrackMetadataFn
+	origOpenBrowser := openURLInBrowserFn
+	origDetectBrowserDownload := detectBrowserDownloadedFileFn
+	origBrowserDownloadsDir := browserDownloadsDirFn
+	origMoveBrowserDownload := moveDownloadedMediaToTargetFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		applySoundCloudTrackMetadataFn = origApplyMetadata
+		openURLInBrowserFn = origOpenBrowser
+		detectBrowserDownloadedFileFn = origDetectBrowserDownload
+		browserDownloadsDirFn = origBrowserDownloadsDir
+		moveDownloadedMediaToTargetFn = origMoveBrowserDownload
+	})
+
+	tracks := []soundCloudRemoteTrack{
+		{ID: "111", Title: "Track One", URL: "https://soundcloud.com/a/one"},
+		{ID: "222", Title: "Track Two", URL: "https://soundcloud.com/a/two"},
+	}
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return tracks, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{
+			ID:            track.ID,
+			Title:         track.Title,
+			Artist:        "Artist " + track.ID,
+			SoundCloudURL: track.URL,
+			PurchaseURL:   "https://hypeddit.com/pichi/" + track.ID,
+		}, nil
+	}
+	applySoundCloudTrackMetadataFn = func(ctx context.Context, filePath string, metadata soundCloudFreeDownloadMetadata) error {
+		return nil
+	}
+	browserDownloadsDirFn = func() (string, error) {
+		return downloadsDir, nil
+	}
+	openedURLs := make([]string, 0, len(tracks))
+	openURLInBrowserFn = func(ctx context.Context, rawURL string) error {
+		openedURLs = append(openedURLs, rawURL)
+		return nil
+	}
+	detectBrowserDownloadedFileFn = func(ctx context.Context, dir string, before map[string]mediaFileSnapshot, timeout time.Duration, metadata soundCloudFreeDownloadMetadata) (string, error) {
+		path := filepath.Join(dir, "track-"+metadata.ID+".wav")
+		if err := os.WriteFile(path, []byte("audio"), 0o644); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+	moveDownloadedMediaToTargetFn = moveDownloadedMediaToTarget
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful source run, got %+v", result)
+	}
+	if len(openedURLs) != 2 {
+		t.Fatalf("expected browser handoff for both tracks, got %d opens", len(openedURLs))
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no yt-dlp subprocess runs in browser handoff flow, got %d", len(runner.specs))
+	}
+
+	statePath := filepath.Join(stateDir, "sc-free.sync.scdl")
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.ByID["111"]; !ok {
+		t.Fatalf("expected id 111 in state, got %+v", state.ByID)
+	}
+	if _, ok := state.ByID["222"]; !ok {
+		t.Fatalf("expected id 222 in state, got %+v", state.ByID)
+	}
+
+	archivePath, err := config.ResolveArchiveFile(stateDir, "archive.txt", "sc-free")
+	if err != nil {
+		t.Fatalf("resolve archive path: %v", err)
+	}
+	archiveKnown, err := parseSoundCloudArchive(archivePath)
+	if err != nil {
+		t.Fatalf("parse archive: %v", err)
+	}
+	if _, ok := archiveKnown["111"]; !ok {
+		t.Fatalf("expected id 111 in archive, got %+v", archiveKnown)
+	}
+	if _, ok := archiveKnown["222"]; !ok {
+		t.Fatalf("expected id 222 in archive, got %+v", archiveKnown)
+	}
+}
+
+func TestSyncerSoundCloudFreeDLSkipsUnsupportedFreeDownloadHost(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origApplyMetadata := applySoundCloudTrackMetadataFn
+	origOpenBrowser := openURLInBrowserFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		applySoundCloudTrackMetadataFn = origApplyMetadata
+		openURLInBrowserFn = origOpenBrowser
+	})
+
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "111", Title: "Track One", URL: "https://soundcloud.com/a/one"},
+		}, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{
+			ID:            track.ID,
+			Title:         track.Title,
+			Artist:        "Artist " + track.ID,
+			SoundCloudURL: track.URL,
+			PurchaseURL:   "https://example.com/freedl/" + track.ID,
+		}, nil
+	}
+	applySoundCloudTrackMetadataFn = func(ctx context.Context, filePath string, metadata soundCloudFreeDownloadMetadata) error {
+		return nil
+	}
+	browserOpened := false
+	openURLInBrowserFn = func(ctx context.Context, rawURL string) error {
+		browserOpened = true
+		return nil
+	}
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful source run with unsupported-host skip, got %+v", result)
+	}
+	if browserOpened {
+		t.Fatalf("did not expect browser handoff for unsupported host")
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no yt-dlp subprocess runs for unsupported host skip, got %d", len(runner.specs))
+	}
+
+	statePath := filepath.Join(stateDir, "sc-free.sync.scdl")
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if len(state.ByID) != 0 {
+		t.Fatalf("did not expect state entries for unsupported-host skips, got %+v", state.ByID)
+	}
+}
+
+func TestSyncerSoundCloudFreeDLSkipsTracksWithoutFreeLink(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origApplyMetadata := applySoundCloudTrackMetadataFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		applySoundCloudTrackMetadataFn = origApplyMetadata
+	})
+
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "111", Title: "Track One", URL: "https://soundcloud.com/a/one"},
+		}, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{}, errSoundCloudNoFreeDownloadLink
+	}
+	applySoundCloudTrackMetadataFn = func(ctx context.Context, filePath string, metadata soundCloudFreeDownloadMetadata) error {
+		return nil
+	}
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful source run with skip, got %+v", result)
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no subprocess runs when no free link is available, got %d", len(runner.specs))
+	}
+
+	statePath := filepath.Join(stateDir, "sc-free.sync.scdl")
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if len(state.ByID) != 0 {
+		t.Fatalf("did not expect state entries for skipped tracks, got %+v", state.ByID)
+	}
+}
+
+func TestSyncerSoundCloudFreeDLUsesBrowserFallbackForHypeddit(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	downloadsDir := filepath.Join(tmp, "downloads")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origApplyMetadata := applySoundCloudTrackMetadataFn
+	origOpenBrowser := openURLInBrowserFn
+	origDetectBrowserDownload := detectBrowserDownloadedFileFn
+	origBrowserDownloadsDir := browserDownloadsDirFn
+	origMoveBrowserDownload := moveDownloadedMediaToTargetFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		applySoundCloudTrackMetadataFn = origApplyMetadata
+		openURLInBrowserFn = origOpenBrowser
+		detectBrowserDownloadedFileFn = origDetectBrowserDownload
+		browserDownloadsDirFn = origBrowserDownloadsDir
+		moveDownloadedMediaToTargetFn = origMoveBrowserDownload
+	})
+
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "111", Title: "PICHI - BO FUNK [FREE DL]", URL: "https://soundcloud.com/a/one"},
+		}, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{
+			ID:            track.ID,
+			Title:         track.Title,
+			Artist:        "PICHI",
+			SoundCloudURL: track.URL,
+			PurchaseURL:   "https://hypeddit.com/pichi/pichibofunk",
+		}, nil
+	}
+	applySoundCloudTrackMetadataFn = func(ctx context.Context, filePath string, metadata soundCloudFreeDownloadMetadata) error {
+		return nil
+	}
+	browserDownloadsDirFn = func() (string, error) {
+		return downloadsDir, nil
+	}
+	browserOpened := false
+	openURLInBrowserFn = func(ctx context.Context, rawURL string) error {
+		browserOpened = true
+		return nil
+	}
+	downloadedPath := filepath.Join(downloadsDir, "MASTER BOFUNK.wav")
+	detectBrowserDownloadedFileFn = func(ctx context.Context, dir string, before map[string]mediaFileSnapshot, timeout time.Duration, metadata soundCloudFreeDownloadMetadata) (string, error) {
+		if err := os.WriteFile(downloadedPath, []byte("audio"), 0o644); err != nil {
+			return "", err
+		}
+		return downloadedPath, nil
+	}
+	moveDownloadedMediaToTargetFn = moveDownloadedMediaToTarget
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful source run, got %+v", result)
+	}
+	if !browserOpened {
+		t.Fatalf("expected browser handoff to be used for hypeddit URL")
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no yt-dlp subprocess run for hypeddit URL, got %d", len(runner.specs))
+	}
+
+	statePath := filepath.Join(stateDir, "sc-free.sync.scdl")
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.ByID["111"]; !ok {
+		t.Fatalf("expected downloaded id in state, got %+v", state.ByID)
+	}
+}
+
+func TestSyncerSoundCloudFreeDLSkipsHypedditTimeoutAndContinues(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	downloadsDir := filepath.Join(tmp, "downloads")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origApplyMetadata := applySoundCloudTrackMetadataFn
+	origOpenBrowser := openURLInBrowserFn
+	origDetectBrowserDownload := detectBrowserDownloadedFileFn
+	origBrowserDownloadsDir := browserDownloadsDirFn
+	origMoveBrowserDownload := moveDownloadedMediaToTargetFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		applySoundCloudTrackMetadataFn = origApplyMetadata
+		openURLInBrowserFn = origOpenBrowser
+		detectBrowserDownloadedFileFn = origDetectBrowserDownload
+		browserDownloadsDirFn = origBrowserDownloadsDir
+		moveDownloadedMediaToTargetFn = origMoveBrowserDownload
+	})
+
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "111", Title: "Stuck Track", URL: "https://soundcloud.com/a/stuck"},
+			{ID: "222", Title: "Good Track", URL: "https://soundcloud.com/a/good"},
+		}, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{
+			ID:            track.ID,
+			Title:         track.Title,
+			Artist:        "Artist " + track.ID,
+			SoundCloudURL: track.URL,
+			PurchaseURL:   "https://hypeddit.com/pichi/" + track.ID,
+		}, nil
+	}
+	applySoundCloudTrackMetadataFn = func(ctx context.Context, filePath string, metadata soundCloudFreeDownloadMetadata) error {
+		return nil
+	}
+	browserDownloadsDirFn = func() (string, error) {
+		return downloadsDir, nil
+	}
+	openURLInBrowserFn = func(ctx context.Context, rawURL string) error {
+		return nil
+	}
+	detectBrowserDownloadedFileFn = func(ctx context.Context, dir string, before map[string]mediaFileSnapshot, timeout time.Duration, metadata soundCloudFreeDownloadMetadata) (string, error) {
+		if metadata.ID == "111" {
+			return "", errBrowserDownloadIdleTimeout
+		}
+		path := filepath.Join(dir, "good-track.aif")
+		if err := os.WriteFile(path, []byte("audio"), 0o644); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+	moveDownloadedMediaToTargetFn = moveDownloadedMediaToTarget
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected source run to continue after hypeddit timeout skip, got %+v", result)
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no yt-dlp subprocess run for browser flow, got %d", len(runner.specs))
+	}
+
+	statePath := filepath.Join(stateDir, "sc-free.sync.scdl")
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.ByID["111"]; ok {
+		t.Fatalf("did not expect timed-out id in state, got %+v", state.ByID)
+	}
+	if _, ok := state.ByID["222"]; !ok {
+		t.Fatalf("expected successful id in state, got %+v", state.ByID)
+	}
+}
+
+func TestSyncerSoundCloudFreeDLRequiresPreflight(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{NoPreflight: true})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Failed != 1 || result.Succeeded != 0 {
+		t.Fatalf("expected preflight requirement failure, got %+v", result)
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no free-download subprocess execution when preflight is disabled")
 	}
 }
 

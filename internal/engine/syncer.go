@@ -35,13 +35,15 @@ type Syncer struct {
 }
 
 var (
-	resolveSpotifyCredentialsFn = auth.ResolveSpotifyCredentials
-	resolveDeemixARLFn          = auth.ResolveDeemixARL
-	saveDeemixARLFn             = auth.SaveDeemixARL
-	enumerateSpotifyTracksFn    = enumerateSpotifyPlaylistTracks
-	enumerateSpotifyViaPageFn   = enumerateSpotifyPlaylistTracksViaPage
-	fetchSpotifyTrackMetadataFn = fetchSpotifyTrackMetadataFromPage
-	deemixTitlePattern          = regexp.MustCompile(`\[(.+?)\]\s+Download(?:ing:\s+[0-9]+(?:\.[0-9]+)?%| complete)`)
+	resolveSpotifyCredentialsFn           = auth.ResolveSpotifyCredentials
+	resolveDeemixARLFn                    = auth.ResolveDeemixARL
+	saveDeemixARLFn                       = auth.SaveDeemixARL
+	enumerateSpotifyTracksFn              = enumerateSpotifyPlaylistTracks
+	enumerateSpotifyViaPageFn             = enumerateSpotifyPlaylistTracksViaPage
+	fetchSpotifyTrackMetadataFn           = fetchSpotifyTrackMetadataFromPage
+	fetchSoundCloudFreeDownloadMetadataFn = fetchSoundCloudFreeDownloadMetadata
+	applySoundCloudTrackMetadataFn        = applySoundCloudTrackMetadata
+	deemixTitlePattern                    = regexp.MustCompile(`\[(.+?)\]\s+Download(?:ing:\s+[0-9]+(?:\.[0-9]+)?%| complete)`)
 )
 
 func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.EventEmitter) *Syncer {
@@ -169,6 +171,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		sourceForExec := source
 		stateSwap := soundCloudStateSwap{}
 		var sourcePreflight *SoundCloudPreflight
+		plannedSoundCloudTracks := []soundCloudRemoteTrack{}
 		if source.Type == config.SourceTypeSoundCloud {
 			plan, planErr := s.prepareSoundCloudExecutionPlan(ctx, cfg, source, opts)
 			if planErr != nil {
@@ -192,6 +195,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			sourceForExec = plan.Source
 			stateSwap = plan.StateSwap
 			sourcePreflight = plan.Preflight
+			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, plan.PlannedTracks...)
 
 			if plan.Preflight != nil {
 				_ = s.Emitter.Emit(output.Event{
@@ -582,6 +586,40 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 					"skipped_unavailable":    skippedUnavailable,
 				},
 			})
+			continue
+		}
+
+		if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl-freedl" {
+			outcome, runErr := s.runSoundCloudFreeDownloadSource(
+				ctx,
+				cfg,
+				source,
+				sourceForExec,
+				sourcePreflight,
+				plannedSoundCloudTracks,
+				stateSwap,
+				opts,
+			)
+			if outcome.Attempted {
+				result.Attempted++
+			}
+			if outcome.DependencyFailure {
+				result.DependencyFailures++
+			}
+			if outcome.Interrupted {
+				result.Interrupted = true
+				break
+			}
+			if runErr != nil {
+				result.Failed++
+				if !cfg.Defaults.ContinueOnError {
+					break
+				}
+				continue
+			}
+			if outcome.Succeeded {
+				result.Succeeded++
+			}
 			continue
 		}
 
@@ -1015,9 +1053,17 @@ type soundCloudStateSwap struct {
 }
 
 type soundCloudExecutionPlan struct {
-	Source    config.Source
-	Preflight *SoundCloudPreflight
-	StateSwap soundCloudStateSwap
+	Source        config.Source
+	Preflight     *SoundCloudPreflight
+	StateSwap     soundCloudStateSwap
+	PlannedTracks []soundCloudRemoteTrack
+}
+
+type soundCloudFreeDownloadOutcome struct {
+	Attempted         bool
+	Succeeded         bool
+	DependencyFailure bool
+	Interrupted       bool
 }
 
 type spotifyDeemixExecutionPlan struct {
@@ -1050,6 +1096,9 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting
 
 	if opts.NoPreflight {
+		if source.Adapter.Kind == "scdl-freedl" {
+			return plan, fmt.Errorf("soundcloud adapter.kind=scdl-freedl requires preflight planning; remove --no-preflight")
+		}
 		if askOnExisting {
 			_ = s.Emitter.Emit(output.Event{
 				Timestamp: s.Now(),
@@ -1122,6 +1171,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	preflight := planStage.Preflight
 	knownGapIDs := planStage.KnownGapID
 	plannedIDs := planStage.PlannedID
+	plan.PlannedTracks = orderPlannedSoundCloudTracks(tracks, plannedIDs)
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&
 		preflight.FirstExistingIndex > 0 &&
@@ -1144,6 +1194,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 			preflight = planStage.Preflight
 			knownGapIDs = planStage.KnownGapID
 			plannedIDs = planStage.PlannedID
+			plan.PlannedTracks = orderPlannedSoundCloudTracks(tracks, plannedIDs)
 		}
 	}
 
@@ -1182,6 +1233,20 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	}
 
 	return plan, nil
+}
+
+func orderPlannedSoundCloudTracks(tracks []soundCloudRemoteTrack, plannedIDs map[string]struct{}) []soundCloudRemoteTrack {
+	if len(tracks) == 0 || len(plannedIDs) == 0 {
+		return []soundCloudRemoteTrack{}
+	}
+	ordered := make([]soundCloudRemoteTrack, 0, len(plannedIDs))
+	for _, track := range tracks {
+		if _, ok := plannedIDs[track.ID]; !ok {
+			continue
+		}
+		ordered = append(ordered, track)
+	}
+	return ordered
 }
 
 func (s *Syncer) prepareSpotifyDeemixExecutionPlan(

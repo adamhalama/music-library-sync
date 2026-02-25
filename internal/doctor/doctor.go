@@ -197,7 +197,7 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			continue
 		}
 
-		if source.Type == config.SourceTypeSoundCloud {
+		if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" {
 			if strings.TrimSpace(c.Getenv("SCDL_CLIENT_ID")) == "" {
 				report.Checks = append(report.Checks, Check{
 					Severity: SeverityError,
@@ -460,6 +460,17 @@ func requiredBinaries(cfg config.Config, matrix map[string]dependencyMatrixRule)
 				Matrix:     matrixRulePointer(matrix, "scdl"),
 			}
 
+			ytdlpMin := "0.0.0"
+			if hasYTDLPRule && strings.TrimSpace(ytdlpRule.MinVersion) != "" {
+				ytdlpMin = ytdlpRule.MinVersion
+			}
+			seen["yt-dlp"] = dependency{
+				Key:        "yt-dlp",
+				Binary:     "yt-dlp",
+				MinVersion: ytdlpMin,
+				Matrix:     matrixRulePointer(matrix, "yt-dlp"),
+			}
+		case "scdl-freedl":
 			ytdlpMin := "0.0.0"
 			if hasYTDLPRule && strings.TrimSpace(ytdlpRule.MinVersion) != "" {
 				ytdlpMin = ytdlpRule.MinVersion

@@ -15,7 +15,7 @@ type soundCloudEnumerateStageResult struct {
 }
 
 func enumerateSoundCloudStage(ctx context.Context, input soundCloudEnumerateStageInput) (soundCloudEnumerateStageResult, error) {
-	tracks, err := enumerateSoundCloudTracks(ctx, input.Source)
+	tracks, err := enumerateSoundCloudTracksFn(ctx, input.Source)
 	if err != nil {
 		return soundCloudEnumerateStageResult{}, err
 	}
