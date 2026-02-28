@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/fileops"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -67,6 +68,20 @@ type soundCloudFreeDownloadMetadata struct {
 	SoundCloudURL string
 	ArtworkURL    string
 	PurchaseURL   string
+}
+
+type soundCloudFreeDLStuckRecord struct {
+	Timestamp     string `json:"timestamp"`
+	SourceID      string `json:"source_id"`
+	TrackID       string `json:"track_id"`
+	Title         string `json:"title,omitempty"`
+	Artist        string `json:"artist,omitempty"`
+	SoundCloudURL string `json:"soundcloud_url,omitempty"`
+	PurchaseURL   string `json:"purchase_url,omitempty"`
+	DownloadDir   string `json:"download_dir,omitempty"`
+	Stage         string `json:"stage"`
+	Error         string `json:"error"`
+	Strategy      string `json:"strategy"`
 }
 
 func (s *Syncer) runSoundCloudFreeDownloadSource(
@@ -188,6 +203,18 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 		return outcome, fmt.Errorf("[%s] parse archive file: %w", source.ID, err)
 	}
 
+	stuckLogPath, stuckPathErr := resolveSoundCloudFreeDLStuckLogPath(cfg.Defaults.StateDir, source.ID)
+	if stuckPathErr != nil {
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelWarn,
+			Event:     output.EventSourceStarted,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] unable to resolve free-dl stuck log path: %v", source.ID, stuckPathErr),
+		})
+		stuckLogPath = ""
+	}
+
 	cleanupSuffixes := artifactSuffixesForAdapter("scdl")
 	preArtifacts := map[string]struct{}{}
 	if len(cleanupSuffixes) > 0 {
@@ -229,6 +256,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 	skippedNoLink := 0
 	skippedUnsupportedHost := 0
 	skippedHypedditTimeout := 0
+	stuckLogCount := 0
 	var failureDetails map[string]any
 	failureMessage := ""
 	for idx, track := range plannedTracks {
@@ -297,6 +325,22 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 			if errors.Is(openErr, exec.ErrNotFound) {
 				outcome.DependencyFailure = true
 			}
+			stuckRecord := soundCloudFreeDLStuckRecord{
+				Timestamp:     s.Now().UTC().Format(time.RFC3339Nano),
+				SourceID:      source.ID,
+				TrackID:       track.ID,
+				Title:         strings.TrimSpace(metadata.Title),
+				Artist:        strings.TrimSpace(metadata.Artist),
+				SoundCloudURL: strings.TrimSpace(metadata.SoundCloudURL),
+				PurchaseURL:   sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
+				DownloadDir:   downloadsDir,
+				Stage:         "browser-launch",
+				Error:         openErr.Error(),
+				Strategy:      "browser-handoff",
+			}
+			if appendErr := appendSoundCloudFreeDLStuckRecord(stuckLogPath, stuckRecord); appendErr == nil {
+				stuckLogCount++
+			}
 			failureMessage = fmt.Sprintf("[%s] browser launch failed for %s: %v", source.ID, track.ID, openErr)
 			failureDetails = map[string]any{
 				"purchase_url": sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
@@ -336,6 +380,22 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 			}
 			if errors.Is(detectErr, errBrowserDownloadIdleTimeout) || errors.Is(detectErr, errBrowserDownloadMaxTimeout) {
 				skippedHypedditTimeout++
+				stuckRecord := soundCloudFreeDLStuckRecord{
+					Timestamp:     s.Now().UTC().Format(time.RFC3339Nano),
+					SourceID:      source.ID,
+					TrackID:       track.ID,
+					Title:         strings.TrimSpace(metadata.Title),
+					Artist:        strings.TrimSpace(metadata.Artist),
+					SoundCloudURL: strings.TrimSpace(metadata.SoundCloudURL),
+					PurchaseURL:   sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
+					DownloadDir:   downloadsDir,
+					Stage:         "browser-wait-timeout",
+					Error:         detectErr.Error(),
+					Strategy:      "browser-handoff",
+				}
+				if appendErr := appendSoundCloudFreeDLStuckRecord(stuckLogPath, stuckRecord); appendErr == nil {
+					stuckLogCount++
+				}
 				_ = s.Emitter.Emit(output.Event{
 					Timestamp: s.Now(),
 					Level:     output.LevelWarn,
@@ -361,6 +421,22 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 				})
 				continue
 			}
+			stuckRecord := soundCloudFreeDLStuckRecord{
+				Timestamp:     s.Now().UTC().Format(time.RFC3339Nano),
+				SourceID:      source.ID,
+				TrackID:       track.ID,
+				Title:         strings.TrimSpace(metadata.Title),
+				Artist:        strings.TrimSpace(metadata.Artist),
+				SoundCloudURL: strings.TrimSpace(metadata.SoundCloudURL),
+				PurchaseURL:   sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
+				DownloadDir:   downloadsDir,
+				Stage:         "browser-detect",
+				Error:         detectErr.Error(),
+				Strategy:      "browser-handoff",
+			}
+			if appendErr := appendSoundCloudFreeDLStuckRecord(stuckLogPath, stuckRecord); appendErr == nil {
+				stuckLogCount++
+			}
 			failureMessage = fmt.Sprintf("[%s] browser download failed for %s: %v", source.ID, track.ID, detectErr)
 			failureDetails = map[string]any{
 				"track_id":       track.ID,
@@ -375,6 +451,22 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 		}
 		downloadedPath, moveErr := moveDownloadedMediaToTargetFn(detectedPath, targetDir)
 		if moveErr != nil {
+			stuckRecord := soundCloudFreeDLStuckRecord{
+				Timestamp:     s.Now().UTC().Format(time.RFC3339Nano),
+				SourceID:      source.ID,
+				TrackID:       track.ID,
+				Title:         strings.TrimSpace(metadata.Title),
+				Artist:        strings.TrimSpace(metadata.Artist),
+				SoundCloudURL: strings.TrimSpace(metadata.SoundCloudURL),
+				PurchaseURL:   sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
+				DownloadDir:   downloadsDir,
+				Stage:         "post-process-move",
+				Error:         moveErr.Error(),
+				Strategy:      "browser-handoff",
+			}
+			if appendErr := appendSoundCloudFreeDLStuckRecord(stuckLogPath, stuckRecord); appendErr == nil {
+				stuckLogCount++
+			}
 			failureMessage = fmt.Sprintf("[%s] browser download post-processing failed for %s: %v", source.ID, track.ID, moveErr)
 			failureDetails = map[string]any{
 				"purchase_url": sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
@@ -455,18 +547,27 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 	}
 
 	outcome.Succeeded = true
+	finishedDetails := map[string]any{
+		"planned_download_count":   len(plannedTracks),
+		"skipped_no_free_dl":       skippedNoLink,
+		"skipped_unsupported_host": skippedUnsupportedHost,
+		"skipped_hypeddit_timeout": skippedHypedditTimeout,
+		"stuck_log_count":          stuckLogCount,
+	}
+	if strings.TrimSpace(stuckLogPath) != "" {
+		finishedDetails["stuck_log_path"] = stuckLogPath
+	}
+	finishedMessage := fmt.Sprintf("[%s] completed", source.ID)
+	if stuckLogCount > 0 && strings.TrimSpace(stuckLogPath) != "" {
+		finishedMessage = fmt.Sprintf("[%s] completed (stuck=%d log=%s)", source.ID, stuckLogCount, stuckLogPath)
+	}
 	_ = s.Emitter.Emit(output.Event{
 		Timestamp: s.Now(),
 		Level:     output.LevelInfo,
 		Event:     output.EventSourceFinished,
 		SourceID:  source.ID,
-		Message:   fmt.Sprintf("[%s] completed", source.ID),
-		Details: map[string]any{
-			"planned_download_count":   len(plannedTracks),
-			"skipped_no_free_dl":       skippedNoLink,
-			"skipped_unsupported_host": skippedUnsupportedHost,
-			"skipped_hypeddit_timeout": skippedHypedditTimeout,
-		},
+		Message:   finishedMessage,
+		Details:   finishedDetails,
 	})
 	return outcome, nil
 }
@@ -534,6 +635,49 @@ func appendLine(path string, line string) error {
 		_ = file.Close()
 	}()
 	if _, err := file.WriteString(line); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+func resolveSoundCloudFreeDLStuckLogPath(defaultStateDir string, sourceID string) (string, error) {
+	stateDir, err := config.ExpandPath(defaultStateDir)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(stateDir) {
+		return "", fmt.Errorf("state_dir must resolve to an absolute path")
+	}
+	trimmedID := strings.TrimSpace(sourceID)
+	if trimmedID == "" {
+		return "", fmt.Errorf("source id is required")
+	}
+	return filepath.Join(stateDir, trimmedID+".freedl-stuck.jsonl"), nil
+}
+
+func appendSoundCloudFreeDLStuckRecord(path string, record soundCloudFreeDLStuckRecord) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(trimmed), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(trimmed, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(payload); err != nil {
+		return err
+	}
+	if _, err := file.WriteString("\n"); err != nil {
 		return err
 	}
 	return file.Sync()
@@ -1121,7 +1265,7 @@ func applySoundCloudTrackMetadata(ctx context.Context, filePath string, metadata
 
 	if artworkPath != "" {
 		if err := runSoundCloudMetadataFFmpeg(ctx, trimmed, tempPath, metadata, artworkPath); err == nil {
-			return replaceTaggedMediaFile(tempPath, trimmed)
+			return fileops.ReplaceFileSafely(tempPath, trimmed)
 		} else {
 			artworkEmbedErr = err
 			_ = os.Remove(tempPath)
@@ -1134,7 +1278,7 @@ func applySoundCloudTrackMetadata(ctx context.Context, filePath string, metadata
 		}
 		return fmt.Errorf("artwork embedding failed (%v) and metadata fallback failed (%w)", artworkEmbedErr, err)
 	}
-	if err := replaceTaggedMediaFile(tempPath, trimmed); err != nil {
+	if err := fileops.ReplaceFileSafely(tempPath, trimmed); err != nil {
 		return err
 	}
 	if artworkEmbedErr != nil {
@@ -1187,20 +1331,6 @@ func runSoundCloudMetadataFFmpeg(
 			return runErr
 		}
 		return fmt.Errorf("%v: %s", runErr, trimmedOutput)
-	}
-	return nil
-}
-
-func replaceTaggedMediaFile(tempPath string, targetPath string) error {
-	if err := os.Rename(tempPath, targetPath); err != nil {
-		if removeErr := os.Remove(targetPath); removeErr != nil {
-			_ = os.Remove(tempPath)
-			return err
-		}
-		if retryErr := os.Rename(tempPath, targetPath); retryErr != nil {
-			_ = os.Remove(tempPath)
-			return retryErr
-		}
 	}
 	return nil
 }

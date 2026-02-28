@@ -22,7 +22,7 @@ Runtime tools:
 - `scdl` (required for `adapter.kind: scdl`)
 - `deemix` (recommended for Spotify)
 - `spotdl` (legacy/fallback Spotify path)
-- `yt-dlp` (required for SoundCloud preflight diff mode and `adapter.kind: scdl-freedl`)
+- `yt-dlp` (required for SoundCloud preflight/enumeration; `scdl-freedl` download execution itself is browser handoff for HypeEdit)
 
 Dependency policy:
 - `scdl`/`yt-dlp` are managed as strict external dependencies with a supported compatibility matrix enforced by `udl doctor`.
@@ -95,6 +95,7 @@ Commands:
   validate
   doctor
   sync
+  promote-freedl
   version
   help
 ```
@@ -118,6 +119,27 @@ Global flags:
 - `--progress <auto|always|never>`
 - `--preflight-summary <auto|always|never>`
 - `--track-status <names|count|none>`
+
+`promote-freedl` flags:
+- `--free-dl-dir <path>` (required)
+- `--library-dir <path>` (required)
+- `--write-dir <path>` (optional sandbox output root; keeps `--library-dir` untouched)
+- `--target-format <auto|wav|mp3-320|aac-256>` (default `auto`)
+- `--apply` (default is preview-only)
+- `--overwrite` (allow overwriting existing outputs in `--write-dir`)
+- `--probe-timeout <duration>` (default `2s`, used for per-file `ffprobe` title/audio probes)
+- `--min-match-score <0-100>` (default `72`)
+- `--ambiguity-gap <n>` (default `8`; if top-vs-second match score gap is smaller, skip as ambiguous)
+- `--aac-bitrate <value>` (default `256k`)
+- `--mp3-bitrate <value>` (default `320k`)
+- `--min-aac-kbps <n>` (default `256`)
+- `--min-mp3-kbps <n>` (default `320`)
+- `--min-opus-kbps <n>` (default `192`)
+- `--replace-limit <n>` (default `0`, unlimited)
+- Matching prefers embedded metadata (`Title`, `Artist`, and source URL/comment when present); filename stem is used only as fallback.
+- In-place replacement is done when `--write-dir` is omitted; this preserves existing library file paths.
+- For mixed-extension libraries, `--target-format auto` is recommended for in-place replacement (`.mp3` -> MP3, `.m4a/.aac/.mp4` -> AAC). Incompatible target-format/file-extension pairs are skipped.
+- AAC files can still appear as `VBR` in some DJ/file managers even when encoded with `-b:a 256k`; `promote-freedl` quality checks use effective bitrate from `ffprobe` stream/format/size+duration data.
 
 ## Config
 
@@ -225,7 +247,12 @@ Notes:
 - Upstream `deemix`/`deezer-sdk` transport behavior is security-sensitive (historically includes insecure request paths). Treat Deezer ARL and Spotify app credentials as secrets and run only on trusted networks.
 - Use `bin/setup-udl-secrets.sh` to store ARL and optional Spotify credentials in Keychain.
 - Legacy Spotify path uses `spotdl` and prefers a managed binary at `~/.venvs/udl-spotdl/bin/spotdl` when present (or `UDL_SPOTDL_BIN` when set), falling back to `spotdl` from `PATH`.
+- For Spotify+`spotdl`, shared/default Spotify app credentials can be globally throttled (for example `Retry after: 86400`); prefer user-owned Spotify app credentials in `~/.spotdl/config.json` or env/keychain.
+- As of February 2026, upstream `spotdl 4.4.3` has known failures for some playlist metadata paths (`/playlists/{id}/tracks` 403) and missing artist fields (for example `genres`). Use a patched build or prefer `adapter.kind: deemix` where possible.
 - If `spotdl` reports `Valid user authentication required` and prompts are allowed (TTY, no `--no-input`), `udl` retries once with `--user-auth`.
+- If Spotify retry runs with `--headless`, OAuth remains manual copy/paste; for interactive runs, remove `--headless` so browser-led auth can complete normally.
+- `udl` creates a temporary deemix runtime directory per source run (`config/.arl`, `config/spotify/config.json`) and removes it after completion.
+- `udl` treats deemix Spotify-plugin stack traces as failures even when upstream exits `0`, to avoid false-positive success/state writes.
 - For SoundCloud sources, `udl` injects `--yt-dlp-args "--embed-thumbnail --embed-metadata"` automatically when `--yt-dlp-args` is not explicitly provided.
 - `udl` also injects a per-source SoundCloud download archive file under `defaults.state_dir` (for example `soundcloud-clean-test.archive.txt`) unless `--download-archive` is explicitly set in custom `--yt-dlp-args`.
 - SoundCloud sync uses a state file (`scdl --sync`) and preflight diff by default to estimate remote-vs-local changes before execution.
@@ -239,6 +266,7 @@ Notes:
 - On macOS, set `UDL_FREEDL_BROWSER_APP` (for example `Helium`) to force a specific browser app for HypeEdit handoff.
 - HypeEdit browser handoff now uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
 - Override idle timeout with `UDL_FREEDL_BROWSER_IDLE_TIMEOUT` (Go duration format, for example `45s` or `90s`).
+- Browser launch/wait/post-processing failures are persisted for manual follow-up in `defaults.state_dir/<source-id>.freedl-stuck.jsonl`.
 - Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.
 - SoundCloud preflight is split into explicit stages (`enumerate`, `load-state`, `load-archive`, `local-index`, `plan`) and skips local media scans when there are no archive-only known entries for a source.
 - `sync.local_index_cache` enables a persisted local index cache (per source under `defaults.state_dir`) to avoid repeated full target-dir rescans; cache rebuilds on miss, schema mismatch, hash mismatch, or target signature change.
@@ -263,6 +291,44 @@ Run all tests:
 
 ```bash
 make test
+```
+
+Run core UDL smoke suite (init/validate/doctor/sync with normal `adapter.kind: scdl`, isolated sandbox under `~/Music/downloaded`):
+
+Required environment for real SoundCloud smoke:
+- `SCDL_CLIENT_ID` must be set
+- network access must be available
+
+```bash
+make smoke-main SMOKE_MAIN_ARGS="--scdl-url https://soundcloud.com/<user>/<track>"
+```
+
+Optional examples:
+
+```bash
+# allow likes/profile/playlist-like URL (slower)
+make smoke-main SMOKE_MAIN_ARGS="--scdl-url https://soundcloud.com/<user>/likes --allow-large-source"
+
+# skip go test bootstrap step
+make smoke-main SMOKE_MAIN_ARGS="--scdl-url https://soundcloud.com/<user>/<track> --skip-go-test"
+```
+
+Run full freedl/promotion smoke suite (isolated sandbox under `~/Music/downloaded`):
+
+```bash
+make smoke-freedl
+```
+
+Optional example (skip networked `scdl-freedl` sync smoke):
+
+```bash
+make smoke-freedl SMOKE_ARGS="--skip-sync-smoke"
+```
+
+Run both smoke suites:
+
+```bash
+make smoke-all SMOKE_MAIN_ARGS="--scdl-url https://soundcloud.com/<user>/<track>"
 ```
 
 ## Distribution

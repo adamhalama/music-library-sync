@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2023,6 +2024,111 @@ func TestSyncerSoundCloudFreeDLSkipsHypedditTimeoutAndContinues(t *testing.T) {
 	}
 	if _, ok := state.ByID["222"]; !ok {
 		t.Fatalf("expected successful id in state, got %+v", state.ByID)
+	}
+
+	stuckLogPath := filepath.Join(stateDir, "sc-free.freedl-stuck.jsonl")
+	stuckPayload, err := os.ReadFile(stuckLogPath)
+	if err != nil {
+		t.Fatalf("read stuck log: %v", err)
+	}
+	if !strings.Contains(string(stuckPayload), `"track_id":"111"`) {
+		t.Fatalf("expected stuck log to include timed-out track id, got: %s", string(stuckPayload))
+	}
+	if !strings.Contains(string(stuckPayload), `"stage":"browser-wait-timeout"`) {
+		t.Fatalf("expected stuck log timeout stage, got: %s", string(stuckPayload))
+	}
+}
+
+func TestSyncerSoundCloudFreeDLWritesStuckLogOnBrowserLaunchFailure(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origOpenBrowser := openURLInBrowserFn
+	origBrowserDownloadsDir := browserDownloadsDirFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		openURLInBrowserFn = origOpenBrowser
+		browserDownloadsDirFn = origBrowserDownloadsDir
+	})
+
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "111", Title: "Launch Fail", URL: "https://soundcloud.com/a/launch-fail"},
+		}, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{
+			ID:            track.ID,
+			Title:         track.Title,
+			Artist:        "Artist " + track.ID,
+			SoundCloudURL: track.URL,
+			PurchaseURL:   "https://hypeddit.com/pichi/" + track.ID,
+		}, nil
+	}
+	browserDownloadsDirFn = func() (string, error) {
+		return filepath.Join(tmp, "downloads"), nil
+	}
+	openURLInBrowserFn = func(ctx context.Context, rawURL string) error {
+		return errors.New("launch failed")
+	}
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("expected one failed source, got %+v", result)
+	}
+
+	stuckLogPath := filepath.Join(stateDir, "sc-free.freedl-stuck.jsonl")
+	stuckPayload, err := os.ReadFile(stuckLogPath)
+	if err != nil {
+		t.Fatalf("read stuck log: %v", err)
+	}
+	if !strings.Contains(string(stuckPayload), `"track_id":"111"`) {
+		t.Fatalf("expected stuck log to include launch-failed track id, got: %s", string(stuckPayload))
+	}
+	if !strings.Contains(string(stuckPayload), `"stage":"browser-launch"`) {
+		t.Fatalf("expected stuck log launch stage, got: %s", string(stuckPayload))
 	}
 }
 

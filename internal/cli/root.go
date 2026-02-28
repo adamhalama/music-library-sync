@@ -62,6 +62,7 @@ func newRootCommand(app *AppContext) *cobra.Command {
 	root.AddCommand(newValidateCommand(app))
 	root.AddCommand(newDoctorCommand(app))
 	root.AddCommand(newSyncCommand(app))
+	root.AddCommand(newPromoteFreeDLCommand(app))
 	root.AddCommand(newVersionCommand(app))
 
 	return root

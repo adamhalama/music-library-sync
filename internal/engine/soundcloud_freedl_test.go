@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -230,5 +231,50 @@ func TestInferArtworkFileExtensionFromContentType(t *testing.T) {
 	got := inferArtworkFileExtension("image/png", "")
 	if got != ".png" {
 		t.Fatalf("expected .png, got %q", got)
+	}
+}
+
+func TestResolveSoundCloudFreeDLStuckLogPath(t *testing.T) {
+	got, err := resolveSoundCloudFreeDLStuckLogPath("/tmp/udl-state", "sc-free")
+	if err != nil {
+		t.Fatalf("resolve stuck log path: %v", err)
+	}
+	want := filepath.Clean("/tmp/udl-state/sc-free.freedl-stuck.jsonl")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestAppendSoundCloudFreeDLStuckRecordWritesJSONL(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "state", "sc-free.freedl-stuck.jsonl")
+	record := soundCloudFreeDLStuckRecord{
+		Timestamp:   "2026-02-27T00:00:00Z",
+		SourceID:    "sc-free",
+		TrackID:     "111",
+		Title:       "Launch Fail",
+		PurchaseURL: "https://hypeddit.com/pichi/111",
+		Stage:       "browser-launch",
+		Error:       "launch failed",
+		Strategy:    "browser-handoff",
+	}
+
+	if err := appendSoundCloudFreeDLStuckRecord(path, record); err != nil {
+		t.Fatalf("append stuck record: %v", err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stuck log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected one stuck record line, got %d", len(lines))
+	}
+	decoded := soundCloudFreeDLStuckRecord{}
+	if err := json.Unmarshal([]byte(lines[0]), &decoded); err != nil {
+		t.Fatalf("decode stuck record: %v", err)
+	}
+	if decoded.TrackID != "111" || decoded.Stage != "browser-launch" {
+		t.Fatalf("unexpected decoded record: %+v", decoded)
 	}
 }

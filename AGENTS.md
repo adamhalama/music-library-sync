@@ -23,16 +23,11 @@ Do not quietly change security-sensitive behavior. Call it out.
 
 We are building this together. When you learn something non-obvious, add it here so future changes go faster.
 
-- For Spotify sources, `spotdl` shared/default client credentials can get globally throttled (`Retry after: 86400`) before any download starts. Prefer user-owned Spotify app credentials in `~/.spotdl/config.json`.
-- As of Spotify Web API changes (Feb 2026), upstream `spotdl` `4.4.3` can fail on playlist metadata (`/playlists/{id}/tracks` 403) and missing artist fields (for example `genres`). A patched build from PR #2610 commit `27f3a0e33174170cbeebbcc0738ceb41a9baf947` works in local validation.
 - Spotify adapter binary resolution now prefers `UDL_SPOTDL_BIN`, then `~/.venvs/udl-spotdl/bin/spotdl`, then `spotdl` from `PATH`.
-- If Spotify retries run with `--headless`, OAuth stays in manual copy/paste mode; removing `--headless` on the retry allows browser-led auth and is much clearer for interactive `udl sync` flows.
 - Deemix auth resolution order is `UDL_DEEMIX_ARL` then macOS Keychain (`service=udl.deemix`, `account=default`); prompted ARLs are saved back to Keychain.
 - Deemix Spotify conversion credentials resolve from `UDL_SPOTIFY_CLIENT_ID`/`UDL_SPOTIFY_CLIENT_SECRET` first, then macOS Keychain (`service=udl.spotify`, `account=client_id|client_secret`), then `~/.spotdl/config.json`.
-- `udl` creates a temporary deemix runtime folder per source run (`config/.arl`, `config/spotify/config.json`) and removes it after completion; no long-lived ARL plaintext files should be written by `udl`.
 - Upstream deemix/deezer-sdk transport behavior remains security-sensitive; keep doctor/docs warnings visible and do not silently suppress them.
 - CLI startup now loads `.env` and `.env.local` from the current working directory without overriding already-exported process env vars; use `.env.local` for non-secret local overrides like `UDL_DEEMIX_BIN`.
-- `bambanah` `deemix-cli@0.1.0` can print a Spotify plugin stack trace (for example `TypeError: Cannot read properties of undefined (reading 'error')`) while still exiting `0`; `udl` must treat this as failure to avoid false-positive source success/state writes.
 - `udl` now primes deemix's Spotify plugin cache (`config/spotify/cache.json`) with track metadata before per-track execution; this avoids the upstream Spotify plugin crash path for public track URLs.
 - When Spotify Web API playlist preflight fails (for example `403`), `udl` falls back to parsing public `open.spotify.com/playlist/...` HTML to enumerate track IDs and continue deterministic deemix planning.
 - For Spotify playlist sources run with `--no-preflight`, `udl` now enumerates tracks from the public playlist page and executes per-track (instead of passing the whole playlist URL once), so deemix cache priming still applies.

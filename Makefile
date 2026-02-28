@@ -1,4 +1,4 @@
-.PHONY: build test install uninstall clean legacy-install legacy-uninstall
+.PHONY: build test smoke-main smoke-freedl smoke-all install uninstall clean legacy-install legacy-uninstall
 
 GO ?= go
 PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /usr/local)
@@ -22,6 +22,18 @@ build:
 
 test:
 	@$(GO) test ./...
+
+SMOKE_MAIN_ARGS ?=
+smoke-main:
+	@./bin/smoke-main-udl.sh $(SMOKE_MAIN_ARGS)
+
+SMOKE_ARGS ?=
+smoke-freedl:
+	@./bin/smoke-freedl-hardening.sh $(SMOKE_ARGS)
+
+smoke-all:
+	@./bin/smoke-main-udl.sh $(SMOKE_MAIN_ARGS)
+	@./bin/smoke-freedl-hardening.sh $(SMOKE_ARGS)
 
 install: build
 	@mkdir -p "$(BINDIR)"
