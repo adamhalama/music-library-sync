@@ -183,6 +183,63 @@ func TestCompactLogWriterStructuredPreflightContractIgnoresMessageWording(t *tes
 	}
 }
 
+func TestCompactLogWriterStructuredTrackEventsDriveRendering(t *testing.T) {
+	buf := &bytes.Buffer{}
+	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})
+	writer.ObserveEvent(Event{
+		Event:    EventSourcePreflight,
+		SourceID: "sc-source",
+		Details: map[string]any{
+			"planned_download_count": 1,
+		},
+		Message: "[sc-source] preflight",
+	})
+	writer.ObserveEvent(Event{
+		Event:    EventTrackStarted,
+		SourceID: "sc-source",
+		Details: map[string]any{
+			"track_name": "Structured Song",
+			"index":      1,
+			"total":      1,
+		},
+	})
+	writer.ObserveEvent(Event{
+		Event:    EventTrackProgress,
+		SourceID: "sc-source",
+		Details: map[string]any{
+			"track_name": "Structured Song",
+			"index":      1,
+			"total":      1,
+			"percent":    67.5,
+		},
+	})
+	writer.ObserveEvent(Event{
+		Event:    EventTrackDone,
+		SourceID: "sc-source",
+		Details: map[string]any{
+			"track_name": "Structured Song",
+			"index":      1,
+			"total":      1,
+			"percent":    100.0,
+		},
+	})
+
+	if _, err := writer.Write([]byte("[download] Downloading item 1 of 1\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[done] Structured Song") {
+		t.Fatalf("expected structured done line, got: %s", out)
+	}
+	if strings.Contains(out, "Downloading item 1 of 1") {
+		t.Fatalf("expected raw adapter line suppression when structured events are present, got: %s", out)
+	}
+}
+
 func TestCompactLogWriterSuppressesBreakOnExistingTraceback(t *testing.T) {
 	buf := &bytes.Buffer{}
 	writer := NewCompactLogWriterWithOptions(buf, CompactLogOptions{Interactive: false})

@@ -19,7 +19,21 @@ const (
 	EventSourceFinished  EventName = "source_finished"
 	EventSourceFailed    EventName = "source_failed"
 	EventSyncFinished    EventName = "sync_finished"
+	EventTrackStarted    EventName = "track_started"
+	EventTrackProgress   EventName = "track_progress"
+	EventTrackDone       EventName = "track_done"
+	EventTrackSkip       EventName = "track_skip"
+	EventTrackFail       EventName = "track_fail"
 )
+
+func IsTrackEventName(name EventName) bool {
+	switch name {
+	case EventTrackStarted, EventTrackProgress, EventTrackDone, EventTrackSkip, EventTrackFail:
+		return true
+	default:
+		return false
+	}
+}
 
 type Event struct {
 	Timestamp time.Time      `json:"timestamp"`

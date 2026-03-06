@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/jaa/update-downloads/internal/config"
+	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/spf13/cobra"
 )
@@ -19,7 +19,7 @@ func newValidateCommand(app *AppContext) *cobra.Command {
 				return withExitCode(exitcode.InvalidConfig, err)
 			}
 
-			if err := config.Validate(cfg); err != nil {
+			if err := (workflows.ValidateUseCase{}).Run(cfg); err != nil {
 				return withExitCode(exitcode.InvalidConfig, err)
 			}
 

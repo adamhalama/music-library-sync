@@ -32,3 +32,15 @@ func TestRegistryReturnsRegisteredParser(t *testing.T) {
 		t.Fatalf("unexpected parser events: %+v", events)
 	}
 }
+
+func TestRegistryReturnsFactoryParser(t *testing.T) {
+	reg := NewRegistry()
+	reg.RegisterFactory("spotdl", func() Parser {
+		return fakeParser{}
+	})
+	parser := reg.ParserFor("spotdl")
+	events := parser.Flush()
+	if len(events) != 1 || events[0].Kind != progress.TrackDone {
+		t.Fatalf("unexpected parser events: %+v", events)
+	}
+}

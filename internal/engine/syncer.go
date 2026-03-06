@@ -57,6 +57,9 @@ func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.Ev
 	}
 	progressSink := progress.Sink(progress.NoopSink{})
 	parserRegistry := adapterlog.NewRegistry()
+	parserRegistry.RegisterFactory("scdl", adapterlog.NewSCDLParser)
+	parserRegistry.RegisterFactory("deemix", adapterlog.NewDeemixParser)
+	parserRegistry.RegisterFactory("spotdl", adapterlog.NewSpotDLParser)
 	planRegistry := NewPlanRegistry()
 	planRegistry.Register("scdl", NewSCDLPlanProvider())
 	return &Syncer{
@@ -425,23 +428,85 @@ func applySourceOutcome(result *SyncResult, outcome sourceRunOutcome) {
 	}
 }
 
-func (s *Syncer) applyFlowObservers(spec ExecSpec, flow sourceFlowContext) ExecSpec {
+func (s *Syncer) applyFlowObservers(spec ExecSpec, flow sourceFlowContext, source config.Source) ExecSpec {
 	if flow.Parser == nil {
 		return spec
 	}
-	spec.StdoutObservers = append(spec.StdoutObservers, flow.Parser.OnStdoutLine)
-	spec.StderrObservers = append(spec.StderrObservers, flow.Parser.OnStderrLine)
+	spec.StdoutObservers = append(spec.StdoutObservers, func(line string) {
+		flow.Parser.OnStdoutLine(line)
+		s.flushFlowParser(flow, source)
+	})
+	spec.StderrObservers = append(spec.StderrObservers, func(line string) {
+		flow.Parser.OnStderrLine(line)
+		s.flushFlowParser(flow, source)
+	})
 	return spec
 }
 
-func (s *Syncer) flushFlowParser(flow sourceFlowContext) {
+func (s *Syncer) flushFlowParser(flow sourceFlowContext, source config.Source) {
 	if flow.Parser == nil || flow.Progress == nil {
 		return
 	}
 	events := flow.Parser.Flush()
 	for _, event := range events {
+		if strings.TrimSpace(event.SourceID) == "" {
+			event.SourceID = source.ID
+		}
+		if strings.TrimSpace(event.AdapterKind) == "" {
+			event.AdapterKind = source.Adapter.Kind
+		}
 		flow.Progress.RecordTrackEvent(event)
+		s.emitTrackEvent(source, event)
 	}
+}
+
+func (s *Syncer) emitTrackEvent(source config.Source, event progress.TrackEvent) {
+	eventName := output.EventTrackProgress
+	level := output.LevelInfo
+	switch event.Kind {
+	case progress.TrackStarted:
+		eventName = output.EventTrackStarted
+	case progress.TrackProgress:
+		eventName = output.EventTrackProgress
+	case progress.TrackDone:
+		eventName = output.EventTrackDone
+	case progress.TrackSkip:
+		eventName = output.EventTrackSkip
+		level = output.LevelWarn
+	case progress.TrackFail:
+		eventName = output.EventTrackFail
+		level = output.LevelError
+	default:
+		return
+	}
+	trackLabel := strings.TrimSpace(event.TrackName)
+	if trackLabel == "" {
+		trackLabel = strings.TrimSpace(event.TrackID)
+	}
+	if trackLabel == "" {
+		trackLabel = "track"
+	}
+	message := fmt.Sprintf("[%s] [%s] %s", source.ID, eventName, trackLabel)
+	if event.Reason != "" {
+		message = fmt.Sprintf("%s (%s)", message, event.Reason)
+	}
+
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     level,
+		Event:     eventName,
+		SourceID:  source.ID,
+		Message:   message,
+		Details: map[string]any{
+			"track_id":     strings.TrimSpace(event.TrackID),
+			"track_name":   strings.TrimSpace(event.TrackName),
+			"index":        event.Index,
+			"total":        event.Total,
+			"percent":      event.Percent,
+			"reason":       strings.TrimSpace(event.Reason),
+			"adapter_kind": strings.TrimSpace(event.AdapterKind),
+		},
+	})
 }
 
 func (s *Syncer) runSoundCloudFreeDL(
@@ -654,7 +719,7 @@ func (s *Syncer) runSpotifyDeemix(
 			sourceFailureMessage = fmt.Sprintf("[%s] cannot build command: %v", source.ID, buildErr)
 			break
 		}
-		spec = s.applyFlowObservers(spec, flow)
+		spec = s.applyFlowObservers(spec, flow, source)
 		if runtimeDir == "" {
 			runtimeDir = spec.Dir
 			sourceForExec.DeemixRuntimeDir = spec.Dir
@@ -714,7 +779,7 @@ func (s *Syncer) runSpotifyDeemix(
 		}
 
 		execResult := s.Runner.Run(ctx, spec)
-		s.flushFlowParser(flow)
+		s.flushFlowParser(flow, source)
 		if execResult.Interrupted {
 			_ = cleanupRuntimeDir(runtimeDir)
 			outcome.Interrupted = true
@@ -934,7 +999,7 @@ func (s *Syncer) runGenericAdapter(
 		outcome.Stop = !cfg.Defaults.ContinueOnError
 		return outcome
 	}
-	spec = s.applyFlowObservers(spec, flow)
+	spec = s.applyFlowObservers(spec, flow, source)
 
 	if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 && (!opts.DryRun || opts.Plan) {
 		outcome.Attempted++
@@ -1039,7 +1104,7 @@ func (s *Syncer) runGenericAdapter(
 	}
 
 	execResult := s.Runner.Run(ctx, spec)
-	s.flushFlowParser(flow)
+	s.flushFlowParser(flow, source)
 	if execResult.Interrupted {
 		s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
 		if err := cleanupTempStateFiles(stateSwap); err != nil {
@@ -1090,7 +1155,7 @@ func (s *Syncer) runGenericAdapter(
 				Message:   fmt.Sprintf("[%s] spotify auth retry setup failed: %v", source.ID, retryErr),
 			})
 		} else {
-			retrySpec = s.applyFlowObservers(retrySpec, flow)
+			retrySpec = s.applyFlowObservers(retrySpec, flow, source)
 			retryHint := "paste redirected URL in terminal when prompted"
 			retryMode := "manual"
 			if opensBrowser {
@@ -1111,7 +1176,7 @@ func (s *Syncer) runGenericAdapter(
 				},
 			})
 			execResult = s.Runner.Run(ctx, retrySpec)
-			s.flushFlowParser(flow)
+			s.flushFlowParser(flow, source)
 			spec = retrySpec
 			sourceForExec = retrySource
 			if execResult.Interrupted {

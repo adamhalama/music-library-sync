@@ -47,6 +47,7 @@ type CompactLogWriter struct {
 	breakStopPrinted        bool
 	activeAdapter           string
 	deemixTrackTitle        string
+	structuredTrackEvents   bool
 	preflightSummaryMode    string
 	trackStatusMode         string
 }
@@ -165,6 +166,7 @@ func (w *CompactLogWriter) ObserveEvent(event Event) {
 		w.breakStopPrinted = false
 		w.activeAdapter = ""
 		w.deemixTrackTitle = ""
+		w.structuredTrackEvents = false
 	case EventSourcePreflight:
 		planned, ok := eventDetailInt(event.Details, "planned_download_count")
 		if !ok {
@@ -181,6 +183,16 @@ func (w *CompactLogWriter) ObserveEvent(event Event) {
 		w.progress.FinishSource(event.SourceID, false)
 	case EventSourceFailed:
 		w.progress.FinishSource(event.SourceID, true)
+	case EventTrackStarted:
+		w.observeStructuredTrackStartedLocked(event)
+	case EventTrackProgress:
+		w.observeStructuredTrackProgressLocked(event)
+	case EventTrackDone:
+		w.observeStructuredTrackDoneLocked(event)
+	case EventTrackSkip:
+		w.observeStructuredTrackSkipLocked(event)
+	case EventTrackFail:
+		w.observeStructuredTrackFailLocked(event)
 	}
 }
 
@@ -199,6 +211,27 @@ func (w *CompactLogWriter) flushLineLocked() error {
 }
 
 func (w *CompactLogWriter) handleLineLocked(line string) error {
+	if w.structuredTrackEvents {
+		if shouldSuppressSCDLNoise(line) ||
+			shouldSuppressSpotDLSpotifyNoise(line) ||
+			shouldSuppressDeemixNoise(line) ||
+			isBreakOnExistingTraceLine(line) ||
+			isBreakOnExistingLine(line) {
+			return nil
+		}
+		if _, ok := compactstate.ParseLine(line); ok {
+			return nil
+		}
+		if deemixTrackProgressPattern.MatchString(line) ||
+			deemixTrackDonePattern.MatchString(line) ||
+			deemixTrackSkipPattern.MatchString(line) ||
+			deemixTrackFailurePattern.MatchString(line) ||
+			deemixDownloadProgressPattern.MatchString(line) ||
+			deemixDownloadCompletePattern.MatchString(line) {
+			return nil
+		}
+	}
+
 	if strings.HasPrefix(line, "sync started (") {
 		w.progress.Reset()
 		w.track = trackState{}
@@ -894,4 +927,149 @@ func eventDetailInt(details map[string]any, key string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func eventDetailFloat(details map[string]any, key string) (float64, bool) {
+	if details == nil {
+		return 0, false
+	}
+	raw, ok := details[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func eventDetailString(details map[string]any, key string) string {
+	if details == nil {
+		return ""
+	}
+	raw, ok := details[key]
+	if !ok {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func (w *CompactLogWriter) observeStructuredTrackStartedLocked(event Event) {
+	w.structuredTrackEvents = true
+	name := eventDetailString(event.Details, "track_name")
+	if name == "" {
+		name = eventDetailString(event.Details, "track_id")
+	}
+	index, hasIndex := eventDetailInt(event.Details, "index")
+	total, hasTotal := eventDetailInt(event.Details, "total")
+	if hasTotal && total >= 0 {
+		w.progress.SetItemTotal(total)
+	}
+	if hasIndex || hasTotal {
+		w.progress.SetItemIndex(index, total)
+	}
+	w.track = trackState{
+		Name:            name,
+		ProgressKnown:   true,
+		ProgressPercent: 0,
+	}
+	_ = w.renderStatusLocked("downloading")
+}
+
+func (w *CompactLogWriter) observeStructuredTrackProgressLocked(event Event) {
+	w.structuredTrackEvents = true
+	name := eventDetailString(event.Details, "track_name")
+	if name != "" {
+		w.track.Name = name
+	}
+	if w.track.Name == "" {
+		w.track.Name = eventDetailString(event.Details, "track_id")
+	}
+	if index, ok := eventDetailInt(event.Details, "index"); ok {
+		total, _ := eventDetailInt(event.Details, "total")
+		w.progress.SetItemIndex(index, total)
+	}
+	if percent, ok := eventDetailFloat(event.Details, "percent"); ok {
+		w.track.ProgressKnown = true
+		w.track.ProgressPercent = compactstate.ClampPercent(percent)
+	}
+	_ = w.renderStatusLocked("downloading")
+}
+
+func (w *CompactLogWriter) observeStructuredTrackDoneLocked(event Event) {
+	w.structuredTrackEvents = true
+	name := eventDetailString(event.Details, "track_name")
+	if name == "" {
+		name = w.track.Name
+	}
+	if name == "" {
+		name = eventDetailString(event.Details, "track_id")
+	}
+	w.track.Name = name
+	w.track.ProgressKnown = true
+	w.track.ProgressPercent = 100
+	w.track.CompletionObserved = true
+	_ = w.renderStatusLocked("downloaded")
+	_ = w.finalizeTrackLocked()
+}
+
+func (w *CompactLogWriter) observeStructuredTrackSkipLocked(event Event) {
+	w.structuredTrackEvents = true
+	name := eventDetailString(event.Details, "track_name")
+	if name == "" {
+		name = eventDetailString(event.Details, "track_id")
+	}
+	if name == "" {
+		name = w.nextSpotDLTrackLabelLocked()
+	}
+	w.progress.CompleteTrack()
+	w.track = trackState{}
+	line := w.compactTrackResultLineLocked("[skip]", name)
+	if reason := eventDetailString(event.Details, "reason"); reason != "" {
+		line = fmt.Sprintf("%s (%s)", line, reason)
+	}
+	if w.trackStatusMode != CompactTrackStatusNone {
+		_ = w.printPersistentLocked(line)
+	}
+	_ = w.renderIdleStatusLocked()
+}
+
+func (w *CompactLogWriter) observeStructuredTrackFailLocked(event Event) {
+	w.structuredTrackEvents = true
+	name := eventDetailString(event.Details, "track_name")
+	if name == "" {
+		name = eventDetailString(event.Details, "track_id")
+	}
+	if name == "" {
+		name = w.nextSpotDLTrackLabelLocked()
+	}
+	w.progress.CompleteTrack()
+	w.track = trackState{}
+	line := w.compactTrackResultLineLocked("[fail]", name)
+	if reason := eventDetailString(event.Details, "reason"); reason != "" {
+		line = fmt.Sprintf("%s (%s)", line, reason)
+	}
+	if w.trackStatusMode != CompactTrackStatusNone {
+		_ = w.printPersistentLocked(line)
+	}
+	_ = w.renderIdleStatusLocked()
 }

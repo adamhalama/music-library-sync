@@ -14,6 +14,7 @@ import (
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
 	"github.com/jaa/update-downloads/internal/adapters/scdlfreedl"
 	"github.com/jaa/update-downloads/internal/adapters/spotdl"
+	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/exitcode"
@@ -146,28 +147,17 @@ Operational notes:
 				"scdl":        scdl.New(),
 				"scdl-freedl": scdlfreedl.New(),
 			}
-			syncer := engine.NewSyncer(registry, runner, emitter)
+			useCase := workflows.SyncUseCase{
+				Registry: registry,
+				Runner:   runner,
+				Emitter:  emitter,
+			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 			defer stop()
 
-			var selectPlanRows func(sourceID string, rows []engine.PlanRow) ([]int, bool, error)
-			if plan {
-				sourceByID := map[string]config.Source{}
-				for _, source := range cfg.Sources {
-					sourceByID[source.ID] = source
-				}
-				selectPlanRows = func(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
-					source, ok := sourceByID[sourceID]
-					if !ok {
-						source.ID = sourceID
-					}
-					details := buildPlanSourceDetails(source, cfg.Defaults, planLimit, app.Opts.DryRun)
-					return runPlanSelector(app, details, rows)
-				}
-			}
-
-			result, runErr := syncer.Sync(ctx, cfg, engine.SyncOptions{
+			interaction := buildCLIInteraction(app, cfg, planLimit, app.Opts.DryRun)
+			result, runErr := useCase.Run(ctx, cfg, workflows.SyncRequest{
 				SourceIDs:        sourceIDs,
 				DryRun:           app.Opts.DryRun,
 				TimeoutOverride:  timeout,
@@ -177,19 +167,9 @@ Operational notes:
 				AskOnExistingSet: cmd.Flags().Changed("ask-on-existing"),
 				ScanGaps:         scanGaps,
 				NoPreflight:      noPreflight,
-				SelectPlanRows:   selectPlanRows,
 				AllowPrompt:      !app.Opts.NoInput && !app.Opts.JSON && isTTY(os.Stdin),
-				PromptOnExisting: func(sourceID string, preflight engine.SoundCloudPreflight) (bool, error) {
-					return promptYesNo(app, fmt.Sprintf("[%s] Existing track found at position %d of %d. Continue scanning for gaps?", sourceID, preflight.FirstExistingIndex, preflight.RemoteTotal))
-				},
-				PromptOnSpotifyAuth: func(sourceID string) (bool, error) {
-					return promptYesNoDefault(app, fmt.Sprintf("[%s] Spotify login required. Open browser now?", sourceID), true)
-				},
-				PromptOnDeemixARL: func(sourceID string) (string, error) {
-					return promptLine(app, fmt.Sprintf("[%s] Enter your Deezer ARL for deemix", sourceID))
-				},
-				TrackStatus: parsedTrackStatusMode,
-			})
+				TrackStatus:      parsedTrackStatusMode,
+			}, interaction)
 			if runErr != nil {
 				var selectionErr *engine.SelectionError
 				switch {

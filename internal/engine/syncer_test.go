@@ -108,6 +108,25 @@ func (r *cacheInspectRunner) Run(ctx context.Context, spec ExecSpec) ExecResult 
 	return ExecResult{ExitCode: 0}
 }
 
+type observerLineRunner struct {
+	stdoutLines []string
+	stderrLines []string
+}
+
+func (r observerLineRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	for _, line := range r.stdoutLines {
+		for _, observer := range spec.StdoutObservers {
+			observer(line)
+		}
+	}
+	for _, line := range r.stderrLines {
+		for _, observer := range spec.StderrObservers {
+			observer(line)
+		}
+	}
+	return ExecResult{ExitCode: 0}
+}
+
 type fakeSpotifyAdapter struct{}
 
 func (a fakeSpotifyAdapter) Kind() string                              { return "spotdl" }
@@ -197,6 +216,70 @@ func TestSyncerDryRunDeterministicJSON(t *testing.T) {
 	}
 	if !bytes.Contains(buf.Bytes(), []byte(`"event":"sync_finished"`)) {
 		t.Fatalf("expected sync_finished event, got %s", buf.String())
+	}
+}
+
+func TestSyncerEmitsNormalizedTrackEventsFromAdapterParser(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-source",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-source.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+
+	buf := &bytes.Buffer{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl": fakeAdapter{}},
+		observerLineRunner{
+			stdoutLines: []string{
+				"[download] Downloading item 1 of 1",
+				"[download] Destination: /tmp/Track One.m4a",
+				"[download] 25.0% of ~ 2.00MiB at 1.00MiB/s ETA 00:02 (frag 5/10)",
+				"[download] 100% of 2.00MiB in 00:02",
+			},
+		},
+		output.NewJSONEmitter(buf),
+	)
+
+	if _, err := syncer.Sync(context.Background(), cfg, SyncOptions{NoPreflight: true}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	out := buf.String()
+	for _, token := range []string{
+		`"event":"track_started"`,
+		`"event":"track_progress"`,
+		`"event":"track_done"`,
+		`"track_name":"Track One"`,
+		`"adapter_kind":"scdl"`,
+	} {
+		if !strings.Contains(out, token) {
+			t.Fatalf("expected token %q in output, got: %s", token, out)
+		}
 	}
 }
 
