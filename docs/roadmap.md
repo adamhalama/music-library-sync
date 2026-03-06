@@ -62,6 +62,16 @@
 ### Future task: Maximum shielding (bundled adapter toolchain)
 - [ ] Future: bundled per-platform adapter toolchain (full version pinning + rollback), including release asset strategy and signature verification.
 
+## Track C: Rekordbox Date Added ordering (planned)
+- [ ] Add `udl rekordbox order plan|apply|show` command family.
+- [ ] Implement SoundCloud-only origin ordering in v1.
+- [ ] Add plan artifact schema + checksum validation.
+- [ ] Add Rekordbox process-wait guard before writes.
+- [ ] Add backup prompt + automatic backup file creation.
+- [ ] Add day-preserving planner with conflict-on-demand prompt.
+- [ ] Add CLI + engine + bridge tests for safety gates and drift detection.
+- [ ] Document rollback procedure from backup.
+
 ## Finalization acceptance checklist
 1. `go test ./...`
 2. `go test -race ./...`

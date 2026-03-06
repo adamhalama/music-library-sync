@@ -1,0 +1,14 @@
+run_id=20260224-231646
+target_dir=/Users/jaa/Music/downloaded/TEST_COPY_udl-test-sc-clean
+likes_url=https://soundcloud.com/janxadam/likes
+mode=created
+granularity=day
+release_format=datetime
+preserve_mtime=1
+dry_run=0
+run_started_at=2026-02-24 23:16:46 +0100
+base_day=2026-02-22
+base_day_end_epoch=1771801199
+matched_count=6
+run_finished_at=2026-02-24 23:16:56 +0100
+out_dir=/Users/jaa/dev/utils/update-downloads/experiments/rb-date-order/runs/20260224-231646

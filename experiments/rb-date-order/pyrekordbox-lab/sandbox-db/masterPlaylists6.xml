@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<MASTER_PLAYLIST Version="3.0.0" AutomaticSync="0">
+  <PRODUCT Name="rekordbox" Version="7.2.2" Company="Pioneer DJ"/>
+  <PLAYLISTS>
+    <NODE Id="8713FA7" ParentId="0" Attribute="4" Timestamp="1767805167912" Lib_Type="0" CheckType="0"/>
+    <NODE Id="50E17C3" ParentId="0" Attribute="4" Timestamp="1766418397718" Lib_Type="0" CheckType="0"/>
+    <NODE Id="7657DD15" ParentId="0" Attribute="4" Timestamp="1760780691211" Lib_Type="0" CheckType="0"/>
+    <NODE Id="FD38A8E7" ParentId="0" Attribute="4" Timestamp="1769797391769" Lib_Type="0" CheckType="0"/>
+    <NODE Id="B76D2BF3" ParentId="0" Attribute="4" Timestamp="1760647741582" Lib_Type="0" CheckType="0"/>
+    <NODE Id="9E0679EB" ParentId="0" Attribute="4" Timestamp="1767817085535" Lib_Type="0" CheckType="0"/>
+    <NODE Id="D8675EC8" ParentId="0" Attribute="0" Timestamp="1770665240356" Lib_Type="0" CheckType="0"/>
+    <NODE Id="3A86B824" ParentId="0" Attribute="4" Timestamp="1769796807879" Lib_Type="0" CheckType="0"/>
+    <NODE Id="30D40" ParentId="0" Attribute="0" Timestamp="1740774576907" Lib_Type="0" CheckType="0"/>
+    <NODE Id="41A39FB2" ParentId="0" Attribute="0" Timestamp="0" Lib_Type="0" CheckType="0"/>
+    <NODE Id="309D7F2A" ParentId="0" Attribute="0" Timestamp="1770989050050" Lib_Type="0" CheckType="0"/>
+    <NODE Id="B2EC7217" ParentId="0" Attribute="0" Timestamp="1769798132514" Lib_Type="0" CheckType="0"/>
+    <NODE Id="D187908C" ParentId="0" Attribute="0" Timestamp="1769798060728" Lib_Type="0" CheckType="0"/>
+    <NODE Id="EDEE7FB9" ParentId="0" Attribute="0" Timestamp="1771883666541" Lib_Type="0" CheckType="0"/>
+    <NODE Id="11A92707" ParentId="0" Attribute="0" Timestamp="1769798005237" Lib_Type="0" CheckType="0"/>
+  </PLAYLISTS>
+</MASTER_PLAYLIST>

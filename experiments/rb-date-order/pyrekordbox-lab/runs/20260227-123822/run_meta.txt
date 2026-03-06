@@ -1,0 +1,12 @@
+run_id=20260227-123822
+db_dir=/Users/jaa/dev/utils/update-downloads/experiments/rb-date-order/pyrekordbox-lab/sandbox-db
+db_path=/Users/jaa/dev/utils/update-downloads/experiments/rb-date-order/pyrekordbox-lab/sandbox-db/master.db
+target_dir=/Users/jaa/Music/downloaded/TEST_COPY_udl-test-sc-clean
+likes_url=https://soundcloud.com/janxadam/likes
+step_seconds=1
+use_like_index_offset=0
+anchor_datetime=2026-02-27 12:00:00.900000
+apply=1
+matched=6
+unmatched=0
+started_at=2026-02-27 12:38:26
