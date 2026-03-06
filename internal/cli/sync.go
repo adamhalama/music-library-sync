@@ -153,8 +153,17 @@ Operational notes:
 
 			var selectPlanRows func(sourceID string, rows []engine.PlanRow) ([]int, bool, error)
 			if plan {
+				sourceByID := map[string]config.Source{}
+				for _, source := range cfg.Sources {
+					sourceByID[source.ID] = source
+				}
 				selectPlanRows = func(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
-					return runPlanSelector(app, sourceID, rows)
+					source, ok := sourceByID[sourceID]
+					if !ok {
+						source.ID = sourceID
+					}
+					details := buildPlanSourceDetails(source, cfg.Defaults, planLimit, app.Opts.DryRun)
+					return runPlanSelector(app, details, rows)
 				}
 			}
 

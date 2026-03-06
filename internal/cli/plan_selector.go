@@ -2,17 +2,31 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 )
+
+type planSourceDetails struct {
+	SourceID   string
+	SourceType string
+	Adapter    string
+	URL        string
+	TargetDir  string
+	StateFile  string
+	PlanLimit  int
+	DryRun     bool
+}
 
 type planSelectorModel struct {
 	sourceID string
 	rows     []engine.PlanRow
+	details  planSourceDetails
 	cursor   int
 	selected map[int]bool
 	width    int
@@ -31,8 +45,8 @@ type planSelectorKeys struct {
 	cancel    key.Binding
 }
 
-func runPlanSelector(app *AppContext, sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
-	model := newPlanSelectorModel(sourceID, rows)
+func runPlanSelector(app *AppContext, details planSourceDetails, rows []engine.PlanRow) ([]int, bool, error) {
+	model := newPlanSelectorModel(details, rows)
 	program := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
@@ -53,7 +67,7 @@ func runPlanSelector(app *AppContext, sourceID string, rows []engine.PlanRow) ([
 	return resolved.selectedIndices(), false, nil
 }
 
-func newPlanSelectorModel(sourceID string, rows []engine.PlanRow) planSelectorModel {
+func newPlanSelectorModel(details planSourceDetails, rows []engine.PlanRow) planSelectorModel {
 	selected := map[int]bool{}
 	for _, row := range rows {
 		if row.Toggleable && row.SelectedByDefault {
@@ -61,8 +75,9 @@ func newPlanSelectorModel(sourceID string, rows []engine.PlanRow) planSelectorMo
 		}
 	}
 	return planSelectorModel{
-		sourceID: sourceID,
+		sourceID: details.SourceID,
 		rows:     append([]engine.PlanRow{}, rows...),
+		details:  details,
 		selected: selected,
 		keys:     defaultPlanSelectorKeys(),
 	}
@@ -127,8 +142,21 @@ func (m planSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m planSelectorModel) View() string {
+	limitLabel := "unlimited"
+	if m.details.PlanLimit > 0 {
+		limitLabel = fmt.Sprintf("%d", m.details.PlanLimit)
+	}
+	modeLabel := "run"
+	if m.details.DryRun {
+		modeLabel = "dry-run"
+	}
+
 	lines := []string{
-		fmt.Sprintf("udl sync --plan  source=%s", m.sourceID),
+		fmt.Sprintf("udl sync --plan  source=%s  mode=%s  plan-limit=%s", m.sourceID, modeLabel, limitLabel),
+		fmt.Sprintf("type=%s  adapter=%s", m.details.SourceType, m.details.Adapter),
+		fmt.Sprintf("target_dir=%s", m.details.TargetDir),
+		fmt.Sprintf("state_file=%s", m.details.StateFile),
+		fmt.Sprintf("url=%s", m.details.URL),
 		"up/down or j/k: move   space: toggle   a: select all   n: clear all   enter: confirm   q/esc: cancel",
 		"",
 	}
@@ -251,4 +279,43 @@ func defaultPlanSelectorKeys() planSelectorKeys {
 			key.WithKeys("ctrl+c", "q", "esc"),
 		),
 	}
+}
+
+func buildPlanSourceDetails(source config.Source, defaults config.Defaults, planLimit int, dryRun bool) planSourceDetails {
+	targetDir := strings.TrimSpace(source.TargetDir)
+	if expanded, err := config.ExpandPath(targetDir); err == nil && strings.TrimSpace(expanded) != "" {
+		targetDir = expanded
+	}
+
+	stateFile := strings.TrimSpace(source.StateFile)
+	if resolved, err := config.ResolveStateFile(defaults.StateDir, source.StateFile); err == nil && strings.TrimSpace(resolved) != "" {
+		stateFile = resolved
+	}
+
+	url := strings.TrimSpace(source.URL)
+	if targetDir != "" {
+		targetDir = filepath.Clean(targetDir)
+	}
+	if stateFile != "" {
+		stateFile = filepath.Clean(stateFile)
+	}
+	return planSourceDetails{
+		SourceID:   strings.TrimSpace(source.ID),
+		SourceType: string(source.Type),
+		Adapter:    strings.TrimSpace(source.Adapter.Kind),
+		URL:        sanitizePlanURL(url),
+		TargetDir:  targetDir,
+		StateFile:  stateFile,
+		PlanLimit:  planLimit,
+		DryRun:     dryRun,
+	}
+}
+
+func sanitizePlanURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return trimmed
+	}
+	parts := strings.SplitN(trimmed, "?", 2)
+	return parts[0]
 }
