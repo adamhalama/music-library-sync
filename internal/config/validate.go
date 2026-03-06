@@ -93,15 +93,15 @@ func Validate(cfg Config) error {
 			}
 		} else {
 			switch source.Adapter.Kind {
-			case "spotdl", "scdl", "deemix":
+			case "spotdl", "scdl", "scdl-freedl", "deemix":
 			default:
 				problems = append(problems, fmt.Sprintf("source %q has unsupported adapter.kind %q", source.ID, source.Adapter.Kind))
 			}
 			if source.Type == SourceTypeSpotify && source.Adapter.Kind != "spotdl" && source.Adapter.Kind != "deemix" {
 				problems = append(problems, fmt.Sprintf("source %q spotify type requires spotdl or deemix adapter", source.ID))
 			}
-			if source.Type == SourceTypeSoundCloud && source.Adapter.Kind != "scdl" {
-				problems = append(problems, fmt.Sprintf("source %q soundcloud type requires scdl adapter", source.ID))
+			if source.Type == SourceTypeSoundCloud && source.Adapter.Kind != "scdl" && source.Adapter.Kind != "scdl-freedl" {
+				problems = append(problems, fmt.Sprintf("source %q soundcloud type requires scdl or scdl-freedl adapter", source.ID))
 			}
 		}
 

@@ -60,6 +60,30 @@ func soundcloudConfig() config.Config {
 	}
 }
 
+func soundcloudFreeDLConfig() config.Config {
+	return config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              "/tmp/state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: "/tmp/music",
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+}
+
 func spotifyDeemixConfig() config.Config {
 	return config.Config{
 		Version: 1,
@@ -126,6 +150,30 @@ func TestDoctorMissingSoundCloudEnv(t *testing.T) {
 	}
 }
 
+func TestDoctorSoundCloudFreeDLDoesNotRequireSCDLClientID(t *testing.T) {
+	checker := &Checker{
+		LookPath: func(name string) (string, error) {
+			if name == "yt-dlp" {
+				return "/usr/bin/yt-dlp", nil
+			}
+			return "/usr/bin/" + name, nil
+		},
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			if binary == "yt-dlp" {
+				return "yt-dlp 2026.2.4", nil
+			}
+			return "3.0.0", nil
+		},
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+	}
+
+	report := checker.Check(context.Background(), soundcloudFreeDLConfig())
+	if hasErrorContaining(report, "SCDL_CLIENT_ID is required") {
+		t.Fatalf("did not expect SCDL_CLIENT_ID requirement for scdl-freedl, got %+v", report.Checks)
+	}
+}
+
 func TestDoctorRequiresYTDLPForSoundCloud(t *testing.T) {
 	checker := &Checker{
 		LookPath: func(name string) (string, error) {
@@ -142,6 +190,25 @@ func TestDoctorRequiresYTDLPForSoundCloud(t *testing.T) {
 	report := checker.Check(context.Background(), soundcloudConfig())
 	if !report.HasErrors() {
 		t.Fatalf("expected missing yt-dlp dependency to be reported")
+	}
+}
+
+func TestDoctorRequiresYTDLPForSoundCloudFreeDL(t *testing.T) {
+	checker := &Checker{
+		LookPath: func(name string) (string, error) {
+			if name == "yt-dlp" {
+				return "", fmt.Errorf("not found")
+			}
+			return "/usr/bin/" + name, nil
+		},
+		ReadVersion:   func(ctx context.Context, binary string) (string, error) { return "3.0.0", nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+	}
+
+	report := checker.Check(context.Background(), soundcloudFreeDLConfig())
+	if !report.HasErrors() {
+		t.Fatalf("expected missing yt-dlp dependency to be reported for scdl-freedl")
 	}
 }
 

@@ -25,6 +25,20 @@ sources:
       kind: "scdl"
       extra_args: ["-f"]
 
+  # Optional SoundCloud free-download flow (separate from scdl stream ripping):
+  # - id: "soundcloud-likes-free"
+  #   type: "soundcloud"
+  #   enabled: false
+  #   target_dir: "~/Music/downloaded/sc-likes-free"
+  #   url: "https://soundcloud.com/your-user"
+  #   state_file: "soundcloud-likes-free.sync.scdl"
+  #   adapter:
+  #     kind: "scdl-freedl"
+  #   sync:
+  #     break_on_existing: true
+  #     ask_on_existing: false
+  #     local_index_cache: false
+
   - id: "spotify-groove"
     type: "spotify"
     enabled: true

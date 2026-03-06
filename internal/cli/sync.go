@@ -12,6 +12,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/adapters/deemix"
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
+	"github.com/jaa/update-downloads/internal/adapters/scdlfreedl"
 	"github.com/jaa/update-downloads/internal/adapters/spotdl"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
@@ -33,6 +34,21 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Run enabled sources in deterministic order",
+		Long: strings.TrimSpace(`
+Run enabled sources in deterministic order.
+
+Operational notes:
+- SoundCloud sync requires SCDL_CLIENT_ID for adapter.kind=scdl.
+- For Spotify, adapter.kind=deemix is recommended when available.
+- Legacy spotdl can be throttled when using shared/default Spotify app credentials; use user-owned credentials.
+- If spotdl auth retry happens and --headless is enabled, rerun without --headless for browser-led OAuth.
+`),
+		Example: strings.TrimSpace(`
+  udl sync
+  udl sync --dry-run
+  udl sync --source soundcloud-likes --scan-gaps
+  udl sync --source spotify-legacy --timeout 20m -v
+`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			parsedProgressMode, err := parseProgressMode(progressMode)
 			if err != nil {
@@ -97,9 +113,10 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 			runner := engine.NewSubprocessRunner(app.IO.In, runnerStdout, runnerStderr)
 
 			registry := map[string]engine.Adapter{
-				"deemix": deemix.New(),
-				"spotdl": spotdl.New(),
-				"scdl":   scdl.New(),
+				"deemix":      deemix.New(),
+				"spotdl":      spotdl.New(),
+				"scdl":        scdl.New(),
+				"scdl-freedl": scdlfreedl.New(),
 			}
 			syncer := engine.NewSyncer(registry, runner, emitter)
 

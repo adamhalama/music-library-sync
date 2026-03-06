@@ -34,6 +34,8 @@ type soundCloudSyncState struct {
 
 type idSet map[string]struct{}
 
+var enumerateSoundCloudTracksFn = enumerateSoundCloudTracks
+
 func effectiveSoundCloudListURL(source config.Source) string {
 	base := strings.TrimSpace(source.URL)
 	mode := detectSoundCloudMode(source.Adapter.ExtraArgs)
@@ -438,7 +440,7 @@ func scanLocalMediaTitleIndex(targetDir string) map[string]int {
 
 func isMediaExt(ext string) bool {
 	switch ext {
-	case ".m4a", ".mp3", ".flac", ".opus", ".ogg", ".wav", ".aac":
+	case ".m4a", ".mp3", ".flac", ".opus", ".ogg", ".wav", ".aac", ".aif", ".aiff":
 		return true
 	default:
 		return false

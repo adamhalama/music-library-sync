@@ -38,7 +38,7 @@ func TestValidateSuccess(t *testing.T) {
 					AskOnExisting:   testBoolPtr(false),
 					LocalIndexCache: testBoolPtr(true),
 				},
-				Adapter: AdapterSpec{Kind: "scdl"},
+				Adapter: AdapterSpec{Kind: "scdl-freedl"},
 			},
 		},
 	}

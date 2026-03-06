@@ -22,7 +22,6 @@ Do not quietly change security-sensitive behavior. Call it out.
 ## A Note To The Agent
 
 We are building this together. When you learn something non-obvious, add it here so future changes go faster.
-
 - As of Spotify Web API changes (Feb 2026), upstream `spotdl` `4.4.3` can fail on playlist metadata (`/playlists/{id}/tracks` 403) and missing artist fields (for example `genres`). A patched build from PR #2610 commit `27f3a0e33174170cbeebbcc0738ceb41a9baf947` works in local validation.
 - If Spotify retries run with `--headless`, OAuth stays in manual copy/paste mode; removing `--headless` on the retry allows browser-led auth and is much clearer for interactive `udl sync` flows.
 - `bambanah` `deemix-cli@0.1.0` can print a Spotify plugin stack trace (for example `TypeError: Cannot read properties of undefined (reading 'error')`) while still exiting `0`; `udl` must treat this as failure to avoid false-positive source success/state writes.
