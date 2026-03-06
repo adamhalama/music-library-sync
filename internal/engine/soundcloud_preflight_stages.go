@@ -8,6 +8,7 @@ import (
 
 type soundCloudEnumerateStageInput struct {
 	Source config.Source
+	Limit  int
 }
 
 type soundCloudEnumerateStageResult struct {
@@ -15,7 +16,15 @@ type soundCloudEnumerateStageResult struct {
 }
 
 func enumerateSoundCloudStage(ctx context.Context, input soundCloudEnumerateStageInput) (soundCloudEnumerateStageResult, error) {
-	tracks, err := enumerateSoundCloudTracksFn(ctx, input.Source)
+	var (
+		tracks []soundCloudRemoteTrack
+		err    error
+	)
+	if input.Limit > 0 {
+		tracks, err = enumerateSoundCloudTracksWithLimitFn(ctx, input.Source, input.Limit)
+	} else {
+		tracks, err = enumerateSoundCloudTracksFn(ctx, input.Source)
+	}
 	if err != nil {
 		return soundCloudEnumerateStageResult{}, err
 	}

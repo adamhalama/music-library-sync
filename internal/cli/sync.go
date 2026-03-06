@@ -27,6 +27,8 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 	var askOnExisting bool
 	var scanGaps bool
 	var noPreflight bool
+	var plan bool
+	var planLimit int
 	var progressMode string
 	var preflightSummaryMode string
 	var trackStatusMode string
@@ -61,6 +63,32 @@ Operational notes:
 			parsedTrackStatusMode, err := parseTrackStatusMode(trackStatusMode)
 			if err != nil {
 				return withExitCode(exitcode.InvalidUsage, err)
+			}
+			if planLimit < 0 {
+				return withExitCode(exitcode.InvalidUsage, fmt.Errorf("invalid --plan-limit %d (must be >= 0; 0 means unlimited)", planLimit))
+			}
+			if cmd.Flags().Changed("plan-limit") && !plan {
+				return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan-limit requires --plan"))
+			}
+			if plan {
+				if app.Opts.JSON {
+					return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan cannot be used with --json"))
+				}
+				if app.Opts.NoInput {
+					return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan cannot be used with --no-input"))
+				}
+				if cmd.Flags().Changed("scan-gaps") {
+					return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan cannot be combined with --scan-gaps"))
+				}
+				if cmd.Flags().Changed("ask-on-existing") {
+					return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan cannot be combined with --ask-on-existing"))
+				}
+				if cmd.Flags().Changed("no-preflight") {
+					return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan cannot be combined with --no-preflight"))
+				}
+				if !isTTY(os.Stdin) || !isTTY(os.Stdout) {
+					return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan requires an interactive TTY on stdin and stdout"))
+				}
 			}
 
 			cfg, err := loadConfig(app)
@@ -123,14 +151,24 @@ Operational notes:
 			ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 			defer stop()
 
+			var selectPlanRows func(sourceID string, rows []engine.PlanRow) ([]int, bool, error)
+			if plan {
+				selectPlanRows = func(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+					return runPlanSelector(app, sourceID, rows)
+				}
+			}
+
 			result, runErr := syncer.Sync(ctx, cfg, engine.SyncOptions{
 				SourceIDs:        sourceIDs,
 				DryRun:           app.Opts.DryRun,
 				TimeoutOverride:  timeout,
+				Plan:             plan,
+				PlanLimit:        planLimit,
 				AskOnExisting:    askOnExisting,
 				AskOnExistingSet: cmd.Flags().Changed("ask-on-existing"),
 				ScanGaps:         scanGaps,
 				NoPreflight:      noPreflight,
+				SelectPlanRows:   selectPlanRows,
 				AllowPrompt:      !app.Opts.NoInput && !app.Opts.JSON && isTTY(os.Stdin),
 				PromptOnExisting: func(sourceID string, preflight engine.SoundCloudPreflight) (bool, error) {
 					return promptYesNo(app, fmt.Sprintf("[%s] Existing track found at position %d of %d. Continue scanning for gaps?", sourceID, preflight.FirstExistingIndex, preflight.RemoteTotal))
@@ -170,6 +208,8 @@ Operational notes:
 	cmd.Flags().BoolVar(&askOnExisting, "ask-on-existing", false, "Prompt once when first existing track is found and optionally continue with gap scan")
 	cmd.Flags().BoolVar(&scanGaps, "scan-gaps", false, "Continue full remote scan to fill archive and local-file gaps")
 	cmd.Flags().BoolVar(&noPreflight, "no-preflight", false, "Skip remote preflight diff stage for supported adapters")
+	cmd.Flags().BoolVar(&plan, "plan", false, "Interactive plan mode for selecting tracks to download (currently adapter.kind=scdl only)")
+	cmd.Flags().IntVar(&planLimit, "plan-limit", 10, "Per-source remote track check limit in --plan mode (0 = unlimited)")
 	cmd.Flags().StringVar(&progressMode, "progress", "auto", "Progress rendering mode: auto, always, or never")
 	cmd.Flags().StringVar(&preflightSummaryMode, "preflight-summary", "auto", "Preflight summary output: auto, always, or never")
 	cmd.Flags().StringVar(&trackStatusMode, "track-status", "names", "Per-track status output: names, count, or none")

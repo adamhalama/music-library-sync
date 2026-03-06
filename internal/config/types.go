@@ -28,6 +28,7 @@ type Source struct {
 	TargetDir           string      `yaml:"target_dir"`
 	URL                 string      `yaml:"url"`
 	StateFile           string      `yaml:"state_file,omitempty"`
+	SelectedPlaylistIDs []int       `yaml:"-"`
 	DownloadArchivePath string      `yaml:"-"`
 	DeezerARL           string      `yaml:"-"`
 	SpotifyClientID     string      `yaml:"-"`

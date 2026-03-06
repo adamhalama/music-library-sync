@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/jaa/update-downloads/internal/auth"
+	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine/adapterlog"
 	"github.com/jaa/update-downloads/internal/engine/progress"
-	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -30,12 +30,13 @@ func (e *SelectionError) Error() string {
 }
 
 type Syncer struct {
-	Registry map[string]Adapter
-	Runner   ExecRunner
-	Emitter  output.EventEmitter
-	Progress progress.Sink
-	Parsers  *adapterlog.Registry
-	Now      func() time.Time
+	Registry     map[string]Adapter
+	Runner       ExecRunner
+	Emitter      output.EventEmitter
+	Progress     progress.Sink
+	Parsers      *adapterlog.Registry
+	PlanRegistry *PlanRegistry
+	Now          func() time.Time
 }
 
 var (
@@ -56,13 +57,16 @@ func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.Ev
 	}
 	progressSink := progress.Sink(progress.NoopSink{})
 	parserRegistry := adapterlog.NewRegistry()
+	planRegistry := NewPlanRegistry()
+	planRegistry.Register("scdl", NewSCDLPlanProvider())
 	return &Syncer{
-		Registry: registry,
-		Runner:   runner,
-		Emitter:  emitter,
-		Progress: progressSink,
-		Parsers:  parserRegistry,
-		Now:      time.Now,
+		Registry:     registry,
+		Runner:       runner,
+		Emitter:      emitter,
+		Progress:     progressSink,
+		Parsers:      parserRegistry,
+		PlanRegistry: planRegistry,
+		Now:          time.Now,
 	}
 }
 
@@ -119,6 +123,26 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		if !source.Enabled {
 			result.Skipped++
 			continue
+		}
+
+		if opts.Plan {
+			provider := s.planProviderForSource(source)
+			if provider == nil {
+				result.Skipped++
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourceFinished,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] --plan only supports adapter.kind=scdl in this release; skipping source", source.ID),
+					Details: map[string]any{
+						"adapter_kind": source.Adapter.Kind,
+						"skipped":      true,
+						"mode":         "plan",
+					},
+				})
+				continue
+			}
 		}
 
 		adapter, ok := s.Registry[source.Adapter.Kind]
@@ -195,7 +219,35 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		stateSwap := soundCloudStateSwap{}
 		var sourcePreflight *SoundCloudPreflight
 		plannedSoundCloudTracks := []soundCloudRemoteTrack{}
-		if source.Type == config.SourceTypeSoundCloud {
+		if opts.Plan {
+			sourcePlan, planErr := s.prepareSourcePlan(ctx, cfg, source, opts)
+			if planErr != nil {
+				if errors.Is(planErr, ErrInterrupted) {
+					result.Interrupted = true
+					break
+				}
+				result.Failed++
+				result.Attempted++
+				if errors.Is(planErr, exec.ErrNotFound) {
+					result.DependencyFailures++
+				}
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelError,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] plan preflight failed: %v", source.ID, planErr),
+				})
+				if !cfg.Defaults.ContinueOnError {
+					break
+				}
+				continue
+			}
+			sourceForExec = sourcePlan.SourceForExec
+			stateSwap = sourcePlan.StateSwap
+			sourcePreflight = sourcePlan.SourcePreflight
+			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, sourcePlan.PlannedSoundCloudTracks...)
+		} else if source.Type == config.SourceTypeSoundCloud {
 			plan, planErr := s.prepareSoundCloudExecutionPlan(ctx, cfg, source, opts)
 			if planErr != nil {
 				result.Failed++
@@ -219,35 +271,10 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			stateSwap = plan.StateSwap
 			sourcePreflight = plan.Preflight
 			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, plan.PlannedTracks...)
+		}
 
-			if plan.Preflight != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message: fmt.Sprintf(
-						"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
-						source.ID,
-						plan.Preflight.RemoteTotal,
-						plan.Preflight.KnownCount,
-						plan.Preflight.ArchiveGapCount,
-						plan.Preflight.KnownGapCount,
-						plan.Preflight.FirstExistingIndex,
-						plan.Preflight.PlannedDownloadCount,
-						plan.Preflight.Mode,
-					),
-					Details: map[string]any{
-						"remote_total":           plan.Preflight.RemoteTotal,
-						"known_count":            plan.Preflight.KnownCount,
-						"archive_gap_count":      plan.Preflight.ArchiveGapCount,
-						"known_gap_count":        plan.Preflight.KnownGapCount,
-						"first_existing_index":   plan.Preflight.FirstExistingIndex,
-						"planned_download_count": plan.Preflight.PlannedDownloadCount,
-						"mode":                   plan.Preflight.Mode,
-					},
-				})
-			}
+		if sourcePreflight != nil {
+			s.emitSourcePreflightSummary(source.ID, sourcePreflight)
 		}
 
 		flowOutcome := s.runSource(
@@ -299,6 +326,72 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 	})
 
 	return result, nil
+}
+
+func (s *Syncer) planProviderForSource(source config.Source) PlanProvider {
+	if s.PlanRegistry == nil {
+		return nil
+	}
+	return s.PlanRegistry.ProviderFor(source.Adapter.Kind)
+}
+
+func (s *Syncer) prepareSourcePlan(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	opts SyncOptions,
+) (sourcePlanExecution, error) {
+	if opts.SelectPlanRows == nil {
+		return sourcePlanExecution{}, fmt.Errorf("plan mode requires an interactive selector callback")
+	}
+	provider := s.planProviderForSource(source)
+	if provider == nil {
+		return sourcePlanExecution{}, fmt.Errorf("no plan provider registered for adapter %q", source.Adapter.Kind)
+	}
+	sourcePlan, err := provider.Build(ctx, cfg, source, opts)
+	if err != nil {
+		return sourcePlanExecution{}, err
+	}
+	selectedIndices, canceled, err := opts.SelectPlanRows(source.ID, sourcePlan.Rows())
+	if err != nil {
+		return sourcePlanExecution{}, err
+	}
+	if canceled {
+		return sourcePlanExecution{}, ErrInterrupted
+	}
+	return sourcePlan.ApplySelection(selectedIndices, opts.DryRun)
+}
+
+func (s *Syncer) emitSourcePreflightSummary(sourceID string, preflight *SoundCloudPreflight) {
+	if preflight == nil {
+		return
+	}
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourcePreflight,
+		SourceID:  sourceID,
+		Message: fmt.Sprintf(
+			"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
+			sourceID,
+			preflight.RemoteTotal,
+			preflight.KnownCount,
+			preflight.ArchiveGapCount,
+			preflight.KnownGapCount,
+			preflight.FirstExistingIndex,
+			preflight.PlannedDownloadCount,
+			preflight.Mode,
+		),
+		Details: map[string]any{
+			"remote_total":           preflight.RemoteTotal,
+			"known_count":            preflight.KnownCount,
+			"archive_gap_count":      preflight.ArchiveGapCount,
+			"known_gap_count":        preflight.KnownGapCount,
+			"first_existing_index":   preflight.FirstExistingIndex,
+			"planned_download_count": preflight.PlannedDownloadCount,
+			"mode":                   preflight.Mode,
+		},
+	})
 }
 
 func (s *Syncer) buildSourceFlowContext(source config.Source) sourceFlowContext {
@@ -843,7 +936,7 @@ func (s *Syncer) runGenericAdapter(
 	}
 	spec = s.applyFlowObservers(spec, flow)
 
-	if !opts.DryRun && sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 {
+	if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 && (!opts.DryRun || opts.Plan) {
 		outcome.Attempted++
 		outcome.Succeeded++
 		if err := cleanupTempStateFiles(stateSwap); err != nil {
