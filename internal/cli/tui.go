@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -54,6 +55,9 @@ const (
 	tuiScreenValidate
 	tuiScreenInit
 )
+
+const tuiDefaultPlanLimit = 10
+const tuiMinPlanLimit = 1
 
 type tuiRootModel struct {
 	app           *AppContext
@@ -132,7 +136,7 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if typed.String() == "esc" {
+		if typed.String() == "esc" && m.canReturnToMenuOnEsc() {
 			m.screen = tuiScreenMenu
 			return m, nil
 		}
@@ -157,6 +161,18 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	default:
 		return m, nil
+	}
+}
+
+func (m tuiRootModel) canReturnToMenuOnEsc() bool {
+	switch m.screen {
+	case tuiScreenSync:
+		// Keep esc available for in-flow sync actions (for example plan cancel).
+		return !m.syncModel.running && !m.syncModel.hasActivePlanPrompt() && !m.syncModel.hasActivePlanLimitInput()
+	case tuiScreenMenu:
+		return false
+	default:
+		return true
 	}
 }
 
@@ -194,20 +210,25 @@ func (m tuiRootModel) View() string {
 }
 
 type tuiSyncModel struct {
-	app         *AppContext
-	cfg         config.Config
-	cfgLoaded   bool
-	cfgErr      error
-	sources     []config.Source
-	selected    map[string]bool
-	cursor      int
-	planEnabled bool
-	running     bool
-	done        bool
-	result      engine.SyncResult
-	runErr      error
-	events      []string
-	eventCh     chan tea.Msg
+	app                  *AppContext
+	cfg                  config.Config
+	cfgLoaded            bool
+	cfgErr               error
+	sources              []config.Source
+	selected             map[string]bool
+	cursor               int
+	planEnabled          bool
+	planLimit            int
+	running              bool
+	done                 bool
+	result               engine.SyncResult
+	runErr               error
+	events               []string
+	eventCh              chan tea.Msg
+	planPrompt           *tuiPlanPromptState
+	planLimitInputActive bool
+	planLimitInput       string
+	planLimitInputErr    string
 }
 
 type tuiConfigLoadedMsg struct {
@@ -224,11 +245,34 @@ type tuiSyncDoneMsg struct {
 	Err    error
 }
 
+type tuiPlanSelectRequestMsg struct {
+	SourceID string
+	Rows     []engine.PlanRow
+	Details  planSourceDetails
+	Reply    chan tuiPlanSelectResult
+}
+
+type tuiPlanSelectResult struct {
+	SelectedIndices []int
+	Canceled        bool
+	Err             error
+}
+
+type tuiPlanPromptState struct {
+	sourceID string
+	rows     []engine.PlanRow
+	details  planSourceDetails
+	reply    chan tuiPlanSelectResult
+	cursor   int
+	selected map[int]bool
+}
+
 func newTUISyncModel(app *AppContext) tuiSyncModel {
 	return tuiSyncModel{
-		app:      app,
-		selected: map[string]bool{},
-		events:   []string{},
+		app:       app,
+		selected:  map[string]bool{},
+		events:    []string{},
+		planLimit: tuiDefaultPlanLimit,
 	}
 }
 
@@ -254,7 +298,90 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case tuiPlanSelectRequestMsg:
+		m.planPrompt = newTUIPlanPromptState(typed)
+		return m, nil
 	case tea.KeyMsg:
+		if m.planPrompt != nil {
+			switch typed.String() {
+			case "up", "k":
+				if m.planPrompt.cursor > 0 {
+					m.planPrompt.cursor--
+				}
+				return m, nil
+			case "down", "j":
+				if m.planPrompt.cursor < len(m.planPrompt.rows)-1 {
+					m.planPrompt.cursor++
+				}
+				return m, nil
+			case " ":
+				if len(m.planPrompt.rows) == 0 {
+					return m, nil
+				}
+				row := m.planPrompt.rows[m.planPrompt.cursor]
+				if !row.Toggleable {
+					return m, nil
+				}
+				m.planPrompt.selected[row.Index] = !m.planPrompt.selected[row.Index]
+				return m, nil
+			case "a":
+				for _, row := range m.planPrompt.rows {
+					if row.Toggleable {
+						m.planPrompt.selected[row.Index] = true
+					}
+				}
+				return m, nil
+			case "n":
+				for _, row := range m.planPrompt.rows {
+					if row.Toggleable {
+						m.planPrompt.selected[row.Index] = false
+					}
+				}
+				return m, nil
+			case "enter":
+				m.planPrompt.reply <- tuiPlanSelectResult{SelectedIndices: m.planPrompt.selectedIndices()}
+				m.planPrompt = nil
+				return m, m.waitRunMsgCmd()
+			case "ctrl+c", "q", "esc":
+				m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
+				m.planPrompt = nil
+				return m, m.waitRunMsgCmd()
+			default:
+				return m, nil
+			}
+		}
+		if m.planLimitInputActive {
+			switch typed.String() {
+			case "enter":
+				limit, err := parsePlanLimitInput(m.planLimitInput)
+				if err != nil {
+					m.planLimitInputErr = err.Error()
+					return m, nil
+				}
+				m.planLimit = limit
+				m.planLimitInputActive = false
+				m.planLimitInput = ""
+				m.planLimitInputErr = ""
+				return m, nil
+			case "esc":
+				m.planLimitInputActive = false
+				m.planLimitInput = ""
+				m.planLimitInputErr = ""
+				return m, nil
+			case "backspace", "ctrl+h":
+				if len(m.planLimitInput) > 0 {
+					m.planLimitInput = m.planLimitInput[:len(m.planLimitInput)-1]
+				}
+				m.planLimitInputErr = ""
+				return m, nil
+			default:
+				if len(typed.Runes) == 1 && typed.Runes[0] >= '0' && typed.Runes[0] <= '9' {
+					m.planLimitInput += string(typed.Runes[0])
+					m.planLimitInputErr = ""
+				}
+				return m, nil
+			}
+		}
 		if !m.cfgLoaded || m.cfgErr != nil || m.running {
 			return m, nil
 		}
@@ -277,6 +404,32 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, nil
 		case "p":
 			m.planEnabled = !m.planEnabled
+			return m, nil
+		case "l":
+			m.planLimitInputActive = true
+			m.planLimitInput = ""
+			m.planLimitInputErr = ""
+			return m, nil
+		case "]":
+			if m.planLimit == 0 {
+				m.planLimit = tuiDefaultPlanLimit
+			} else {
+				m.planLimit++
+			}
+			return m, nil
+		case "[":
+			if m.planLimit == 0 {
+				m.planLimit = tuiDefaultPlanLimit
+			} else if m.planLimit > tuiMinPlanLimit {
+				m.planLimit--
+			}
+			return m, nil
+		case "u":
+			if m.planLimit == 0 {
+				m.planLimit = tuiDefaultPlanLimit
+			} else {
+				m.planLimit = 0
+			}
 			return m, nil
 		case "enter":
 			m.running = true
@@ -339,7 +492,7 @@ func (m tuiSyncModel) startRunCmd() tea.Cmd {
 			SourceIDs:        selectedIDs,
 			DryRun:           m.app.Opts.DryRun,
 			Plan:             m.planEnabled,
-			PlanLimit:        10,
+			PlanLimit:        m.planLimit,
 			AllowPrompt:      false,
 			AskOnExisting:    false,
 			AskOnExistingSet: false,
@@ -347,7 +500,18 @@ func (m tuiSyncModel) startRunCmd() tea.Cmd {
 			NoPreflight:      false,
 			TrackStatus:      engine.TrackStatusNames,
 		}
-		result, err := useCase.Run(context.Background(), cfg, req, workflows.NoopInteraction{})
+		sourceByID := map[string]config.Source{}
+		for _, source := range m.sources {
+			sourceByID[source.ID] = source
+		}
+		interaction := &tuiSyncInteraction{
+			ch:         ch,
+			defaults:   cfg.Defaults,
+			sourceByID: sourceByID,
+			planLimit:  req.PlanLimit,
+			dryRun:     req.DryRun,
+		}
+		result, err := useCase.Run(context.Background(), cfg, req, interaction)
 		ch <- tuiSyncDoneMsg{Result: result, Err: err}
 		close(ch)
 		return nil
@@ -361,13 +525,25 @@ func (m tuiSyncModel) View() string {
 	if m.cfgErr != nil {
 		return fmt.Sprintf("Config load failed: %v", m.cfgErr)
 	}
+	if m.planPrompt != nil {
+		return m.planPromptView()
+	}
 	lines := []string{
 		"Sync Workflow",
-		"j/k: move  space: toggle source  p: toggle plan  enter: run  esc: back",
+		"j/k: move  space: toggle source  p: toggle plan  [/]: plan-limit  l: type limit  u: unlimited  enter: run  esc: back",
 		fmt.Sprintf("plan_mode=%t", m.planEnabled),
-		"",
-		"Sources:",
+		fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit)),
 	}
+	if m.planLimitInputActive {
+		lines = append(lines,
+			"plan_limit_input: type number (0 = unlimited), enter apply, esc cancel",
+			fmt.Sprintf("current_input=%q", m.planLimitInput),
+		)
+		if m.planLimitInputErr != "" {
+			lines = append(lines, "input_error: "+m.planLimitInputErr)
+		}
+	}
+	lines = append(lines, "", "Sources:")
 	if len(m.sources) == 0 {
 		lines = append(lines, "  (no enabled sources)")
 	}
@@ -406,6 +582,132 @@ func (m tuiSyncModel) View() string {
 	return strings.Join(lines, "\n")
 }
 
+func (m tuiSyncModel) hasActivePlanPrompt() bool {
+	return m.planPrompt != nil
+}
+
+func (m tuiSyncModel) hasActivePlanLimitInput() bool {
+	return m.planLimitInputActive
+}
+
+func formatPlanLimit(limit int) string {
+	if limit == 0 {
+		return "unlimited"
+	}
+	return fmt.Sprintf("%d", limit)
+}
+
+func parsePlanLimitInput(raw string) (int, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, fmt.Errorf("enter a number (0 for unlimited)")
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number")
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("plan limit must be >= 0")
+	}
+	return parsed, nil
+}
+
+func (m tuiSyncModel) planPromptView() string {
+	state := m.planPrompt
+	if state == nil {
+		return ""
+	}
+	limitLabel := "unlimited"
+	if state.details.PlanLimit > 0 {
+		limitLabel = fmt.Sprintf("%d", state.details.PlanLimit)
+	}
+	modeLabel := "run"
+	if state.details.DryRun {
+		modeLabel = "dry-run"
+	}
+	lines := []string{
+		"Sync Workflow",
+		fmt.Sprintf("udl sync --plan  source=%s  mode=%s  plan-limit=%s", state.sourceID, modeLabel, limitLabel),
+		fmt.Sprintf("type=%s  adapter=%s", state.details.SourceType, state.details.Adapter),
+		fmt.Sprintf("target_dir=%s", state.details.TargetDir),
+		fmt.Sprintf("state_file=%s", state.details.StateFile),
+		fmt.Sprintf("url=%s", state.details.URL),
+		"up/down or j/k: move   space: toggle   a: select all   n: clear all   enter: confirm   q/esc: cancel",
+		"",
+	}
+	if len(state.rows) == 0 {
+		lines = append(lines, "No tracks found in selected preflight window.")
+		return strings.Join(lines, "\n")
+	}
+	start, end := planSelectorWindow(len(state.rows), state.cursor, 0)
+	for i := start; i < end; i++ {
+		row := state.rows[i]
+		cursor := " "
+		if i == state.cursor {
+			cursor = ">"
+		}
+		marker := "[-]"
+		if row.Toggleable {
+			if state.selected[row.Index] {
+				marker = "[x]"
+			} else {
+				marker = "[ ]"
+			}
+		}
+		title := strings.TrimSpace(row.Title)
+		if title == "" {
+			title = "(untitled)"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s %3d  %-16s  %s (%s)", cursor, marker, row.Index, string(row.Status), title, row.RemoteID))
+	}
+	selectedCount := 0
+	totalToggleable := 0
+	for _, row := range state.rows {
+		if row.Toggleable {
+			totalToggleable++
+			if state.selected[row.Index] {
+				selectedCount++
+			}
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks", selectedCount, totalToggleable))
+	return strings.Join(lines, "\n")
+}
+
+func newTUIPlanPromptState(req tuiPlanSelectRequestMsg) *tuiPlanPromptState {
+	selected := map[int]bool{}
+	for _, row := range req.Rows {
+		if row.Toggleable && row.SelectedByDefault {
+			selected[row.Index] = true
+		}
+	}
+	return &tuiPlanPromptState{
+		sourceID: req.SourceID,
+		rows:     append([]engine.PlanRow{}, req.Rows...),
+		details:  req.Details,
+		reply:    req.Reply,
+		selected: selected,
+	}
+}
+
+func (s *tuiPlanPromptState) selectedIndices() []int {
+	if s == nil {
+		return nil
+	}
+	out := make([]int, 0, len(s.selected))
+	for _, row := range s.rows {
+		if !row.Toggleable {
+			continue
+		}
+		if s.selected[row.Index] {
+			out = append(out, row.Index)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
 type tuiChannelEmitter struct {
 	ch chan tea.Msg
 }
@@ -416,6 +718,48 @@ func (e *tuiChannelEmitter) Emit(event output.Event) error {
 	}
 	e.ch <- tuiSyncEventMsg{Event: event}
 	return nil
+}
+
+type tuiSyncInteraction struct {
+	ch         chan tea.Msg
+	defaults   config.Defaults
+	sourceByID map[string]config.Source
+	planLimit  int
+	dryRun     bool
+}
+
+func (i *tuiSyncInteraction) Confirm(prompt string, defaultYes bool) (bool, error) {
+	return defaultYes, nil
+}
+
+func (i *tuiSyncInteraction) Input(prompt string) (string, error) {
+	return "", nil
+}
+
+func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+	if i == nil || i.ch == nil {
+		selected := make([]int, 0, len(rows))
+		for _, row := range rows {
+			if row.Toggleable && row.SelectedByDefault {
+				selected = append(selected, row.Index)
+			}
+		}
+		sort.Ints(selected)
+		return selected, false, nil
+	}
+	source, ok := i.sourceByID[sourceID]
+	if !ok {
+		source.ID = sourceID
+	}
+	reply := make(chan tuiPlanSelectResult, 1)
+	i.ch <- tuiPlanSelectRequestMsg{
+		SourceID: sourceID,
+		Rows:     append([]engine.PlanRow{}, rows...),
+		Details:  buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun),
+		Reply:    reply,
+	}
+	result := <-reply
+	return result.SelectedIndices, result.Canceled, result.Err
 }
 
 type tuiDoctorModel struct {
