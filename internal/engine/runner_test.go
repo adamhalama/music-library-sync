@@ -80,3 +80,38 @@ func TestSubprocessRunnerAbortsSpotDLOnLargeRateLimitRetryWindow(t *testing.T) {
 		t.Fatalf("expected stderr tail to include rate-limit marker, got %q", result.StderrTail)
 	}
 }
+
+func TestSubprocessRunnerInvokesSpecLineObservers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell test is POSIX-specific")
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	stdoutLines := []string{}
+	stderrLines := []string{}
+	runner := NewSubprocessRunner(strings.NewReader(""), &stdout, &stderr)
+	result := runner.Run(context.Background(), ExecSpec{
+		Bin: "sh",
+		Args: []string{
+			"-c",
+			"echo 'out-line'; echo 'err-line' >&2",
+		},
+		StdoutObservers: []func(string){
+			func(line string) { stdoutLines = append(stdoutLines, line) },
+		},
+		StderrObservers: []func(string){
+			func(line string) { stderrLines = append(stderrLines, line) },
+		},
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", result.ExitCode)
+	}
+	if len(stdoutLines) == 0 || stdoutLines[0] != "out-line" {
+		t.Fatalf("expected stdout observer to capture line, got %+v", stdoutLines)
+	}
+	if len(stderrLines) == 0 || stderrLines[0] != "err-line" {
+		t.Fatalf("expected stderr observer to capture line, got %+v", stderrLines)
+	}
+}

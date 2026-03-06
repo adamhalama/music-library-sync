@@ -12,6 +12,8 @@ type ExecSpec struct {
 	Dir            string
 	Timeout        time.Duration
 	DisplayCommand string
+	StdoutObservers []func(line string)
+	StderrObservers []func(line string)
 }
 
 type ExecResult struct {

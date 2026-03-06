@@ -114,8 +114,8 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	if r.Stderr != nil {
 		stderrSink = io.MultiWriter(r.Stderr, stderrTail)
 	}
-	stdoutSink = newLineObserverWriter(stdoutSink, abortForRateLimit)
-	stderrSink = newLineObserverWriter(stderrSink, abortForRateLimit)
+	stdoutSink = newLineObserverWriter(stdoutSink, joinLineObservers(abortForRateLimit, spec.StdoutObservers))
+	stderrSink = newLineObserverWriter(stderrSink, joinLineObservers(abortForRateLimit, spec.StderrObservers))
 	cmd.Stdout = stdoutSink
 	cmd.Stderr = stderrSink
 
@@ -240,4 +240,28 @@ func parseSpotifyRateLimitRetryAfterSeconds(line string) (int, bool) {
 		return 0, false
 	}
 	return seconds, true
+}
+
+func joinLineObservers(base func(line string), extras []func(line string)) func(line string) {
+	if base == nil && len(extras) == 0 {
+		return nil
+	}
+	filtered := make([]func(line string), 0, len(extras)+1)
+	if base != nil {
+		filtered = append(filtered, base)
+	}
+	for _, extra := range extras {
+		if extra == nil {
+			continue
+		}
+		filtered = append(filtered, extra)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return func(line string) {
+		for _, fn := range filtered {
+			fn(line)
+		}
+	}
 }
