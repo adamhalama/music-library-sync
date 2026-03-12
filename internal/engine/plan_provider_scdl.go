@@ -20,8 +20,6 @@ type scdlSourcePlan struct {
 	preflight     SoundCloudPreflight
 	tracks        []soundCloudRemoteTrack
 	knownGapIDs   map[string]struct{}
-	stateFilePath string
-	state         soundCloudSyncState
 	archivePath   string
 }
 
@@ -123,8 +121,6 @@ func (p *SCDLPlanProvider) Build(
 		preflight:     planStage.Preflight,
 		tracks:        append([]soundCloudRemoteTrack{}, tracks...),
 		knownGapIDs:   copyStringSet(planStage.KnownGapID),
-		stateFilePath: stateFilePath,
-		state:         stateStage.State,
 		archivePath:   archiveStage.ArchivePath,
 	}, nil
 }
@@ -182,6 +178,7 @@ func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, dryRun bool) (sou
 
 	sourceForExec := p.sourceForExec
 	sourceForExec.SelectedPlaylistIDs = selectedPlaylistIDs
+	sourceForExec.DisableSyncMode = len(selectedPlaylistIDs) > 0
 	out := sourcePlanExecution{
 		SourceForExec:           sourceForExec,
 		SourcePreflight:         &preflight,
@@ -192,21 +189,13 @@ func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, dryRun bool) (sou
 		return out, nil
 	}
 
-	tempStateFile, err := writeFilteredSyncStateFile(p.stateFilePath, p.state, selectedKnownGapIDs)
-	if err != nil {
-		return sourcePlanExecution{}, fmt.Errorf("prepare temporary sync state file: %w", err)
-	}
 	tempArchiveFile, err := writeFilteredArchiveFile(p.archivePath, selectedKnownGapIDs)
 	if err != nil {
-		_ = cleanupTempFile(tempStateFile)
 		return sourcePlanExecution{}, fmt.Errorf("prepare temporary archive file: %w", err)
 	}
 
-	out.SourceForExec.StateFile = tempStateFile
 	out.SourceForExec.DownloadArchivePath = tempArchiveFile
 	out.StateSwap = soundCloudStateSwap{
-		OriginalSyncPath:    p.stateFilePath,
-		TempSyncPath:        tempStateFile,
 		OriginalArchivePath: p.archivePath,
 		TempArchivePath:     tempArchiveFile,
 	}

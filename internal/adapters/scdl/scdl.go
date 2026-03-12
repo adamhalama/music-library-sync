@@ -78,8 +78,10 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 		args = append(args, "-f")
 		displayArgs = append(displayArgs, "-f")
 	}
-	args = append(args, "--sync", syncFilePath)
-	displayArgs = append(displayArgs, "--sync", syncFilePath)
+	if !source.DisableSyncMode {
+		args = append(args, "--sync", syncFilePath)
+		displayArgs = append(displayArgs, "--sync", syncFilePath)
+	}
 
 	if clientID := strings.TrimSpace(os.Getenv("SCDL_CLIENT_ID")); clientID != "" {
 		args = append(args, "--client-id", clientID)

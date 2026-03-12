@@ -164,19 +164,14 @@ func TestSCDLPlanProviderAppliesSelectionAndFiltersSelectedKnownGapOnly(t *testi
 	if execPlan.SourcePreflight == nil || execPlan.SourcePreflight.PlannedDownloadCount != 1 {
 		t.Fatalf("expected planned_download_count=1, got %+v", execPlan.SourcePreflight)
 	}
-	if execPlan.StateSwap.TempSyncPath == "" || execPlan.StateSwap.TempArchivePath == "" {
-		t.Fatalf("expected temporary state/archive files for selected known-gap replay")
+	if !execPlan.SourceForExec.DisableSyncMode {
+		t.Fatalf("expected plan subset execution to disable scdl --sync")
 	}
-
-	filteredState, err := os.ReadFile(execPlan.StateSwap.TempSyncPath)
-	if err != nil {
-		t.Fatalf("read filtered state: %v", err)
+	if execPlan.StateSwap.TempSyncPath != "" {
+		t.Fatalf("expected no temporary sync file for subset replay, got %+v", execPlan.StateSwap)
 	}
-	if strings.Contains(string(filteredState), "gap-a") {
-		t.Fatalf("expected selected known gap gap-a removed from temp state, got %q", string(filteredState))
-	}
-	if !strings.Contains(string(filteredState), "gap-b") {
-		t.Fatalf("expected unselected known gap gap-b to remain in temp state, got %q", string(filteredState))
+	if execPlan.StateSwap.TempArchivePath == "" {
+		t.Fatalf("expected temporary archive file for selected known-gap replay")
 	}
 
 	filteredArchive, err := os.ReadFile(execPlan.StateSwap.TempArchivePath)

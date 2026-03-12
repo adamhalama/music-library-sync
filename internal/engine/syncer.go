@@ -2203,7 +2203,7 @@ func commitTempStateFiles(stateSwap soundCloudStateSwap) error {
 			if err := cleanupTempFile(stateSwap.TempSyncPath); err != nil {
 				return err
 			}
-		} else if err := os.Rename(stateSwap.TempSyncPath, stateSwap.OriginalSyncPath); err != nil {
+		} else if err := mergeCommittedSoundCloudSyncStateFile(stateSwap.OriginalSyncPath, stateSwap.TempSyncPath); err != nil {
 			_ = cleanupTempFile(stateSwap.TempSyncPath)
 			return err
 		}
@@ -2213,7 +2213,7 @@ func commitTempStateFiles(stateSwap soundCloudStateSwap) error {
 			if err := cleanupTempFile(stateSwap.TempArchivePath); err != nil {
 				return err
 			}
-		} else if err := os.Rename(stateSwap.TempArchivePath, stateSwap.OriginalArchivePath); err != nil {
+		} else if err := mergeCommittedSoundCloudArchiveFile(stateSwap.OriginalArchivePath, stateSwap.TempArchivePath); err != nil {
 			_ = cleanupTempFile(stateSwap.TempArchivePath)
 			return err
 		}

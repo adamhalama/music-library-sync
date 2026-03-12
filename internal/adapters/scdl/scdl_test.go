@@ -209,6 +209,27 @@ func TestBuildExecSpecInjectsManagedPlaylistItems(t *testing.T) {
 	}
 }
 
+func TestBuildExecSpecOmitsSyncInManagedSubsetMode(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	source.SelectedPlaylistIDs = []int{2, 5, 8}
+	source.DisableSyncMode = true
+
+	spec, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("build exec spec: %v", err)
+	}
+
+	joined := strings.Join(spec.Args, " ")
+	if strings.Contains(joined, "--sync ") {
+		t.Fatalf("expected --sync to be omitted in managed subset mode, got %v", spec.Args)
+	}
+	if !strings.Contains(joined, "--playlist-items 2,5,8") {
+		t.Fatalf("expected managed playlist items in ytdlp args, got %v", spec.Args)
+	}
+}
+
 func TestBuildExecSpecOverridesCustomPlaylistItemsWhenManagedSelectionSet(t *testing.T) {
 	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
 

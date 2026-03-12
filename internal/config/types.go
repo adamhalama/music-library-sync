@@ -29,6 +29,7 @@ type Source struct {
 	URL                 string      `yaml:"url"`
 	StateFile           string      `yaml:"state_file,omitempty"`
 	SelectedPlaylistIDs []int       `yaml:"-"`
+	DisableSyncMode     bool        `yaml:"-"`
 	DownloadArchivePath string      `yaml:"-"`
 	DeezerARL           string      `yaml:"-"`
 	SpotifyClientID     string      `yaml:"-"`

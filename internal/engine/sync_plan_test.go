@@ -158,6 +158,84 @@ func TestSyncPlanModeCancelReturnsInterrupted(t *testing.T) {
 	}
 }
 
+func TestSyncPlanModeDoesNotDeleteSelectedKnownGapIfAdapterDoesNotRewriteState(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir, stateDir := syncerTestDirs(t, tmp, "plan-merge")
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "scdl-plan",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/plan",
+				StateFile: "scdl-plan.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+
+	statePath := filepath.Join(stateDir, "scdl-plan.sync.scdl")
+	if err := os.WriteFile(statePath, []byte("soundcloud gap-a missing-a.m4a\n"), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	archivePath := filepath.Join(stateDir, "scdl-plan.archive.txt")
+	if err := os.WriteFile(archivePath, []byte("soundcloud gap-a\n"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	origEnumerateLimited := enumerateSoundCloudTracksWithLimitFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksWithLimitFn = origEnumerateLimited
+	})
+	enumerateSoundCloudTracksWithLimitFn = func(ctx context.Context, source config.Source, limit int) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{{ID: "gap-a", Title: "Gap A"}}, nil
+	}
+
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl": fakeAdapter{}},
+		noOpRunner{},
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
+		Plan:      true,
+		PlanLimit: 10,
+		SelectPlanRows: func(sourceID string, rows []PlanRow) ([]int, bool, error) {
+			return []int{1}, false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.ByID["gap-a"]; !ok {
+		t.Fatalf("expected selected known gap to remain in state, got %+v", state.ByID)
+	}
+	archive, err := parseSoundCloudArchive(archivePath)
+	if err != nil {
+		t.Fatalf("parse archive: %v", err)
+	}
+	if _, ok := archive["gap-a"]; !ok {
+		t.Fatalf("expected selected known gap to remain in archive, got %+v", archive)
+	}
+}
+
 func syncerTestDirs(t *testing.T, root, suffix string) (targetDir, stateDir string) {
 	t.Helper()
 	targetDir = root + "/target-" + suffix
