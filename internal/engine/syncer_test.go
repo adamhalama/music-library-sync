@@ -1004,6 +1004,49 @@ func TestSyncerSpotifyDeemixUnavailableTrackIsSkippedAndNotAppended(t *testing.T
 	}
 }
 
+func TestSCDLClientIDFailureMessageInvalidConfiguredClientID(t *testing.T) {
+	message, ok := scdlClientIDFailureMessage(
+		config.Source{
+			ID:      "soundcloud-likes",
+			Type:    config.SourceTypeSoundCloud,
+			Adapter: config.AdapterSpec{Kind: "scdl"},
+		},
+		ExecResult{
+			ExitCode: 1,
+			StderrTail: strings.Join([]string{
+				"[scdl] Invalid client_id specified by --client-id argument. Using a dynamically generated client_id",
+				"soundcloud.exceptions.ClientIDGenerationError: Could not find client_id in script 'https://a-v2.sndcdn.com/assets/0-0d70f4c9.js'",
+			}, "\n"),
+		},
+	)
+	if !ok {
+		t.Fatalf("expected client-id failure to be detected")
+	}
+	if !strings.Contains(message, "rejected the configured SCDL_CLIENT_ID") {
+		t.Fatalf("unexpected message: %q", message)
+	}
+}
+
+func TestSCDLClientIDFailureMessageAutomaticGenerationOnly(t *testing.T) {
+	message, ok := scdlClientIDFailureMessage(
+		config.Source{
+			ID:      "soundcloud-likes",
+			Type:    config.SourceTypeSoundCloud,
+			Adapter: config.AdapterSpec{Kind: "scdl"},
+		},
+		ExecResult{
+			ExitCode:   1,
+			StderrTail: "soundcloud.exceptions.ClientIDGenerationError: Could not find client_id in script 'https://a-v2.sndcdn.com/assets/0-0d70f4c9.js'",
+		},
+	)
+	if !ok {
+		t.Fatalf("expected automatic client-id generation failure to be detected")
+	}
+	if !strings.Contains(message, "could not generate a SoundCloud client_id automatically") {
+		t.Fatalf("unexpected message: %q", message)
+	}
+}
+
 func TestSyncerSpotifyDeemixSkipsSubprocessWhenNoDownloadsPlanned(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")

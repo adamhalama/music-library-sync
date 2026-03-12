@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -168,7 +169,13 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 	switch m.screen {
 	case tuiScreenSync:
 		// Keep esc available for in-flow sync actions (for example plan cancel).
-		return !m.syncModel.running && !m.syncModel.hasActivePlanPrompt() && !m.syncModel.hasActivePlanLimitInput()
+		return !m.syncModel.running &&
+			!m.syncModel.hasActivePlanPrompt() &&
+			!m.syncModel.hasActiveInteractionPrompt() &&
+			!m.syncModel.hasActivePlanLimitInput() &&
+			!m.syncModel.hasActiveTimeoutInput()
+	case tuiScreenInit:
+		return !m.initModel.running && !m.initModel.hasActivePrompt()
 	case tuiScreenMenu:
 		return false
 	default:
@@ -217,15 +224,28 @@ type tuiSyncModel struct {
 	sources              []config.Source
 	selected             map[string]bool
 	cursor               int
+	dryRun               bool
+	timeoutOverride      time.Duration
+	timeoutInputActive   bool
+	timeoutInput         string
+	timeoutInputErr      string
+	askOnExisting        bool
+	askOnExistingSet     bool
+	scanGaps             bool
+	noPreflight          bool
 	planEnabled          bool
 	planLimit            int
 	running              bool
+	cancelRequested      bool
+	runCancel            context.CancelFunc
 	done                 bool
 	result               engine.SyncResult
 	runErr               error
+	validationErr        string
 	events               []string
 	eventCh              chan tea.Msg
 	planPrompt           *tuiPlanPromptState
+	interactionPrompt    *tuiInteractionPromptState
 	planLimitInputActive bool
 	planLimitInput       string
 	planLimitInputErr    string
@@ -258,6 +278,39 @@ type tuiPlanSelectResult struct {
 	Err             error
 }
 
+type tuiPromptKind string
+
+const (
+	tuiPromptKindConfirm tuiPromptKind = "confirm"
+	tuiPromptKindInput   tuiPromptKind = "input"
+)
+
+type tuiPromptRequestMsg struct {
+	Kind       tuiPromptKind
+	SourceID   string
+	Prompt     string
+	DefaultYes bool
+	MaskInput  bool
+	Reply      chan tuiPromptResult
+}
+
+type tuiPromptResult struct {
+	Confirmed bool
+	Input     string
+	Canceled  bool
+	Err       error
+}
+
+type tuiInteractionPromptState struct {
+	kind       tuiPromptKind
+	sourceID   string
+	prompt     string
+	defaultYes bool
+	maskInput  bool
+	input      string
+	reply      chan tuiPromptResult
+}
+
 type tuiPlanPromptState struct {
 	sourceID string
 	rows     []engine.PlanRow
@@ -268,10 +321,15 @@ type tuiPlanPromptState struct {
 }
 
 func newTUISyncModel(app *AppContext) tuiSyncModel {
+	dryRun := false
+	if app != nil {
+		dryRun = app.Opts.DryRun
+	}
 	return tuiSyncModel{
 		app:       app,
 		selected:  map[string]bool{},
 		events:    []string{},
+		dryRun:    dryRun,
 		planLimit: tuiDefaultPlanLimit,
 	}
 }
@@ -301,7 +359,21 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 	case tuiPlanSelectRequestMsg:
 		m.planPrompt = newTUIPlanPromptState(typed)
 		return m, nil
+	case tuiPromptRequestMsg:
+		m.interactionPrompt = &tuiInteractionPromptState{
+			kind:       typed.Kind,
+			sourceID:   typed.SourceID,
+			prompt:     typed.Prompt,
+			defaultYes: typed.DefaultYes,
+			maskInput:  typed.MaskInput,
+			reply:      typed.Reply,
+		}
+		return m, nil
 	case tea.KeyMsg:
+		if m.running && (typed.String() == "x" || typed.String() == "ctrl+c") {
+			m = m.cancelActiveRun()
+			return m, m.waitRunMsgCmd()
+		}
 		if m.planPrompt != nil {
 			switch typed.String() {
 			case "up", "k":
@@ -350,6 +422,54 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.interactionPrompt != nil {
+			switch m.interactionPrompt.kind {
+			case tuiPromptKindConfirm:
+				switch typed.String() {
+				case "y":
+					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: true}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "n":
+					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: false}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "enter":
+					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: m.interactionPrompt.defaultYes}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "esc", "q":
+					m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				default:
+					return m, nil
+				}
+			case tuiPromptKindInput:
+				switch typed.String() {
+				case "enter":
+					m.interactionPrompt.reply <- tuiPromptResult{Input: strings.TrimSpace(m.interactionPrompt.input)}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "esc", "q":
+					m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "backspace", "ctrl+h":
+					if len(m.interactionPrompt.input) > 0 {
+						m.interactionPrompt.input = m.interactionPrompt.input[:len(m.interactionPrompt.input)-1]
+					}
+					return m, nil
+				default:
+					if len(typed.Runes) > 0 {
+						m.interactionPrompt.input += string(typed.Runes)
+					}
+					return m, nil
+				}
+			default:
+				return m, nil
+			}
+		}
 		if m.planLimitInputActive {
 			switch typed.String() {
 			case "enter":
@@ -382,7 +502,42 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			}
 		}
-		if !m.cfgLoaded || m.cfgErr != nil || m.running {
+		if m.timeoutInputActive {
+			switch typed.String() {
+			case "enter":
+				timeout, err := parseTimeoutInput(m.timeoutInput)
+				if err != nil {
+					m.timeoutInputErr = err.Error()
+					return m, nil
+				}
+				m.timeoutOverride = timeout
+				m.timeoutInputActive = false
+				m.timeoutInput = ""
+				m.timeoutInputErr = ""
+				return m, nil
+			case "esc":
+				m.timeoutInputActive = false
+				m.timeoutInput = ""
+				m.timeoutInputErr = ""
+				return m, nil
+			case "backspace", "ctrl+h":
+				if len(m.timeoutInput) > 0 {
+					m.timeoutInput = m.timeoutInput[:len(m.timeoutInput)-1]
+				}
+				m.timeoutInputErr = ""
+				return m, nil
+			default:
+				if len(typed.Runes) > 0 {
+					m.timeoutInput += string(typed.Runes)
+					m.timeoutInputErr = ""
+				}
+				return m, nil
+			}
+		}
+		if !m.cfgLoaded || m.cfgErr != nil {
+			return m, nil
+		}
+		if m.running {
 			return m, nil
 		}
 		switch typed.String() {
@@ -404,8 +559,46 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, nil
 		case "p":
 			m.planEnabled = !m.planEnabled
+			m.validationErr = ""
+			return m, nil
+		case "d":
+			m.dryRun = !m.dryRun
+			m.validationErr = ""
+			return m, nil
+		case "a":
+			if m.askOnExistingSet {
+				m.askOnExisting = false
+				m.askOnExistingSet = false
+			} else {
+				m.askOnExisting = true
+				m.askOnExistingSet = true
+			}
+			m.validationErr = ""
+			return m, nil
+		case "g":
+			m.scanGaps = !m.scanGaps
+			m.validationErr = ""
+			return m, nil
+		case "f":
+			m.noPreflight = !m.noPreflight
+			m.validationErr = ""
+			return m, nil
+		case "t":
+			m.planLimitInputActive = false
+			m.planLimitInput = ""
+			m.planLimitInputErr = ""
+			m.timeoutInputActive = true
+			if m.timeoutOverride > 0 {
+				m.timeoutInput = m.timeoutOverride.String()
+			} else {
+				m.timeoutInput = ""
+			}
+			m.timeoutInputErr = ""
 			return m, nil
 		case "l":
+			m.timeoutInputActive = false
+			m.timeoutInput = ""
+			m.timeoutInputErr = ""
 			m.planLimitInputActive = true
 			m.planLimitInput = ""
 			m.planLimitInputErr = ""
@@ -416,6 +609,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			} else {
 				m.planLimit++
 			}
+			m.validationErr = ""
 			return m, nil
 		case "[":
 			if m.planLimit == 0 {
@@ -423,6 +617,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			} else if m.planLimit > tuiMinPlanLimit {
 				m.planLimit--
 			}
+			m.validationErr = ""
 			return m, nil
 		case "u":
 			if m.planLimit == 0 {
@@ -430,14 +625,23 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			} else {
 				m.planLimit = 0
 			}
+			m.validationErr = ""
 			return m, nil
 		case "enter":
+			if errMsg := validateTUISyncOptions(m); errMsg != "" {
+				m.validationErr = errMsg
+				return m, nil
+			}
 			m.running = true
+			m.cancelRequested = false
 			m.done = false
 			m.runErr = nil
+			m.validationErr = ""
 			m.events = []string{}
 			m.eventCh = make(chan tea.Msg, 256)
-			start := m.startRunCmd()
+			runCtx, cancel := context.WithCancel(context.Background())
+			m.runCancel = cancel
+			start := m.startRunCmd(runCtx)
 			return m, tea.Batch(start, m.waitRunMsgCmd())
 		}
 	case tuiSyncEventMsg:
@@ -445,6 +649,10 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		return m, m.waitRunMsgCmd()
 	case tuiSyncDoneMsg:
 		m.running = false
+		m.cancelRequested = false
+		m.runCancel = nil
+		m.planPrompt = nil
+		m.interactionPrompt = nil
 		m.done = true
 		m.result = typed.Result
 		m.runErr = typed.Err
@@ -467,7 +675,7 @@ func (m tuiSyncModel) waitRunMsgCmd() tea.Cmd {
 	}
 }
 
-func (m tuiSyncModel) startRunCmd() tea.Cmd {
+func (m tuiSyncModel) startRunCmd(runCtx context.Context) tea.Cmd {
 	cfg := m.cfg
 	selectedIDs := make([]string, 0, len(m.sources))
 	for _, source := range m.sources {
@@ -490,14 +698,15 @@ func (m tuiSyncModel) startRunCmd() tea.Cmd {
 		}
 		req := workflows.SyncRequest{
 			SourceIDs:        selectedIDs,
-			DryRun:           m.app.Opts.DryRun,
+			DryRun:           m.dryRun,
+			TimeoutOverride:  m.timeoutOverride,
 			Plan:             m.planEnabled,
 			PlanLimit:        m.planLimit,
-			AllowPrompt:      false,
-			AskOnExisting:    false,
-			AskOnExistingSet: false,
-			ScanGaps:         false,
-			NoPreflight:      false,
+			AllowPrompt:      m.app != nil && !m.app.Opts.NoInput,
+			AskOnExisting:    m.askOnExisting,
+			AskOnExistingSet: m.askOnExistingSet,
+			ScanGaps:         m.scanGaps,
+			NoPreflight:      m.noPreflight,
 			TrackStatus:      engine.TrackStatusNames,
 		}
 		sourceByID := map[string]config.Source{}
@@ -511,7 +720,7 @@ func (m tuiSyncModel) startRunCmd() tea.Cmd {
 			planLimit:  req.PlanLimit,
 			dryRun:     req.DryRun,
 		}
-		result, err := useCase.Run(context.Background(), cfg, req, interaction)
+		result, err := useCase.Run(runCtx, cfg, req, interaction)
 		ch <- tuiSyncDoneMsg{Result: result, Err: err}
 		close(ch)
 		return nil
@@ -528,11 +737,16 @@ func (m tuiSyncModel) View() string {
 	if m.planPrompt != nil {
 		return m.planPromptView()
 	}
+	if m.interactionPrompt != nil {
+		return m.interactionPromptView()
+	}
 	lines := []string{
 		"Sync Workflow",
-		"j/k: move  space: toggle source  p: toggle plan  [/]: plan-limit  l: type limit  u: unlimited  enter: run  esc: back",
-		fmt.Sprintf("plan_mode=%t", m.planEnabled),
-		fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit)),
+		"j/k: move  space: toggle source  p: plan  d: dry-run  a: ask-existing  g: scan-gaps  f: no-preflight  t: timeout  enter: run  esc: back",
+		"[/]: plan-limit  l: type limit  u: unlimited  x/ctrl+c: cancel active run",
+		fmt.Sprintf("dry_run=%t  timeout=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride)),
+		fmt.Sprintf("plan_mode=%t  plan_limit=%s", m.planEnabled, formatPlanLimit(m.planLimit)),
+		fmt.Sprintf("ask_on_existing=%s  scan_gaps=%t  no_preflight=%t", formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight),
 	}
 	if m.planLimitInputActive {
 		lines = append(lines,
@@ -542,6 +756,18 @@ func (m tuiSyncModel) View() string {
 		if m.planLimitInputErr != "" {
 			lines = append(lines, "input_error: "+m.planLimitInputErr)
 		}
+	}
+	if m.timeoutInputActive {
+		lines = append(lines,
+			"timeout_input: type Go duration (e.g. 10m, 90s), enter apply, esc cancel, empty = default",
+			fmt.Sprintf("current_input=%q", m.timeoutInput),
+		)
+		if m.timeoutInputErr != "" {
+			lines = append(lines, "input_error: "+m.timeoutInputErr)
+		}
+	}
+	if m.validationErr != "" {
+		lines = append(lines, "validation_error: "+m.validationErr)
 	}
 	lines = append(lines, "", "Sources:")
 	if len(m.sources) == 0 {
@@ -560,7 +786,10 @@ func (m tuiSyncModel) View() string {
 	}
 	lines = append(lines, "")
 	if m.running {
-		lines = append(lines, "Running sync...")
+		lines = append(lines, "Running sync... (press x or ctrl+c to cancel)")
+		if m.cancelRequested {
+			lines = append(lines, "Cancellation requested, waiting for adapter shutdown...")
+		}
 	}
 	if m.done {
 		if m.runErr != nil {
@@ -586,8 +815,16 @@ func (m tuiSyncModel) hasActivePlanPrompt() bool {
 	return m.planPrompt != nil
 }
 
+func (m tuiSyncModel) hasActiveInteractionPrompt() bool {
+	return m.interactionPrompt != nil
+}
+
 func (m tuiSyncModel) hasActivePlanLimitInput() bool {
 	return m.planLimitInputActive
+}
+
+func (m tuiSyncModel) hasActiveTimeoutInput() bool {
+	return m.timeoutInputActive
 }
 
 func formatPlanLimit(limit int) string {
@@ -595,6 +832,20 @@ func formatPlanLimit(limit int) string {
 		return "unlimited"
 	}
 	return fmt.Sprintf("%d", limit)
+}
+
+func formatTimeoutOverride(timeout time.Duration) string {
+	if timeout <= 0 {
+		return "default"
+	}
+	return timeout.String()
+}
+
+func formatAskOnExisting(set bool) string {
+	if set {
+		return "on"
+	}
+	return "inherit"
 }
 
 func parsePlanLimitInput(raw string) (int, error) {
@@ -610,6 +861,93 @@ func parsePlanLimitInput(raw string) (int, error) {
 		return 0, fmt.Errorf("plan limit must be >= 0")
 	}
 	return parsed, nil
+}
+
+func parseTimeoutInput(raw string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, nil
+	}
+	parsed, err := time.ParseDuration(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration")
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("timeout must be >= 0")
+	}
+	return parsed, nil
+}
+
+func validateTUISyncOptions(m tuiSyncModel) string {
+	if m.planEnabled && m.scanGaps {
+		return "plan mode cannot be combined with scan-gaps"
+	}
+	if m.planEnabled && m.askOnExistingSet {
+		return "plan mode cannot be combined with ask-on-existing"
+	}
+	if m.planEnabled && m.noPreflight {
+		return "plan mode cannot be combined with no-preflight"
+	}
+	return ""
+}
+
+func (m tuiSyncModel) cancelActiveRun() tuiSyncModel {
+	if !m.running {
+		return m
+	}
+	m.cancelRequested = true
+	if m.planPrompt != nil {
+		select {
+		case m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}:
+		default:
+		}
+		m.planPrompt = nil
+	}
+	if m.interactionPrompt != nil {
+		select {
+		case m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}:
+		default:
+		}
+		m.interactionPrompt = nil
+	}
+	if m.runCancel != nil {
+		m.runCancel()
+	}
+	return m
+}
+
+func (m tuiSyncModel) interactionPromptView() string {
+	state := m.interactionPrompt
+	if state == nil {
+		return ""
+	}
+	switch state.kind {
+	case tuiPromptKindConfirm:
+		defaultLabel := "no"
+		if state.defaultYes {
+			defaultLabel = "yes"
+		}
+		return strings.Join([]string{
+			"Sync Workflow",
+			fmt.Sprintf("[%s] confirm", state.sourceID),
+			state.prompt,
+			fmt.Sprintf("y: yes  n: no  enter: default (%s)  esc/q: cancel run", defaultLabel),
+		}, "\n")
+	case tuiPromptKindInput:
+		displayInput := state.input
+		if state.maskInput {
+			displayInput = strings.Repeat("*", len(state.input))
+		}
+		return strings.Join([]string{
+			"Sync Workflow",
+			fmt.Sprintf("[%s] input", state.sourceID),
+			state.prompt,
+			fmt.Sprintf("value=%q", displayInput),
+			"type to edit  backspace: delete  enter: submit  esc/q: cancel run",
+		}, "\n")
+	default:
+		return "Sync Workflow\nUnknown prompt state"
+	}
 }
 
 func (m tuiSyncModel) planPromptView() string {
@@ -729,11 +1067,47 @@ type tuiSyncInteraction struct {
 }
 
 func (i *tuiSyncInteraction) Confirm(prompt string, defaultYes bool) (bool, error) {
-	return defaultYes, nil
+	if i == nil || i.ch == nil {
+		return defaultYes, nil
+	}
+	reply := make(chan tuiPromptResult, 1)
+	i.ch <- tuiPromptRequestMsg{
+		Kind:       tuiPromptKindConfirm,
+		SourceID:   sourceIDFromPrompt(prompt),
+		Prompt:     prompt,
+		DefaultYes: defaultYes,
+		Reply:      reply,
+	}
+	result := <-reply
+	if result.Err != nil {
+		return false, result.Err
+	}
+	if result.Canceled {
+		return false, engine.ErrInterrupted
+	}
+	return result.Confirmed, nil
 }
 
 func (i *tuiSyncInteraction) Input(prompt string) (string, error) {
-	return "", nil
+	if i == nil || i.ch == nil {
+		return "", nil
+	}
+	reply := make(chan tuiPromptResult, 1)
+	i.ch <- tuiPromptRequestMsg{
+		Kind:      tuiPromptKindInput,
+		SourceID:  sourceIDFromPrompt(prompt),
+		Prompt:    prompt,
+		MaskInput: shouldMaskPromptInput(prompt),
+		Reply:     reply,
+	}
+	result := <-reply
+	if result.Err != nil {
+		return "", result.Err
+	}
+	if result.Canceled {
+		return "", engine.ErrInterrupted
+	}
+	return result.Input, nil
 }
 
 func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
@@ -760,6 +1134,83 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 	}
 	result := <-reply
 	return result.SelectedIndices, result.Canceled, result.Err
+}
+
+func sourceIDFromPrompt(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if strings.HasPrefix(trimmed, "[") {
+		if end := strings.Index(trimmed, "]"); end > 1 {
+			return strings.TrimSpace(trimmed[1:end])
+		}
+	}
+	return "sync"
+}
+
+func shouldMaskPromptInput(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	return strings.Contains(lower, "arl") ||
+		strings.Contains(lower, "token") ||
+		strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password")
+}
+
+type tuiInitInteraction struct {
+	ch chan tea.Msg
+}
+
+func (i *tuiInitInteraction) Confirm(prompt string, defaultYes bool) (bool, error) {
+	if i == nil || i.ch == nil {
+		return defaultYes, nil
+	}
+	reply := make(chan tuiPromptResult, 1)
+	i.ch <- tuiPromptRequestMsg{
+		Kind:       tuiPromptKindConfirm,
+		SourceID:   "init",
+		Prompt:     prompt,
+		DefaultYes: defaultYes,
+		Reply:      reply,
+	}
+	result := <-reply
+	if result.Err != nil {
+		return false, result.Err
+	}
+	if result.Canceled {
+		return false, nil
+	}
+	return result.Confirmed, nil
+}
+
+func (i *tuiInitInteraction) Input(prompt string) (string, error) {
+	if i == nil || i.ch == nil {
+		return "", nil
+	}
+	reply := make(chan tuiPromptResult, 1)
+	i.ch <- tuiPromptRequestMsg{
+		Kind:      tuiPromptKindInput,
+		SourceID:  "init",
+		Prompt:    prompt,
+		MaskInput: shouldMaskPromptInput(prompt),
+		Reply:     reply,
+	}
+	result := <-reply
+	if result.Err != nil {
+		return "", result.Err
+	}
+	if result.Canceled {
+		return "", nil
+	}
+	return result.Input, nil
+}
+
+func (i *tuiInitInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+	selected := make([]int, 0, len(rows))
+	for _, row := range rows {
+		if row.Toggleable && row.SelectedByDefault {
+			selected = append(selected, row.Index)
+		}
+	}
+	sort.Ints(selected)
+	return selected, false, nil
 }
 
 type tuiDoctorModel struct {
@@ -876,9 +1327,12 @@ func (m tuiValidateModel) View() string {
 }
 
 type tuiInitModel struct {
-	app    *AppContext
-	done   bool
-	result string
+	app     *AppContext
+	running bool
+	done    bool
+	result  string
+	eventCh chan tea.Msg
+	prompt  *tuiInteractionPromptState
 }
 
 func newTUIInitModel(app *AppContext) tuiInitModel {
@@ -891,25 +1345,122 @@ type tuiInitDoneMsg struct {
 
 func (m tuiInitModel) Init() tea.Cmd {
 	return func() tea.Msg {
+		return tuiInitStartMsg{}
+	}
+}
+
+type tuiInitStartMsg struct{}
+
+func (m tuiInitModel) waitRunMsgCmd() tea.Cmd {
+	ch := m.eventCh
+	return func() tea.Msg {
+		if ch == nil {
+			return nil
+		}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+func (m tuiInitModel) startRunCmd() tea.Cmd {
+	ch := m.eventCh
+	return func() tea.Msg {
+		interaction := &tuiInitInteraction{ch: ch}
 		res, err := (workflows.InitUseCase{}).Run(workflows.InitRequest{
 			ConfigPath: m.app.Opts.ConfigPath,
 			Force:      false,
-			NoInput:    true,
-			IsTTY:      false,
-		}, workflows.NoopInteraction{})
+			NoInput:    m.app.Opts.NoInput,
+			IsTTY:      true,
+		}, interaction)
 		if err != nil {
-			return tuiInitDoneMsg{Result: "Init failed: " + err.Error()}
+			ch <- tuiInitDoneMsg{Result: "Init failed: " + err.Error()}
+			close(ch)
+			return nil
 		}
 		if res.Canceled {
-			return tuiInitDoneMsg{Result: "Initialization canceled."}
+			ch <- tuiInitDoneMsg{Result: "Initialization canceled."}
+			close(ch)
+			return nil
 		}
-		return tuiInitDoneMsg{Result: fmt.Sprintf("Wrote config: %s\nEnsured state dir: %s", res.ConfigPath, res.StateDir)}
+		ch <- tuiInitDoneMsg{Result: fmt.Sprintf("Wrote config: %s\nEnsured state dir: %s", res.ConfigPath, res.StateDir)}
+		close(ch)
+		return nil
 	}
 }
 
 func (m tuiInitModel) Update(msg tea.Msg) (tuiInitModel, tea.Cmd) {
 	switch typed := msg.(type) {
+	case tuiInitStartMsg:
+		m.running = true
+		m.done = false
+		m.result = ""
+		m.eventCh = make(chan tea.Msg, 32)
+		return m, tea.Batch(m.startRunCmd(), m.waitRunMsgCmd())
+	case tuiPromptRequestMsg:
+		m.prompt = &tuiInteractionPromptState{
+			kind:       typed.Kind,
+			sourceID:   typed.SourceID,
+			prompt:     typed.Prompt,
+			defaultYes: typed.DefaultYes,
+			maskInput:  typed.MaskInput,
+			reply:      typed.Reply,
+		}
+		return m, nil
+	case tea.KeyMsg:
+		if m.prompt != nil {
+			switch m.prompt.kind {
+			case tuiPromptKindConfirm:
+				switch typed.String() {
+				case "y":
+					m.prompt.reply <- tuiPromptResult{Confirmed: true}
+					m.prompt = nil
+					return m, m.waitRunMsgCmd()
+				case "n":
+					m.prompt.reply <- tuiPromptResult{Confirmed: false}
+					m.prompt = nil
+					return m, m.waitRunMsgCmd()
+				case "enter":
+					m.prompt.reply <- tuiPromptResult{Confirmed: m.prompt.defaultYes}
+					m.prompt = nil
+					return m, m.waitRunMsgCmd()
+				case "esc", "q":
+					m.prompt.reply <- tuiPromptResult{Canceled: true}
+					m.prompt = nil
+					return m, m.waitRunMsgCmd()
+				default:
+					return m, nil
+				}
+			case tuiPromptKindInput:
+				switch typed.String() {
+				case "enter":
+					m.prompt.reply <- tuiPromptResult{Input: strings.TrimSpace(m.prompt.input)}
+					m.prompt = nil
+					return m, m.waitRunMsgCmd()
+				case "esc", "q":
+					m.prompt.reply <- tuiPromptResult{Canceled: true}
+					m.prompt = nil
+					return m, m.waitRunMsgCmd()
+				case "backspace", "ctrl+h":
+					if len(m.prompt.input) > 0 {
+						m.prompt.input = m.prompt.input[:len(m.prompt.input)-1]
+					}
+					return m, nil
+				default:
+					if len(typed.Runes) > 0 {
+						m.prompt.input += string(typed.Runes)
+					}
+					return m, nil
+				}
+			default:
+				return m, nil
+			}
+		}
+		return m, nil
 	case tuiInitDoneMsg:
+		m.running = false
 		m.done = true
 		m.result = typed.Result
 	}
@@ -917,11 +1468,54 @@ func (m tuiInitModel) Update(msg tea.Msg) (tuiInitModel, tea.Cmd) {
 }
 
 func (m tuiInitModel) View() string {
+	if m.prompt != nil {
+		return m.promptView()
+	}
 	lines := []string{"Init Workflow", "esc: back", ""}
-	if !m.done {
+	if m.running && !m.done {
 		lines = append(lines, "Running init...")
+		return strings.Join(lines, "\n")
+	}
+	if !m.done {
+		lines = append(lines, "Preparing init...")
 		return strings.Join(lines, "\n")
 	}
 	lines = append(lines, m.result)
 	return strings.Join(lines, "\n")
+}
+
+func (m tuiInitModel) promptView() string {
+	state := m.prompt
+	if state == nil {
+		return ""
+	}
+	switch state.kind {
+	case tuiPromptKindConfirm:
+		defaultLabel := "no"
+		if state.defaultYes {
+			defaultLabel = "yes"
+		}
+		return strings.Join([]string{
+			"Init Workflow",
+			state.prompt,
+			fmt.Sprintf("y: yes  n: no  enter: default (%s)  esc/q: cancel", defaultLabel),
+		}, "\n")
+	case tuiPromptKindInput:
+		displayInput := state.input
+		if state.maskInput {
+			displayInput = strings.Repeat("*", len(state.input))
+		}
+		return strings.Join([]string{
+			"Init Workflow",
+			state.prompt,
+			fmt.Sprintf("value=%q", displayInput),
+			"type to edit  backspace: delete  enter: submit  esc/q: cancel",
+		}, "\n")
+	default:
+		return "Init Workflow\nUnknown prompt state"
+	}
+}
+
+func (m tuiInitModel) hasActivePrompt() bool {
+	return m.prompt != nil
 }

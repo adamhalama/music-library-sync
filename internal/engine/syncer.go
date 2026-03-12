@@ -1238,6 +1238,17 @@ func (s *Syncer) runGenericAdapter(
 			Message:   rateLimitMessage,
 		})
 	}
+	if execResult.ExitCode != 0 {
+		if clientIDMessage, ok := scdlClientIDFailureMessage(sourceForExec, execResult); ok {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   clientIDMessage,
+			})
+		}
+	}
 
 	if execResult.ExitCode != 0 {
 		if isGracefulBreakOnExistingStop(sourceForExec, sourcePreflight, execResult) {
@@ -1292,6 +1303,8 @@ func (s *Syncer) runGenericAdapter(
 				"exit_code":   execResult.ExitCode,
 				"duration_ms": execResult.Duration.Milliseconds(),
 				"timed_out":   execResult.TimedOut,
+				"stdout_tail": execResult.StdoutTail,
+				"stderr_tail": execResult.StderrTail,
 			},
 		})
 		outcome.Stop = !cfg.Defaults.ContinueOnError
@@ -1831,6 +1844,34 @@ func isSpotifyRateLimited(source config.Source, execResult ExecResult) bool {
 	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
 	return strings.Contains(combined, "rate/request limit") &&
 		strings.Contains(combined, "retry will occur after:")
+}
+
+func scdlClientIDFailureMessage(source config.Source, execResult ExecResult) (string, bool) {
+	if source.Type != config.SourceTypeSoundCloud {
+		return "", false
+	}
+	if source.Adapter.Kind != "scdl" {
+		return "", false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted {
+		return "", false
+	}
+
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+	if strings.Contains(combined, "invalid client_id specified by --client-id argument") &&
+		strings.Contains(combined, "clientidgenerationerror") {
+		return fmt.Sprintf(
+			"[%s] scdl rejected the configured SCDL_CLIENT_ID, and automatic client_id generation also failed; refresh SCDL_CLIENT_ID and rerun",
+			source.ID,
+		), true
+	}
+	if strings.Contains(combined, "clientidgenerationerror") {
+		return fmt.Sprintf(
+			"[%s] scdl could not generate a SoundCloud client_id automatically; set SCDL_CLIENT_ID to a current value and rerun",
+			source.ID,
+		), true
+	}
+	return "", false
 }
 
 func hasSpotDLHeadlessArg(args []string) bool {

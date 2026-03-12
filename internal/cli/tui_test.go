@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -240,5 +242,178 @@ func TestTUIRootEscDuringPlanLimitInputDoesNotLeaveSync(t *testing.T) {
 	}
 	if next.syncModel.planLimitInputActive {
 		t.Fatalf("expected esc to cancel typed-input mode")
+	}
+}
+
+func TestTUISyncInteractionConfirmUsesPromptHandshake(t *testing.T) {
+	ch := make(chan tea.Msg, 1)
+	interaction := &tuiSyncInteraction{ch: ch}
+
+	done := make(chan struct{})
+	var confirmed bool
+	var err error
+	go func() {
+		confirmed, err = interaction.Confirm("[source-a] Continue?", true)
+		close(done)
+	}()
+
+	raw := <-ch
+	req, ok := raw.(tuiPromptRequestMsg)
+	if !ok {
+		t.Fatalf("expected tuiPromptRequestMsg, got %T", raw)
+	}
+	if req.Kind != tuiPromptKindConfirm {
+		t.Fatalf("expected confirm prompt kind, got %q", req.Kind)
+	}
+	req.Reply <- tuiPromptResult{Confirmed: true}
+	<-done
+
+	if err != nil {
+		t.Fatalf("unexpected confirm error: %v", err)
+	}
+	if !confirmed {
+		t.Fatalf("expected confirmed=true")
+	}
+}
+
+func TestTUISyncInteractionInputMasksARLPrompt(t *testing.T) {
+	ch := make(chan tea.Msg, 1)
+	interaction := &tuiSyncInteraction{ch: ch}
+
+	done := make(chan struct{})
+	var value string
+	var err error
+	go func() {
+		value, err = interaction.Input("[source-a] Enter your Deezer ARL for deemix")
+		close(done)
+	}()
+
+	raw := <-ch
+	req, ok := raw.(tuiPromptRequestMsg)
+	if !ok {
+		t.Fatalf("expected tuiPromptRequestMsg, got %T", raw)
+	}
+	if req.Kind != tuiPromptKindInput {
+		t.Fatalf("expected input prompt kind, got %q", req.Kind)
+	}
+	if !req.MaskInput {
+		t.Fatalf("expected ARL prompt to be masked")
+	}
+	req.Reply <- tuiPromptResult{Input: "abc123"}
+	<-done
+
+	if err != nil {
+		t.Fatalf("unexpected input error: %v", err)
+	}
+	if value != "abc123" {
+		t.Fatalf("unexpected input value %q", value)
+	}
+}
+
+func TestTUISyncModelEnterValidatesIncompatiblePlanFlags(t *testing.T) {
+	m := newTUISyncModel(&AppContext{})
+	m.cfgLoaded = true
+	m.planEnabled = true
+	m.scanGaps = true
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.running {
+		t.Fatalf("expected run not to start on invalid options")
+	}
+	if !strings.Contains(m.validationErr, "scan-gaps") {
+		t.Fatalf("expected validation error mentioning scan-gaps, got %q", m.validationErr)
+	}
+}
+
+func TestTUISyncModelCancelKeyCancelsActiveRunAndPrompt(t *testing.T) {
+	cancelCalled := false
+	reply := make(chan tuiPromptResult, 1)
+	m := newTUISyncModel(&AppContext{})
+	m.cfgLoaded = true
+	m.running = true
+	m.eventCh = make(chan tea.Msg, 1)
+	m.runCancel = func() { cancelCalled = true }
+	m.interactionPrompt = &tuiInteractionPromptState{
+		kind:  tuiPromptKindConfirm,
+		reply: reply,
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if !m.cancelRequested {
+		t.Fatalf("expected cancel requested state")
+	}
+	if !cancelCalled {
+		t.Fatalf("expected run cancel callback to be called")
+	}
+	if m.interactionPrompt != nil {
+		t.Fatalf("expected active prompt to be cleared on cancel")
+	}
+	select {
+	case result := <-reply:
+		if !result.Canceled {
+			t.Fatalf("expected prompt cancellation result")
+		}
+	default:
+		t.Fatalf("expected cancellation reply for active prompt")
+	}
+}
+
+func TestTUIInitStartRunRequestsOverwriteConfirmAndCanCancel(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "udl.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+
+	model := newTUIInitModel(&AppContext{
+		Opts: GlobalOptions{ConfigPath: configPath},
+	})
+	model.eventCh = make(chan tea.Msg, 8)
+	runCmd := model.startRunCmd()
+
+	done := make(chan struct{})
+	go func() {
+		_ = runCmd()
+		close(done)
+	}()
+
+	raw := <-model.eventCh
+	req, ok := raw.(tuiPromptRequestMsg)
+	if !ok {
+		t.Fatalf("expected init confirm prompt request, got %T", raw)
+	}
+	if req.Kind != tuiPromptKindConfirm {
+		t.Fatalf("expected confirm kind, got %q", req.Kind)
+	}
+	req.Reply <- tuiPromptResult{Canceled: true}
+
+	finished := <-model.eventCh
+	doneMsg, ok := finished.(tuiInitDoneMsg)
+	if !ok {
+		t.Fatalf("expected init done message, got %T", finished)
+	}
+	if !strings.Contains(strings.ToLower(doneMsg.Result), "canceled") {
+		t.Fatalf("expected canceled init result, got %q", doneMsg.Result)
+	}
+	<-done
+}
+
+func TestReadmeIncludesTUIAndGuideLink(t *testing.T) {
+	readmePath := filepath.Join("..", "..", "readme.md")
+	docsPath := filepath.Join("..", "..", "docs", "tui.md")
+
+	content, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read readme: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "\n  tui\n") {
+		t.Fatalf("expected command surface to include tui")
+	}
+	if !strings.Contains(text, "docs/tui.md") {
+		t.Fatalf("expected readme to link docs/tui.md")
+	}
+	if _, err := os.Stat(docsPath); err != nil {
+		t.Fatalf("expected docs/tui.md to exist: %v", err)
 	}
 }
