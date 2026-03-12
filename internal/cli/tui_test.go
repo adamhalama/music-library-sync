@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/output"
 )
 
 func TestTUICommandHelp(t *testing.T) {
@@ -355,6 +356,128 @@ func TestTUISyncModelCancelKeyCancelsActiveRunAndPrompt(t *testing.T) {
 		}
 	default:
 		t.Fatalf("expected cancellation reply for active prompt")
+	}
+}
+
+func TestTUISyncModelRendersCompactProgressAndHistory(t *testing.T) {
+	m := newTUISyncModel(&AppContext{})
+	m.cfgLoaded = true
+	m.running = true
+
+	events := []output.Event{
+		{
+			Event:    output.EventSourcePreflight,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"planned_download_count": 1,
+			},
+			Message: "[soundcloud-likes] preflight",
+		},
+		{
+			Event:    output.EventTrackStarted,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"track_name": "Structured Song",
+				"index":      1,
+				"total":      4,
+			},
+		},
+		{
+			Event:    output.EventTrackProgress,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"track_name": "Structured Song",
+				"index":      1,
+				"total":      4,
+				"percent":    67.5,
+			},
+		},
+	}
+
+	for _, event := range events {
+		var cmd tea.Cmd
+		m, cmd = m.Update(tuiSyncEventMsg{Event: event})
+		if cmd != nil {
+			t.Fatalf("expected no wait command without event channel")
+		}
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Structured Song") {
+		t.Fatalf("expected active track in view, got: %s", view)
+	}
+	if !strings.Contains(view, "67.5%") || !strings.Contains(view, "[overall]") {
+		t.Fatalf("expected compact progress lines in view, got: %s", view)
+	}
+	if !strings.Contains(view, "(1/1)") {
+		t.Fatalf("expected overall line to use planned total 1, got: %s", view)
+	}
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "soundcloud-likes",
+		Details: map[string]any{
+			"track_name": "Structured Song",
+			"index":      1,
+			"total":      4,
+		},
+	}})
+
+	view = m.View()
+	if !strings.Contains(view, "[done] Structured Song") {
+		t.Fatalf("expected compact outcome history, got: %s", view)
+	}
+	if !strings.Contains(view, "all planned tracks complete (1/1)") {
+		t.Fatalf("expected idle completion line after done, got: %s", view)
+	}
+}
+
+func TestTUISyncModelSuppressesTrackProgressSpamInActivity(t *testing.T) {
+	m := newTUISyncModel(&AppContext{})
+	m.cfgLoaded = true
+
+	progressEvent := output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "soundcloud-likes",
+		Message:  "[soundcloud-likes] [track_progress] Structured Song",
+		Details: map[string]any{
+			"track_name": "Structured Song",
+			"index":      1,
+			"total":      1,
+			"percent":    50.0,
+		},
+	}
+	for i := 0; i < 3; i++ {
+		var cmd tea.Cmd
+		m, cmd = m.Update(tuiSyncEventMsg{Event: progressEvent})
+		if cmd != nil {
+			t.Fatalf("expected no wait command without event channel")
+		}
+	}
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "soundcloud-likes",
+		Details: map[string]any{
+			"track_name": "Structured Song",
+			"index":      1,
+			"total":      1,
+		},
+	}})
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:   output.EventSyncFinished,
+		Message: "sync finished: attempted=1 succeeded=1 failed=0 skipped=0",
+	}})
+
+	view := m.View()
+	if strings.Contains(view, "[track_progress]") {
+		t.Fatalf("expected track progress chatter to be suppressed, got: %s", view)
+	}
+	if !strings.Contains(view, "[done] Structured Song") {
+		t.Fatalf("expected compact outcome line in activity, got: %s", view)
+	}
+	if !strings.Contains(view, "sync finished: attempted=1 succeeded=1 failed=0 skipped=0") {
+		t.Fatalf("expected sync summary in activity, got: %s", view)
 	}
 }
 

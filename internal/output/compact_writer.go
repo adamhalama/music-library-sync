@@ -39,9 +39,10 @@ type CompactLogWriter struct {
 	activeTotal string
 	liveVisible bool
 
-	progress *compactstate.StateMachine
-	track    trackState
-	barWidth int
+	progress   *compactstate.StateMachine
+	structured *StructuredProgressTracker
+	track      trackState
+	barWidth   int
 
 	breakOnExistingDetected bool
 	breakStopPrinted        bool
@@ -103,11 +104,13 @@ func NewCompactLogWriterWithOptions(dst io.Writer, opts CompactLogOptions) *Comp
 		trackStatus = CompactTrackStatusNames
 	}
 
+	progress := compactstate.NewStateMachine()
 	return &CompactLogWriter{
 		dst:                  dst,
 		interactive:          opts.Interactive,
 		buf:                  make([]byte, 0, 256),
-		progress:             compactstate.NewStateMachine(),
+		progress:             progress,
+		structured:           NewStructuredProgressTracker(progress),
 		preflightSummaryMode: preflightSummary,
 		trackStatusMode:      trackStatus,
 	}
@@ -158,41 +161,47 @@ func (w *CompactLogWriter) ObserveEvent(event Event) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if w.progress == nil {
+		w.progress = compactstate.NewStateMachine()
+	}
+	if w.structured == nil {
+		w.structured = NewStructuredProgressTracker(w.progress)
+	}
+	w.structured.ObserveEvent(event)
+	snapshot := w.structured.Snapshot()
+	w.structuredTrackEvents = snapshot.StructuredTrackEvents
+
 	switch event.Event {
 	case EventSyncStarted:
-		w.progress.Reset()
 		w.track = trackState{}
 		w.breakOnExistingDetected = false
 		w.breakStopPrinted = false
 		w.activeAdapter = ""
 		w.deemixTrackTitle = ""
-		w.structuredTrackEvents = false
 	case EventSourcePreflight:
-		planned, ok := eventDetailInt(event.Details, "planned_download_count")
-		if !ok {
+		if snapshot.Progress.Source.PlannedTotal <= 0 {
 			return
 		}
-		w.progress.SetPlanningSource(event.SourceID, planned)
 		w.track = trackState{}
-		if planned > 0 {
-			_ = w.renderIdleStatusLocked()
-		}
-	case EventSourceStarted:
-		w.progress.BeginSource(event.SourceID)
-	case EventSourceFinished:
-		w.progress.FinishSource(event.SourceID, false)
-	case EventSourceFailed:
-		w.progress.FinishSource(event.SourceID, true)
+		_ = w.renderIdleStatusLocked()
 	case EventTrackStarted:
-		w.observeStructuredTrackStartedLocked(event)
+		w.applyStructuredTrackLocked(snapshot.Track)
+		_ = w.renderStatusLocked(stageForStructuredLifecycle(snapshot.Track.Lifecycle))
 	case EventTrackProgress:
-		w.observeStructuredTrackProgressLocked(event)
+		w.applyStructuredTrackLocked(snapshot.Track)
+		_ = w.renderStatusLocked(stageForStructuredLifecycle(snapshot.Track.Lifecycle))
 	case EventTrackDone:
-		w.observeStructuredTrackDoneLocked(event)
+		w.track = trackState{}
+		w.printStructuredOutcomesLocked()
+		_ = w.renderIdleStatusLocked()
 	case EventTrackSkip:
-		w.observeStructuredTrackSkipLocked(event)
+		w.track = trackState{}
+		w.printStructuredOutcomesLocked()
+		_ = w.renderIdleStatusLocked()
 	case EventTrackFail:
-		w.observeStructuredTrackFailLocked(event)
+		w.track = trackState{}
+		w.printStructuredOutcomesLocked()
+		_ = w.renderIdleStatusLocked()
 	}
 }
 
@@ -973,103 +982,39 @@ func eventDetailString(details map[string]any, key string) string {
 	}
 }
 
-func (w *CompactLogWriter) observeStructuredTrackStartedLocked(event Event) {
-	w.structuredTrackEvents = true
-	name := eventDetailString(event.Details, "track_name")
-	if name == "" {
-		name = eventDetailString(event.Details, "track_id")
-	}
-	index, hasIndex := eventDetailInt(event.Details, "index")
-	total, hasTotal := eventDetailInt(event.Details, "total")
-	if hasTotal && total >= 0 {
-		w.progress.SetItemTotal(total)
-	}
-	if hasIndex || hasTotal {
-		w.progress.SetItemIndex(index, total)
-	}
+func (w *CompactLogWriter) applyStructuredTrackLocked(track StructuredTrackState) {
 	w.track = trackState{
-		Name:            name,
-		ProgressKnown:   true,
-		ProgressPercent: 0,
+		Name:            strings.TrimSpace(track.Name),
+		ProgressKnown:   track.ProgressKnown,
+		ProgressPercent: track.ProgressPercent,
 	}
-	_ = w.renderStatusLocked("downloading")
 }
 
-func (w *CompactLogWriter) observeStructuredTrackProgressLocked(event Event) {
-	w.structuredTrackEvents = true
-	name := eventDetailString(event.Details, "track_name")
-	if name != "" {
-		w.track.Name = name
+func (w *CompactLogWriter) printStructuredOutcomesLocked() {
+	if w.structured == nil {
+		return
 	}
-	if w.track.Name == "" {
-		w.track.Name = eventDetailString(event.Details, "track_id")
+	for _, outcome := range w.structured.DrainTrackOutcomes() {
+		if w.trackStatusMode == CompactTrackStatusNone {
+			continue
+		}
+		_ = w.printPersistentLocked(FormatCompactTrackOutcome(outcome, w.trackStatusMode))
 	}
-	if index, ok := eventDetailInt(event.Details, "index"); ok {
-		total, _ := eventDetailInt(event.Details, "total")
-		w.progress.SetItemIndex(index, total)
-	}
-	if percent, ok := eventDetailFloat(event.Details, "percent"); ok {
-		w.track.ProgressKnown = true
-		w.track.ProgressPercent = compactstate.ClampPercent(percent)
-	}
-	_ = w.renderStatusLocked("downloading")
 }
 
-func (w *CompactLogWriter) observeStructuredTrackDoneLocked(event Event) {
-	w.structuredTrackEvents = true
-	name := eventDetailString(event.Details, "track_name")
-	if name == "" {
-		name = w.track.Name
+func stageForStructuredLifecycle(lifecycle compactstate.TrackLifecycle) string {
+	switch lifecycle {
+	case compactstate.TrackLifecyclePreparing:
+		return "preparing"
+	case compactstate.TrackLifecycleFinalizing:
+		return "finalizing"
+	case compactstate.TrackLifecycleDone:
+		return "downloaded"
+	case compactstate.TrackLifecycleSkipped:
+		return "skipped"
+	case compactstate.TrackLifecycleFailed:
+		return "failed"
+	default:
+		return "downloading"
 	}
-	if name == "" {
-		name = eventDetailString(event.Details, "track_id")
-	}
-	w.track.Name = name
-	w.track.ProgressKnown = true
-	w.track.ProgressPercent = 100
-	w.track.CompletionObserved = true
-	_ = w.renderStatusLocked("downloaded")
-	_ = w.finalizeTrackLocked()
-}
-
-func (w *CompactLogWriter) observeStructuredTrackSkipLocked(event Event) {
-	w.structuredTrackEvents = true
-	name := eventDetailString(event.Details, "track_name")
-	if name == "" {
-		name = eventDetailString(event.Details, "track_id")
-	}
-	if name == "" {
-		name = w.nextSpotDLTrackLabelLocked()
-	}
-	w.progress.CompleteTrack()
-	w.track = trackState{}
-	line := w.compactTrackResultLineLocked("[skip]", name)
-	if reason := eventDetailString(event.Details, "reason"); reason != "" {
-		line = fmt.Sprintf("%s (%s)", line, reason)
-	}
-	if w.trackStatusMode != CompactTrackStatusNone {
-		_ = w.printPersistentLocked(line)
-	}
-	_ = w.renderIdleStatusLocked()
-}
-
-func (w *CompactLogWriter) observeStructuredTrackFailLocked(event Event) {
-	w.structuredTrackEvents = true
-	name := eventDetailString(event.Details, "track_name")
-	if name == "" {
-		name = eventDetailString(event.Details, "track_id")
-	}
-	if name == "" {
-		name = w.nextSpotDLTrackLabelLocked()
-	}
-	w.progress.CompleteTrack()
-	w.track = trackState{}
-	line := w.compactTrackResultLineLocked("[fail]", name)
-	if reason := eventDetailString(event.Details, "reason"); reason != "" {
-		line = fmt.Sprintf("%s (%s)", line, reason)
-	}
-	if w.trackStatusMode != CompactTrackStatusNone {
-		_ = w.printPersistentLocked(line)
-	}
-	_ = w.renderIdleStatusLocked()
 }

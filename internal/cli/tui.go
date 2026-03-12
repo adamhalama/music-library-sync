@@ -20,6 +20,7 @@ import (
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
+	compactstate "github.com/jaa/update-downloads/internal/output/compact"
 	"github.com/spf13/cobra"
 )
 
@@ -243,6 +244,7 @@ type tuiSyncModel struct {
 	runErr               error
 	validationErr        string
 	events               []string
+	progress             *output.StructuredProgressTracker
 	eventCh              chan tea.Msg
 	planPrompt           *tuiPlanPromptState
 	interactionPrompt    *tuiInteractionPromptState
@@ -331,6 +333,7 @@ func newTUISyncModel(app *AppContext) tuiSyncModel {
 		events:    []string{},
 		dryRun:    dryRun,
 		planLimit: tuiDefaultPlanLimit,
+		progress:  output.NewStructuredProgressTracker(nil),
 	}
 }
 
@@ -638,6 +641,11 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.runErr = nil
 			m.validationErr = ""
 			m.events = []string{}
+			if m.progress == nil {
+				m.progress = output.NewStructuredProgressTracker(nil)
+			} else {
+				m.progress.Reset()
+			}
 			m.eventCh = make(chan tea.Msg, 256)
 			runCtx, cancel := context.WithCancel(context.Background())
 			m.runCancel = cancel
@@ -645,8 +653,20 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, tea.Batch(start, m.waitRunMsgCmd())
 		}
 	case tuiSyncEventMsg:
-		m.events = append(m.events, typed.Event.Message)
-		return m, m.waitRunMsgCmd()
+		if m.progress == nil {
+			m.progress = output.NewStructuredProgressTracker(nil)
+		}
+		m.progress.ObserveEvent(typed.Event)
+		for _, outcome := range m.progress.DrainTrackOutcomes() {
+			m.events = append(m.events, output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames))
+		}
+		if line, ok := tuiSyncHistoryLine(typed.Event); ok {
+			m.events = append(m.events, line)
+		}
+		if m.eventCh != nil {
+			return m, m.waitRunMsgCmd()
+		}
+		return m, nil
 	case tuiSyncDoneMsg:
 		m.running = false
 		m.cancelRequested = false
@@ -791,6 +811,12 @@ func (m tuiSyncModel) View() string {
 			lines = append(lines, "Cancellation requested, waiting for adapter shutdown...")
 		}
 	}
+	if progressLines := m.progressLines(); len(progressLines) > 0 {
+		lines = append(lines, "", "Progress:")
+		for _, line := range progressLines {
+			lines = append(lines, "  "+line)
+		}
+	}
 	if m.done {
 		if m.runErr != nil {
 			lines = append(lines, fmt.Sprintf("Run failed: %v", m.runErr))
@@ -799,7 +825,7 @@ func (m tuiSyncModel) View() string {
 		}
 	}
 	if len(m.events) > 0 {
-		lines = append(lines, "", "Event Log:")
+		lines = append(lines, "", "Activity:")
 		start := 0
 		if len(m.events) > 12 {
 			start = len(m.events) - 12
@@ -876,6 +902,83 @@ func parseTimeoutInput(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("timeout must be >= 0")
 	}
 	return parsed, nil
+}
+
+func (m tuiSyncModel) progressLines() []string {
+	if m.progress == nil {
+		return nil
+	}
+	snapshot := m.progress.Snapshot()
+	total := m.progress.EffectiveTotal()
+	if total <= 0 && !snapshot.StructuredTrackEvents {
+		return nil
+	}
+
+	lines := []string{}
+	if strings.TrimSpace(snapshot.Track.Name) != "" && snapshot.Track.Lifecycle != compactstate.TrackLifecycleIdle {
+		lines = append(lines, compactstate.RenderTrackLine(
+			snapshot.Track.Name,
+			tuiStructuredTrackStage(snapshot.Track.Lifecycle),
+			false,
+			false,
+			snapshot.Track.ProgressKnown,
+			snapshot.Track.ProgressPercent,
+			snapshot.Track.Lifecycle == compactstate.TrackLifecycleSkipped,
+			m.progress.CurrentIndex(),
+			total,
+		))
+		lines = append(lines, compactstate.RenderGlobalLine(
+			m.progress.GlobalProgressPercent(),
+			32,
+			m.progress.CurrentIndex(),
+			total,
+		))
+		return lines
+	}
+
+	if total <= 0 {
+		return nil
+	}
+	done := snapshot.Progress.Global.Completed
+	lines = append(lines, compactstate.RenderIdleTrackLine(done, total))
+	lines = append(lines, compactstate.RenderGlobalLine(
+		m.progress.GlobalProgressPercent(),
+		32,
+		done,
+		total,
+	))
+	return lines
+}
+
+func tuiStructuredTrackStage(lifecycle compactstate.TrackLifecycle) string {
+	switch lifecycle {
+	case compactstate.TrackLifecyclePreparing:
+		return "preparing"
+	case compactstate.TrackLifecycleFinalizing:
+		return "finalizing"
+	case compactstate.TrackLifecycleDone:
+		return "downloaded"
+	case compactstate.TrackLifecycleSkipped:
+		return "skipped"
+	case compactstate.TrackLifecycleFailed:
+		return "failed"
+	default:
+		return "downloading"
+	}
+}
+
+func tuiSyncHistoryLine(event output.Event) (string, bool) {
+	switch event.Event {
+	case output.EventTrackStarted, output.EventTrackProgress, output.EventTrackDone, output.EventTrackSkip, output.EventTrackFail:
+		return "", false
+	case output.EventSyncStarted, output.EventSourceStarted, output.EventSourcePreflight:
+		return "", false
+	default:
+		if strings.TrimSpace(event.Message) == "" {
+			return "", false
+		}
+		return event.Message, true
+	}
 }
 
 func validateTUISyncOptions(m tuiSyncModel) string {
