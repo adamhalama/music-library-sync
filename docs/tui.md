@@ -75,6 +75,14 @@ The TUI now handles sync prompts via in-app dialogs:
 - confirm prompts (yes/no, default on enter)
 - input prompts (including masked input for sensitive prompts such as Deezer ARL)
 
+### Runtime output
+
+During active sync runs, the TUI renders:
+- a compact live progress panel for the current track and overall run progress
+- a short compact activity history (`[done]`, `[skip]`, `[fail]`, plus source/sync summaries)
+
+This mirrors the streamlined default `udl sync` experience more closely than the earlier raw event-log-only view.
+
 ### Cancellation
 
 During an active sync run:

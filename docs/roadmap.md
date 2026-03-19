@@ -85,8 +85,9 @@
 - Release artifacts without integrity metadata reduce trust and make external packaging brittle.
 - Prompt-based flows depend on TTY detection and must stay deterministic in non-interactive contexts.
 
-## Future task: Adapter log normalization architecture
-- [ ] Introduce adapter-specific log parser strategies per backend (`scdl`, `deemix`, `spotdl`) instead of central regex-only parsing.
-- [ ] Emit normalized progress events from parsers (`track_started`, `track_progress`, `track_done`, `track_skip`, `track_fail`, `source_preflight`).
-- [ ] Keep one shared renderer path (`compact` / `human` / `json`) fed by normalized progress events.
-- [ ] Preserve adapter execution abstraction while decoupling output normalization from backend-specific subprocess log formats.
+## Adapter log normalization architecture (partially implemented)
+- [x] Introduce adapter-specific log parser strategies per backend (`scdl`, `deemix`, `spotdl`) instead of central regex-only parsing.
+- [x] Emit normalized progress events from parsers (`track_started`, `track_progress`, `track_done`, `track_skip`, `track_fail`, `source_preflight`).
+- [x] Reuse shared structured progress state for compact rendering and TUI progress while keeping JSON output additive.
+- [ ] Finish converging remaining fallback/raw-log paths so compact rendering no longer depends on backend-specific text parsing when structured events are present.
+- [x] Preserve adapter execution abstraction while decoupling output normalization from backend-specific subprocess log formats.

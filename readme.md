@@ -123,6 +123,8 @@ Global flags:
 - `--ask-on-existing`
 - `--scan-gaps`
 - `--no-preflight`
+- `--plan`
+- `--plan-limit <n>` (`0` = unlimited; requires `--plan`)
 - `--progress <auto|always|never>`
 - `--preflight-summary <auto|always|never>`
 - `--track-status <names|count|none>`

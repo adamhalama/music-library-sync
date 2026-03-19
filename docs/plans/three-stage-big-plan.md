@@ -1,3 +1,5 @@
+> Historical planning note: Stage 1 and Stage 2 landed on this branch, and part of Stage 3 has since been implemented. Treat this file as design history, not an active checklist.
+
 ### Three-Stage Plan: Seam Refactor, `sync --plan`, Full Normalization
 
 **Summary**

@@ -1,3 +1,5 @@
+> Historical planning note: the branch implemented the staged `sync --plan` work and later landed part of the normalization follow-up. Treat this file as design history, not the current source of truth.
+
 ### Architecture Sequencing for `sync --plan` vs Refactor
 
 **Summary**
@@ -34,4 +36,3 @@
 - If your primary usage remains unattended full sync runs and not selective interactive pulls, defer `sync --plan`.
 - If your pain today is output fragility/noise drift, prioritize Step 3 earlier.
 - Otherwise, `sync --plan` is high user-value and worth doing after Step 1.
-
