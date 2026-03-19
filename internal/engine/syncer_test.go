@@ -38,6 +38,25 @@ func (noOpRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	return ExecResult{ExitCode: 0}
 }
 
+type execResultRunner struct {
+	result ExecResult
+	specs  []ExecSpec
+}
+
+func (r *execResultRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	r.specs = append(r.specs, spec)
+	return r.result
+}
+
+type captureEventEmitter struct {
+	events []output.Event
+}
+
+func (e *captureEventEmitter) Emit(event output.Event) error {
+	e.events = append(e.events, event)
+	return nil
+}
+
 type interruptedRunnerWithArtifacts struct{}
 
 func (interruptedRunnerWithArtifacts) Run(ctx context.Context, spec ExecSpec) ExecResult {
@@ -2405,4 +2424,162 @@ func spotifyStateIDsFromPayload(payload string) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+func TestSyncerCommandFailureEmitsNormalizedFailureDiagnostics(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-source",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/test",
+				StateFile: "spotify-source.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "fake"},
+			},
+		},
+	}
+
+	runner := &execResultRunner{result: ExecResult{
+		ExitCode:   23,
+		StdoutTail: strings.Repeat("o", 64),
+		StderrTail: strings.Repeat("e", 64),
+	}}
+	emitter := &captureEventEmitter{}
+	syncer := NewSyncer(map[string]Adapter{"fake": fakeAdapter{}}, runner, emitter)
+	syncer.Now = func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("expected one failed source, got %+v", result)
+	}
+
+	var failureEvent *output.Event
+	for i := range emitter.events {
+		if emitter.events[i].Event == output.EventSourceFailed && emitter.events[i].Level == output.LevelError {
+			failureEvent = &emitter.events[i]
+		}
+	}
+	if failureEvent == nil {
+		t.Fatalf("expected normalized source_failed event, got %+v", emitter.events)
+	}
+
+	if got := failureEvent.Details["adapter_kind"]; got != "fake" {
+		t.Fatalf("expected adapter_kind=fake, got %#v", got)
+	}
+	if got := failureEvent.Details["command"]; got != "fakebin run spotify-source" {
+		t.Fatalf("unexpected command detail %#v", got)
+	}
+	if got := failureEvent.Details["exit_code"]; got != 23 {
+		t.Fatalf("unexpected exit code detail %#v", got)
+	}
+	if got := failureEvent.Details["failure_message"]; got != failureEvent.Message {
+		t.Fatalf("expected failure_message mirror, got %#v", got)
+	}
+	if got := failureEvent.Details["source_id"]; got != "spotify-source" {
+		t.Fatalf("expected source_id detail, got %#v", got)
+	}
+	if _, ok := failureEvent.Details["stdout_tail"]; !ok {
+		t.Fatalf("expected stdout_tail detail, got %+v", failureEvent.Details)
+	}
+	if _, ok := failureEvent.Details["stderr_tail"]; !ok {
+		t.Fatalf("expected stderr_tail detail, got %+v", failureEvent.Details)
+	}
+	logPath, ok := failureEvent.Details["failure_log_path"].(string)
+	if !ok || logPath == "" {
+		t.Fatalf("expected failure_log_path detail, got %+v", failureEvent.Details)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("expected persisted failure log at %s: %v", logPath, err)
+	}
+}
+
+func TestRunGenericAdapterBreakOnExistingEmitsStructuredStopDetails(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+	}
+	source := config.Source{
+		ID:        "soundcloud-likes",
+		Type:      config.SourceTypeSoundCloud,
+		Enabled:   true,
+		TargetDir: targetDir,
+		URL:       "https://soundcloud.com/user/likes",
+		StateFile: "soundcloud-likes.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "fake"},
+	}
+
+	runner := &execResultRunner{result: ExecResult{
+		ExitCode:   1,
+		Duration:   2 * time.Second,
+		StderrTail: "yt_dlp.utils.ExistingVideoReached: Encountered a video that is already in the archive, stopping due to --break-on-existing",
+	}}
+	emitter := &captureEventEmitter{}
+	syncer := NewSyncer(map[string]Adapter{"fake": fakeAdapter{}}, runner, emitter)
+	syncer.Now = func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }
+
+	outcome := syncer.runGenericAdapter(context.Background(), cfg, source, fakeAdapter{}, source, nil, soundCloudStateSwap{}, SyncOptions{})
+	if outcome.Failed != 0 || outcome.Succeeded != 1 {
+		t.Fatalf("expected graceful break-on-existing success, got %+v", outcome)
+	}
+
+	var finishedEvent *output.Event
+	for i := range emitter.events {
+		if emitter.events[i].Event == output.EventSourceFinished {
+			finishedEvent = &emitter.events[i]
+		}
+	}
+	if finishedEvent == nil {
+		t.Fatalf("expected source_finished stop event, got %+v", emitter.events)
+	}
+	if got := finishedEvent.Details["stop_reason"]; got != "break_on_existing" {
+		t.Fatalf("expected stop_reason=break_on_existing, got %#v", got)
+	}
+	if got := finishedEvent.Details["stopped_on_existing"]; got != true {
+		t.Fatalf("expected stopped_on_existing=true, got %#v", got)
+	}
+	if got := finishedEvent.Details["adapter_kind"]; got != "fake" {
+		t.Fatalf("expected adapter_kind=fake, got %#v", got)
+	}
+	if !strings.Contains(finishedEvent.Message, "stopped at first existing track (break_on_existing)") {
+		t.Fatalf("unexpected stop message %q", finishedEvent.Message)
+	}
 }

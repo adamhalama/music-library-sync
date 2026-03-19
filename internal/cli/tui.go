@@ -245,12 +245,24 @@ type tuiSyncModel struct {
 	validationErr        string
 	events               []string
 	progress             *output.StructuredProgressTracker
+	lastFailure          *tuiSyncFailureState
 	eventCh              chan tea.Msg
 	planPrompt           *tuiPlanPromptState
 	interactionPrompt    *tuiInteractionPromptState
 	planLimitInputActive bool
 	planLimitInput       string
 	planLimitInputErr    string
+}
+
+type tuiSyncFailureState struct {
+	SourceID       string
+	Message        string
+	ExitCode       *int
+	TimedOut       bool
+	Interrupted    bool
+	StdoutTail     string
+	StderrTail     string
+	FailureLogPath string
 }
 
 type tuiConfigLoadedMsg struct {
@@ -641,6 +653,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.runErr = nil
 			m.validationErr = ""
 			m.events = []string{}
+			m.lastFailure = nil
 			if m.progress == nil {
 				m.progress = output.NewStructuredProgressTracker(nil)
 			} else {
@@ -657,6 +670,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.progress = output.NewStructuredProgressTracker(nil)
 		}
 		m.progress.ObserveEvent(typed.Event)
+		if failure := tuiFailureStateFromEvent(typed.Event); failure != nil {
+			m.lastFailure = failure
+		}
 		for _, outcome := range m.progress.DrainTrackOutcomes() {
 			m.events = append(m.events, output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames))
 		}
@@ -834,6 +850,12 @@ func (m tuiSyncModel) View() string {
 			lines = append(lines, "  "+line)
 		}
 	}
+	if failureLines := m.lastFailureLines(); len(failureLines) > 0 {
+		lines = append(lines, "", "Last Failure:")
+		for _, line := range failureLines {
+			lines = append(lines, "  "+line)
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -978,6 +1000,162 @@ func tuiSyncHistoryLine(event output.Event) (string, bool) {
 			return "", false
 		}
 		return event.Message, true
+	}
+}
+
+func (m tuiSyncModel) lastFailureLines() []string {
+	if m.lastFailure == nil {
+		return nil
+	}
+	failure := m.lastFailure
+	headline := strings.TrimSpace(failure.Message)
+	prefix := fmt.Sprintf("[%s]", failure.SourceID)
+	if headline == "" {
+		headline = prefix
+	} else if !strings.HasPrefix(headline, prefix) {
+		headline = prefix + " " + headline
+	}
+	lines := []string{headline}
+	statusParts := []string{}
+	if failure.ExitCode != nil {
+		statusParts = append(statusParts, fmt.Sprintf("exit_code=%d", *failure.ExitCode))
+	}
+	if failure.TimedOut {
+		statusParts = append(statusParts, "timed_out=true")
+	}
+	if failure.Interrupted {
+		statusParts = append(statusParts, "interrupted=true")
+	}
+	if len(statusParts) > 0 {
+		lines = append(lines, strings.Join(statusParts, "  "))
+	}
+	if tail := strings.TrimSpace(failure.StdoutTail); tail != "" {
+		lines = append(lines, "stdout_tail:")
+		lines = append(lines, tuiIndentedTailLines(tail)...)
+	}
+	if tail := strings.TrimSpace(failure.StderrTail); tail != "" {
+		lines = append(lines, "stderr_tail:")
+		lines = append(lines, tuiIndentedTailLines(tail)...)
+	}
+	if path := strings.TrimSpace(failure.FailureLogPath); path != "" {
+		lines = append(lines, "log: "+path)
+	}
+	return lines
+}
+
+func tuiIndentedTailLines(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimRight(part, "\r")
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		lines = append(lines, "  "+part)
+	}
+	return lines
+}
+
+func tuiFailureStateFromEvent(event output.Event) *tuiSyncFailureState {
+	if event.Event != output.EventSourceFailed || event.Level != output.LevelError {
+		return nil
+	}
+	failure := &tuiSyncFailureState{
+		SourceID:       strings.TrimSpace(event.SourceID),
+		Message:        strings.TrimSpace(event.Message),
+		TimedOut:       tuiDetailBool(event.Details, "timed_out"),
+		Interrupted:    tuiDetailBool(event.Details, "interrupted"),
+		StdoutTail:     strings.TrimSpace(tuiDetailString(event.Details, "stdout_tail")),
+		StderrTail:     strings.TrimSpace(tuiDetailString(event.Details, "stderr_tail")),
+		FailureLogPath: strings.TrimSpace(tuiDetailString(event.Details, "failure_log_path")),
+	}
+	if message := strings.TrimSpace(tuiDetailString(event.Details, "failure_message")); message != "" {
+		failure.Message = message
+	}
+	if sourceID := strings.TrimSpace(tuiDetailString(event.Details, "source_id")); sourceID != "" {
+		failure.SourceID = sourceID
+	}
+	if failure.SourceID == "" {
+		failure.SourceID = "sync"
+	}
+	if exitCode, ok := tuiDetailInt(event.Details, "exit_code"); ok {
+		failure.ExitCode = &exitCode
+	}
+	return failure
+}
+
+func tuiDetailString(details map[string]any, key string) string {
+	if details == nil {
+		return ""
+	}
+	raw, ok := details[key]
+	if !ok {
+		return ""
+	}
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", value))
+	}
+}
+
+func tuiDetailInt(details map[string]any, key string) (int, bool) {
+	if details == nil {
+		return 0, false
+	}
+	raw, ok := details[key]
+	if !ok {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case int:
+		return value, true
+	case int64:
+		return int(value), true
+	case float64:
+		return int(value), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func tuiDetailBool(details map[string]any, key string) bool {
+	if details == nil {
+		return false
+	}
+	raw, ok := details[key]
+	if !ok {
+		return false
+	}
+	switch value := raw.(type) {
+	case bool:
+		return value
+	case string:
+		switch strings.TrimSpace(strings.ToLower(value)) {
+		case "1", "true", "yes":
+			return true
+		default:
+			return false
+		}
+	case int:
+		return value != 0
+	case int64:
+		return value != 0
+	case float64:
+		return value != 0
+	default:
+		return false
 	}
 }
 

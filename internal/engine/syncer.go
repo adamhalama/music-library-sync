@@ -99,6 +99,11 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 	if s.Now == nil {
 		s.Now = time.Now
 	}
+	originalEmitter := s.Emitter
+	s.Emitter = output.NewFailureDiagnosticsEmitter(cfg.Defaults.StateDir, originalEmitter)
+	defer func() {
+		s.Emitter = originalEmitter
+	}()
 
 	selected, err := selectSources(cfg.Sources, opts.SourceIDs)
 	if err != nil {
@@ -336,6 +341,24 @@ func (s *Syncer) planProviderForSource(source config.Source) PlanProvider {
 		return nil
 	}
 	return s.PlanRegistry.ProviderFor(source.Adapter.Kind)
+}
+
+func buildExecFailureDetails(source config.Source, spec ExecSpec, execResult ExecResult) map[string]any {
+	details := map[string]any{
+		"adapter_kind": source.Adapter.Kind,
+		"command":      spec.DisplayCommand,
+		"exit_code":    execResult.ExitCode,
+		"duration_ms":  execResult.Duration.Milliseconds(),
+		"timed_out":    execResult.TimedOut,
+		"interrupted":  execResult.Interrupted,
+	}
+	if stdoutTail := strings.TrimSpace(execResult.StdoutTail); stdoutTail != "" {
+		details["stdout_tail"] = stdoutTail
+	}
+	if stderrTail := strings.TrimSpace(execResult.StderrTail); stderrTail != "" {
+		details["stderr_tail"] = stderrTail
+	}
+	return details
 }
 
 func (s *Syncer) prepareSourcePlan(
@@ -790,10 +813,7 @@ func (s *Syncer) runSpotifyDeemix(
 				Event:     output.EventSourceFailed,
 				SourceID:  source.ID,
 				Message:   fmt.Sprintf("[%s] interrupted", source.ID),
-				Details: map[string]any{
-					"exit_code":   execResult.ExitCode,
-					"duration_ms": execResult.Duration.Milliseconds(),
-				},
+				Details:   buildExecFailureDetails(source, spec, execResult),
 			})
 			return outcome
 		}
@@ -820,12 +840,7 @@ func (s *Syncer) runSpotifyDeemix(
 		if execResult.ExitCode != 0 {
 			sourceFailed = true
 			sourceFailureMessage = fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode)
-			sourceFailureDetails = map[string]any{
-				"command":     spec.DisplayCommand,
-				"exit_code":   execResult.ExitCode,
-				"duration_ms": execResult.Duration.Milliseconds(),
-				"timed_out":   execResult.TimedOut,
-			}
+			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
 			break
 		}
 		if failed, reason := deemixReportedFailure(execResult); failed {
@@ -835,13 +850,7 @@ func (s *Syncer) runSpotifyDeemix(
 				source.ID,
 				reason,
 			)
-			sourceFailureDetails = map[string]any{
-				"command":     spec.DisplayCommand,
-				"exit_code":   execResult.ExitCode,
-				"duration_ms": execResult.Duration.Milliseconds(),
-				"stdout_tail": execResult.StdoutTail,
-				"stderr_tail": execResult.StderrTail,
-			}
+			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
 			break
 		}
 
@@ -1124,10 +1133,7 @@ func (s *Syncer) runGenericAdapter(
 			Event:     output.EventSourceFailed,
 			SourceID:  source.ID,
 			Message:   fmt.Sprintf("[%s] interrupted", source.ID),
-			Details: map[string]any{
-				"exit_code":   execResult.ExitCode,
-				"duration_ms": execResult.Duration.Milliseconds(),
-			},
+			Details:   buildExecFailureDetails(source, spec, execResult),
 		})
 		return outcome
 	}
@@ -1273,8 +1279,10 @@ func (s *Syncer) runGenericAdapter(
 				SourceID:  source.ID,
 				Message:   fmt.Sprintf("[%s] stopped at first existing track (break_on_existing)", source.ID),
 				Details: map[string]any{
+					"adapter_kind":        source.Adapter.Kind,
 					"exit_code":           execResult.ExitCode,
 					"duration_ms":         execResult.Duration.Milliseconds(),
+					"stop_reason":         "break_on_existing",
 					"stopped_on_existing": true,
 				},
 			})
@@ -1298,14 +1306,7 @@ func (s *Syncer) runGenericAdapter(
 			Event:     output.EventSourceFailed,
 			SourceID:  source.ID,
 			Message:   fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode),
-			Details: map[string]any{
-				"command":     spec.DisplayCommand,
-				"exit_code":   execResult.ExitCode,
-				"duration_ms": execResult.Duration.Milliseconds(),
-				"timed_out":   execResult.TimedOut,
-				"stdout_tail": execResult.StdoutTail,
-				"stderr_tail": execResult.StderrTail,
-			},
+			Details:   buildExecFailureDetails(source, spec, execResult),
 		})
 		outcome.Stop = !cfg.Defaults.ContinueOnError
 		return outcome

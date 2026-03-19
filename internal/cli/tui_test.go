@@ -481,6 +481,47 @@ func TestTUISyncModelSuppressesTrackProgressSpamInActivity(t *testing.T) {
 	}
 }
 
+func TestTUISyncModelShowsPinnedLastFailureDiagnostics(t *testing.T) {
+	m := newTUISyncModel(&AppContext{})
+	m.cfgLoaded = true
+	m.running = true
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventSourceFailed,
+		Level:    output.LevelError,
+		SourceID: "spotify-source",
+		Message:  "[spotify-source] command failed with exit code 1",
+		Details: map[string]any{
+			"failure_message":  "[spotify-source] command failed with exit code 1",
+			"exit_code":        1,
+			"timed_out":        true,
+			"stdout_tail":      "line one\nline two",
+			"stderr_tail":      "fatal line",
+			"failure_log_path": "/tmp/udl-state/sync-failures.jsonl",
+		},
+	}})
+
+	view := m.View()
+	if !strings.Contains(view, "Last Failure:") {
+		t.Fatalf("expected pinned last failure section, got: %s", view)
+	}
+	if !strings.Contains(view, "[spotify-source] command failed with exit code 1") {
+		t.Fatalf("expected failure source/message, got: %s", view)
+	}
+	if !strings.Contains(view, "exit_code=1") || !strings.Contains(view, "timed_out=true") {
+		t.Fatalf("expected failure status details, got: %s", view)
+	}
+	if !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "line one") || !strings.Contains(view, "line two") {
+		t.Fatalf("expected stdout tail excerpt, got: %s", view)
+	}
+	if !strings.Contains(view, "stderr_tail:") || !strings.Contains(view, "fatal line") {
+		t.Fatalf("expected stderr tail excerpt, got: %s", view)
+	}
+	if !strings.Contains(view, "/tmp/udl-state/sync-failures.jsonl") {
+		t.Fatalf("expected failure log path, got: %s", view)
+	}
+}
+
 func TestTUIInitStartRunRequestsOverwriteConfirmAndCanCancel(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "udl.yaml")
