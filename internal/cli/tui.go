@@ -309,13 +309,26 @@ type tuiInteractionPromptState struct {
 }
 
 type tuiPlanPromptState struct {
-	sourceID string
-	rows     []engine.PlanRow
-	details  planSourceDetails
-	reply    chan tuiPlanSelectResult
-	cursor   int
-	selected map[int]bool
+	sourceID     string
+	rows         []engine.PlanRow
+	details      planSourceDetails
+	reply        chan tuiPlanSelectResult
+	cursor       int
+	selected     map[int]bool
+	filter       tuiPlanPromptFilter
+	filterCursor int
+	focusFilters bool
 }
+
+type tuiPlanPromptFilter string
+
+const (
+	tuiPlanFilterAll        tuiPlanPromptFilter = "all"
+	tuiPlanFilterSelected   tuiPlanPromptFilter = "selected"
+	tuiPlanFilterMissingNew tuiPlanPromptFilter = "missing_new"
+	tuiPlanFilterKnownGap   tuiPlanPromptFilter = "known_gap"
+	tuiPlanFilterDownloaded tuiPlanPromptFilter = "downloaded"
+)
 
 func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 	dryRun := false
@@ -377,36 +390,64 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, m.waitRunMsgCmd()
 		}
 		if m.planPrompt != nil {
-			switch typed.String() {
-			case "up", "k":
-				if m.planPrompt.cursor > 0 {
-					m.planPrompt.cursor--
+			if typed.String() == "tab" {
+				m.planPrompt.focusFilters = !m.planPrompt.focusFilters
+				if !m.planPrompt.focusFilters {
+					m.planPrompt.ensureCursorVisible()
 				}
 				return m, nil
-			case "down", "j":
-				if m.planPrompt.cursor < len(m.planPrompt.rows)-1 {
-					m.planPrompt.cursor++
-				}
-				return m, nil
-			case " ":
-				if len(m.planPrompt.rows) == 0 {
+			}
+			if m.planPrompt.focusFilters {
+				switch typed.String() {
+				case "up", "k":
+					if m.planPrompt.filterCursor > 0 {
+						m.planPrompt.filterCursor--
+					}
+					return m, nil
+				case "down", "j":
+					if m.planPrompt.filterCursor < len(m.planPrompt.filters())-1 {
+						m.planPrompt.filterCursor++
+					}
+					return m, nil
+				case " ", "enter":
+					m.planPrompt.filter = m.planPrompt.filters()[m.planPrompt.filterCursor]
+					m.planPrompt.focusFilters = false
+					m.planPrompt.ensureCursorVisible()
+					return m, nil
+				case "ctrl+c", "q", "esc":
+					m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
+					m.planPrompt = nil
+					return m, m.waitRunMsgCmd()
+				default:
 					return m, nil
 				}
-				row := m.planPrompt.rows[m.planPrompt.cursor]
+			}
+			switch typed.String() {
+			case "up", "k":
+				m.planPrompt.moveCursor(-1)
+				return m, nil
+			case "down", "j":
+				m.planPrompt.moveCursor(1)
+				return m, nil
+			case " ":
+				row, ok := m.planPrompt.currentRow()
+				if !ok {
+					return m, nil
+				}
 				if !row.Toggleable {
 					return m, nil
 				}
 				m.planPrompt.selected[row.Index] = !m.planPrompt.selected[row.Index]
 				return m, nil
 			case "a":
-				for _, row := range m.planPrompt.rows {
+				for _, row := range m.planPrompt.filteredRows() {
 					if row.Toggleable {
 						m.planPrompt.selected[row.Index] = true
 					}
 				}
 				return m, nil
 			case "n":
-				for _, row := range m.planPrompt.rows {
+				for _, row := range m.planPrompt.filteredRows() {
 					if row.Toggleable {
 						m.planPrompt.selected[row.Index] = false
 					}
@@ -1233,11 +1274,13 @@ func newTUIPlanPromptState(req tuiPlanSelectRequestMsg) *tuiPlanPromptState {
 		}
 	}
 	return &tuiPlanPromptState{
-		sourceID: req.SourceID,
-		rows:     append([]engine.PlanRow{}, req.Rows...),
-		details:  req.Details,
-		reply:    req.Reply,
-		selected: selected,
+		sourceID:     req.SourceID,
+		rows:         append([]engine.PlanRow{}, req.Rows...),
+		details:      req.Details,
+		reply:        req.Reply,
+		selected:     selected,
+		filter:       tuiPlanFilterAll,
+		filterCursor: 0,
 	}
 }
 
@@ -1256,6 +1299,156 @@ func (s *tuiPlanPromptState) selectedIndices() []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+func (s *tuiPlanPromptState) filters() []tuiPlanPromptFilter {
+	return []tuiPlanPromptFilter{
+		tuiPlanFilterAll,
+		tuiPlanFilterSelected,
+		tuiPlanFilterMissingNew,
+		tuiPlanFilterKnownGap,
+		tuiPlanFilterDownloaded,
+	}
+}
+
+func (s *tuiPlanPromptState) filteredRows() []engine.PlanRow {
+	if s == nil {
+		return nil
+	}
+	rows := make([]engine.PlanRow, 0, len(s.rows))
+	for _, row := range s.rows {
+		if s.matchesFilter(row) {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func (s *tuiPlanPromptState) matchesFilter(row engine.PlanRow) bool {
+	switch s.filter {
+	case tuiPlanFilterSelected:
+		return row.Toggleable && s.selected[row.Index]
+	case tuiPlanFilterMissingNew:
+		return row.Status == engine.PlanRowMissingNew
+	case tuiPlanFilterKnownGap:
+		return row.Status == engine.PlanRowMissingKnownGap
+	case tuiPlanFilterDownloaded:
+		return row.Status == engine.PlanRowAlreadyDownloaded
+	default:
+		return true
+	}
+}
+
+func (s *tuiPlanPromptState) visibleRowIndices() []int {
+	if s == nil {
+		return nil
+	}
+	indices := make([]int, 0, len(s.rows))
+	for idx, row := range s.rows {
+		if s.matchesFilter(row) {
+			indices = append(indices, idx)
+		}
+	}
+	return indices
+}
+
+func (s *tuiPlanPromptState) ensureCursorVisible() {
+	if s == nil {
+		return
+	}
+	visible := s.visibleRowIndices()
+	if len(visible) == 0 {
+		s.cursor = 0
+		return
+	}
+	for _, idx := range visible {
+		if idx == s.cursor {
+			return
+		}
+	}
+	s.cursor = visible[0]
+}
+
+func (s *tuiPlanPromptState) moveCursor(delta int) {
+	if s == nil {
+		return
+	}
+	visible := s.visibleRowIndices()
+	if len(visible) == 0 {
+		s.cursor = 0
+		return
+	}
+	current := 0
+	for i, idx := range visible {
+		if idx == s.cursor {
+			current = i
+			break
+		}
+	}
+	current += delta
+	if current < 0 {
+		current = 0
+	}
+	if current >= len(visible) {
+		current = len(visible) - 1
+	}
+	s.cursor = visible[current]
+}
+
+func (s *tuiPlanPromptState) currentRow() (engine.PlanRow, bool) {
+	if s == nil {
+		return engine.PlanRow{}, false
+	}
+	visible := s.visibleRowIndices()
+	for _, idx := range visible {
+		if idx == s.cursor {
+			return s.rows[idx], true
+		}
+	}
+	return engine.PlanRow{}, false
+}
+
+func (s *tuiPlanPromptState) filterDisplayLabel(filter tuiPlanPromptFilter) string {
+	switch filter {
+	case tuiPlanFilterSelected:
+		return "Selected"
+	case tuiPlanFilterMissingNew:
+		return "New"
+	case tuiPlanFilterKnownGap:
+		return "Known Gap"
+	case tuiPlanFilterDownloaded:
+		return "Downloaded"
+	default:
+		return "All"
+	}
+}
+
+func (s *tuiPlanPromptState) filterLabel() string {
+	if s == nil {
+		return "all"
+	}
+	return strings.ToLower(s.filterDisplayLabel(s.filter))
+}
+
+func (s *tuiPlanPromptState) focusLabel() string {
+	if s == nil {
+		return "tracks"
+	}
+	if s.focusFilters {
+		return "filters"
+	}
+	return "tracks"
+}
+
+func (s *tuiPlanPromptState) filterCount(filter tuiPlanPromptFilter) int {
+	if s == nil {
+		return 0
+	}
+	original := s.filter
+	s.filter = filter
+	rows := s.filteredRows()
+	s.filter = original
+	return len(rows)
 }
 
 type tuiChannelEmitter struct {

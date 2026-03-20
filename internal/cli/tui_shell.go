@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jaa/update-downloads/internal/engine"
 )
 
 type tuiShellLayout struct {
@@ -44,6 +46,7 @@ type tuiSidebarItem struct {
 	Meta     string
 	Active   bool
 	Disabled bool
+	Tone     string
 }
 
 type tuiBadge struct {
@@ -271,6 +274,18 @@ func renderTUISidebarItem(item tuiSidebarItem, theme tuiShellTheme, layout tuiSh
 	if item.Active {
 		prefix = "> "
 		style = theme.sidebarActive
+	}
+	if !item.Active && !item.Disabled {
+		switch item.Tone {
+		case "info":
+			style = style.Copy().Foreground(lipgloss.Color("81"))
+		case "success":
+			style = style.Copy().Foreground(lipgloss.Color("78"))
+		case "warning":
+			style = style.Copy().Foreground(lipgloss.Color("179"))
+		case "muted":
+			style = style.Copy().Foreground(lipgloss.Color("243"))
+		}
 	}
 	labelWidth := shellSidebarWidth(layout, theme) - theme.sidebar.GetHorizontalFrameSize() - 2
 	if labelWidth < 8 {
@@ -885,6 +900,16 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 		{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()},
 		{Label: "sources", Value: fmt.Sprintf("%d/%d", m.selectedSourceCount(), len(m.sources)), Tone: "info"},
 	}
+	if m.planPrompt != nil {
+		focus := "tracks"
+		if m.planPrompt.focusFilters {
+			focus = "filters"
+		}
+		stats = append(stats,
+			tuiFooterStat{Label: "filter", Value: m.planPrompt.filterLabel(), Tone: "info"},
+			tuiFooterStat{Label: "focus", Value: focus, Tone: "warning"},
+		)
+	}
 	if m.done {
 		stats = append(stats,
 			tuiFooterStat{Label: "attempted", Value: fmt.Sprintf("%d", m.result.Attempted), Tone: "info"},
@@ -928,42 +953,18 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 	if state.details.DryRun {
 		modeLabel = "dry-run"
 	}
-	lines := []string{
-		fmt.Sprintf("Plan Selection  source=%s  mode=%s  plan-limit=%s  type=%s  adapter=%s", state.sourceID, modeLabel, limitLabel, state.details.SourceType, state.details.Adapter),
-		fmt.Sprintf("target_dir=%s", state.details.TargetDir),
-		fmt.Sprintf("state_file=%s", state.details.StateFile),
-		fmt.Sprintf("url=%s", state.details.URL),
-		"keys: j/k move  space toggle  a all  n none  enter confirm  q/esc cancel",
-	}
-	if len(state.rows) == 0 {
+	state.ensureCursorVisible()
+	lines := planPromptHeaderLines(state, modeLabel, limitLabel, layout)
+	filteredRows := state.filteredRows()
+	if len(filteredRows) == 0 {
 		lines = append(lines, "No tracks found in selected preflight window.")
 	} else {
-		start, end := shellPlanPromptRowWindow(len(state.rows), state.cursor, layout)
-		for i := start; i < end; i++ {
-			row := state.rows[i]
-			cursor := " "
-			if i == state.cursor {
-				cursor = ">"
-			}
-			marker := "[-]"
-			if row.Toggleable {
-				if state.selected[row.Index] {
-					marker = "[x]"
-				} else {
-					marker = "[ ]"
-				}
-			}
-			title := strings.TrimSpace(row.Title)
-			if title == "" {
-				title = "(untitled)"
-			}
-			lines = append(lines, fmt.Sprintf("%s %s %3d  %-16s  %s (%s)", cursor, marker, row.Index, string(row.Status), title, row.RemoteID))
-		}
+		lines = append(lines, strings.Split(renderPlanPromptTable(state, layout), "\n")...)
 	}
-	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks", state.selectedCount(), state.toggleableCount()))
+	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks  |  Showing: %d/%d", state.selectedCount(), state.toggleableCount(), len(filteredRows), len(state.rows)))
 	theme := newTUIShellTheme()
 	bodyStyle := theme.bodyPanel.Padding(0, 1)
-	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize()
+	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize() - 4
 	if width < 24 {
 		width = shellMainSectionWidth(layout, theme)
 	}
@@ -973,6 +974,23 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 		bodyLines = append(bodyLines, ansi.Truncate(line, width, ""))
 	}
 	return strings.Join(bodyLines, "\n")
+}
+
+func planPromptHeaderLines(state *tuiPlanPromptState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
+	if layout.Height < 24 {
+		return []string{
+			fmt.Sprintf("Plan Selection  src=%s  type=%s/%s  mode=%s  limit=%s", state.sourceID, state.details.SourceType, state.details.Adapter, modeLabel, limitLabel),
+			fmt.Sprintf("focus=%s  filter=%s  target=%s  state=%s", state.focusLabel(), state.filterLabel(), filepath.Base(state.details.TargetDir), filepath.Base(state.details.StateFile)),
+			"keys: tab filters  j/k move  space toggle/apply  a all visible  n clear visible  enter confirm  esc cancel",
+		}
+	}
+	return []string{
+		fmt.Sprintf("Plan Selection  source=%s  mode=%s  plan-limit=%s  type=%s  adapter=%s", state.sourceID, modeLabel, limitLabel, state.details.SourceType, state.details.Adapter),
+		fmt.Sprintf("target_dir=%s", state.details.TargetDir),
+		fmt.Sprintf("state_file=%s", state.details.StateFile),
+		fmt.Sprintf("url=%s", state.details.URL),
+		fmt.Sprintf("focus=%s  filter=%s  keys: tab switch  j/k move  space toggle/apply  a all visible  n clear visible  enter confirm/apply  esc cancel", state.focusLabel(), state.filterLabel()),
+	}
 }
 
 func (m tuiSyncModel) interactionPromptModal() *tuiModalState {
@@ -1179,6 +1197,100 @@ func renderPlanSection(title string, lines []string, width int) string {
 		Render(header + "\n" + body)
 }
 
+func renderPlanPromptTable(state *tuiPlanPromptState, layout tuiShellLayout) string {
+	theme := newTUIShellTheme()
+	bodyStyle := theme.bodyPanel.Padding(0, 1)
+	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize() - 4
+	if width < 48 {
+		width = 48
+	}
+	idWidth := 12
+	statusWidth := 14
+	indexWidth := 4
+	selectWidth := 4
+	gapWidth := 8
+	titleWidth := width - idWidth - statusWidth - indexWidth - selectWidth - gapWidth
+	if titleWidth < 16 {
+		titleWidth = 16
+	}
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	header := strings.Join([]string{
+		headerStyle.Width(selectWidth).Render("SEL"),
+		headerStyle.Width(indexWidth).Render("#"),
+		headerStyle.Width(statusWidth).Render("STATUS"),
+		headerStyle.Width(titleWidth).Render("TRACK"),
+		headerStyle.Width(idWidth).Render("ID"),
+	}, "  ")
+
+	filtered := state.filteredRows()
+	visibleIndices := state.visibleRowIndices()
+	filteredCursor := 0
+	for i, idx := range visibleIndices {
+		if idx == state.cursor {
+			filteredCursor = i
+			break
+		}
+	}
+	start, end := shellPlanPromptRowWindow(len(filtered), filteredCursor, layout)
+	lines := []string{header, strings.Repeat("─", maxInt(16, width))}
+	for i := start; i < end; i++ {
+		row := filtered[i]
+		selected := row.Toggleable && state.selected[row.Index]
+		isCursor := i == filteredCursor
+		lines = append(lines, renderPlanPromptRow(row, isCursor, selected, selectWidth, indexWidth, statusWidth, titleWidth, idWidth))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderPlanPromptRow(row engine.PlanRow, isCursor, selected bool, selectWidth, indexWidth, statusWidth, titleWidth, idWidth int) string {
+	cursorPrefix := " "
+	if isCursor {
+		cursorPrefix = ">"
+	}
+	selectLabel := "[-]"
+	selectTone := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	if row.Toggleable {
+		selectLabel = "[ ]"
+		selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		if selected {
+			selectLabel = "[x]"
+			selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
+		}
+	}
+	statusLabel, statusStyle := planPromptStatusChip(row.Status)
+	title := strings.TrimSpace(row.Title)
+	if title == "" {
+		title = "(untitled)"
+	}
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	if row.Status == engine.PlanRowAlreadyDownloaded {
+		titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	}
+	idStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	line := strings.Join([]string{
+		selectTone.Width(selectWidth).Render(cursorPrefix + selectLabel),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Width(indexWidth).Render(fmt.Sprintf("%d", row.Index)),
+		statusStyle.Width(statusWidth).Render(statusLabel),
+		titleStyle.Width(titleWidth).Render(ansi.Truncate(title, titleWidth, "")),
+		idStyle.Width(idWidth).Render(ansi.Truncate(row.RemoteID, idWidth, "")),
+	}, "  ")
+	if isCursor {
+		return lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(line)
+	}
+	return line
+}
+
+func planPromptStatusChip(status engine.PlanRowStatus) (string, lipgloss.Style) {
+	switch status {
+	case engine.PlanRowMissingNew:
+		return "new", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
+	case engine.PlanRowMissingKnownGap:
+		return "known-gap", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Bold(true)
+	default:
+		return "have-it", lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	}
+}
+
 func shellPlanPromptRowWindow(total, cursor int, layout tuiShellLayout) (int, int) {
 	maxRows := layout.Height - 22
 	if maxRows < 4 {
@@ -1325,6 +1437,29 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 		sourceItems = append(sourceItems, tuiSidebarItem{Label: "(no enabled sources)", Disabled: true})
 	}
 	sections = append(sections, tuiSidebarSection{Title: "sources", Items: sourceItems})
+	if m.planPrompt != nil {
+		filterItems := make([]tuiSidebarItem, 0, len(m.planPrompt.filters()))
+		for idx, filter := range m.planPrompt.filters() {
+			count := m.planPrompt.filterCount(filter)
+			item := tuiSidebarItem{
+				Label:  fmt.Sprintf("%s (%d)", m.planPrompt.filterDisplayLabel(filter), count),
+				Active: m.planPrompt.focusFilters && idx == m.planPrompt.filterCursor,
+			}
+			if !m.planPrompt.focusFilters && m.planPrompt.filter == filter {
+				item.Tone = "info"
+			}
+			switch filter {
+			case tuiPlanFilterMissingNew:
+				item.Tone = "success"
+			case tuiPlanFilterKnownGap:
+				item.Tone = "warning"
+			case tuiPlanFilterDownloaded:
+				item.Tone = "muted"
+			}
+			filterItems = append(filterItems, item)
+		}
+		sections = append(sections, tuiSidebarSection{Title: "filters", Items: filterItems})
+	}
 	return sections
 }
 

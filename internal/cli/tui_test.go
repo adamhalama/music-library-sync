@@ -195,18 +195,7 @@ func TestTUIRootShellShowsSourcesInSidebarForInteractiveSync(t *testing.T) {
 }
 
 func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.screen = tuiScreenInteractiveSync
-	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
-	root.syncModel.cfgLoaded = true
-	reply := make(chan tuiPlanSelectResult, 1)
-
-	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
-		SourceID: "source-a",
-		Rows:     []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
-		Details:  planSourceDetails{SourceID: "source-a", PlanLimit: 10},
-		Reply:    reply,
-	})
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}})
 
 	view := root.View()
 	if !strings.Contains(view, "INTERACTIVE SYNC WORKFLOW") {
@@ -224,14 +213,6 @@ func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
 }
 
 func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.screen = tuiScreenInteractiveSync
-	root.width = 140
-	root.height = 20
-	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
-	root.syncModel.cfgLoaded = true
-	reply := make(chan tuiPlanSelectResult, 1)
-
 	rows := make([]engine.PlanRow, 0, 30)
 	for i := 1; i <= 30; i++ {
 		rows = append(rows, engine.PlanRow{
@@ -243,13 +224,9 @@ func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
 			SelectedByDefault: i%3 == 0,
 		})
 	}
-
-	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
-		SourceID: "source-a",
-		Rows:     rows,
-		Details:  planSourceDetails{SourceID: "source-a", PlanLimit: 10},
-		Reply:    reply,
-	})
+	root := renderPlanPromptFixture(rows)
+	root.width = 140
+	root.height = 20
 
 	view := root.View()
 	if !strings.Contains(view, "STATE: ready") {
@@ -264,6 +241,84 @@ func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
 	if got := lipgloss.Height(view); got > root.height {
 		t.Fatalf("expected rendered shell height <= %d, got %d", root.height, got)
 	}
+}
+
+func TestTUIRootShellRendersPlanFiltersInSidebar(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "gap", RemoteID: "c", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "FILTERS") {
+		t.Fatalf("expected filters sidebar section, got: %s", view)
+	}
+	if !strings.Contains(view, "Selected (1)") || !strings.Contains(view, "New (1)") || !strings.Contains(view, "Known Gap (1)") {
+		t.Fatalf("expected filter counts in sidebar, got: %s", view)
+	}
+	if !strings.Contains(view, "SEL") || !strings.Contains(view, "STATUS") || !strings.Contains(view, "TRACK") || !strings.Contains(view, "ID") {
+		t.Fatalf("expected table header columns, got: %s", view)
+	}
+}
+
+func TestTUISyncPlanPromptTabFocusesFiltersAndAppliesFilter(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+			{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 3, Title: "gap", RemoteID: "c", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a"},
+		Reply:   reply,
+	})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.planPrompt.focusFilters {
+		t.Fatalf("expected tab to move focus to filters")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.planPrompt.focusFilters {
+		t.Fatalf("expected enter to apply filter and return focus to tracks")
+	}
+	if m.planPrompt.filter != tuiPlanFilterMissingNew {
+		t.Fatalf("expected missing_new filter, got %q", m.planPrompt.filter)
+	}
+}
+
+func renderPlanPromptFixture(rows []engine.PlanRow) tuiRootModel {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 28
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     rows,
+		Details: planSourceDetails{
+			SourceID:   "soundcloud-likes",
+			SourceType: "soundcloud",
+			Adapter:    "scdl",
+			URL:        "https://soundcloud.com/janxadam",
+			TargetDir:  "/tmp/music",
+			StateFile:  "/tmp/soundcloud.sync.scdl",
+			PlanLimit:  10,
+		},
+		Reply: reply,
+	})
+	return root
 }
 
 func TestTUIRootShellRendersInitPromptModal(t *testing.T) {
