@@ -10,6 +10,8 @@ dist/
 .github/copilot-instructions.md
 .VSCodeCounter/
 
+.vscode
+
 # Python
 .venv/
 venv/
