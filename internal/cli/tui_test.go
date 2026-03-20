@@ -242,7 +242,7 @@ func TestTUISyncModelInitValidatesConfig(t *testing.T) {
 
 	m := newTUISyncModel(&AppContext{
 		Opts: GlobalOptions{ConfigPath: configPath},
-	})
+	}, tuiSyncWorkflowStandard)
 	raw := m.Init()()
 	msg, ok := raw.(tuiConfigLoadedMsg)
 	if !ok {
