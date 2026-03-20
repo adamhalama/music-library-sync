@@ -7,11 +7,13 @@ import (
 )
 
 type ExecSpec struct {
-	Bin            string
-	Args           []string
-	Dir            string
-	Timeout        time.Duration
-	DisplayCommand string
+	Bin             string
+	Args            []string
+	Dir             string
+	Timeout         time.Duration
+	DisplayCommand  string
+	StdoutObservers []func(line string)
+	StderrObservers []func(line string)
 }
 
 type ExecResult struct {
@@ -37,11 +39,14 @@ type SyncOptions struct {
 	SourceIDs           []string
 	DryRun              bool
 	TimeoutOverride     time.Duration
+	Plan                bool
+	PlanLimit           int
 	AskOnExisting       bool
 	AskOnExistingSet    bool
 	ScanGaps            bool
 	NoPreflight         bool
 	AllowPrompt         bool
+	SelectPlanRows      func(sourceID string, rows []PlanRow) (selectedIndices []int, canceled bool, err error)
 	PromptOnExisting    func(sourceID string, preflight SoundCloudPreflight) (bool, error)
 	PromptOnSpotifyAuth func(sourceID string) (bool, error)
 	PromptOnDeemixARL   func(sourceID string) (string, error)
@@ -82,3 +87,20 @@ const (
 	TrackStatusCount TrackStatusMode = "count"
 	TrackStatusNone  TrackStatusMode = "none"
 )
+
+type PlanRowStatus string
+
+const (
+	PlanRowAlreadyDownloaded PlanRowStatus = "already_downloaded"
+	PlanRowMissingNew        PlanRowStatus = "missing_new"
+	PlanRowMissingKnownGap   PlanRowStatus = "missing_known_gap"
+)
+
+type PlanRow struct {
+	Index             int
+	RemoteID          string
+	Title             string
+	Status            PlanRowStatus
+	Toggleable        bool
+	SelectedByDefault bool
+}

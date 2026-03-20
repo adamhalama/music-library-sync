@@ -192,6 +192,68 @@ func TestBuildExecSpecScanModeUsesNoBreakFlag(t *testing.T) {
 	}
 }
 
+func TestBuildExecSpecInjectsManagedPlaylistItems(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	source.SelectedPlaylistIDs = []int{8, 2, 2, 5}
+
+	spec, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("build exec spec: %v", err)
+	}
+
+	joined := strings.Join(spec.Args, " ")
+	if !strings.Contains(joined, "--playlist-items 2,5,8") {
+		t.Fatalf("expected managed playlist items in ytdlp args, got %v", spec.Args)
+	}
+}
+
+func TestBuildExecSpecOmitsSyncInManagedSubsetMode(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	source.SelectedPlaylistIDs = []int{2, 5, 8}
+	source.DisableSyncMode = true
+
+	spec, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("build exec spec: %v", err)
+	}
+
+	joined := strings.Join(spec.Args, " ")
+	if strings.Contains(joined, "--sync ") {
+		t.Fatalf("expected --sync to be omitted in managed subset mode, got %v", spec.Args)
+	}
+	if !strings.Contains(joined, "--playlist-items 2,5,8") {
+		t.Fatalf("expected managed playlist items in ytdlp args, got %v", spec.Args)
+	}
+}
+
+func TestBuildExecSpecOverridesCustomPlaylistItemsWhenManagedSelectionSet(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	source.Adapter.ExtraArgs = []string{
+		"--yt-dlp-args",
+		"--embed-thumbnail --playlist-items 10-20 --download-archive scdl-archive.txt",
+	}
+	source.SelectedPlaylistIDs = []int{1, 3}
+
+	spec, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("build exec spec: %v", err)
+	}
+
+	joined := strings.Join(spec.Args, " ")
+	if strings.Contains(joined, "--playlist-items 10-20") {
+		t.Fatalf("expected custom playlist-items to be removed when managed selection is present, got %v", spec.Args)
+	}
+	if !strings.Contains(joined, "--playlist-items 1,3") {
+		t.Fatalf("expected managed playlist-items in ytdlp args, got %v", spec.Args)
+	}
+}
+
 func TestBuildExecSpecPrefersCompatibleBinaryFromPATH(t *testing.T) {
 	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
 

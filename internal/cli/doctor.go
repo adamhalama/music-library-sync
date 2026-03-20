@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/exitcode"
@@ -28,7 +29,7 @@ func newDoctorCommand(app *AppContext) *cobra.Command {
 				}
 			}
 
-			report := doctor.NewChecker().Check(context.Background(), cfg)
+			report := workflows.DoctorUseCase{Checker: doctor.NewChecker()}.Run(context.Background(), cfg)
 
 			if app.Opts.JSON {
 				encoder := json.NewEncoder(app.IO.Out)

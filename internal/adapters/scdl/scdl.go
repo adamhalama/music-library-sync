@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,8 +78,10 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 		args = append(args, "-f")
 		displayArgs = append(displayArgs, "-f")
 	}
-	args = append(args, "--sync", syncFilePath)
-	displayArgs = append(displayArgs, "--sync", syncFilePath)
+	if !source.DisableSyncMode {
+		args = append(args, "--sync", syncFilePath)
+		displayArgs = append(displayArgs, "--sync", syncFilePath)
+	}
 
 	if clientID := strings.TrimSpace(os.Getenv("SCDL_CLIENT_ID")); clientID != "" {
 		args = append(args, "--client-id", clientID)
@@ -110,6 +114,7 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 		ytdlpArgs = strings.TrimSpace(ytdlpArgs + " --download-archive " + archivePath)
 	}
 	ytdlpArgs = normalizeYTDLPBreakArgs(ytdlpArgs, breakOnExisting)
+	ytdlpArgs = normalizeYTDLPPlaylistItems(ytdlpArgs, source.SelectedPlaylistIDs)
 	if !runtimeInfo.SupportsYTDLPArgs {
 		return engine.ExecSpec{}, fmt.Errorf(
 			"scdl binary %q does not support --yt-dlp-args (requires scdl >= 3.0.0); set PATH or UDL_SCDL_BIN to a compatible binary",
@@ -209,6 +214,49 @@ func normalizeYTDLPBreakArgs(raw string, breakOnExisting bool) string {
 	} else {
 		filtered = append(filtered, "--no-break-on-existing")
 	}
+	return strings.Join(filtered, " ")
+}
+
+func normalizeYTDLPPlaylistItems(raw string, selected []int) string {
+	parts := strings.Fields(strings.TrimSpace(raw))
+	filtered := make([]string, 0, len(parts)+2)
+	for i := 0; i < len(parts); i++ {
+		token := parts[i]
+		if token == "--playlist-items" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(token, "--playlist-items=") {
+			continue
+		}
+		filtered = append(filtered, token)
+	}
+	if len(selected) == 0 {
+		return strings.Join(filtered, " ")
+	}
+
+	unique := map[int]struct{}{}
+	ordered := make([]int, 0, len(selected))
+	for _, idx := range selected {
+		if idx <= 0 {
+			continue
+		}
+		if _, seen := unique[idx]; seen {
+			continue
+		}
+		unique[idx] = struct{}{}
+		ordered = append(ordered, idx)
+	}
+	slices.Sort(ordered)
+	if len(ordered) == 0 {
+		return strings.Join(filtered, " ")
+	}
+
+	partsOut := make([]string, 0, len(ordered))
+	for _, idx := range ordered {
+		partsOut = append(partsOut, strconv.Itoa(idx))
+	}
+	filtered = append(filtered, "--playlist-items", strings.Join(partsOut, ","))
 	return strings.Join(filtered, " ")
 }
 

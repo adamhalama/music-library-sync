@@ -14,6 +14,8 @@ import (
 
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/engine/adapterlog"
+	"github.com/jaa/update-downloads/internal/engine/progress"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -28,10 +30,13 @@ func (e *SelectionError) Error() string {
 }
 
 type Syncer struct {
-	Registry map[string]Adapter
-	Runner   ExecRunner
-	Emitter  output.EventEmitter
-	Now      func() time.Time
+	Registry     map[string]Adapter
+	Runner       ExecRunner
+	Emitter      output.EventEmitter
+	Progress     progress.Sink
+	Parsers      *adapterlog.Registry
+	PlanRegistry *PlanRegistry
+	Now          func() time.Time
 }
 
 var (
@@ -50,11 +55,21 @@ func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.Ev
 	if emitter == nil {
 		emitter = noOpEmitter{}
 	}
+	progressSink := progress.Sink(progress.NoopSink{})
+	parserRegistry := adapterlog.NewRegistry()
+	parserRegistry.RegisterFactory("scdl", adapterlog.NewSCDLParser)
+	parserRegistry.RegisterFactory("deemix", adapterlog.NewDeemixParser)
+	parserRegistry.RegisterFactory("spotdl", adapterlog.NewSpotDLParser)
+	planRegistry := NewPlanRegistry()
+	planRegistry.Register("scdl", NewSCDLPlanProvider())
 	return &Syncer{
-		Registry: registry,
-		Runner:   runner,
-		Emitter:  emitter,
-		Now:      time.Now,
+		Registry:     registry,
+		Runner:       runner,
+		Emitter:      emitter,
+		Progress:     progressSink,
+		Parsers:      parserRegistry,
+		PlanRegistry: planRegistry,
+		Now:          time.Now,
 	}
 }
 
@@ -64,11 +79,31 @@ func (noOpEmitter) Emit(event output.Event) error {
 	return nil
 }
 
+type sourceFlowContext struct {
+	Progress progress.Sink
+	Parser   adapterlog.Parser
+}
+
+type sourceRunOutcome struct {
+	Attempted          int
+	Succeeded          int
+	Failed             int
+	Skipped            int
+	DependencyFailures int
+	Interrupted        bool
+	Stop               bool
+}
+
 func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) (SyncResult, error) {
 	result := SyncResult{}
 	if s.Now == nil {
 		s.Now = time.Now
 	}
+	originalEmitter := s.Emitter
+	s.Emitter = output.NewFailureDiagnosticsEmitter(cfg.Defaults.StateDir, originalEmitter)
+	defer func() {
+		s.Emitter = originalEmitter
+	}()
 
 	selected, err := selectSources(cfg.Sources, opts.SourceIDs)
 	if err != nil {
@@ -96,6 +131,26 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		if !source.Enabled {
 			result.Skipped++
 			continue
+		}
+
+		if opts.Plan {
+			provider := s.planProviderForSource(source)
+			if provider == nil {
+				result.Skipped++
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourceFinished,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] --plan only supports adapter.kind=scdl in this release; skipping source", source.ID),
+					Details: map[string]any{
+						"adapter_kind": source.Adapter.Kind,
+						"skipped":      true,
+						"mode":         "plan",
+					},
+				})
+				continue
+			}
 		}
 
 		adapter, ok := s.Registry[source.Adapter.Kind]
@@ -172,7 +227,35 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		stateSwap := soundCloudStateSwap{}
 		var sourcePreflight *SoundCloudPreflight
 		plannedSoundCloudTracks := []soundCloudRemoteTrack{}
-		if source.Type == config.SourceTypeSoundCloud {
+		if opts.Plan {
+			sourcePlan, planErr := s.prepareSourcePlan(ctx, cfg, source, opts)
+			if planErr != nil {
+				if errors.Is(planErr, ErrInterrupted) {
+					result.Interrupted = true
+					break
+				}
+				result.Failed++
+				result.Attempted++
+				if errors.Is(planErr, exec.ErrNotFound) {
+					result.DependencyFailures++
+				}
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelError,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] plan preflight failed: %v", source.ID, planErr),
+				})
+				if !cfg.Defaults.ContinueOnError {
+					break
+				}
+				continue
+			}
+			sourceForExec = sourcePlan.SourceForExec
+			stateSwap = sourcePlan.StateSwap
+			sourcePreflight = sourcePlan.SourcePreflight
+			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, sourcePlan.PlannedSoundCloudTracks...)
+		} else if source.Type == config.SourceTypeSoundCloud {
 			plan, planErr := s.prepareSoundCloudExecutionPlan(ctx, cfg, source, opts)
 			if planErr != nil {
 				result.Failed++
@@ -196,777 +279,27 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			stateSwap = plan.StateSwap
 			sourcePreflight = plan.Preflight
 			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, plan.PlannedTracks...)
-
-			if plan.Preflight != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message: fmt.Sprintf(
-						"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
-						source.ID,
-						plan.Preflight.RemoteTotal,
-						plan.Preflight.KnownCount,
-						plan.Preflight.ArchiveGapCount,
-						plan.Preflight.KnownGapCount,
-						plan.Preflight.FirstExistingIndex,
-						plan.Preflight.PlannedDownloadCount,
-						plan.Preflight.Mode,
-					),
-					Details: map[string]any{
-						"remote_total":           plan.Preflight.RemoteTotal,
-						"known_count":            plan.Preflight.KnownCount,
-						"archive_gap_count":      plan.Preflight.ArchiveGapCount,
-						"known_gap_count":        plan.Preflight.KnownGapCount,
-						"first_existing_index":   plan.Preflight.FirstExistingIndex,
-						"planned_download_count": plan.Preflight.PlannedDownloadCount,
-						"mode":                   plan.Preflight.Mode,
-					},
-				})
-			}
 		}
 
-		if source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
-			plan, planErr := s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
-			if planErr != nil {
-				result.Failed++
-				result.Attempted++
-				if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
-					errors.Is(planErr, auth.ErrDeemixARLNotFound) {
-					result.DependencyFailures++
-				}
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelError,
-					Event:     output.EventSourceFailed,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
-				})
-				if !cfg.Defaults.ContinueOnError {
-					break
-				}
-				continue
-			}
-			sourceForExec = plan.Source
-			sourcePreflight = plan.Preflight
-			if plan.Preflight != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message: fmt.Sprintf(
-						"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
-						source.ID,
-						plan.Preflight.RemoteTotal,
-						plan.Preflight.KnownCount,
-						plan.Preflight.ArchiveGapCount,
-						plan.Preflight.KnownGapCount,
-						plan.Preflight.FirstExistingIndex,
-						plan.Preflight.PlannedDownloadCount,
-						plan.Preflight.Mode,
-					),
-					Details: map[string]any{
-						"remote_total":           plan.Preflight.RemoteTotal,
-						"known_count":            plan.Preflight.KnownCount,
-						"archive_gap_count":      plan.Preflight.ArchiveGapCount,
-						"known_gap_count":        plan.Preflight.KnownGapCount,
-						"first_existing_index":   plan.Preflight.FirstExistingIndex,
-						"planned_download_count": plan.Preflight.PlannedDownloadCount,
-						"mode":                   plan.Preflight.Mode,
-					},
-				})
-			}
-			emitSpotifyDeemixExistingTrackStatus(s, source.ID, plan, opts.TrackStatus)
-
-			timeout := time.Duration(cfg.Defaults.CommandTimeoutSeconds) * time.Second
-			if opts.TimeoutOverride > 0 {
-				timeout = opts.TimeoutOverride
-			}
-
-			if opts.DryRun {
-				result.Attempted++
-				result.Succeeded++
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourceFinished,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] dry-run complete", source.ID),
-				})
-				continue
-			}
-
-			if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 {
-				result.Attempted++
-				result.Succeeded++
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourceFinished,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] up-to-date (no downloads planned)", source.ID),
-					Details: map[string]any{
-						"planned_download_count": 0,
-						"mode":                   sourcePreflight.Mode,
-					},
-				})
-				continue
-			}
-
-			plannedTrackIDs := append([]string(nil), plan.PlannedTrackIDs...)
-			if len(plannedTrackIDs) == 0 {
-				if trackID := extractSpotifyTrackID(sourceForExec.URL); trackID != "" {
-					plannedTrackIDs = []string{trackID}
-				} else if playlistID, playlistErr := resolveSpotifyPlaylistID(sourceForExec.URL); playlistErr == nil {
-					pageTracks, pageErr := enumerateSpotifyViaPageFn(ctx, playlistID)
-					if pageErr != nil || len(pageTracks) == 0 {
-						plannedTrackIDs = []string{""}
-					} else {
-						plannedTrackIDs = make([]string, 0, len(pageTracks))
-						for _, track := range pageTracks {
-							plannedTrackIDs = append(plannedTrackIDs, track.ID)
-						}
-						metadata := buildSpotifyTrackMetadataIndex(pageTracks)
-						if len(metadata) > 0 {
-							if plan.TrackMetadata == nil {
-								plan.TrackMetadata = metadata
-							} else {
-								for id, value := range metadata {
-									plan.TrackMetadata[id] = value
-								}
-							}
-						}
-						_ = s.Emitter.Emit(output.Event{
-							Timestamp: s.Now(),
-							Level:     output.LevelWarn,
-							Event:     output.EventSourcePreflight,
-							SourceID:  source.ID,
-							Message:   fmt.Sprintf("[%s] no-preflight playlist run using public playlist page track enumeration (%d track(s))", source.ID, len(plannedTrackIDs)),
-						})
-					}
-				} else {
-					plannedTrackIDs = []string{""}
-				}
-			}
-
-			result.Attempted++
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelInfo,
-				Event:     output.EventSourceStarted,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] running deemix for %d track(s)", source.ID, len(plannedTrackIDs)),
-			})
-
-			runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
-			sourceFailed := false
-			var sourceFailureMessage string
-			var sourceFailureDetails map[string]any
-			skippedUnavailable := 0
-			spotifyTargetDir, targetDirErr := config.ExpandPath(sourceForExec.TargetDir)
-			if targetDirErr != nil {
-				sourceFailed = true
-				sourceFailureMessage = fmt.Sprintf("[%s] resolve target_dir: %v", source.ID, targetDirErr)
-			}
-			for idx, trackID := range plannedTrackIDs {
-				if sourceFailed {
-					break
-				}
-				trackSource := sourceForExec
-				if trackID != "" {
-					trackSource.URL = spotifyTrackURL(trackID)
-				}
-				trackLabel := spotifyTrackDisplayNameFromState(trackID, plan.TrackMetadata, plan.State)
-				spec, buildErr := adapter.BuildExecSpec(trackSource, cfg.Defaults, timeout)
-				if buildErr != nil {
-					sourceFailed = true
-					sourceFailureMessage = fmt.Sprintf("[%s] cannot build command: %v", source.ID, buildErr)
-					break
-				}
-				if runtimeDir == "" {
-					runtimeDir = spec.Dir
-					sourceForExec.DeemixRuntimeDir = spec.Dir
-				}
-				trackSource.DeemixRuntimeDir = runtimeDir
-				spec.Dir = runtimeDir
-
-				if trackID != "" && strings.TrimSpace(runtimeDir) != "" {
-					metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata)
-					if metadataErr != nil {
-						_ = s.Emitter.Emit(output.Event{
-							Timestamp: s.Now(),
-							Level:     output.LevelWarn,
-							Event:     output.EventSourcePreflight,
-							SourceID:  source.ID,
-							Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
-						})
-					} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
-						_ = s.Emitter.Emit(output.Event{
-							Timestamp: s.Now(),
-							Level:     output.LevelWarn,
-							Event:     output.EventSourcePreflight,
-							SourceID:  source.ID,
-							Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
-						})
-					}
-				}
-
-				if trackID != "" {
-					message := fmt.Sprintf("[%s] deemix track %d/%d %s", source.ID, idx+1, len(plannedTrackIDs), trackID)
-					if trackLabel != "" {
-						message = fmt.Sprintf("[%s] deemix track %d/%d %s (%s)", source.ID, idx+1, len(plannedTrackIDs), trackID, trackLabel)
-					}
-					_ = s.Emitter.Emit(output.Event{
-						Timestamp: s.Now(),
-						Level:     output.LevelInfo,
-						Event:     output.EventSourcePreflight,
-						SourceID:  source.ID,
-						Message:   message,
-					})
-				}
-
-				var mediaBefore map[string]mediaFileSnapshot
-				if trackID != "" {
-					before, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
-					if snapshotErr != nil {
-						_ = s.Emitter.Emit(output.Event{
-							Timestamp: s.Now(),
-							Level:     output.LevelWarn,
-							Event:     output.EventSourcePreflight,
-							SourceID:  source.ID,
-							Message:   fmt.Sprintf("[%s] unable to snapshot target directory before track run: %v", source.ID, snapshotErr),
-						})
-					} else {
-						mediaBefore = before
-					}
-				}
-
-				execResult := s.Runner.Run(ctx, spec)
-				if execResult.Interrupted {
-					_ = cleanupRuntimeDir(runtimeDir)
-					result.Interrupted = true
-					_ = s.Emitter.Emit(output.Event{
-						Timestamp: s.Now(),
-						Level:     output.LevelError,
-						Event:     output.EventSourceFailed,
-						SourceID:  source.ID,
-						Message:   fmt.Sprintf("[%s] interrupted", source.ID),
-						Details: map[string]any{
-							"exit_code":   execResult.ExitCode,
-							"duration_ms": execResult.Duration.Milliseconds(),
-						},
-					})
-					break
-				}
-
-				if unavailable, reason := deemixReportedTrackUnavailable(execResult); unavailable {
-					skippedUnavailable++
-					display := trackLabel
-					if display == "" {
-						display = deemixTrackDisplayName(execResult)
-					}
-					if display == "" {
-						display = trackID
-					}
-					_ = s.Emitter.Emit(output.Event{
-						Timestamp: s.Now(),
-						Level:     output.LevelInfo,
-						Event:     output.EventSourcePreflight,
-						SourceID:  source.ID,
-						Message:   fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason),
-					})
-					continue
-				}
-
-				if execResult.ExitCode != 0 {
-					sourceFailed = true
-					sourceFailureMessage = fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode)
-					sourceFailureDetails = map[string]any{
-						"command":     spec.DisplayCommand,
-						"exit_code":   execResult.ExitCode,
-						"duration_ms": execResult.Duration.Milliseconds(),
-						"timed_out":   execResult.TimedOut,
-					}
-					break
-				}
-				if failed, reason := deemixReportedFailure(execResult); failed {
-					sourceFailed = true
-					sourceFailureMessage = fmt.Sprintf(
-						"[%s] deemix reported runtime failure despite exit code 0 (%s); check Spotify app credentials/quota and consider fallback to spotdl for this source",
-						source.ID,
-						reason,
-					)
-					sourceFailureDetails = map[string]any{
-						"command":     spec.DisplayCommand,
-						"exit_code":   execResult.ExitCode,
-						"duration_ms": execResult.Duration.Milliseconds(),
-						"stdout_tail": execResult.StdoutTail,
-						"stderr_tail": execResult.StderrTail,
-					}
-					break
-				}
-
-				if trackID != "" {
-					entryLabel := trackLabel
-					if entryLabel == "" {
-						entryLabel = deemixTrackDisplayName(execResult)
-					}
-					localPath := ""
-					if mediaBefore != nil {
-						after, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
-						if snapshotErr == nil {
-							localPath = detectUpdatedMediaPath(mediaBefore, after)
-						}
-					}
-					doneMessage := fmt.Sprintf("[%s] [done] %s", source.ID, trackID)
-					if entryLabel != "" {
-						doneMessage = fmt.Sprintf("[%s] [done] %s (%s)", source.ID, trackID, entryLabel)
-					}
-					if appendErr := appendSpotifySyncStateEntry(sourceForExec.StateFile, trackID, entryLabel, localPath); appendErr != nil {
-						sourceFailed = true
-						sourceFailureMessage = fmt.Sprintf("[%s] failed to update spotify state file: %v", source.ID, appendErr)
-						break
-					}
-					plan.State.KnownIDs[trackID] = struct{}{}
-					entry := plan.State.Entries[trackID]
-					if entryLabel != "" {
-						entry.DisplayName = entryLabel
-					}
-					if localPath != "" {
-						entry.LocalPath = localPath
-					}
-					if entry.DisplayName != "" || entry.LocalPath != "" {
-						plan.State.Entries[trackID] = entry
-					}
-					_ = s.Emitter.Emit(output.Event{
-						Timestamp: s.Now(),
-						Level:     output.LevelInfo,
-						Event:     output.EventSourcePreflight,
-						SourceID:  source.ID,
-						Message:   doneMessage,
-					})
-				}
-			}
-
-			_ = cleanupRuntimeDir(runtimeDir)
-
-			if result.Interrupted {
-				break
-			}
-			if sourceFailed {
-				result.Failed++
-				if sourceFailureMessage == "" {
-					sourceFailureMessage = fmt.Sprintf("[%s] command failed", source.ID)
-				}
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelError,
-					Event:     output.EventSourceFailed,
-					SourceID:  source.ID,
-					Message:   sourceFailureMessage,
-					Details:   sourceFailureDetails,
-				})
-				if !cfg.Defaults.ContinueOnError {
-					break
-				}
-				continue
-			}
-
-			result.Succeeded++
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelInfo,
-				Event:     output.EventSourceFinished,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] completed", source.ID),
-				Details: map[string]any{
-					"planned_download_count": len(plannedTrackIDs),
-					"skipped_unavailable":    skippedUnavailable,
-				},
-			})
-			continue
+		if sourcePreflight != nil {
+			s.emitSourcePreflightSummary(source.ID, sourcePreflight)
 		}
 
-		if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl-freedl" {
-			outcome, runErr := s.runSoundCloudFreeDownloadSource(
-				ctx,
-				cfg,
-				source,
-				sourceForExec,
-				sourcePreflight,
-				plannedSoundCloudTracks,
-				stateSwap,
-				opts,
-			)
-			if outcome.Attempted {
-				result.Attempted++
-			}
-			if outcome.DependencyFailure {
-				result.DependencyFailures++
-			}
-			if outcome.Interrupted {
-				result.Interrupted = true
-				break
-			}
-			if runErr != nil {
-				result.Failed++
-				if !cfg.Defaults.ContinueOnError {
-					break
-				}
-				continue
-			}
-			if outcome.Succeeded {
-				result.Succeeded++
-			}
-			continue
-		}
-
-		timeout := time.Duration(cfg.Defaults.CommandTimeoutSeconds) * time.Second
-		if opts.TimeoutOverride > 0 {
-			timeout = opts.TimeoutOverride
-		}
-
-		spec, err := adapter.BuildExecSpec(sourceForExec, cfg.Defaults, timeout)
-		if err != nil {
-			result.Failed++
-			result.Attempted++
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelError,
-				Event:     output.EventSourceFailed,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("cannot build command: %v", err),
-			})
-			if !cfg.Defaults.ContinueOnError {
-				break
-			}
-			continue
-		}
-
-		if !opts.DryRun && sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 {
-			result.Attempted++
-			result.Succeeded++
-			if err := cleanupTempStateFiles(stateSwap); err != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourceFinished,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
-				})
-			}
-			finishedMessage := fmt.Sprintf("[%s] up-to-date (no downloads planned)", source.ID)
-			if sourcePreflight.KnownGapCount > 0 || sourcePreflight.ArchiveGapCount > 0 {
-				finishedMessage = fmt.Sprintf(
-					"[%s] no new downloads planned in %s mode (known_gaps=%d archive_gaps=%d)",
-					source.ID,
-					sourcePreflight.Mode,
-					sourcePreflight.KnownGapCount,
-					sourcePreflight.ArchiveGapCount,
-				)
-			}
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelInfo,
-				Event:     output.EventSourceFinished,
-				SourceID:  source.ID,
-				Message:   finishedMessage,
-				Details: map[string]any{
-					"planned_download_count": 0,
-					"mode":                   sourcePreflight.Mode,
-					"known_gap_count":        sourcePreflight.KnownGapCount,
-					"archive_gap_count":      sourcePreflight.ArchiveGapCount,
-				},
-			})
-			continue
-		}
-
-		_ = s.Emitter.Emit(output.Event{
-			Timestamp: s.Now(),
-			Level:     output.LevelInfo,
-			Event:     output.EventSourcePreflight,
-			SourceID:  source.ID,
-			Message:   fmt.Sprintf("[%s] downloading to %s", source.ID, spec.Dir),
-			Details: map[string]any{
-				"target_dir": spec.Dir,
-			},
-		})
-
-		result.Attempted++
-		_ = s.Emitter.Emit(output.Event{
-			Timestamp: s.Now(),
-			Level:     output.LevelInfo,
-			Event:     output.EventSourceStarted,
-			SourceID:  source.ID,
-			Message:   fmt.Sprintf("[%s] running %s", source.ID, spec.DisplayCommand),
-			Details: map[string]any{
-				"command": spec.DisplayCommand,
-				"dir":     spec.Dir,
-			},
-		})
-
-		cleanupSuffixes := artifactSuffixesForAdapter(source.Adapter.Kind)
-		preArtifacts := map[string]struct{}{}
-		if len(cleanupSuffixes) > 0 {
-			preArtifacts, err = snapshotArtifacts(spec.Dir, cleanupSuffixes)
-			if err != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourceStarted,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to snapshot artifacts before run: %v", source.ID, err),
-				})
-			}
-		}
-
-		if opts.DryRun {
-			result.Succeeded++
-			if err := cleanupTempStateFiles(stateSwap); err != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourceFinished,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
-				})
-			}
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelInfo,
-				Event:     output.EventSourceFinished,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] dry-run complete", source.ID),
-				Details: map[string]any{
-					"dry_run": true,
-					"command": spec.DisplayCommand,
-				},
-			})
-			continue
-		}
-
-		execResult := s.Runner.Run(ctx, spec)
-		if execResult.Interrupted {
-			s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
-			if err := cleanupTempStateFiles(stateSwap); err != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourceFailed,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
-				})
-			}
-			result.Interrupted = true
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelError,
-				Event:     output.EventSourceFailed,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] interrupted", source.ID),
-				Details: map[string]any{
-					"exit_code":   execResult.ExitCode,
-					"duration_ms": execResult.Duration.Milliseconds(),
-				},
-			})
+		flowOutcome := s.runSource(
+			ctx,
+			cfg,
+			source,
+			adapter,
+			sourceForExec,
+			sourcePreflight,
+			plannedSoundCloudTracks,
+			stateSwap,
+			opts,
+		)
+		applySourceOutcome(&result, flowOutcome)
+		if flowOutcome.Stop {
 			break
 		}
-
-		if shouldRetrySpotifyWithUserAuth(sourceForExec, execResult, opts) {
-			retrySource, opensBrowser, promptErr := planSpotifyUserAuthRetry(sourceForExec, opts)
-			if promptErr != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to read Spotify auth prompt response: %v", source.ID, promptErr),
-				})
-				retrySource = withSpotDLUserAuth(sourceForExec)
-				opensBrowser = false
-			}
-			retrySpec, retryErr := adapter.BuildExecSpec(retrySource, cfg.Defaults, timeout)
-			if retryErr != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourceFailed,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] spotify auth retry setup failed: %v", source.ID, retryErr),
-				})
-			} else {
-				retryHint := "paste redirected URL in terminal when prompted"
-				retryMode := "manual"
-				if opensBrowser {
-					retryHint = "browser login enabled"
-					retryMode = "browser"
-				}
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] spotify login required; retrying once with --user-auth (%s)", source.ID, retryHint),
-					Details: map[string]any{
-						"command": retrySpec.DisplayCommand,
-						"dir":     retrySpec.Dir,
-						"retry":   true,
-						"mode":    retryMode,
-					},
-				})
-				execResult = s.Runner.Run(ctx, retrySpec)
-				spec = retrySpec
-				sourceForExec = retrySource
-				if execResult.Interrupted {
-					s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
-					if err := cleanupTempStateFiles(stateSwap); err != nil {
-						_ = s.Emitter.Emit(output.Event{
-							Timestamp: s.Now(),
-							Level:     output.LevelWarn,
-							Event:     output.EventSourceFailed,
-							SourceID:  source.ID,
-							Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
-						})
-					}
-					result.Interrupted = true
-					_ = s.Emitter.Emit(output.Event{
-						Timestamp: s.Now(),
-						Level:     output.LevelError,
-						Event:     output.EventSourceFailed,
-						SourceID:  source.ID,
-						Message:   fmt.Sprintf("[%s] interrupted", source.ID),
-						Details: map[string]any{
-							"exit_code":   execResult.ExitCode,
-							"duration_ms": execResult.Duration.Milliseconds(),
-						},
-					})
-					break
-				}
-			}
-		}
-
-		if execResult.ExitCode != 0 && isSpotifyUserAuthRequired(sourceForExec, execResult) {
-			guidance := "spotify login required; rerun in an interactive terminal once with --user-auth to refresh ~/.spotdl/.spotipy"
-			if opts.AllowPrompt {
-				guidance = "spotify login required and retry did not complete; rerun sync and finish the OAuth prompt"
-			}
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelWarn,
-				Event:     output.EventSourceFailed,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] %s", source.ID, guidance),
-			})
-		}
-		if execResult.ExitCode != 0 && isSpotifyRateLimited(sourceForExec, execResult) {
-			rateLimitMessage := fmt.Sprintf("[%s] spotify API rate limit detected; use your own Spotify app credentials and rerun", source.ID)
-			if cachePath, ok := resolveSpotDLOAuthCachePath(); ok {
-				rateLimitMessage = fmt.Sprintf(
-					"[%s] spotify API rate limit detected; OAuth cache is present at %s, so auth is configured and this is likely app quota throttling. Use your own Spotify app credentials and rerun",
-					source.ID,
-					cachePath,
-				)
-			}
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelWarn,
-				Event:     output.EventSourceFailed,
-				SourceID:  source.ID,
-				Message:   rateLimitMessage,
-			})
-		}
-
-		if execResult.ExitCode != 0 {
-			if isGracefulBreakOnExistingStop(sourceForExec, sourcePreflight, execResult) {
-				if err := commitTempStateFiles(stateSwap); err != nil {
-					result.Failed++
-					_ = s.Emitter.Emit(output.Event{
-						Timestamp: s.Now(),
-						Level:     output.LevelError,
-						Event:     output.EventSourceFailed,
-						SourceID:  source.ID,
-						Message:   fmt.Sprintf("[%s] failed to finalize sync state file: %v", source.ID, err),
-					})
-					if !cfg.Defaults.ContinueOnError {
-						break
-					}
-					continue
-				}
-
-				result.Succeeded++
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelInfo,
-					Event:     output.EventSourceFinished,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] stopped at first existing track (break_on_existing)", source.ID),
-					Details: map[string]any{
-						"exit_code":           execResult.ExitCode,
-						"duration_ms":         execResult.Duration.Milliseconds(),
-						"stopped_on_existing": true,
-					},
-				})
-				continue
-			}
-
-			s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
-			if err := cleanupTempStateFiles(stateSwap); err != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourceFailed,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
-				})
-			}
-			result.Failed++
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelError,
-				Event:     output.EventSourceFailed,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode),
-				Details: map[string]any{
-					"command":     spec.DisplayCommand,
-					"exit_code":   execResult.ExitCode,
-					"duration_ms": execResult.Duration.Milliseconds(),
-					"timed_out":   execResult.TimedOut,
-				},
-			})
-			if !cfg.Defaults.ContinueOnError {
-				break
-			}
-			continue
-		}
-
-		if err := commitTempStateFiles(stateSwap); err != nil {
-			result.Failed++
-			_ = s.Emitter.Emit(output.Event{
-				Timestamp: s.Now(),
-				Level:     output.LevelError,
-				Event:     output.EventSourceFailed,
-				SourceID:  source.ID,
-				Message:   fmt.Sprintf("[%s] failed to finalize sync state file: %v", source.ID, err),
-			})
-			if !cfg.Defaults.ContinueOnError {
-				break
-			}
-			continue
-		}
-
-		result.Succeeded++
-		_ = s.Emitter.Emit(output.Event{
-			Timestamp: s.Now(),
-			Level:     output.LevelInfo,
-			Event:     output.EventSourceFinished,
-			SourceID:  source.ID,
-			Message:   fmt.Sprintf("[%s] completed", source.ID),
-			Details: map[string]any{
-				"duration_ms": execResult.Duration.Milliseconds(),
-			},
-		})
 	}
 
 	if result.Interrupted {
@@ -1001,6 +334,1010 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 	})
 
 	return result, nil
+}
+
+func (s *Syncer) planProviderForSource(source config.Source) PlanProvider {
+	if s.PlanRegistry == nil {
+		return nil
+	}
+	return s.PlanRegistry.ProviderFor(source.Adapter.Kind)
+}
+
+func buildExecFailureDetails(source config.Source, spec ExecSpec, execResult ExecResult) map[string]any {
+	details := map[string]any{
+		"adapter_kind": source.Adapter.Kind,
+		"command":      spec.DisplayCommand,
+		"exit_code":    execResult.ExitCode,
+		"duration_ms":  execResult.Duration.Milliseconds(),
+		"timed_out":    execResult.TimedOut,
+		"interrupted":  execResult.Interrupted,
+	}
+	if stdoutTail := strings.TrimSpace(execResult.StdoutTail); stdoutTail != "" {
+		details["stdout_tail"] = stdoutTail
+	}
+	if stderrTail := strings.TrimSpace(execResult.StderrTail); stderrTail != "" {
+		details["stderr_tail"] = stderrTail
+	}
+	return details
+}
+
+func (s *Syncer) prepareSourcePlan(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	opts SyncOptions,
+) (sourcePlanExecution, error) {
+	if opts.SelectPlanRows == nil {
+		return sourcePlanExecution{}, fmt.Errorf("plan mode requires an interactive selector callback")
+	}
+	provider := s.planProviderForSource(source)
+	if provider == nil {
+		return sourcePlanExecution{}, fmt.Errorf("no plan provider registered for adapter %q", source.Adapter.Kind)
+	}
+	sourcePlan, err := provider.Build(ctx, cfg, source, opts)
+	if err != nil {
+		return sourcePlanExecution{}, err
+	}
+	selectedIndices, canceled, err := opts.SelectPlanRows(source.ID, sourcePlan.Rows())
+	if err != nil {
+		return sourcePlanExecution{}, err
+	}
+	if canceled {
+		return sourcePlanExecution{}, ErrInterrupted
+	}
+	return sourcePlan.ApplySelection(selectedIndices, opts.DryRun)
+}
+
+func (s *Syncer) emitSourcePreflightSummary(sourceID string, preflight *SoundCloudPreflight) {
+	if preflight == nil {
+		return
+	}
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourcePreflight,
+		SourceID:  sourceID,
+		Message: fmt.Sprintf(
+			"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
+			sourceID,
+			preflight.RemoteTotal,
+			preflight.KnownCount,
+			preflight.ArchiveGapCount,
+			preflight.KnownGapCount,
+			preflight.FirstExistingIndex,
+			preflight.PlannedDownloadCount,
+			preflight.Mode,
+		),
+		Details: map[string]any{
+			"remote_total":           preflight.RemoteTotal,
+			"known_count":            preflight.KnownCount,
+			"archive_gap_count":      preflight.ArchiveGapCount,
+			"known_gap_count":        preflight.KnownGapCount,
+			"first_existing_index":   preflight.FirstExistingIndex,
+			"planned_download_count": preflight.PlannedDownloadCount,
+			"mode":                   preflight.Mode,
+		},
+	})
+}
+
+func (s *Syncer) buildSourceFlowContext(source config.Source) sourceFlowContext {
+	sink := s.Progress
+	if sink == nil {
+		sink = progress.NoopSink{}
+	}
+
+	var parser adapterlog.Parser = adapterlog.NoopParser{}
+	if s.Parsers != nil {
+		parser = s.Parsers.ParserFor(source.Adapter.Kind)
+	}
+
+	return sourceFlowContext{
+		Progress: sink,
+		Parser:   parser,
+	}
+}
+
+func applySourceOutcome(result *SyncResult, outcome sourceRunOutcome) {
+	if result == nil {
+		return
+	}
+	result.Attempted += outcome.Attempted
+	result.Succeeded += outcome.Succeeded
+	result.Failed += outcome.Failed
+	result.Skipped += outcome.Skipped
+	result.DependencyFailures += outcome.DependencyFailures
+	if outcome.Interrupted {
+		result.Interrupted = true
+	}
+}
+
+func (s *Syncer) applyFlowObservers(spec ExecSpec, flow sourceFlowContext, source config.Source) ExecSpec {
+	if flow.Parser == nil {
+		return spec
+	}
+	spec.StdoutObservers = append(spec.StdoutObservers, func(line string) {
+		flow.Parser.OnStdoutLine(line)
+		s.flushFlowParser(flow, source)
+	})
+	spec.StderrObservers = append(spec.StderrObservers, func(line string) {
+		flow.Parser.OnStderrLine(line)
+		s.flushFlowParser(flow, source)
+	})
+	return spec
+}
+
+func (s *Syncer) flushFlowParser(flow sourceFlowContext, source config.Source) {
+	if flow.Parser == nil || flow.Progress == nil {
+		return
+	}
+	events := flow.Parser.Flush()
+	for _, event := range events {
+		if strings.TrimSpace(event.SourceID) == "" {
+			event.SourceID = source.ID
+		}
+		if strings.TrimSpace(event.AdapterKind) == "" {
+			event.AdapterKind = source.Adapter.Kind
+		}
+		flow.Progress.RecordTrackEvent(event)
+		s.emitTrackEvent(source, event)
+	}
+}
+
+func (s *Syncer) emitTrackEvent(source config.Source, event progress.TrackEvent) {
+	eventName := output.EventTrackProgress
+	level := output.LevelInfo
+	switch event.Kind {
+	case progress.TrackStarted:
+		eventName = output.EventTrackStarted
+	case progress.TrackProgress:
+		eventName = output.EventTrackProgress
+	case progress.TrackDone:
+		eventName = output.EventTrackDone
+	case progress.TrackSkip:
+		eventName = output.EventTrackSkip
+		level = output.LevelWarn
+	case progress.TrackFail:
+		eventName = output.EventTrackFail
+		level = output.LevelError
+	default:
+		return
+	}
+	trackLabel := strings.TrimSpace(event.TrackName)
+	if trackLabel == "" {
+		trackLabel = strings.TrimSpace(event.TrackID)
+	}
+	if trackLabel == "" {
+		trackLabel = "track"
+	}
+	message := fmt.Sprintf("[%s] [%s] %s", source.ID, eventName, trackLabel)
+	if event.Reason != "" {
+		message = fmt.Sprintf("%s (%s)", message, event.Reason)
+	}
+
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     level,
+		Event:     eventName,
+		SourceID:  source.ID,
+		Message:   message,
+		Details: map[string]any{
+			"track_id":     strings.TrimSpace(event.TrackID),
+			"track_name":   strings.TrimSpace(event.TrackName),
+			"index":        event.Index,
+			"total":        event.Total,
+			"percent":      event.Percent,
+			"reason":       strings.TrimSpace(event.Reason),
+			"adapter_kind": strings.TrimSpace(event.AdapterKind),
+		},
+	})
+}
+
+func (s *Syncer) runSoundCloudFreeDL(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	sourceForExec config.Source,
+	sourcePreflight *SoundCloudPreflight,
+	plannedSoundCloudTracks []soundCloudRemoteTrack,
+	stateSwap soundCloudStateSwap,
+	opts SyncOptions,
+) sourceRunOutcome {
+	outcome := sourceRunOutcome{}
+	flowResult, runErr := s.runSoundCloudFreeDownloadSource(
+		ctx,
+		cfg,
+		source,
+		sourceForExec,
+		sourcePreflight,
+		plannedSoundCloudTracks,
+		stateSwap,
+		opts,
+	)
+	if flowResult.Attempted {
+		outcome.Attempted++
+	}
+	if flowResult.DependencyFailure {
+		outcome.DependencyFailures++
+	}
+	if flowResult.Interrupted {
+		outcome.Interrupted = true
+		outcome.Stop = true
+		return outcome
+	}
+	if runErr != nil {
+		outcome.Failed++
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+	if flowResult.Succeeded {
+		outcome.Succeeded++
+	}
+	return outcome
+}
+
+func (s *Syncer) runSpotifyDeemix(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	adapter Adapter,
+	sourceForExec config.Source,
+	sourcePreflight *SoundCloudPreflight,
+	opts SyncOptions,
+) sourceRunOutcome {
+	outcome := sourceRunOutcome{}
+	flow := s.buildSourceFlowContext(source)
+
+	plan, planErr := s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
+	if planErr != nil {
+		outcome.Failed++
+		outcome.Attempted++
+		if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
+			errors.Is(planErr, auth.ErrDeemixARLNotFound) {
+			outcome.DependencyFailures++
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+	sourceForExec = plan.Source
+	sourcePreflight = plan.Preflight
+	if plan.Preflight != nil {
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourcePreflight,
+			SourceID:  source.ID,
+			Message: fmt.Sprintf(
+				"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
+				source.ID,
+				plan.Preflight.RemoteTotal,
+				plan.Preflight.KnownCount,
+				plan.Preflight.ArchiveGapCount,
+				plan.Preflight.KnownGapCount,
+				plan.Preflight.FirstExistingIndex,
+				plan.Preflight.PlannedDownloadCount,
+				plan.Preflight.Mode,
+			),
+			Details: map[string]any{
+				"remote_total":           plan.Preflight.RemoteTotal,
+				"known_count":            plan.Preflight.KnownCount,
+				"archive_gap_count":      plan.Preflight.ArchiveGapCount,
+				"known_gap_count":        plan.Preflight.KnownGapCount,
+				"first_existing_index":   plan.Preflight.FirstExistingIndex,
+				"planned_download_count": plan.Preflight.PlannedDownloadCount,
+				"mode":                   plan.Preflight.Mode,
+			},
+		})
+	}
+	emitSpotifyDeemixExistingTrackStatus(s, source.ID, plan, opts.TrackStatus)
+
+	timeout := time.Duration(cfg.Defaults.CommandTimeoutSeconds) * time.Second
+	if opts.TimeoutOverride > 0 {
+		timeout = opts.TimeoutOverride
+	}
+
+	if opts.DryRun {
+		outcome.Attempted++
+		outcome.Succeeded++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourceFinished,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] dry-run complete", source.ID),
+		})
+		return outcome
+	}
+
+	if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 {
+		outcome.Attempted++
+		outcome.Succeeded++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourceFinished,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] up-to-date (no downloads planned)", source.ID),
+			Details: map[string]any{
+				"planned_download_count": 0,
+				"mode":                   sourcePreflight.Mode,
+			},
+		})
+		return outcome
+	}
+
+	plannedTrackIDs := append([]string(nil), plan.PlannedTrackIDs...)
+	if len(plannedTrackIDs) == 0 {
+		if trackID := extractSpotifyTrackID(sourceForExec.URL); trackID != "" {
+			plannedTrackIDs = []string{trackID}
+		} else if playlistID, playlistErr := resolveSpotifyPlaylistID(sourceForExec.URL); playlistErr == nil {
+			pageTracks, pageErr := enumerateSpotifyViaPageFn(ctx, playlistID)
+			if pageErr != nil || len(pageTracks) == 0 {
+				plannedTrackIDs = []string{""}
+			} else {
+				plannedTrackIDs = make([]string, 0, len(pageTracks))
+				for _, track := range pageTracks {
+					plannedTrackIDs = append(plannedTrackIDs, track.ID)
+				}
+				metadata := buildSpotifyTrackMetadataIndex(pageTracks)
+				if len(metadata) > 0 {
+					if plan.TrackMetadata == nil {
+						plan.TrackMetadata = metadata
+					} else {
+						for id, value := range metadata {
+							plan.TrackMetadata[id] = value
+						}
+					}
+				}
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] no-preflight playlist run using public playlist page track enumeration (%d track(s))", source.ID, len(plannedTrackIDs)),
+				})
+			}
+		} else {
+			plannedTrackIDs = []string{""}
+		}
+	}
+
+	outcome.Attempted++
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourceStarted,
+		SourceID:  source.ID,
+		Message:   fmt.Sprintf("[%s] running deemix for %d track(s)", source.ID, len(plannedTrackIDs)),
+	})
+
+	runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
+	sourceFailed := false
+	var sourceFailureMessage string
+	var sourceFailureDetails map[string]any
+	skippedUnavailable := 0
+	spotifyTargetDir, targetDirErr := config.ExpandPath(sourceForExec.TargetDir)
+	if targetDirErr != nil {
+		sourceFailed = true
+		sourceFailureMessage = fmt.Sprintf("[%s] resolve target_dir: %v", source.ID, targetDirErr)
+	}
+	for idx, trackID := range plannedTrackIDs {
+		if sourceFailed {
+			break
+		}
+		trackSource := sourceForExec
+		if trackID != "" {
+			trackSource.URL = spotifyTrackURL(trackID)
+		}
+		trackLabel := spotifyTrackDisplayNameFromState(trackID, plan.TrackMetadata, plan.State)
+		spec, buildErr := adapter.BuildExecSpec(trackSource, cfg.Defaults, timeout)
+		if buildErr != nil {
+			sourceFailed = true
+			sourceFailureMessage = fmt.Sprintf("[%s] cannot build command: %v", source.ID, buildErr)
+			break
+		}
+		spec = s.applyFlowObservers(spec, flow, source)
+		if runtimeDir == "" {
+			runtimeDir = spec.Dir
+			sourceForExec.DeemixRuntimeDir = spec.Dir
+		}
+		trackSource.DeemixRuntimeDir = runtimeDir
+		spec.Dir = runtimeDir
+
+		if trackID != "" && strings.TrimSpace(runtimeDir) != "" {
+			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata)
+			if metadataErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
+				})
+			} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
+				})
+			}
+		}
+
+		if trackID != "" {
+			message := fmt.Sprintf("[%s] deemix track %d/%d %s", source.ID, idx+1, len(plannedTrackIDs), trackID)
+			if trackLabel != "" {
+				message = fmt.Sprintf("[%s] deemix track %d/%d %s (%s)", source.ID, idx+1, len(plannedTrackIDs), trackID, trackLabel)
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   message,
+			})
+		}
+
+		var mediaBefore map[string]mediaFileSnapshot
+		if trackID != "" {
+			before, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
+			if snapshotErr != nil {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] unable to snapshot target directory before track run: %v", source.ID, snapshotErr),
+				})
+			} else {
+				mediaBefore = before
+			}
+		}
+
+		execResult := s.Runner.Run(ctx, spec)
+		s.flushFlowParser(flow, source)
+		if execResult.Interrupted {
+			_ = cleanupRuntimeDir(runtimeDir)
+			outcome.Interrupted = true
+			outcome.Stop = true
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelError,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] interrupted", source.ID),
+				Details:   buildExecFailureDetails(source, spec, execResult),
+			})
+			return outcome
+		}
+
+		if unavailable, reason := deemixReportedTrackUnavailable(execResult); unavailable {
+			skippedUnavailable++
+			display := trackLabel
+			if display == "" {
+				display = deemixTrackDisplayName(execResult)
+			}
+			if display == "" {
+				display = trackID
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason),
+			})
+			continue
+		}
+
+		if execResult.ExitCode != 0 {
+			sourceFailed = true
+			sourceFailureMessage = fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode)
+			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
+			break
+		}
+		if failed, reason := deemixReportedFailure(execResult); failed {
+			sourceFailed = true
+			sourceFailureMessage = fmt.Sprintf(
+				"[%s] deemix reported runtime failure despite exit code 0 (%s); check Spotify app credentials/quota and consider fallback to spotdl for this source",
+				source.ID,
+				reason,
+			)
+			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
+			break
+		}
+
+		if trackID != "" {
+			entryLabel := trackLabel
+			if entryLabel == "" {
+				entryLabel = deemixTrackDisplayName(execResult)
+			}
+			localPath := ""
+			if mediaBefore != nil {
+				after, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
+				if snapshotErr == nil {
+					localPath = detectUpdatedMediaPath(mediaBefore, after)
+				}
+			}
+			doneMessage := fmt.Sprintf("[%s] [done] %s", source.ID, trackID)
+			if entryLabel != "" {
+				doneMessage = fmt.Sprintf("[%s] [done] %s (%s)", source.ID, trackID, entryLabel)
+			}
+			if appendErr := appendSpotifySyncStateEntry(sourceForExec.StateFile, trackID, entryLabel, localPath); appendErr != nil {
+				sourceFailed = true
+				sourceFailureMessage = fmt.Sprintf("[%s] failed to update spotify state file: %v", source.ID, appendErr)
+				break
+			}
+			plan.State.KnownIDs[trackID] = struct{}{}
+			entry := plan.State.Entries[trackID]
+			if entryLabel != "" {
+				entry.DisplayName = entryLabel
+			}
+			if localPath != "" {
+				entry.LocalPath = localPath
+			}
+			if entry.DisplayName != "" || entry.LocalPath != "" {
+				plan.State.Entries[trackID] = entry
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   doneMessage,
+			})
+		}
+	}
+
+	_ = cleanupRuntimeDir(runtimeDir)
+
+	if sourceFailed {
+		outcome.Failed++
+		if sourceFailureMessage == "" {
+			sourceFailureMessage = fmt.Sprintf("[%s] command failed", source.ID)
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   sourceFailureMessage,
+			Details:   sourceFailureDetails,
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+
+	outcome.Succeeded++
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourceFinished,
+		SourceID:  source.ID,
+		Message:   fmt.Sprintf("[%s] completed", source.ID),
+		Details: map[string]any{
+			"planned_download_count": len(plannedTrackIDs),
+			"skipped_unavailable":    skippedUnavailable,
+		},
+	})
+
+	return outcome
+}
+
+func (s *Syncer) runSource(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	adapter Adapter,
+	sourceForExec config.Source,
+	sourcePreflight *SoundCloudPreflight,
+	plannedSoundCloudTracks []soundCloudRemoteTrack,
+	stateSwap soundCloudStateSwap,
+	opts SyncOptions,
+) sourceRunOutcome {
+	if source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
+		return s.runSpotifyDeemix(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, opts)
+	}
+	if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl-freedl" {
+		return s.runSoundCloudFreeDL(
+			ctx,
+			cfg,
+			source,
+			sourceForExec,
+			sourcePreflight,
+			plannedSoundCloudTracks,
+			stateSwap,
+			opts,
+		)
+	}
+	if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" {
+		return s.runSoundCloudSCDL(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, opts)
+	}
+	return s.runGenericAdapter(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, opts)
+}
+
+func (s *Syncer) runSoundCloudSCDL(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	adapter Adapter,
+	sourceForExec config.Source,
+	sourcePreflight *SoundCloudPreflight,
+	stateSwap soundCloudStateSwap,
+	opts SyncOptions,
+) sourceRunOutcome {
+	return s.runGenericAdapter(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, opts)
+}
+
+func (s *Syncer) runGenericAdapter(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	adapter Adapter,
+	sourceForExec config.Source,
+	sourcePreflight *SoundCloudPreflight,
+	stateSwap soundCloudStateSwap,
+	opts SyncOptions,
+) sourceRunOutcome {
+	outcome := sourceRunOutcome{}
+	flow := s.buildSourceFlowContext(source)
+
+	timeout := time.Duration(cfg.Defaults.CommandTimeoutSeconds) * time.Second
+	if opts.TimeoutOverride > 0 {
+		timeout = opts.TimeoutOverride
+	}
+
+	spec, err := adapter.BuildExecSpec(sourceForExec, cfg.Defaults, timeout)
+	if err != nil {
+		outcome.Failed++
+		outcome.Attempted++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("cannot build command: %v", err),
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+	spec = s.applyFlowObservers(spec, flow, source)
+
+	if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 && (!opts.DryRun || opts.Plan) {
+		outcome.Attempted++
+		outcome.Succeeded++
+		if err := cleanupTempStateFiles(stateSwap); err != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFinished,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+			})
+		}
+		finishedMessage := fmt.Sprintf("[%s] up-to-date (no downloads planned)", source.ID)
+		if sourcePreflight.KnownGapCount > 0 || sourcePreflight.ArchiveGapCount > 0 {
+			finishedMessage = fmt.Sprintf(
+				"[%s] no new downloads planned in %s mode (known_gaps=%d archive_gaps=%d)",
+				source.ID,
+				sourcePreflight.Mode,
+				sourcePreflight.KnownGapCount,
+				sourcePreflight.ArchiveGapCount,
+			)
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourceFinished,
+			SourceID:  source.ID,
+			Message:   finishedMessage,
+			Details: map[string]any{
+				"planned_download_count": 0,
+				"mode":                   sourcePreflight.Mode,
+				"known_gap_count":        sourcePreflight.KnownGapCount,
+				"archive_gap_count":      sourcePreflight.ArchiveGapCount,
+			},
+		})
+		return outcome
+	}
+
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourcePreflight,
+		SourceID:  source.ID,
+		Message:   fmt.Sprintf("[%s] downloading to %s", source.ID, spec.Dir),
+		Details: map[string]any{
+			"target_dir": spec.Dir,
+		},
+	})
+
+	outcome.Attempted++
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourceStarted,
+		SourceID:  source.ID,
+		Message:   fmt.Sprintf("[%s] running %s", source.ID, spec.DisplayCommand),
+		Details: map[string]any{
+			"command": spec.DisplayCommand,
+			"dir":     spec.Dir,
+		},
+	})
+
+	cleanupSuffixes := artifactSuffixesForAdapter(source.Adapter.Kind)
+	preArtifacts := map[string]struct{}{}
+	if len(cleanupSuffixes) > 0 {
+		preArtifacts, err = snapshotArtifacts(spec.Dir, cleanupSuffixes)
+		if err != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceStarted,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to snapshot artifacts before run: %v", source.ID, err),
+			})
+		}
+	}
+
+	if opts.DryRun {
+		outcome.Succeeded++
+		if err := cleanupTempStateFiles(stateSwap); err != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFinished,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+			})
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourceFinished,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] dry-run complete", source.ID),
+			Details: map[string]any{
+				"dry_run": true,
+				"command": spec.DisplayCommand,
+			},
+		})
+		return outcome
+	}
+
+	execResult := s.Runner.Run(ctx, spec)
+	s.flushFlowParser(flow, source)
+	if execResult.Interrupted {
+		s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
+		if err := cleanupTempStateFiles(stateSwap); err != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+			})
+		}
+		outcome.Interrupted = true
+		outcome.Stop = true
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] interrupted", source.ID),
+			Details:   buildExecFailureDetails(source, spec, execResult),
+		})
+		return outcome
+	}
+
+	if shouldRetrySpotifyWithUserAuth(sourceForExec, execResult, opts) {
+		retrySource, opensBrowser, promptErr := planSpotifyUserAuthRetry(sourceForExec, opts)
+		if promptErr != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to read Spotify auth prompt response: %v", source.ID, promptErr),
+			})
+			retrySource = withSpotDLUserAuth(sourceForExec)
+			opensBrowser = false
+		}
+		retrySpec, retryErr := adapter.BuildExecSpec(retrySource, cfg.Defaults, timeout)
+		if retryErr != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] spotify auth retry setup failed: %v", source.ID, retryErr),
+			})
+		} else {
+			retrySpec = s.applyFlowObservers(retrySpec, flow, source)
+			retryHint := "paste redirected URL in terminal when prompted"
+			retryMode := "manual"
+			if opensBrowser {
+				retryHint = "browser login enabled"
+				retryMode = "browser"
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourcePreflight,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] spotify login required; retrying once with --user-auth (%s)", source.ID, retryHint),
+				Details: map[string]any{
+					"command": retrySpec.DisplayCommand,
+					"dir":     retrySpec.Dir,
+					"retry":   true,
+					"mode":    retryMode,
+				},
+			})
+			execResult = s.Runner.Run(ctx, retrySpec)
+			s.flushFlowParser(flow, source)
+			spec = retrySpec
+			sourceForExec = retrySource
+			if execResult.Interrupted {
+				s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
+				if err := cleanupTempStateFiles(stateSwap); err != nil {
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelWarn,
+						Event:     output.EventSourceFailed,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+					})
+				}
+				outcome.Interrupted = true
+				outcome.Stop = true
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelError,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] interrupted", source.ID),
+					Details: map[string]any{
+						"exit_code":   execResult.ExitCode,
+						"duration_ms": execResult.Duration.Milliseconds(),
+					},
+				})
+				return outcome
+			}
+		}
+	}
+
+	if execResult.ExitCode != 0 && isSpotifyUserAuthRequired(sourceForExec, execResult) {
+		guidance := "spotify login required; rerun in an interactive terminal once with --user-auth to refresh ~/.spotdl/.spotipy"
+		if opts.AllowPrompt {
+			guidance = "spotify login required and retry did not complete; rerun sync and finish the OAuth prompt"
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelWarn,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] %s", source.ID, guidance),
+		})
+	}
+	if execResult.ExitCode != 0 && isSpotifyRateLimited(sourceForExec, execResult) {
+		rateLimitMessage := fmt.Sprintf("[%s] spotify API rate limit detected; use your own Spotify app credentials and rerun", source.ID)
+		if cachePath, ok := resolveSpotDLOAuthCachePath(); ok {
+			rateLimitMessage = fmt.Sprintf(
+				"[%s] spotify API rate limit detected; OAuth cache is present at %s, so auth is configured and this is likely app quota throttling. Use your own Spotify app credentials and rerun",
+				source.ID,
+				cachePath,
+			)
+		}
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelWarn,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   rateLimitMessage,
+		})
+	}
+	if execResult.ExitCode != 0 {
+		if clientIDMessage, ok := scdlClientIDFailureMessage(sourceForExec, execResult); ok {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   clientIDMessage,
+			})
+		}
+	}
+
+	if execResult.ExitCode != 0 {
+		if isGracefulBreakOnExistingStop(sourceForExec, sourcePreflight, execResult) {
+			if err := commitTempStateFiles(stateSwap); err != nil {
+				outcome.Failed++
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelError,
+					Event:     output.EventSourceFailed,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] failed to finalize sync state file: %v", source.ID, err),
+				})
+				outcome.Stop = !cfg.Defaults.ContinueOnError
+				return outcome
+			}
+
+			outcome.Succeeded++
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelInfo,
+				Event:     output.EventSourceFinished,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] stopped at first existing track (break_on_existing)", source.ID),
+				Details: map[string]any{
+					"adapter_kind":        source.Adapter.Kind,
+					"exit_code":           execResult.ExitCode,
+					"duration_ms":         execResult.Duration.Milliseconds(),
+					"stop_reason":         "break_on_existing",
+					"stopped_on_existing": true,
+				},
+			})
+			return outcome
+		}
+
+		s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
+		if err := cleanupTempStateFiles(stateSwap); err != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+			})
+		}
+		outcome.Failed++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode),
+			Details:   buildExecFailureDetails(source, spec, execResult),
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+
+	if err := commitTempStateFiles(stateSwap); err != nil {
+		outcome.Failed++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] failed to finalize sync state file: %v", source.ID, err),
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+
+	outcome.Succeeded++
+	_ = s.Emitter.Emit(output.Event{
+		Timestamp: s.Now(),
+		Level:     output.LevelInfo,
+		Event:     output.EventSourceFinished,
+		SourceID:  source.ID,
+		Message:   fmt.Sprintf("[%s] completed", source.ID),
+		Details: map[string]any{
+			"duration_ms": execResult.Duration.Milliseconds(),
+		},
+	})
+
+	return outcome
 }
 
 func selectSources(sources []config.Source, requestedIDs []string) ([]config.Source, error) {
@@ -1510,6 +1847,34 @@ func isSpotifyRateLimited(source config.Source, execResult ExecResult) bool {
 		strings.Contains(combined, "retry will occur after:")
 }
 
+func scdlClientIDFailureMessage(source config.Source, execResult ExecResult) (string, bool) {
+	if source.Type != config.SourceTypeSoundCloud {
+		return "", false
+	}
+	if source.Adapter.Kind != "scdl" {
+		return "", false
+	}
+	if execResult.ExitCode == 0 || execResult.Interrupted {
+		return "", false
+	}
+
+	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
+	if strings.Contains(combined, "invalid client_id specified by --client-id argument") &&
+		strings.Contains(combined, "clientidgenerationerror") {
+		return fmt.Sprintf(
+			"[%s] scdl rejected the configured SCDL_CLIENT_ID, and automatic client_id generation also failed; refresh SCDL_CLIENT_ID and rerun",
+			source.ID,
+		), true
+	}
+	if strings.Contains(combined, "clientidgenerationerror") {
+		return fmt.Sprintf(
+			"[%s] scdl could not generate a SoundCloud client_id automatically; set SCDL_CLIENT_ID to a current value and rerun",
+			source.ID,
+		), true
+	}
+	return "", false
+}
+
 func hasSpotDLHeadlessArg(args []string) bool {
 	for _, candidate := range args {
 		if isSpotDLHeadlessArg(candidate) {
@@ -1839,7 +2204,7 @@ func commitTempStateFiles(stateSwap soundCloudStateSwap) error {
 			if err := cleanupTempFile(stateSwap.TempSyncPath); err != nil {
 				return err
 			}
-		} else if err := os.Rename(stateSwap.TempSyncPath, stateSwap.OriginalSyncPath); err != nil {
+		} else if err := mergeCommittedSoundCloudSyncStateFile(stateSwap.OriginalSyncPath, stateSwap.TempSyncPath); err != nil {
 			_ = cleanupTempFile(stateSwap.TempSyncPath)
 			return err
 		}
@@ -1849,7 +2214,7 @@ func commitTempStateFiles(stateSwap soundCloudStateSwap) error {
 			if err := cleanupTempFile(stateSwap.TempArchivePath); err != nil {
 				return err
 			}
-		} else if err := os.Rename(stateSwap.TempArchivePath, stateSwap.OriginalArchivePath); err != nil {
+		} else if err := mergeCommittedSoundCloudArchiveFile(stateSwap.OriginalArchivePath, stateSwap.TempArchivePath); err != nil {
 			_ = cleanupTempFile(stateSwap.TempArchivePath)
 			return err
 		}

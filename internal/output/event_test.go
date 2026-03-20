@@ -71,3 +71,12 @@ func TestObservingEmitterForwardsToObserverAndEmitter(t *testing.T) {
 		t.Fatalf("expected wrapped emitter output, got %s", buf.String())
 	}
 }
+
+func TestIsTrackEventName(t *testing.T) {
+	if !IsTrackEventName(EventTrackStarted) || !IsTrackEventName(EventTrackDone) {
+		t.Fatalf("expected track events to be recognized")
+	}
+	if IsTrackEventName(EventSourcePreflight) {
+		t.Fatalf("expected source event to not be treated as track event")
+	}
+}

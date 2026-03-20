@@ -14,7 +14,7 @@ The legacy script remains available during migration: `bin/update-downloads`.
 
 - CLI name: `udl`
 - v1 model: Go app orchestrating external adapters (`deemix`, `spotdl`, `scdl`)
-- Scope: `init`, `validate`, `doctor`, `sync`, `version`
+- Scope: `init`, `validate`, `doctor`, `sync`, `tui`, `version`
 
 ## Requirements
 
@@ -85,6 +85,12 @@ Run sync:
 udl sync
 ```
 
+Launch interactive TUI shell:
+
+```bash
+udl tui
+```
+
 ## Command Surface
 
 ```text
@@ -95,6 +101,7 @@ Commands:
   validate
   doctor
   sync
+  tui
   promote-freedl
   version
   help
@@ -116,9 +123,16 @@ Global flags:
 - `--ask-on-existing`
 - `--scan-gaps`
 - `--no-preflight`
+- `--plan`
+- `--plan-limit <n>` (`0` = unlimited; requires `--plan`)
 - `--progress <auto|always|never>`
 - `--preflight-summary <auto|always|never>`
 - `--track-status <names|count|none>`
+
+`tui`:
+- Launch with `udl tui`
+- Includes `sync`, `doctor`, `validate`, and `init` workflows
+- See `docs/tui.md` for keybindings, sync options, plan-mode flow, and known limitations
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)

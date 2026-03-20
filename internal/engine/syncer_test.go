@@ -38,6 +38,25 @@ func (noOpRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	return ExecResult{ExitCode: 0}
 }
 
+type execResultRunner struct {
+	result ExecResult
+	specs  []ExecSpec
+}
+
+func (r *execResultRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	r.specs = append(r.specs, spec)
+	return r.result
+}
+
+type captureEventEmitter struct {
+	events []output.Event
+}
+
+func (e *captureEventEmitter) Emit(event output.Event) error {
+	e.events = append(e.events, event)
+	return nil
+}
+
 type interruptedRunnerWithArtifacts struct{}
 
 func (interruptedRunnerWithArtifacts) Run(ctx context.Context, spec ExecSpec) ExecResult {
@@ -104,6 +123,25 @@ func (r *cacheInspectRunner) Run(ctx context.Context, spec ExecSpec) ExecResult 
 	}
 	if !strings.Contains(string(payload), r.expectSnippet) {
 		r.t.Fatalf("expected cache %s to include %q, got %q", cachePath, r.expectSnippet, string(payload))
+	}
+	return ExecResult{ExitCode: 0}
+}
+
+type observerLineRunner struct {
+	stdoutLines []string
+	stderrLines []string
+}
+
+func (r observerLineRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	for _, line := range r.stdoutLines {
+		for _, observer := range spec.StdoutObservers {
+			observer(line)
+		}
+	}
+	for _, line := range r.stderrLines {
+		for _, observer := range spec.StderrObservers {
+			observer(line)
+		}
 	}
 	return ExecResult{ExitCode: 0}
 }
@@ -197,6 +235,70 @@ func TestSyncerDryRunDeterministicJSON(t *testing.T) {
 	}
 	if !bytes.Contains(buf.Bytes(), []byte(`"event":"sync_finished"`)) {
 		t.Fatalf("expected sync_finished event, got %s", buf.String())
+	}
+}
+
+func TestSyncerEmitsNormalizedTrackEventsFromAdapterParser(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-source",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-source.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+
+	buf := &bytes.Buffer{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl": fakeAdapter{}},
+		observerLineRunner{
+			stdoutLines: []string{
+				"[download] Downloading item 1 of 1",
+				"[download] Destination: /tmp/Track One.m4a",
+				"[download] 25.0% of ~ 2.00MiB at 1.00MiB/s ETA 00:02 (frag 5/10)",
+				"[download] 100% of 2.00MiB in 00:02",
+			},
+		},
+		output.NewJSONEmitter(buf),
+	)
+
+	if _, err := syncer.Sync(context.Background(), cfg, SyncOptions{NoPreflight: true}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	out := buf.String()
+	for _, token := range []string{
+		`"event":"track_started"`,
+		`"event":"track_progress"`,
+		`"event":"track_done"`,
+		`"track_name":"Track One"`,
+		`"adapter_kind":"scdl"`,
+	} {
+		if !strings.Contains(out, token) {
+			t.Fatalf("expected token %q in output, got: %s", token, out)
+		}
 	}
 }
 
@@ -918,6 +1020,49 @@ func TestSyncerSpotifyDeemixUnavailableTrackIsSkippedAndNotAppended(t *testing.T
 	}
 	if _, ok := state.KnownIDs["2abc234def"]; !ok {
 		t.Fatalf("expected available track id in state, got %+v", state.KnownIDs)
+	}
+}
+
+func TestSCDLClientIDFailureMessageInvalidConfiguredClientID(t *testing.T) {
+	message, ok := scdlClientIDFailureMessage(
+		config.Source{
+			ID:      "soundcloud-likes",
+			Type:    config.SourceTypeSoundCloud,
+			Adapter: config.AdapterSpec{Kind: "scdl"},
+		},
+		ExecResult{
+			ExitCode: 1,
+			StderrTail: strings.Join([]string{
+				"[scdl] Invalid client_id specified by --client-id argument. Using a dynamically generated client_id",
+				"soundcloud.exceptions.ClientIDGenerationError: Could not find client_id in script 'https://a-v2.sndcdn.com/assets/0-0d70f4c9.js'",
+			}, "\n"),
+		},
+	)
+	if !ok {
+		t.Fatalf("expected client-id failure to be detected")
+	}
+	if !strings.Contains(message, "rejected the configured SCDL_CLIENT_ID") {
+		t.Fatalf("unexpected message: %q", message)
+	}
+}
+
+func TestSCDLClientIDFailureMessageAutomaticGenerationOnly(t *testing.T) {
+	message, ok := scdlClientIDFailureMessage(
+		config.Source{
+			ID:      "soundcloud-likes",
+			Type:    config.SourceTypeSoundCloud,
+			Adapter: config.AdapterSpec{Kind: "scdl"},
+		},
+		ExecResult{
+			ExitCode:   1,
+			StderrTail: "soundcloud.exceptions.ClientIDGenerationError: Could not find client_id in script 'https://a-v2.sndcdn.com/assets/0-0d70f4c9.js'",
+		},
+	)
+	if !ok {
+		t.Fatalf("expected automatic client-id generation failure to be detected")
+	}
+	if !strings.Contains(message, "could not generate a SoundCloud client_id automatically") {
+		t.Fatalf("unexpected message: %q", message)
 	}
 }
 
@@ -1787,6 +1932,86 @@ func TestSyncerSoundCloudFreeDLSkipsTracksWithoutFreeLink(t *testing.T) {
 	}
 }
 
+func TestSyncerSoundCloudSCDLDoesNotDeleteKnownGapIfAdapterDoesNotRewriteState(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "scdl-gap",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/gap",
+				StateFile: "scdl-gap.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl"},
+			},
+		},
+	}
+
+	statePath := filepath.Join(stateDir, "scdl-gap.sync.scdl")
+	if err := os.WriteFile(statePath, []byte("soundcloud gap-a missing-a.m4a\n"), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	archivePath := filepath.Join(stateDir, "scdl-gap.archive.txt")
+	if err := os.WriteFile(archivePath, []byte("soundcloud gap-a\n"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+	})
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{{ID: "gap-a", Title: "Gap A"}}, nil
+	}
+
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl": fakeAdapter{}},
+		noOpRunner{},
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+
+	state, err := parseSoundCloudSyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.ByID["gap-a"]; !ok {
+		t.Fatalf("expected known gap to remain in state, got %+v", state.ByID)
+	}
+	archive, err := parseSoundCloudArchive(archivePath)
+	if err != nil {
+		t.Fatalf("parse archive: %v", err)
+	}
+	if _, ok := archive["gap-a"]; !ok {
+		t.Fatalf("expected known gap to remain in archive, got %+v", archive)
+	}
+}
+
 func TestSyncerSoundCloudFreeDLUsesBrowserFallbackForHypeddit(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
@@ -2199,4 +2424,162 @@ func spotifyStateIDsFromPayload(payload string) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+func TestSyncerCommandFailureEmitsNormalizedFailureDiagnostics(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-source",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/test",
+				StateFile: "spotify-source.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "fake"},
+			},
+		},
+	}
+
+	runner := &execResultRunner{result: ExecResult{
+		ExitCode:   23,
+		StdoutTail: strings.Repeat("o", 64),
+		StderrTail: strings.Repeat("e", 64),
+	}}
+	emitter := &captureEventEmitter{}
+	syncer := NewSyncer(map[string]Adapter{"fake": fakeAdapter{}}, runner, emitter)
+	syncer.Now = func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("expected one failed source, got %+v", result)
+	}
+
+	var failureEvent *output.Event
+	for i := range emitter.events {
+		if emitter.events[i].Event == output.EventSourceFailed && emitter.events[i].Level == output.LevelError {
+			failureEvent = &emitter.events[i]
+		}
+	}
+	if failureEvent == nil {
+		t.Fatalf("expected normalized source_failed event, got %+v", emitter.events)
+	}
+
+	if got := failureEvent.Details["adapter_kind"]; got != "fake" {
+		t.Fatalf("expected adapter_kind=fake, got %#v", got)
+	}
+	if got := failureEvent.Details["command"]; got != "fakebin run spotify-source" {
+		t.Fatalf("unexpected command detail %#v", got)
+	}
+	if got := failureEvent.Details["exit_code"]; got != 23 {
+		t.Fatalf("unexpected exit code detail %#v", got)
+	}
+	if got := failureEvent.Details["failure_message"]; got != failureEvent.Message {
+		t.Fatalf("expected failure_message mirror, got %#v", got)
+	}
+	if got := failureEvent.Details["source_id"]; got != "spotify-source" {
+		t.Fatalf("expected source_id detail, got %#v", got)
+	}
+	if _, ok := failureEvent.Details["stdout_tail"]; !ok {
+		t.Fatalf("expected stdout_tail detail, got %+v", failureEvent.Details)
+	}
+	if _, ok := failureEvent.Details["stderr_tail"]; !ok {
+		t.Fatalf("expected stderr_tail detail, got %+v", failureEvent.Details)
+	}
+	logPath, ok := failureEvent.Details["failure_log_path"].(string)
+	if !ok || logPath == "" {
+		t.Fatalf("expected failure_log_path detail, got %+v", failureEvent.Details)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("expected persisted failure log at %s: %v", logPath, err)
+	}
+}
+
+func TestRunGenericAdapterBreakOnExistingEmitsStructuredStopDetails(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+	}
+	source := config.Source{
+		ID:        "soundcloud-likes",
+		Type:      config.SourceTypeSoundCloud,
+		Enabled:   true,
+		TargetDir: targetDir,
+		URL:       "https://soundcloud.com/user/likes",
+		StateFile: "soundcloud-likes.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "fake"},
+	}
+
+	runner := &execResultRunner{result: ExecResult{
+		ExitCode:   1,
+		Duration:   2 * time.Second,
+		StderrTail: "yt_dlp.utils.ExistingVideoReached: Encountered a video that is already in the archive, stopping due to --break-on-existing",
+	}}
+	emitter := &captureEventEmitter{}
+	syncer := NewSyncer(map[string]Adapter{"fake": fakeAdapter{}}, runner, emitter)
+	syncer.Now = func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }
+
+	outcome := syncer.runGenericAdapter(context.Background(), cfg, source, fakeAdapter{}, source, nil, soundCloudStateSwap{}, SyncOptions{})
+	if outcome.Failed != 0 || outcome.Succeeded != 1 {
+		t.Fatalf("expected graceful break-on-existing success, got %+v", outcome)
+	}
+
+	var finishedEvent *output.Event
+	for i := range emitter.events {
+		if emitter.events[i].Event == output.EventSourceFinished {
+			finishedEvent = &emitter.events[i]
+		}
+	}
+	if finishedEvent == nil {
+		t.Fatalf("expected source_finished stop event, got %+v", emitter.events)
+	}
+	if got := finishedEvent.Details["stop_reason"]; got != "break_on_existing" {
+		t.Fatalf("expected stop_reason=break_on_existing, got %#v", got)
+	}
+	if got := finishedEvent.Details["stopped_on_existing"]; got != true {
+		t.Fatalf("expected stopped_on_existing=true, got %#v", got)
+	}
+	if got := finishedEvent.Details["adapter_kind"]; got != "fake" {
+		t.Fatalf("expected adapter_kind=fake, got %#v", got)
+	}
+	if !strings.Contains(finishedEvent.Message, "stopped at first existing track (break_on_existing)") {
+		t.Fatalf("unexpected stop message %q", finishedEvent.Message)
+	}
 }

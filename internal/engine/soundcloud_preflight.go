@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -35,6 +36,7 @@ type soundCloudSyncState struct {
 type idSet map[string]struct{}
 
 var enumerateSoundCloudTracksFn = enumerateSoundCloudTracks
+var enumerateSoundCloudTracksWithLimitFn = enumerateSoundCloudTracksWithLimit
 
 func effectiveSoundCloudListURL(source config.Source) string {
 	base := strings.TrimSpace(source.URL)
@@ -99,15 +101,21 @@ func hasFlagArg(args []string, candidate string) bool {
 }
 
 func enumerateSoundCloudTracks(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+	return enumerateSoundCloudTracksWithLimit(ctx, source, 0)
+}
+
+func enumerateSoundCloudTracksWithLimit(ctx context.Context, source config.Source, limit int) ([]soundCloudRemoteTrack, error) {
 	listURL := effectiveSoundCloudListURL(source)
-	cmd := exec.CommandContext(
-		ctx,
-		"yt-dlp",
+	args := []string{
 		"--flat-playlist",
 		"--print",
 		"%(id)s\t%(title)s\t%(webpage_url)s",
-		listURL,
-	)
+	}
+	if limit > 0 {
+		args = append(args, "--playlist-end", strconv.Itoa(limit))
+	}
+	args = append(args, listURL)
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError

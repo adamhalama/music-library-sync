@@ -60,6 +60,9 @@ func (e *HumanEmitter) Emit(event Event) error {
 		_, err := fmt.Fprintln(e.stderr, "WARN:", line)
 		return err
 	default:
+		if IsTrackEventName(event.Event) && !e.verbose {
+			return nil
+		}
 		if e.quiet && event.Event != EventSyncFinished {
 			return nil
 		}

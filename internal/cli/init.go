@@ -6,7 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jaa/update-downloads/internal/config"
+	workflows "github.com/jaa/update-downloads/internal/app"
+	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/spf13/cobra"
 )
@@ -18,53 +19,50 @@ func newInitCommand(app *AppContext) *cobra.Command {
 		Use:   "init",
 		Short: "Create starter config and state directories",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := strings.TrimSpace(app.Opts.ConfigPath)
-			if path == "" {
-				userPath, err := config.UserConfigPath()
-				if err != nil {
-					return withExitCode(exitcode.RuntimeFailure, err)
-				}
-				path = userPath
-			}
-
-			if err := config.EnsureConfigDir(path); err != nil {
+			useCase := workflows.InitUseCase{}
+			result, err := useCase.Run(workflows.InitRequest{
+				ConfigPath: app.Opts.ConfigPath,
+				Force:      force,
+				NoInput:    app.Opts.NoInput,
+				IsTTY:      isTTY(os.Stdin),
+			}, initInteraction{app: app})
+			if err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
-
-			if _, err := os.Stat(path); err == nil && !force {
-				if app.Opts.NoInput || !isTTY(os.Stdin) {
-					return withExitCode(exitcode.RuntimeFailure, fmt.Errorf("config already exists at %s (rerun with --force)", path))
-				}
-				confirmed, confirmErr := promptYesNo(app, fmt.Sprintf("Config already exists at %s. Overwrite?", path))
-				if confirmErr != nil {
-					return withExitCode(exitcode.RuntimeFailure, confirmErr)
-				}
-				if !confirmed {
-					fmt.Fprintln(app.IO.Out, "Initialization canceled.")
-					return nil
-				}
+			if result.Canceled {
+				fmt.Fprintln(app.IO.Out, "Initialization canceled.")
+				return nil
 			}
-
-			if err := os.WriteFile(path, []byte(config.DefaultTemplate()), 0o644); err != nil {
-				return withExitCode(exitcode.RuntimeFailure, fmt.Errorf("write config file: %w", err))
-			}
-
-			stateDir, err := config.ExpandPath(config.DefaultConfig().Defaults.StateDir)
-			if err != nil {
-				return withExitCode(exitcode.RuntimeFailure, fmt.Errorf("resolve state directory: %w", err))
-			}
-			if err := os.MkdirAll(stateDir, 0o755); err != nil {
-				return withExitCode(exitcode.RuntimeFailure, fmt.Errorf("create state directory %s: %w", stateDir, err))
-			}
-
-			fmt.Fprintf(app.IO.Out, "Wrote config: %s\n", path)
-			fmt.Fprintf(app.IO.Out, "Ensured state dir: %s\n", stateDir)
+			fmt.Fprintf(app.IO.Out, "Wrote config: %s\n", result.ConfigPath)
+			fmt.Fprintf(app.IO.Out, "Ensured state dir: %s\n", result.StateDir)
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config file")
 	return cmd
+}
+
+type initInteraction struct {
+	app *AppContext
+}
+
+func (i initInteraction) Confirm(prompt string, defaultYes bool) (bool, error) {
+	return promptYesNoDefault(i.app, prompt, defaultYes)
+}
+
+func (i initInteraction) Input(prompt string) (string, error) {
+	return promptLine(i.app, prompt)
+}
+
+func (i initInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+	selected := make([]int, 0, len(rows))
+	for _, row := range rows {
+		if row.Toggleable && row.SelectedByDefault {
+			selected = append(selected, row.Index)
+		}
+	}
+	return selected, false, nil
 }
 
 func promptYesNo(app *AppContext, prompt string) (bool, error) {
