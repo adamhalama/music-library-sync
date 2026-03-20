@@ -977,20 +977,104 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 }
 
 func planPromptHeaderLines(state *tuiPlanPromptState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
+	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel)
+	controls := renderPlanPromptControls(state)
 	if layout.Height < 24 {
 		return []string{
-			fmt.Sprintf("Plan Selection  src=%s  type=%s/%s  mode=%s  limit=%s", state.sourceID, state.details.SourceType, state.details.Adapter, modeLabel, limitLabel),
-			fmt.Sprintf("focus=%s  filter=%s  target=%s  state=%s", state.focusLabel(), state.filterLabel(), filepath.Base(state.details.TargetDir), filepath.Base(state.details.StateFile)),
-			"keys: tab filters  j/k move  space toggle/apply  a all visible  n clear visible  enter confirm  esc cancel",
+			infoBar,
+			renderPlanPromptPathLine(
+				fmt.Sprintf("target %s", filepath.Base(state.details.TargetDir)),
+				fmt.Sprintf("state %s", filepath.Base(state.details.StateFile)),
+			),
+			controls,
 		}
 	}
 	return []string{
-		fmt.Sprintf("Plan Selection  source=%s  mode=%s  plan-limit=%s  type=%s  adapter=%s", state.sourceID, modeLabel, limitLabel, state.details.SourceType, state.details.Adapter),
-		fmt.Sprintf("target_dir=%s", state.details.TargetDir),
-		fmt.Sprintf("state_file=%s", state.details.StateFile),
-		fmt.Sprintf("url=%s", state.details.URL),
-		fmt.Sprintf("focus=%s  filter=%s  keys: tab switch  j/k move  space toggle/apply  a all visible  n clear visible  enter confirm/apply  esc cancel", state.focusLabel(), state.filterLabel()),
+		infoBar,
+		renderPlanPromptPathLine("target "+state.details.TargetDir, "state "+state.details.StateFile),
+		renderPlanPromptPathLine("url "+state.details.URL, ""),
+		controls,
 	}
+}
+
+func renderPlanPromptInfoBar(state *tuiPlanPromptState, modeLabel, limitLabel string) string {
+	parts := []string{
+		planPromptChip("Plan Selection", "info"),
+		planPromptField("source", state.sourceID),
+		planPromptField("mode", modeLabel),
+		planPromptField("limit", limitLabel),
+		planPromptField("type", fmt.Sprintf("%s/%s", state.details.SourceType, state.details.Adapter)),
+	}
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Padding(0, 1).
+		Render(strings.Join(parts, "  "))
+}
+
+func renderPlanPromptPathLine(left, right string) string {
+	parts := []string{
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(left),
+	}
+	if strings.TrimSpace(right) != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("•"))
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(right))
+	}
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Render(strings.Join(parts, "  "))
+}
+
+func renderPlanPromptControls(state *tuiPlanPromptState) string {
+	focusTone := "warning"
+	if !state.focusFilters {
+		focusTone = "info"
+	}
+	parts := []string{
+		planPromptChip("focus "+state.focusLabel(), focusTone),
+		planPromptChip("filter "+state.filterLabel(), "muted"),
+		renderPlanPromptKey("tab", "switch"),
+		renderPlanPromptKey("j/k", "move"),
+		renderPlanPromptKey("space", "toggle/apply"),
+		renderPlanPromptKey("a", "all visible"),
+		renderPlanPromptKey("n", "clear visible"),
+		renderPlanPromptKey("enter", "confirm"),
+		renderPlanPromptKey("esc", "cancel"),
+	}
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Padding(0, 1).
+		Render(strings.Join(parts, "  "))
+}
+
+func renderPlanPromptKey(keyLabel, label string) string {
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")).
+		Background(lipgloss.Color("239")).
+		Bold(true).
+		Padding(0, 1)
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	return keyStyle.Render(keyLabel) + " " + textStyle.Render(label)
+}
+
+func planPromptChip(label, tone string) string {
+	style := lipgloss.NewStyle().Padding(0, 1).Bold(true)
+	switch tone {
+	case "warning":
+		style = style.Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52"))
+	case "success":
+		style = style.Foreground(lipgloss.Color("78")).Background(lipgloss.Color("22"))
+	case "muted":
+		style = style.Foreground(lipgloss.Color("245")).Background(lipgloss.Color("238"))
+	default:
+		style = style.Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17"))
+	}
+	return style.Render(label)
+}
+
+func planPromptField(label, value string) string {
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	return labelStyle.Render(strings.ToLower(label)+"=") + valueStyle.Render(value)
 }
 
 func (m tuiSyncModel) interactionPromptModal() *tuiModalState {
@@ -1221,6 +1305,7 @@ func renderPlanPromptTable(state *tuiPlanPromptState, layout tuiShellLayout) str
 		headerStyle.Width(titleWidth).Render("TRACK"),
 		headerStyle.Width(idWidth).Render("ID"),
 	}, "  ")
+	header = lipgloss.NewStyle().Background(lipgloss.Color("237")).Padding(0, 1).Render(header)
 
 	filtered := state.filteredRows()
 	visibleIndices := state.visibleRowIndices()
@@ -1232,7 +1317,7 @@ func renderPlanPromptTable(state *tuiPlanPromptState, layout tuiShellLayout) str
 		}
 	}
 	start, end := shellPlanPromptRowWindow(len(filtered), filteredCursor, layout)
-	lines := []string{header, strings.Repeat("─", maxInt(16, width))}
+	lines := []string{header, lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render(strings.Repeat("─", maxInt(16, width)))}
 	for i := start; i < end; i++ {
 		row := filtered[i]
 		selected := row.Toggleable && state.selected[row.Index]
@@ -1283,11 +1368,11 @@ func renderPlanPromptRow(row engine.PlanRow, isCursor, selected bool, selectWidt
 func planPromptStatusChip(status engine.PlanRowStatus) (string, lipgloss.Style) {
 	switch status {
 	case engine.PlanRowMissingNew:
-		return "new", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
+		return " new ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
 	case engine.PlanRowMissingKnownGap:
-		return "known-gap", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Bold(true)
+		return " known-gap ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
 	default:
-		return "have-it", lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+		return " have-it ", lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Background(lipgloss.Color("237"))
 	}
 }
 
