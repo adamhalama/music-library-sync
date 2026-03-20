@@ -1509,7 +1509,7 @@ func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, index
 			selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
 		}
 	}
-	statusLabel, statusStyle := planPromptStatusChip(row)
+	statusLabel, statusStyle := planPromptStatusChip(row, statusWidth)
 	title := strings.TrimSpace(row.Title)
 	if title == "" {
 		title = "(untitled)"
@@ -1532,12 +1532,16 @@ func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, index
 	return line
 }
 
-func planPromptStatusChip(row tuiTrackRowState) (string, lipgloss.Style) {
+func planPromptStatusChip(row tuiTrackRowState, statusWidth int) (string, lipgloss.Style) {
 	switch row.RuntimeStatus {
 	case tuiTrackStatusDownloading:
 		label := " downloading "
 		if row.ProgressKnown {
-			label = fmt.Sprintf(" dl %3.0f%% %s ", row.ProgressPercent, tuiRenderMiniBar(row.ProgressPercent, 4))
+			barWidth := statusWidth - 11
+			if barWidth < 4 {
+				barWidth = 4
+			}
+			label = fmt.Sprintf(" dl %3.0f%% %s ", row.ProgressPercent, tuiRenderMiniBar(row.ProgressPercent, barWidth))
 		}
 		return label, lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
 	case tuiTrackStatusDownloaded:
