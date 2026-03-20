@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
@@ -259,6 +260,9 @@ func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
 	}
 	if strings.Contains(view, "row-20") {
 		t.Fatalf("expected long selector rows to be windowed out, got: %s", view)
+	}
+	if got := lipgloss.Height(view); got > root.height {
+		t.Fatalf("expected rendered shell height <= %d, got %d", root.height, got)
 	}
 }
 

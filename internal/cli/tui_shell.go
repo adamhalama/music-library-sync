@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type tuiShellLayout struct {
@@ -25,6 +26,7 @@ type tuiShellState struct {
 	BodyTitle        string
 	Body             string
 	DenseBody        bool
+	StyledBody       bool
 	FooterStats      []tuiFooterStat
 	Banner           *tuiBanner
 	Modal            *tuiModalState
@@ -180,39 +182,55 @@ func renderTUIShell(state tuiShellState, layout tuiShellLayout) string {
 		sidebar = renderTUISidebar(state, theme, layout)
 	}
 
-	mainParts := []string{
-		renderTUITitlebar(state, theme, layout),
+	titlebar := renderTUITitlebar(state, theme, layout)
+	badges := renderTUIBadges(state, theme, layout)
+	commandBar := renderTUICommandBar(state, theme, layout)
+	shortcuts := renderTUIShortcuts(state, theme, layout)
+	banner := renderTUIBanner(state, theme, layout)
+	footer := renderTUIFooter(state, theme, layout)
+
+	fixedParts := []string{titlebar}
+	if sidebar != "" && layout.Compact {
+		fixedParts = append(fixedParts, sidebar)
 	}
+	fixedParts = append(fixedParts, badges, commandBar, shortcuts, banner, footer)
+
+	bodyHeight := shellBodyHeight(layout, theme, fixedParts)
+	body := renderTUIBody(state, theme, layout, bodyHeight)
+
+	mainParts := []string{titlebar}
 	if sidebar != "" && layout.Compact {
 		mainParts = append(mainParts, sidebar)
 	}
-	if badges := renderTUIBadges(state, theme, layout); badges != "" {
+	if badges != "" {
 		mainParts = append(mainParts, badges)
 	}
-	if commandBar := renderTUICommandBar(state, theme, layout); commandBar != "" {
+	if commandBar != "" {
 		mainParts = append(mainParts, commandBar)
 	}
-	if shortcuts := renderTUIShortcuts(state, theme, layout); shortcuts != "" {
+	if shortcuts != "" {
 		mainParts = append(mainParts, shortcuts)
 	}
-	if banner := renderTUIBanner(state, theme, layout); banner != "" {
+	if banner != "" {
 		mainParts = append(mainParts, banner)
 	}
-	mainParts = append(mainParts, renderTUIBody(state, theme, layout))
-	mainParts = append(mainParts, renderTUIFooter(state, theme, layout))
+	mainParts = append(mainParts, body, footer)
 
 	main := strings.Join(filterEmptyStrings(mainParts), "\n")
 	if !layout.Compact {
 		main = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, main)
 	}
-	main = theme.frame.Render(main)
+	main = theme.frame.
+		Width(styleContentWidth(layout.Width, theme.frame)).
+		Render(main)
 
 	if state.Modal != nil {
 		main = renderTUIModal(main, state, theme, layout)
 	}
 	return lipgloss.NewStyle().
 		Width(layout.Width).
-		Height(layout.Height).
+		MaxHeight(layout.Height).
+		AlignVertical(lipgloss.Top).
 		Background(lipgloss.Color(tuiShellBackgroundColor)).
 		Render(main)
 }
@@ -226,13 +244,7 @@ func renderTUITitlebar(state tuiShellState, theme tuiShellTheme, layout tuiShell
 	if title != "" {
 		label = label + " · " + strings.ToUpper(title)
 	}
-	dots := strings.Join([]string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("●"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Render("●"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Render("●"),
-	}, " ")
-	row := dots + "  " + label
-	return theme.titlebar.Width(shellMainSectionWidth(layout)).Render(row)
+	return theme.titlebar.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.titlebar)).Render(label)
 }
 
 func renderTUISidebar(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -247,7 +259,7 @@ func renderTUISidebar(state tuiShellState, theme tuiShellTheme, layout tuiShellL
 		lines = append(lines, "")
 	}
 	sidebar := strings.TrimRight(strings.Join(lines, "\n"), "\n")
-	return theme.sidebar.Width(layout.SidebarWidth).Render(sidebar)
+	return theme.sidebar.Width(styleContentWidth(shellSidebarWidth(layout, theme), theme.sidebar)).Render(sidebar)
 }
 
 func renderTUISidebarItem(item tuiSidebarItem, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -260,16 +272,16 @@ func renderTUISidebarItem(item tuiSidebarItem, theme tuiShellTheme, layout tuiSh
 		prefix = "> "
 		style = theme.sidebarActive
 	}
-	labelWidth := layout.SidebarWidth - 4
+	labelWidth := shellSidebarWidth(layout, theme) - theme.sidebar.GetHorizontalFrameSize() - 2
 	if labelWidth < 8 {
 		labelWidth = 8
 	}
 	label := truncateForWidth(item.Label, labelWidth)
-	line := style.Width(labelWidth + 2).Render(prefix + label)
+	line := style.Render(prefix + label)
 	if strings.TrimSpace(item.Meta) == "" {
 		return line
 	}
-	meta := theme.sidebarMeta.Width(labelWidth + 2).Render("  " + truncateForWidth(item.Meta, labelWidth))
+	meta := theme.sidebarMeta.Render("  " + truncateForWidth(item.Meta, labelWidth))
 	return line + "\n" + meta
 }
 
@@ -288,7 +300,7 @@ func renderTUITopNav(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 			items = append(items, style.Render(label))
 		}
 	}
-	return theme.navStrip.Width(layout.Width - 2).Render(strings.Join(items, "  "))
+	return theme.navStrip.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.navStrip)).Render(strings.Join(items, "  "))
 }
 
 func renderTUIBadges(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -299,7 +311,7 @@ func renderTUIBadges(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 	for _, badge := range state.Badges {
 		rendered = append(rendered, renderTUIBadge(badge, theme))
 	}
-	return theme.topbar.Width(shellMainSectionWidth(layout)).Render(strings.Join(rendered, " "))
+	return theme.topbar.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.topbar)).Render(strings.Join(rendered, " "))
 }
 
 func renderTUIBadge(badge tuiBadge, theme tuiShellTheme) string {
@@ -352,7 +364,7 @@ func renderTUICommandBar(state tuiShellState, theme tuiShellTheme, layout tuiShe
 	if layout.Compact {
 		summary = strings.Join(state.CommandSummary, " | ")
 	}
-	return theme.commandBar.Width(shellMainSectionWidth(layout)).Render(summary)
+	return theme.commandBar.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.commandBar)).Render(summary)
 }
 
 func renderTUIShortcuts(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -368,7 +380,7 @@ func renderTUIShortcuts(state tuiShellState, theme tuiShellTheme, layout tuiShel
 		}
 		rendered = append(rendered, style.Render(chunk))
 	}
-	return theme.shortcuts.Width(shellMainSectionWidth(layout)).Render(strings.Join(rendered, "  "))
+	return theme.shortcuts.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.shortcuts)).Render(strings.Join(rendered, "  "))
 }
 
 func renderTUIBanner(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -376,10 +388,11 @@ func renderTUIBanner(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 		return ""
 	}
 	style := shellToneStyle(theme, state.Banner.Tone)
-	return lipgloss.NewStyle().Padding(0, 1).Width(shellMainSectionWidth(layout)).Render(style.Render(state.Banner.Text))
+	bannerStyle := lipgloss.NewStyle().Padding(0, 1)
+	return bannerStyle.Width(styleContentWidth(shellMainSectionWidth(layout, theme), bannerStyle)).Render(style.Render(state.Banner.Text))
 }
 
-func renderTUIBody(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
+func renderTUIBody(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout, bodyHeight int) string {
 	parts := []string{}
 	if strings.TrimSpace(state.BodyTitle) != "" {
 		parts = append(parts, theme.bodyTitle.Render(state.BodyTitle))
@@ -388,7 +401,11 @@ func renderTUIBody(state tuiShellState, theme tuiShellTheme, layout tuiShellLayo
 	if strings.TrimSpace(body) == "" {
 		body = theme.muted.Render("(empty)")
 	}
-	parts = append(parts, theme.bodyText.Render(body))
+	if state.StyledBody {
+		parts = append(parts, body)
+	} else {
+		parts = append(parts, theme.bodyText.Render(body))
+	}
 	separator := "\n\n"
 	style := theme.bodyPanel
 	if state.DenseBody {
@@ -396,8 +413,11 @@ func renderTUIBody(state tuiShellState, theme tuiShellTheme, layout tuiShellLayo
 		style = style.Padding(0, 1)
 	}
 	panel := strings.Join(parts, separator)
-	width := shellMainSectionWidth(layout)
-	return style.Width(width).Render(panel)
+	width := shellMainSectionWidth(layout, theme)
+	if bodyHeight > 0 {
+		style = style.MaxHeight(bodyHeight)
+	}
+	return style.Width(styleContentWidth(width, style)).Render(panel)
 }
 
 func renderTUIFooter(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -422,17 +442,17 @@ func renderTUIFooter(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 	if layout.Compact && len(stats) > 3 {
 		line = strings.Join(stats[:3], separator)
 	}
-	return theme.footer.Width(shellMainSectionWidth(layout)).Render(line)
+	return theme.footer.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.footer)).Render(line)
 }
 
 func renderTUIModal(base string, state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
 	lines := append([]string{theme.modalTitle.Render(state.Modal.Title)}, state.Modal.Lines...)
-	boxWidth := minInt(shellMainSectionWidth(layout)-6, 72)
+	boxWidth := minInt(shellMainSectionWidth(layout, theme)-6, 72)
 	if boxWidth < 24 {
 		boxWidth = 24
 	}
-	box := theme.modalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
-	centered := lipgloss.Place(shellMainSectionWidth(layout), 0, lipgloss.Center, lipgloss.Top, box)
+	box := theme.modalBox.Width(styleContentWidth(boxWidth, theme.modalBox)).Render(strings.Join(lines, "\n"))
+	centered := lipgloss.Place(shellMainSectionWidth(layout, theme), 0, lipgloss.Center, lipgloss.Top, box)
 	return theme.backdrop.Render(base) + "\n\n" + centered
 }
 
@@ -469,15 +489,74 @@ func minInt(a, b int) int {
 	return b
 }
 
-func shellMainSectionWidth(layout tuiShellLayout) int {
-	if layout.Compact {
-		return layout.Width - 2
+func maxInt(a, b int) int {
+	if a > b {
+		return a
 	}
-	width := layout.MainWidth
-	if width < 20 {
-		return layout.Width - 2
+	return b
+}
+
+func shellMainSectionWidth(layout tuiShellLayout, theme tuiShellTheme) int {
+	frameInnerWidth := layout.Width - theme.frame.GetHorizontalFrameSize()
+	if frameInnerWidth < 20 {
+		frameInnerWidth = layout.Width
+	}
+	if layout.Compact {
+		return frameInnerWidth
+	}
+	sidebarWidth := shellSidebarWidth(layout, theme)
+	mainWidth := frameInnerWidth - sidebarWidth
+	if mainWidth < 20 {
+		return frameInnerWidth
+	}
+	return mainWidth
+}
+
+func shellSidebarWidth(layout tuiShellLayout, theme tuiShellTheme) int {
+	if layout.Compact {
+		return 0
+	}
+	frameInnerWidth := layout.Width - theme.frame.GetHorizontalFrameSize()
+	if frameInnerWidth < 40 {
+		return 0
+	}
+	sidebarWidth := layout.SidebarWidth
+	if sidebarWidth < 20 {
+		sidebarWidth = 20
+	}
+	maxSidebar := frameInnerWidth - 40
+	if maxSidebar < 20 {
+		maxSidebar = 20
+	}
+	if sidebarWidth > maxSidebar {
+		sidebarWidth = maxSidebar
+	}
+	return sidebarWidth
+}
+
+func styleContentWidth(totalWidth int, style lipgloss.Style) int {
+	width := totalWidth - style.GetHorizontalFrameSize()
+	if width < 0 {
+		return 0
 	}
 	return width
+}
+
+func shellBodyHeight(layout tuiShellLayout, theme tuiShellTheme, fixedParts []string) int {
+	height := layout.Height - theme.frame.GetVerticalFrameSize()
+	for _, part := range fixedParts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		height -= lipgloss.Height(part)
+	}
+	if count := len(filterEmptyStrings(fixedParts)); count > 1 {
+		height -= count - 1
+	}
+	if height < 1 {
+		return 1
+	}
+	return height
 }
 
 func truncateForWidth(value string, width int) string {
@@ -556,6 +635,7 @@ func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 		BodyTitle:        syncModel.shellBodyTitle(),
 		Body:             syncModel.shellBody(layout),
 		DenseBody:        syncModel.planPrompt != nil,
+		StyledBody:       syncModel.planPrompt != nil,
 		FooterStats:      syncModel.shellFooterStats(),
 		Banner:           syncModel.shellBanner(),
 		AllowBack:        m.canReturnToMenuOnEsc(),
@@ -773,6 +853,9 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 }
 
 func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
+	if m.planPrompt != nil {
+		return nil
+	}
 	shortcuts := []tuiShortcut{
 		{Key: "j/k", Label: "move"},
 		{Key: "space", Label: "toggle source"},
@@ -846,18 +929,16 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 		modeLabel = "dry-run"
 	}
 	lines := []string{
-		fmt.Sprintf("source=%s  mode=%s  plan-limit=%s", state.sourceID, modeLabel, limitLabel),
-		fmt.Sprintf("type=%s  adapter=%s", state.details.SourceType, state.details.Adapter),
+		fmt.Sprintf("Plan Selection  source=%s  mode=%s  plan-limit=%s  type=%s  adapter=%s", state.sourceID, modeLabel, limitLabel, state.details.SourceType, state.details.Adapter),
 		fmt.Sprintf("target_dir=%s", state.details.TargetDir),
 		fmt.Sprintf("state_file=%s", state.details.StateFile),
 		fmt.Sprintf("url=%s", state.details.URL),
-		"",
-		"up/down or j/k: move   space: toggle   a: select all   n: clear all   enter: confirm   q/esc: cancel",
+		"keys: j/k move  space toggle  a all  n none  enter confirm  q/esc cancel",
 	}
 	if len(state.rows) == 0 {
 		lines = append(lines, "No tracks found in selected preflight window.")
 	} else {
-		start, end := planSelectorWindow(len(state.rows), state.cursor, shellPlanPromptWindowHeight(layout))
+		start, end := shellPlanPromptRowWindow(len(state.rows), state.cursor, layout)
 		for i := start; i < end; i++ {
 			row := state.rows[i]
 			cursor := " "
@@ -878,9 +959,20 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 			}
 			lines = append(lines, fmt.Sprintf("%s %s %3d  %-16s  %s (%s)", cursor, marker, row.Index, string(row.Status), title, row.RemoteID))
 		}
-		lines = append(lines, "", fmt.Sprintf("Selected: %d/%d toggleable tracks", state.selectedCount(), state.toggleableCount()))
 	}
-	return strings.Join(lines, "\n")
+	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks", state.selectedCount(), state.toggleableCount()))
+	theme := newTUIShellTheme()
+	bodyStyle := theme.bodyPanel.Padding(0, 1)
+	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize()
+	if width < 24 {
+		width = shellMainSectionWidth(layout, theme)
+	}
+	bodyLines := make([]string, 0, len(lines)+1)
+	bodyLines = append(bodyLines, strings.Repeat("─", maxInt(8, width)))
+	for _, line := range lines {
+		bodyLines = append(bodyLines, ansi.Truncate(line, width, ""))
+	}
+	return strings.Join(bodyLines, "\n")
 }
 
 func (m tuiSyncModel) interactionPromptModal() *tuiModalState {
@@ -1052,7 +1144,7 @@ func (m tuiSyncModel) selectedSourceCount() int {
 
 func (m tuiSyncModel) shellBodyTitle() string {
 	if m.planPrompt != nil {
-		return "Plan Selection"
+		return ""
 	}
 	return m.workflowTitle()
 }
@@ -1064,12 +1156,50 @@ func (m tuiSyncModel) shellBody(layout tuiShellLayout) string {
 	return m.bodyView(false)
 }
 
-func shellPlanPromptWindowHeight(layout tuiShellLayout) int {
-	height := layout.Height - 18
-	if height < 0 {
-		return 0
+func renderPlanSection(title string, lines []string, width int) string {
+	style := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("236")).
+		Padding(0, 0)
+	contentWidth := styleContentWidth(width, style)
+	if contentWidth < 20 {
+		contentWidth = 20
 	}
-	return height
+	header := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Bold(true).
+		Render(ansi.Truncate(title, contentWidth, ""))
+	bodyLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		bodyLines = append(bodyLines, ansi.Truncate(line, contentWidth, ""))
+	}
+	body := strings.Join(bodyLines, "\n")
+	return style.
+		Width(contentWidth).
+		Render(header + "\n" + body)
+}
+
+func shellPlanPromptRowWindow(total, cursor int, layout tuiShellLayout) (int, int) {
+	maxRows := layout.Height - 22
+	if maxRows < 4 {
+		maxRows = 4
+	}
+	if total <= 0 {
+		return 0, 0
+	}
+	if total <= maxRows {
+		return 0, total
+	}
+	start := cursor - (maxRows / 2)
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxRows
+	if end > total {
+		end = total
+		start = end - maxRows
+	}
+	return start, end
 }
 
 func (m tuiSyncModel) bodyView(includeSources bool) string {
