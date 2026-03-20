@@ -10,7 +10,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/jaa/update-downloads/internal/adapters/deemix"
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
 	"github.com/jaa/update-downloads/internal/adapters/scdlfreedl"
@@ -197,36 +196,8 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 }
 
 func (m tuiRootModel) View() string {
-	header := lipgloss.NewStyle().Bold(true).Render("UDL TUI")
-	footer := "up/down: move  enter: select  esc: back  q: quit"
-	body := ""
-
-	switch m.screen {
-	case tuiScreenMenu:
-		lines := []string{"", "Workflows:"}
-		for i, item := range m.menuItems {
-			cursor := " "
-			if i == m.menuCursor {
-				cursor = ">"
-			}
-			lines = append(lines, fmt.Sprintf("%s %s", cursor, item))
-		}
-		body = strings.Join(lines, "\n")
-	case tuiScreenInteractiveSync, tuiScreenSync:
-		body = m.syncModel.View()
-	case tuiScreenDoctor:
-		body = m.doctorModel.View()
-	case tuiScreenValidate:
-		body = m.validateModel.View()
-	case tuiScreenInit:
-		body = m.initModel.View()
-	}
-
-	if m.debugMessages {
-		footer = footer + "  |  last_msg=" + m.lastMsgType
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
-	return lipgloss.NewStyle().Padding(1, 2).Render(content)
+	layout := newTUIShellLayout(m.width, m.height)
+	return renderTUIShell(m.shellState(layout), layout)
 }
 
 type tuiSyncModel struct {
@@ -791,26 +762,15 @@ func (m tuiSyncModel) View() string {
 	if m.cfgErr != nil {
 		return fmt.Sprintf("Config load failed: %v", m.cfgErr)
 	}
-	if m.planPrompt != nil {
-		return m.planPromptView()
-	}
-	if m.interactionPrompt != nil {
-		return m.interactionPromptView()
-	}
 	lines := []string{
-		m.workflowTitle(),
 		fmt.Sprintf("dry_run=%t  timeout=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride)),
 	}
 	if m.isInteractiveSyncWorkflow() {
 		lines = append(lines,
-			"j/k: move  space: toggle source  d: dry-run  t: timeout  enter: run  esc: back",
-			"[/]: plan-limit  l: type limit  u: unlimited  x/ctrl+c: cancel active run",
 			fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit)),
 		)
 	} else {
 		lines = append(lines,
-			"j/k: move  space: toggle source  d: dry-run  a: ask-existing  g: scan-gaps  f: no-preflight  t: timeout  enter: run  esc: back",
-			"x/ctrl+c: cancel active run",
 			fmt.Sprintf("ask_on_existing=%s  scan_gaps=%t  no_preflight=%t", formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight),
 		)
 	}
@@ -1609,7 +1569,7 @@ func (m tuiDoctorModel) Update(msg tea.Msg) (tuiDoctorModel, tea.Cmd) {
 }
 
 func (m tuiDoctorModel) View() string {
-	lines := []string{"Doctor Workflow", "esc: back", ""}
+	lines := []string{}
 	if !m.done {
 		lines = append(lines, "Running checks...")
 		return strings.Join(lines, "\n")
@@ -1659,7 +1619,7 @@ func (m tuiValidateModel) Update(msg tea.Msg) (tuiValidateModel, tea.Cmd) {
 }
 
 func (m tuiValidateModel) View() string {
-	lines := []string{"Validate Workflow", "esc: back", ""}
+	lines := []string{}
 	if !m.done {
 		lines = append(lines, "Validating...")
 		return strings.Join(lines, "\n")
@@ -1810,10 +1770,7 @@ func (m tuiInitModel) Update(msg tea.Msg) (tuiInitModel, tea.Cmd) {
 }
 
 func (m tuiInitModel) View() string {
-	if m.prompt != nil {
-		return m.promptView()
-	}
-	lines := []string{"Init Workflow", "esc: back", ""}
+	lines := []string{}
 	if m.running && !m.done {
 		lines = append(lines, "Running init...")
 		return strings.Join(lines, "\n")

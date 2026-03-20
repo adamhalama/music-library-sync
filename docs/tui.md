@@ -9,6 +9,12 @@
 
 The TUI is additive. Existing CLI commands (`udl sync`, `udl doctor`, etc.) remain unchanged.
 
+The current TUI uses a shared shell:
+- landing screen with workflow navigation
+- shared titlebar, badges, command summary, shortcuts, body panel, and footer
+- in-app modal prompts for plan selection and confirmations/input
+- compact shell fallback when terminal width is below `110` columns
+
 ## Launch
 
 ```bash
@@ -23,9 +29,14 @@ udl tui --debug-messages
 
 ## Navigation
 
-- Menu: `j/k` or up/down to move, `enter` to open workflow
-- Global: `esc` returns to menu when no active in-workflow prompt is open
-- Menu-only: `q` or `ctrl+c` quits
+- Landing screen: `j/k` or up/down to move, `enter` to open workflow
+- Global: `esc` returns to the landing screen when no active in-workflow prompt is open
+- Landing screen only: `q` or `ctrl+c` quits
+- Shell layout:
+  - width `>= 110`: left sidebar + main panel shell
+  - width `< 110`: compact top navigation strip + main panel shell
+
+Inside active workflows, the sidebar/top navigation is informational in this stage. Workflow switching still happens by returning to the landing screen with `esc`.
 
 ## Interactive Sync Workflow
 
@@ -63,6 +74,8 @@ Selector header includes source config context:
 - source URL
 - current plan limit and run mode
 
+The selector is rendered as an in-shell modal instead of replacing the whole screen.
+
 ## Sync Workflow
 
 ### Source selection
@@ -86,6 +99,8 @@ This workflow is the streamlined non-plan path and no longer exposes `--plan` co
 The TUI now handles sync prompts via in-app dialogs:
 - confirm prompts (yes/no, default on enter)
 - input prompts (including masked input for sensitive prompts such as Deezer ARL)
+
+These prompts render as shell modals rather than full-screen prompt pages.
 
 ### Runtime output
 
@@ -118,8 +133,11 @@ Prompt controls:
 - `enter`: accept default
 - `esc` / `q`: cancel prompt
 
+Init prompts also render as shell modals.
+
 ## Current Limitations
 
 - `promote-freedl` and `version` are not exposed as TUI workflows.
 - `sync` output style controls (`progress`, `preflight-summary`, `track-status`) are not currently configurable from TUI.
 - `doctor` and `validate` are non-guided views (run + output).
+- Workflow sidebar/top-nav switching is not active yet; use `esc` to return to the landing screen first.

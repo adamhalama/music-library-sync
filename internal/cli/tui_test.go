@@ -47,8 +47,34 @@ func TestTUIRootMenuShowsInteractiveSyncFirst(t *testing.T) {
 		t.Fatalf("expected sync second, got %v", root.menuItems)
 	}
 	view := root.View()
-	if !strings.Contains(view, "> interactive sync") {
-		t.Fatalf("expected menu view to default to interactive sync, got: %s", view)
+	if !strings.Contains(view, "WORKFLOW LAUNCHER") {
+		t.Fatalf("expected landing shell title, got: %s", view)
+	}
+	if !strings.Contains(view, "interactive sync") {
+		t.Fatalf("expected interactive sync in landing navigation, got: %s", view)
+	}
+	if !strings.Contains(view, "Review enabled sources, set plan options") {
+		t.Fatalf("expected landing body summary, got: %s", view)
+	}
+}
+
+func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.width = 110
+
+	view := root.View()
+	if !strings.Contains(view, "WORKFLOWS") {
+		t.Fatalf("expected full shell sidebar section at width 110, got: %s", view)
+	}
+}
+
+func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.width = 109
+
+	view := root.View()
+	if strings.Contains(view, "WORKFLOWS") {
+		t.Fatalf("expected compact shell without sidebar section label, got: %s", view)
 	}
 }
 
@@ -126,9 +152,6 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.cfgLoaded = true
 	interactiveView := interactive.View()
-	if !strings.Contains(interactiveView, "Interactive Sync Workflow") {
-		t.Fatalf("expected interactive sync title, got: %s", interactiveView)
-	}
 	if !strings.Contains(interactiveView, "plan_limit=") {
 		t.Fatalf("expected interactive sync plan limit controls, got: %s", interactiveView)
 	}
@@ -139,12 +162,6 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	standard := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
 	standard.cfgLoaded = true
 	standardView := standard.View()
-	if !strings.Contains(standardView, "Sync Workflow") {
-		t.Fatalf("expected standard sync title, got: %s", standardView)
-	}
-	if strings.Contains(standardView, "Interactive Sync Workflow") {
-		t.Fatalf("expected standard sync title only, got: %s", standardView)
-	}
 	if strings.Contains(standardView, "plan_limit=") || strings.Contains(standardView, "type limit") {
 		t.Fatalf("expected standard sync to hide plan controls, got: %s", standardView)
 	}
@@ -153,21 +170,51 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	}
 }
 
-func TestTUISyncModelPlanPromptUsesInteractiveHeading(t *testing.T) {
-	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
-	m.cfgLoaded = true
+func TestTUIRootShellRendersSyncPlanPromptModal(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
 	reply := make(chan tuiPlanSelectResult, 1)
 
-	m, _ = m.Update(tuiPlanSelectRequestMsg{
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
 		SourceID: "source-a",
 		Rows:     []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
 		Details:  planSourceDetails{SourceID: "source-a", PlanLimit: 10},
 		Reply:    reply,
 	})
 
-	view := m.View()
-	if !strings.Contains(view, "Interactive Sync Workflow") {
-		t.Fatalf("expected interactive heading in plan prompt, got: %s", view)
+	view := root.View()
+	if !strings.Contains(view, "INTERACTIVE SYNC WORKFLOW") {
+		t.Fatalf("expected interactive sync shell title, got: %s", view)
+	}
+	if !strings.Contains(view, "Plan Selection") {
+		t.Fatalf("expected plan prompt modal title, got: %s", view)
+	}
+	if !strings.Contains(view, "source=source-a") {
+		t.Fatalf("expected plan prompt source details, got: %s", view)
+	}
+}
+
+func TestTUIRootShellRendersInitPromptModal(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(&AppContext{})
+	root.initModel.prompt = &tuiInteractionPromptState{
+		kind:       tuiPromptKindConfirm,
+		prompt:     "Overwrite existing config?",
+		defaultYes: false,
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "INIT") {
+		t.Fatalf("expected init shell title, got: %s", view)
+	}
+	if !strings.Contains(view, "Init Prompt") {
+		t.Fatalf("expected init modal title, got: %s", view)
+	}
+	if !strings.Contains(view, "Overwrite existing config?") {
+		t.Fatalf("expected init prompt body, got: %s", view)
 	}
 }
 
