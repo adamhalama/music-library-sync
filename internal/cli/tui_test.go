@@ -79,6 +79,46 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 	}
 }
 
+func TestTUISyncModelInitValidatesConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "udl.yaml")
+	configPayload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: ./relative-state",
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  command_timeout_seconds: 60",
+		"sources:",
+		"  - id: sc",
+		"    type: soundcloud",
+		"    enabled: true",
+		"    target_dir: /tmp",
+		"    url: https://soundcloud.com/user",
+		"    state_file: sc.sync.scdl",
+		"    adapter:",
+		"      kind: scdl",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(configPayload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	m := newTUISyncModel(&AppContext{
+		Opts: GlobalOptions{ConfigPath: configPath},
+	})
+	raw := m.Init()()
+	msg, ok := raw.(tuiConfigLoadedMsg)
+	if !ok {
+		t.Fatalf("expected tuiConfigLoadedMsg, got %T", raw)
+	}
+	if msg.err == nil {
+		t.Fatalf("expected config validation error")
+	}
+	if !strings.Contains(msg.err.Error(), "defaults.state_dir must resolve to an absolute path") {
+		t.Fatalf("expected validation error for state_dir, got %v", msg.err)
+	}
+}
+
 func TestTUIRootEscDuringPlanPromptCancelsPlanInsteadOfLeavingScreen(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenSync

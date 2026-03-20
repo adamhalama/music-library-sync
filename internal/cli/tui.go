@@ -352,6 +352,9 @@ func newTUISyncModel(app *AppContext) tuiSyncModel {
 func (m tuiSyncModel) Init() tea.Cmd {
 	return func() tea.Msg {
 		cfg, err := loadConfig(m.app)
+		if err == nil {
+			err = config.Validate(cfg)
+		}
 		return tuiConfigLoadedMsg{cfg: cfg, err: err}
 	}
 }
