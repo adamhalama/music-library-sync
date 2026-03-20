@@ -92,7 +92,7 @@ func TestSCDLPlanProviderBuildClassifiesRowsAndDefaultSelection(t *testing.T) {
 	}
 }
 
-func TestSCDLPlanProviderAppliesSelectionAndFiltersSelectedKnownGapOnly(t *testing.T) {
+func TestSCDLPlanProviderAppliesSelectionUsesTempSyncAndFiltersSelectedKnownGap(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
 	stateDir := filepath.Join(tmp, "state")
@@ -164,14 +164,22 @@ func TestSCDLPlanProviderAppliesSelectionAndFiltersSelectedKnownGapOnly(t *testi
 	if execPlan.SourcePreflight == nil || execPlan.SourcePreflight.PlannedDownloadCount != 1 {
 		t.Fatalf("expected planned_download_count=1, got %+v", execPlan.SourcePreflight)
 	}
-	if !execPlan.SourceForExec.DisableSyncMode {
-		t.Fatalf("expected plan subset execution to disable scdl --sync")
+	if execPlan.SourceForExec.DisableSyncMode {
+		t.Fatalf("did not expect plan subset execution to disable scdl --sync")
 	}
-	if execPlan.StateSwap.TempSyncPath != "" {
-		t.Fatalf("expected no temporary sync file for subset replay, got %+v", execPlan.StateSwap)
+	if execPlan.StateSwap.TempSyncPath == "" {
+		t.Fatalf("expected temporary sync file for subset execution, got %+v", execPlan.StateSwap)
 	}
 	if execPlan.StateSwap.TempArchivePath == "" {
 		t.Fatalf("expected temporary archive file for selected known-gap replay")
+	}
+
+	filteredState, err := os.ReadFile(execPlan.StateSwap.TempSyncPath)
+	if err != nil {
+		t.Fatalf("read filtered state: %v", err)
+	}
+	if strings.TrimSpace(string(filteredState)) != "" {
+		t.Fatalf("expected temporary sync file to exclude original state entries, got %q", string(filteredState))
 	}
 
 	filteredArchive, err := os.ReadFile(execPlan.StateSwap.TempArchivePath)
@@ -250,5 +258,85 @@ func TestSCDLPlanProviderEmptySelectionNoOp(t *testing.T) {
 	}
 	if execPlan.StateSwap.TempSyncPath != "" || execPlan.StateSwap.TempArchivePath != "" {
 		t.Fatalf("expected no temp file rewrites on empty selection, got %+v", execPlan.StateSwap)
+	}
+}
+
+func TestSCDLPlanProviderAppliesSelectionKeepsSyncForNewTracks(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	source := config.Source{
+		ID:        "sc-plan",
+		Type:      config.SourceTypeSoundCloud,
+		Enabled:   true,
+		TargetDir: targetDir,
+		URL:       "https://soundcloud.com/user",
+		StateFile: "sc-plan.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "scdl"},
+	}
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:    stateDir,
+			ArchiveFile: "archive.txt",
+		},
+		Sources: []config.Source{source},
+	}
+
+	statePath := filepath.Join(stateDir, source.StateFile)
+	if err := os.WriteFile(statePath, []byte("soundcloud known-a known-a.mp3\n"), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, source.ID+".archive.txt"), []byte("soundcloud known-a\n"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	origEnumerateLimited := enumerateSoundCloudTracksWithLimitFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksWithLimitFn = origEnumerateLimited
+	})
+	enumerateSoundCloudTracksWithLimitFn = func(ctx context.Context, source config.Source, limit int) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "known-a", Title: "Known A"},
+			{ID: "new-a", Title: "New A"},
+		}, nil
+	}
+
+	provider := NewSCDLPlanProvider()
+	plan, err := provider.Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+
+	execPlan, err := plan.ApplySelection([]int{2}, false)
+	if err != nil {
+		t.Fatalf("apply selection: %v", err)
+	}
+	if execPlan.SourceForExec.DisableSyncMode {
+		t.Fatalf("did not expect plan subset execution to disable scdl --sync for new tracks")
+	}
+	if execPlan.StateSwap.TempSyncPath == "" {
+		t.Fatalf("expected temporary sync file for new-track subset execution, got %+v", execPlan.StateSwap)
+	}
+	if execPlan.StateSwap.TempArchivePath != "" {
+		t.Fatalf("did not expect temporary archive file when no known gaps are selected, got %+v", execPlan.StateSwap)
+	}
+	if execPlan.SourceForExec.DownloadArchivePath != "" {
+		t.Fatalf("did not expect archive override when no known gaps are selected, got %q", execPlan.SourceForExec.DownloadArchivePath)
+	}
+
+	filteredState, err := os.ReadFile(execPlan.StateSwap.TempSyncPath)
+	if err != nil {
+		t.Fatalf("read filtered state: %v", err)
+	}
+	if strings.TrimSpace(string(filteredState)) != "" {
+		t.Fatalf("expected temporary sync file to start empty for managed subset execution, got %q", string(filteredState))
 	}
 }

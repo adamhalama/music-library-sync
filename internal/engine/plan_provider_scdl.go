@@ -19,6 +19,8 @@ type scdlSourcePlan struct {
 	sourceForExec config.Source
 	preflight     SoundCloudPreflight
 	tracks        []soundCloudRemoteTrack
+	state         soundCloudSyncState
+	statePath     string
 	knownGapIDs   map[string]struct{}
 	archivePath   string
 }
@@ -120,6 +122,8 @@ func (p *SCDLPlanProvider) Build(
 		sourceForExec: sourceForExec,
 		preflight:     planStage.Preflight,
 		tracks:        append([]soundCloudRemoteTrack{}, tracks...),
+		state:         stateStage.State,
+		statePath:     stateFilePath,
 		knownGapIDs:   copyStringSet(planStage.KnownGapID),
 		archivePath:   archiveStage.ArchivePath,
 	}, nil
@@ -178,27 +182,41 @@ func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, dryRun bool) (sou
 
 	sourceForExec := p.sourceForExec
 	sourceForExec.SelectedPlaylistIDs = selectedPlaylistIDs
-	sourceForExec.DisableSyncMode = len(selectedPlaylistIDs) > 0
 	out := sourcePlanExecution{
 		SourceForExec:           sourceForExec,
 		SourcePreflight:         &preflight,
 		PlannedSoundCloudTracks: plannedTracks,
 	}
 
-	if dryRun || len(selectedKnownGapIDs) == 0 {
+	if dryRun || len(selectedPlaylistIDs) == 0 {
+		return out, nil
+	}
+
+	allStateIDs := map[string]struct{}{}
+	for id := range p.state.ByID {
+		allStateIDs[id] = struct{}{}
+	}
+	tempSyncFile, err := writeFilteredSyncStateFile(p.statePath, p.state, allStateIDs)
+	if err != nil {
+		return sourcePlanExecution{}, fmt.Errorf("prepare temporary sync state file: %w", err)
+	}
+	out.SourceForExec.StateFile = tempSyncFile
+	out.StateSwap.OriginalSyncPath = p.statePath
+	out.StateSwap.TempSyncPath = tempSyncFile
+
+	if len(selectedKnownGapIDs) == 0 {
 		return out, nil
 	}
 
 	tempArchiveFile, err := writeFilteredArchiveFile(p.archivePath, selectedKnownGapIDs)
 	if err != nil {
+		_ = cleanupTempFile(tempSyncFile)
 		return sourcePlanExecution{}, fmt.Errorf("prepare temporary archive file: %w", err)
 	}
 
 	out.SourceForExec.DownloadArchivePath = tempArchiveFile
-	out.StateSwap = soundCloudStateSwap{
-		OriginalArchivePath: p.archivePath,
-		TempArchivePath:     tempArchiveFile,
-	}
+	out.StateSwap.OriginalArchivePath = p.archivePath
+	out.StateSwap.TempArchivePath = tempArchiveFile
 	return out, nil
 }
 
