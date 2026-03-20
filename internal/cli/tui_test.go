@@ -194,6 +194,33 @@ func TestTUIRootShellShowsSourcesInSidebarForInteractiveSync(t *testing.T) {
 	}
 }
 
+func TestTUIRootInteractiveSyncIdleShowsStructuredPlaceholder(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 150
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+
+	view := root.View()
+	if !strings.Contains(view, "Rows appear here after interactive preflight starts.") {
+		t.Fatalf("expected idle placeholder guidance, got: %s", view)
+	}
+	if !strings.Contains(view, "SEL  #  STATUS  TRACK  ID") {
+		t.Fatalf("expected empty table shell, got: %s", view)
+	}
+	if !strings.Contains(view, "no activity yet") {
+		t.Fatalf("expected empty activity panel, got: %s", view)
+	}
+	if !strings.Contains(view, "state: ready") || !strings.Contains(view, "selected: 0") || !strings.Contains(view, "pending: 0") || !strings.Contains(view, "skipped: 0") || !strings.Contains(view, "progress: 0%") {
+		t.Fatalf("expected idle interactive footer counts, got: %s", view)
+	}
+}
+
 func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
 	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}})
 
@@ -209,6 +236,18 @@ func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
 	}
 	if strings.Contains(view, "Prompt") {
 		t.Fatalf("expected plan selector not to render as prompt modal, got: %s", view)
+	}
+}
+
+func TestTUIRootShellKeepsShortcutsVisibleDuringPlanSelection(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}})
+
+	view := root.View()
+	if !strings.Contains(view, "[tab] filters") {
+		t.Fatalf("expected plan selection shortcuts to remain visible, got: %s", view)
+	}
+	if !strings.Contains(view, "[p] activity") {
+		t.Fatalf("expected activity shortcut to remain visible, got: %s", view)
 	}
 }
 
@@ -240,6 +279,25 @@ func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
 	}
 	if got := lipgloss.Height(view); got > root.height {
 		t.Fatalf("expected rendered shell height <= %d, got %d", root.height, got)
+	}
+}
+
+func TestTUIRootShellRendersPlanRowsWithStatusAndLockedMarker(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "id-have", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "id-new", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "gap", RemoteID: "id-gap", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "have-it") || !strings.Contains(view, "known-gap") {
+		t.Fatalf("expected status chips in table, got: %s", view)
+	}
+	if !strings.Contains(view, "id-have") || !strings.Contains(view, "id-new") {
+		t.Fatalf("expected remote ids in table, got: %s", view)
+	}
+	if !strings.Contains(view, ">[-]") {
+		t.Fatalf("expected locked row selection marker, got: %s", view)
 	}
 }
 
@@ -289,6 +347,53 @@ func TestTUISyncPlanPromptTabFocusesFiltersAndAppliesFilter(t *testing.T) {
 	}
 	if m.planPrompt.filter != tuiPlanFilterMissingNew {
 		t.Fatalf("expected missing_new filter, got %q", m.planPrompt.filter)
+	}
+}
+
+func TestTUIRootShellInteractiveFooterShowsSelectionCounts(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "gap", RemoteID: "c", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "selected: 1") || !strings.Contains(view, "pending: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "progress: 0%") {
+		t.Fatalf("expected interactive footer selection counts, got: %s", view)
+	}
+}
+
+func TestTUIRootShellActivityPanelDefaultsCollapsedInCompactAndPToggles(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true}})
+	root.width = 100
+	root.height = 40
+
+	view := root.View()
+	if !strings.Contains(view, "collapsed") {
+		t.Fatalf("expected compact activity panel to default collapsed, got: %s", view)
+	}
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	next := nextModel.(tuiRootModel)
+	view = next.View()
+	if !strings.Contains(view, "no activity yet") {
+		t.Fatalf("expected p to expand activity panel, got: %s", view)
+	}
+}
+
+func TestTUISyncModelPlanPromptLStillOpensTypedLimitInput(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     []engine.PlanRow{{Index: 1, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true}},
+		Reply:    reply,
+	})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if !m.planLimitInputActive {
+		t.Fatalf("expected l to keep opening typed plan limit input during selection")
 	}
 }
 
@@ -435,14 +540,13 @@ func TestTUIRootEscDuringPlanPromptCancelsPlanInsteadOfLeavingScreen(t *testing.
 	root.syncModel.cfgLoaded = true
 	root.syncModel.running = true
 	reply := make(chan tuiPlanSelectResult, 1)
-	root.syncModel.planPrompt = &tuiPlanPromptState{
-		sourceID: "source-a",
-		rows: []engine.PlanRow{
+	root.syncModel.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
 			{Index: 1, Toggleable: true, SelectedByDefault: true},
 		},
-		reply:    reply,
-		selected: map[int]bool{1: true},
-	}
+		Reply: reply,
+	})
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	next, ok := nextModel.(tuiRootModel)

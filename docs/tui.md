@@ -12,7 +12,8 @@ The TUI is additive. Existing CLI commands (`udl sync`, `udl doctor`, etc.) rema
 The current TUI uses a shared shell:
 - landing screen with workflow navigation
 - shared titlebar, badges, command summary, shortcuts, body panel, and footer
-- in-app modal prompts for plan selection and confirmations/input
+- inline plan-selection screen for interactive sync
+- in-app modal prompts for confirmations/input
 - compact shell fallback when terminal width is below `110` columns
 
 ## Launch
@@ -53,6 +54,7 @@ Inside active workflows, the sidebar/top navigation is informational in this sta
 - `u`: toggle unlimited plan limit
 - `d`: toggle dry-run
 - `t`: type timeout override (Go duration, for example `10m`, `90s`, `1h`)
+- `p`: collapse/expand the activity panel
 - `enter`: start run
 
 `interactive sync` always runs the existing `udl sync --plan` path. Standard sync-only flags such as `ask_on_existing`, `scan_gaps`, and `no_preflight` are intentionally hidden here.
@@ -76,6 +78,11 @@ Selector header includes source config context:
 - current plan limit and run mode
 
 The selector is rendered inline in the main content area instead of opening a separate overlay.
+
+Interactive sync now keeps the shell shortcuts/footer active during selection:
+- the track table stays inline in the main body
+- the footer shows selected, pending, skipped, and progress stub counts before the run
+- the activity panel is expanded by default on wide layouts and collapsed by default on compact layouts
 
 ## Sync Workflow
 

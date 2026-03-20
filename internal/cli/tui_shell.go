@@ -649,8 +649,8 @@ func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 		Shortcuts:        syncModel.shellShortcuts(),
 		BodyTitle:        syncModel.shellBodyTitle(),
 		Body:             syncModel.shellBody(layout),
-		DenseBody:        syncModel.planPrompt != nil,
-		StyledBody:       syncModel.planPrompt != nil,
+		DenseBody:        syncModel.planPrompt != nil || syncModel.isInteractiveSyncWorkflow(),
+		StyledBody:       syncModel.planPrompt != nil || syncModel.isInteractiveSyncWorkflow(),
 		FooterStats:      syncModel.shellFooterStats(),
 		Banner:           syncModel.shellBanner(),
 		AllowBack:        m.canReturnToMenuOnEsc(),
@@ -868,8 +868,27 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 }
 
 func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
-	if m.planPrompt != nil {
-		return nil
+	if m.isInteractiveSyncWorkflow() {
+		shortcuts := []tuiShortcut{
+			{Key: "j/k", Label: "move"},
+			{Key: "space", Label: "toggle"},
+			{Key: "d", Label: "dry-run"},
+			{Key: "t", Label: "timeout"},
+			{Key: "[/]", Label: "plan limit"},
+			{Key: "l", Label: "type limit"},
+			{Key: "u", Label: "unlimited"},
+			{Key: "p", Label: "activity"},
+			{Key: "enter", Label: "run"},
+			{Key: "x", Label: "cancel active run", Disabled: !m.running},
+		}
+		if m.planPrompt != nil {
+			shortcuts = append([]tuiShortcut{
+				{Key: "tab", Label: "filters"},
+				{Key: "a", Label: "all visible"},
+				{Key: "n", Label: "clear visible"},
+			}, shortcuts...)
+		}
+		return shortcuts
 	}
 	shortcuts := []tuiShortcut{
 		{Key: "j/k", Label: "move"},
@@ -896,6 +915,51 @@ func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 }
 
 func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
+	if m.isInteractiveSyncWorkflow() {
+		state := m.currentInteractiveSelection()
+		stats := []tuiFooterStat{{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()}}
+		if !m.running && !m.done {
+			selected := 0
+			pending := 0
+			skipped := 0
+			if state != nil {
+				selected = state.selectedCount()
+				pending = state.toggleableCount()
+				skipped = state.skippedCount()
+			}
+			stats = append(stats,
+				tuiFooterStat{Label: "selected", Value: fmt.Sprintf("%d", selected), Tone: "info"},
+				tuiFooterStat{Label: "pending", Value: fmt.Sprintf("%d", pending), Tone: "info"},
+				tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skipped), Tone: "muted"},
+				tuiFooterStat{Label: "progress", Value: "0%", Tone: "muted"},
+			)
+			return stats
+		}
+		total := 0
+		current := 0
+		doneCount := m.result.Succeeded
+		skippedCount := m.result.Skipped
+		failedCount := m.result.Failed
+		if m.progress != nil {
+			total = m.progress.EffectiveTotal()
+			current = m.progress.CurrentIndex()
+			if m.running {
+				doneCount = m.progress.Snapshot().Progress.Global.Completed
+			}
+		}
+		progressLabel := "0%"
+		if total > 0 {
+			progressLabel = fmt.Sprintf("%d/%d", current, total)
+		}
+		stats = append(stats,
+			tuiFooterStat{Label: "done", Value: fmt.Sprintf("%d", doneCount), Tone: "success"},
+			tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skippedCount), Tone: "muted"},
+			tuiFooterStat{Label: "failed", Value: fmt.Sprintf("%d", failedCount), Tone: failureCountTone(failedCount)},
+			tuiFooterStat{Label: "progress", Value: progressLabel, Tone: "info"},
+			tuiFooterStat{Label: "elapsed", Value: m.elapsedLabel(), Tone: "muted"},
+		)
+		return stats
+	}
 	stats := []tuiFooterStat{
 		{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()},
 		{Label: "sources", Value: fmt.Sprintf("%d/%d", m.selectedSourceCount(), len(m.sources)), Tone: "info"},
@@ -941,7 +1005,7 @@ func (m tuiSyncModel) shellBanner() *tuiBanner {
 }
 
 func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
-	state := m.planPrompt
+	state := m.currentInteractiveSelection()
 	if state == nil {
 		return ""
 	}
@@ -976,7 +1040,7 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 	return strings.Join(bodyLines, "\n")
 }
 
-func planPromptHeaderLines(state *tuiPlanPromptState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
+func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
 	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel)
 	controls := renderPlanPromptControls(state)
 	if layout.Height < 24 {
@@ -997,7 +1061,7 @@ func planPromptHeaderLines(state *tuiPlanPromptState, modeLabel, limitLabel stri
 	}
 }
 
-func renderPlanPromptInfoBar(state *tuiPlanPromptState, modeLabel, limitLabel string) string {
+func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string) string {
 	parts := []string{
 		planPromptChip("Plan Selection", "info"),
 		planPromptField("source", state.sourceID),
@@ -1024,7 +1088,7 @@ func renderPlanPromptPathLine(left, right string) string {
 		Render(strings.Join(parts, "  "))
 }
 
-func renderPlanPromptControls(state *tuiPlanPromptState) string {
+func renderPlanPromptControls(state *tuiInteractiveSelectionState) string {
 	focusTone := "warning"
 	if !state.focusFilters {
 		focusTone = "info"
@@ -1107,32 +1171,6 @@ func (m tuiSyncModel) interactionPromptModal() *tuiModalState {
 		)
 	}
 	return &tuiModalState{Title: "Prompt", Lines: lines, Tone: "info"}
-}
-
-func (m *tuiPlanPromptState) toggleableCount() int {
-	if m == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range m.rows {
-		if row.Toggleable {
-			count++
-		}
-	}
-	return count
-}
-
-func (m *tuiPlanPromptState) selectedCount() int {
-	if m == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range m.rows {
-		if row.Toggleable && m.selected[row.Index] {
-			count++
-		}
-	}
-	return count
 }
 
 func (m tuiDoctorModel) shellBadges() []tuiBadge {
@@ -1245,17 +1283,144 @@ func (m tuiSyncModel) selectedSourceCount() int {
 }
 
 func (m tuiSyncModel) shellBodyTitle() string {
-	if m.planPrompt != nil {
+	if m.isInteractiveSyncWorkflow() {
 		return ""
 	}
 	return m.workflowTitle()
 }
 
 func (m tuiSyncModel) shellBody(layout tuiShellLayout) string {
-	if m.planPrompt != nil {
-		return m.planPromptBody(layout)
+	if m.isInteractiveSyncWorkflow() {
+		return m.interactiveSyncBody(layout)
 	}
 	return m.bodyView(false)
+}
+
+func (m tuiSyncModel) interactiveSyncBody(layout tuiShellLayout) string {
+	if !m.cfgLoaded {
+		return renderPlanSection("Interactive Sync", []string{"Loading config..."}, shellMainSectionWidth(layout, newTUIShellTheme())-4)
+	}
+	if m.cfgErr != nil {
+		return renderPlanSection("Interactive Sync", []string{fmt.Sprintf("Config load failed: %v", m.cfgErr)}, shellMainSectionWidth(layout, newTUIShellTheme())-4)
+	}
+	state := m.currentInteractiveSelection()
+	width := shellMainSectionWidth(layout, newTUIShellTheme()) - 4
+	if width < 36 {
+		width = shellMainSectionWidth(layout, newTUIShellTheme())
+	}
+	selectionSection := renderPlanSection("Selection", m.interactiveSelectionSummaryLines(state, layout), width)
+	tracksSection := renderPlanSection("Tracks", m.interactiveTrackLines(state, layout), width)
+	activitySection := renderPlanSection("Activity", m.interactiveActivityLines(state, layout), width)
+	sections := []string{selectionSection, tracksSection, activitySection}
+	if state != nil && len(state.rows) > 0 && layout.Height < 24 {
+		sections = []string{tracksSection, selectionSection, activitySection}
+	}
+	return strings.Join(sections, "\n")
+}
+
+func (m tuiSyncModel) interactiveSelectionSummaryLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+	lines := []string{}
+	if state != nil && len(state.rows) > 0 {
+		modeLabel := "run"
+		if state.details.DryRun {
+			modeLabel = "dry-run"
+		}
+		limitLabel := "unlimited"
+		if state.details.PlanLimit > 0 {
+			limitLabel = fmt.Sprintf("%d", state.details.PlanLimit)
+		}
+		lines = append(lines, planPromptHeaderLines(state, modeLabel, limitLabel, layout)...)
+		lines = append(lines, fmt.Sprintf("selected=%d  pending=%d  skipped=%d", state.selectedCount(), state.toggleableCount(), state.skippedCount()))
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("selected_sources=%d/%d", m.selectedSourceCount(), len(m.sources)),
+			fmt.Sprintf("dry_run=%t  timeout=%s  plan_limit=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride), formatPlanLimit(m.planLimit)),
+			"Rows appear here after interactive preflight starts.",
+			"Press enter to run `udl sync --plan` for the selected sources.",
+		)
+	}
+	if m.planLimitInputActive {
+		lines = append(lines, fmt.Sprintf("plan_limit_input=%q  enter apply  esc cancel", m.planLimitInput))
+		if m.planLimitInputErr != "" {
+			lines = append(lines, "input_error: "+m.planLimitInputErr)
+		}
+	}
+	if m.timeoutInputActive {
+		lines = append(lines, fmt.Sprintf("timeout_input=%q  enter apply  esc cancel", m.timeoutInput))
+		if m.timeoutInputErr != "" {
+			lines = append(lines, "input_error: "+m.timeoutInputErr)
+		}
+	}
+	if m.validationErr != "" {
+		lines = append(lines, "validation_error: "+m.validationErr)
+	}
+	if m.running {
+		lines = append(lines, "Running sync... press x or ctrl+c to cancel.")
+		if m.cancelRequested {
+			lines = append(lines, "Cancellation requested, waiting for adapter shutdown...")
+		}
+	}
+	if m.done {
+		if m.runErr != nil {
+			lines = append(lines, "Run failed: "+m.runErr.Error())
+		} else {
+			lines = append(lines, fmt.Sprintf("Run finished: attempted=%d succeeded=%d failed=%d skipped=%d", m.result.Attempted, m.result.Succeeded, m.result.Failed, m.result.Skipped))
+		}
+	}
+	return lines
+}
+
+func (m tuiSyncModel) interactiveTrackLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+	if state == nil || len(state.rows) == 0 {
+		return []string{
+			"SEL  #  STATUS  TRACK  ID",
+			"no tracks yet",
+			"Press enter to start preflight and populate the inline selector.",
+		}
+	}
+	state.ensureCursorVisible()
+	filteredRows := state.filteredRows()
+	lines := []string{}
+	if len(filteredRows) == 0 {
+		lines = append(lines, "No tracks match the current filter.")
+	} else {
+		lines = append(lines, strings.Split(renderPlanPromptTable(state, layout), "\n")...)
+	}
+	lines = append(lines, fmt.Sprintf("Showing %d/%d rows", len(filteredRows), len(state.rows)))
+	return lines
+}
+
+func (m tuiSyncModel) interactiveActivityLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+	if state == nil {
+		state = newEmptyTUIInteractiveSelectionState()
+	}
+	if state.activityCollapsedFor(layout) {
+		return []string{"collapsed", "press p to expand"}
+	}
+	lines := []string{"p: collapse"}
+	if len(state.activity) == 0 {
+		lines = append(lines,
+			"no activity yet",
+			"activity updates appear here after preflight and runtime events",
+		)
+	} else {
+		for _, entry := range state.activity {
+			lines = append(lines, formatInteractiveActivityEntry(entry))
+		}
+	}
+	if failureLines := m.lastFailureLines(); len(failureLines) > 0 {
+		lines = append(lines, "", "last failure:")
+		lines = append(lines, failureLines...)
+	}
+	return lines
+}
+
+func formatInteractiveActivityEntry(entry tuiActivityEntry) string {
+	ts := "--:--:--"
+	if !entry.Timestamp.IsZero() {
+		ts = entry.Timestamp.Format("15:04:05")
+	}
+	return fmt.Sprintf("%s  %s", ts, entry.Message)
 }
 
 func renderPlanSection(title string, lines []string, width int) string {
@@ -1281,7 +1446,7 @@ func renderPlanSection(title string, lines []string, width int) string {
 		Render(header + "\n" + body)
 }
 
-func renderPlanPromptTable(state *tuiPlanPromptState, layout tuiShellLayout) string {
+func renderPlanPromptTable(state *tuiInteractiveSelectionState, layout tuiShellLayout) string {
 	theme := newTUIShellTheme()
 	bodyStyle := theme.bodyPanel.Padding(0, 1)
 	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize() - 4
@@ -1320,14 +1485,13 @@ func renderPlanPromptTable(state *tuiPlanPromptState, layout tuiShellLayout) str
 	lines := []string{header, lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render(strings.Repeat("─", maxInt(16, width)))}
 	for i := start; i < end; i++ {
 		row := filtered[i]
-		selected := row.Toggleable && state.selected[row.Index]
 		isCursor := i == filteredCursor
-		lines = append(lines, renderPlanPromptRow(row, isCursor, selected, selectWidth, indexWidth, statusWidth, titleWidth, idWidth))
+		lines = append(lines, renderPlanPromptRow(row, isCursor, selectWidth, indexWidth, statusWidth, titleWidth, idWidth))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderPlanPromptRow(row engine.PlanRow, isCursor, selected bool, selectWidth, indexWidth, statusWidth, titleWidth, idWidth int) string {
+func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, indexWidth, statusWidth, titleWidth, idWidth int) string {
 	cursorPrefix := " "
 	if isCursor {
 		cursorPrefix = ">"
@@ -1337,7 +1501,7 @@ func renderPlanPromptRow(row engine.PlanRow, isCursor, selected bool, selectWidt
 	if row.Toggleable {
 		selectLabel = "[ ]"
 		selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-		if selected {
+		if row.Selected {
 			selectLabel = "[x]"
 			selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
 		}
@@ -1522,15 +1686,15 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 		sourceItems = append(sourceItems, tuiSidebarItem{Label: "(no enabled sources)", Disabled: true})
 	}
 	sections = append(sections, tuiSidebarSection{Title: "sources", Items: sourceItems})
-	if m.planPrompt != nil {
-		filterItems := make([]tuiSidebarItem, 0, len(m.planPrompt.filters()))
-		for idx, filter := range m.planPrompt.filters() {
-			count := m.planPrompt.filterCount(filter)
+	if state := m.currentInteractiveSelection(); state != nil && len(state.rows) > 0 {
+		filterItems := make([]tuiSidebarItem, 0, len(state.filters()))
+		for idx, filter := range state.filters() {
+			count := state.filterCount(filter)
 			item := tuiSidebarItem{
-				Label:  fmt.Sprintf("%s (%d)", m.planPrompt.filterDisplayLabel(filter), count),
-				Active: m.planPrompt.focusFilters && idx == m.planPrompt.filterCursor,
+				Label:  fmt.Sprintf("%s (%d)", state.filterDisplayLabel(filter), count),
+				Active: m.planPrompt != nil && state.focusFilters && idx == state.filterCursor,
 			}
-			if !m.planPrompt.focusFilters && m.planPrompt.filter == filter {
+			if state.filter == filter {
 				item.Tone = "info"
 			}
 			switch filter {

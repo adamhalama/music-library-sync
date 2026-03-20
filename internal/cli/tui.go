@@ -106,7 +106,28 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = typed.Width
 		m.height = typed.Height
-		return m, nil
+		switch m.screen {
+		case tuiScreenInteractiveSync, tuiScreenSync:
+			m.syncModel.width = typed.Width
+			m.syncModel.height = typed.Height
+			next, cmd := m.syncModel.Update(msg)
+			m.syncModel = next
+			return m, cmd
+		case tuiScreenDoctor:
+			next, cmd := m.doctorModel.Update(msg)
+			m.doctorModel = next
+			return m, cmd
+		case tuiScreenValidate:
+			next, cmd := m.validateModel.Update(msg)
+			m.validateModel = next
+			return m, cmd
+		case tuiScreenInit:
+			next, cmd := m.initModel.Update(msg)
+			m.initModel = next
+			return m, cmd
+		default:
+			return m, nil
+		}
 	case tea.KeyMsg:
 		if m.screen == tuiScreenMenu {
 			switch typed.String() {
@@ -157,6 +178,8 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.screen {
 	case tuiScreenInteractiveSync, tuiScreenSync:
+		m.syncModel.width = m.width
+		m.syncModel.height = m.height
 		next, cmd := m.syncModel.Update(msg)
 		m.syncModel = next
 		return m, cmd
@@ -203,6 +226,8 @@ func (m tuiRootModel) View() string {
 type tuiSyncModel struct {
 	app                  *AppContext
 	mode                 tuiSyncWorkflowMode
+	width                int
+	height               int
 	cfg                  config.Config
 	cfgLoaded            bool
 	cfgErr               error
@@ -230,11 +255,14 @@ type tuiSyncModel struct {
 	progress             *output.StructuredProgressTracker
 	lastFailure          *tuiSyncFailureState
 	eventCh              chan tea.Msg
+	interactiveSelection *tuiInteractiveSelectionState
 	planPrompt           *tuiPlanPromptState
 	interactionPrompt    *tuiInteractionPromptState
 	planLimitInputActive bool
 	planLimitInput       string
 	planLimitInputErr    string
+	runStartedAt         time.Time
+	runFinishedAt        time.Time
 }
 
 type tuiSyncFailureState struct {
@@ -308,41 +336,76 @@ type tuiInteractionPromptState struct {
 	reply      chan tuiPromptResult
 }
 
-type tuiPlanPromptState struct {
-	sourceID     string
-	rows         []engine.PlanRow
-	details      planSourceDetails
-	reply        chan tuiPlanSelectResult
-	cursor       int
-	selected     map[int]bool
-	filter       tuiPlanPromptFilter
-	filterCursor int
-	focusFilters bool
-}
-
-type tuiPlanPromptFilter string
+type tuiStatusFilter string
 
 const (
-	tuiPlanFilterAll        tuiPlanPromptFilter = "all"
-	tuiPlanFilterSelected   tuiPlanPromptFilter = "selected"
-	tuiPlanFilterMissingNew tuiPlanPromptFilter = "missing_new"
-	tuiPlanFilterKnownGap   tuiPlanPromptFilter = "known_gap"
-	tuiPlanFilterDownloaded tuiPlanPromptFilter = "downloaded"
+	tuiPlanFilterAll        tuiStatusFilter = "all"
+	tuiPlanFilterSelected   tuiStatusFilter = "selected"
+	tuiPlanFilterMissingNew tuiStatusFilter = "missing_new"
+	tuiPlanFilterKnownGap   tuiStatusFilter = "known_gap"
+	tuiPlanFilterDownloaded tuiStatusFilter = "downloaded"
 )
+
+type tuiTrackRowState struct {
+	SourceID          string
+	SourceLabel       string
+	RemoteID          string
+	Title             string
+	Index             int
+	Toggleable        bool
+	Selected          bool
+	Status            engine.PlanRowStatus
+	StatusLabel       string
+	FailureDetail     string
+	SelectedByDefault bool
+}
+
+type tuiActivityEntry struct {
+	Timestamp time.Time
+	Level     output.Level
+	Message   string
+	SourceID  string
+}
+
+type tuiInteractiveSelectionState struct {
+	sourceID                   string
+	rows                       []tuiTrackRowState
+	details                    planSourceDetails
+	cursor                     int
+	selected                   map[int]bool
+	filter                     tuiStatusFilter
+	filterCursor               int
+	focusFilters               bool
+	activity                   []tuiActivityEntry
+	activityCollapsed          bool
+	activityCollapseConfigured bool
+}
+
+type tuiPlanPromptState struct {
+	*tuiInteractiveSelectionState
+	reply chan tuiPlanSelectResult
+}
+
+type tuiPlanPromptFilter = tuiStatusFilter
 
 func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 	dryRun := false
 	if app != nil {
 		dryRun = app.Opts.DryRun
 	}
+	var interactiveSelection *tuiInteractiveSelectionState
+	if mode == tuiSyncWorkflowInteractive {
+		interactiveSelection = newEmptyTUIInteractiveSelectionState()
+	}
 	return tuiSyncModel{
-		app:       app,
-		mode:      mode,
-		selected:  map[string]bool{},
-		events:    []string{},
-		dryRun:    dryRun,
-		planLimit: tuiDefaultPlanLimit,
-		progress:  output.NewStructuredProgressTracker(nil),
+		app:                  app,
+		mode:                 mode,
+		selected:             map[string]bool{},
+		events:               []string{},
+		dryRun:               dryRun,
+		planLimit:            tuiDefaultPlanLimit,
+		progress:             output.NewStructuredProgressTracker(nil),
+		interactiveSelection: interactiveSelection,
 	}
 }
 
@@ -358,6 +421,10 @@ func (m tuiSyncModel) Init() tea.Cmd {
 
 func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 	switch typed := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = typed.Width
+		m.height = typed.Height
+		return m, nil
 	case tuiConfigLoadedMsg:
 		m.cfgLoaded = true
 		m.cfgErr = typed.err
@@ -372,7 +439,12 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		}
 		return m, nil
 	case tuiPlanSelectRequestMsg:
-		m.planPrompt = newTUIPlanPromptState(typed)
+		state := newTUIInteractiveSelectionState(typed)
+		m.interactiveSelection = state
+		m.planPrompt = &tuiPlanPromptState{
+			tuiInteractiveSelectionState: state,
+			reply:                        typed.Reply,
+		}
 		return m, nil
 	case tuiPromptRequestMsg:
 		m.interactionPrompt = &tuiInteractionPromptState{
@@ -389,129 +461,11 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m = m.cancelActiveRun()
 			return m, m.waitRunMsgCmd()
 		}
-		if m.planPrompt != nil {
-			if typed.String() == "tab" {
-				m.planPrompt.focusFilters = !m.planPrompt.focusFilters
-				if !m.planPrompt.focusFilters {
-					m.planPrompt.ensureCursorVisible()
-				}
-				return m, nil
+		if m.isInteractiveSyncWorkflow() && typed.String() == "p" && !m.timeoutInputActive && !m.planLimitInputActive && m.interactionPrompt == nil {
+			if state := m.currentInteractiveSelection(); state != nil {
+				state.toggleActivity(m.currentShellLayout())
 			}
-			if m.planPrompt.focusFilters {
-				switch typed.String() {
-				case "up", "k":
-					if m.planPrompt.filterCursor > 0 {
-						m.planPrompt.filterCursor--
-					}
-					return m, nil
-				case "down", "j":
-					if m.planPrompt.filterCursor < len(m.planPrompt.filters())-1 {
-						m.planPrompt.filterCursor++
-					}
-					return m, nil
-				case " ", "enter":
-					m.planPrompt.filter = m.planPrompt.filters()[m.planPrompt.filterCursor]
-					m.planPrompt.focusFilters = false
-					m.planPrompt.ensureCursorVisible()
-					return m, nil
-				case "ctrl+c", "q", "esc":
-					m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
-					m.planPrompt = nil
-					return m, m.waitRunMsgCmd()
-				default:
-					return m, nil
-				}
-			}
-			switch typed.String() {
-			case "up", "k":
-				m.planPrompt.moveCursor(-1)
-				return m, nil
-			case "down", "j":
-				m.planPrompt.moveCursor(1)
-				return m, nil
-			case " ":
-				row, ok := m.planPrompt.currentRow()
-				if !ok {
-					return m, nil
-				}
-				if !row.Toggleable {
-					return m, nil
-				}
-				m.planPrompt.selected[row.Index] = !m.planPrompt.selected[row.Index]
-				return m, nil
-			case "a":
-				for _, row := range m.planPrompt.filteredRows() {
-					if row.Toggleable {
-						m.planPrompt.selected[row.Index] = true
-					}
-				}
-				return m, nil
-			case "n":
-				for _, row := range m.planPrompt.filteredRows() {
-					if row.Toggleable {
-						m.planPrompt.selected[row.Index] = false
-					}
-				}
-				return m, nil
-			case "enter":
-				m.planPrompt.reply <- tuiPlanSelectResult{SelectedIndices: m.planPrompt.selectedIndices()}
-				m.planPrompt = nil
-				return m, m.waitRunMsgCmd()
-			case "ctrl+c", "q", "esc":
-				m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
-				m.planPrompt = nil
-				return m, m.waitRunMsgCmd()
-			default:
-				return m, nil
-			}
-		}
-		if m.interactionPrompt != nil {
-			switch m.interactionPrompt.kind {
-			case tuiPromptKindConfirm:
-				switch typed.String() {
-				case "y":
-					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: true}
-					m.interactionPrompt = nil
-					return m, m.waitRunMsgCmd()
-				case "n":
-					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: false}
-					m.interactionPrompt = nil
-					return m, m.waitRunMsgCmd()
-				case "enter":
-					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: m.interactionPrompt.defaultYes}
-					m.interactionPrompt = nil
-					return m, m.waitRunMsgCmd()
-				case "esc", "q":
-					m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}
-					m.interactionPrompt = nil
-					return m, m.waitRunMsgCmd()
-				default:
-					return m, nil
-				}
-			case tuiPromptKindInput:
-				switch typed.String() {
-				case "enter":
-					m.interactionPrompt.reply <- tuiPromptResult{Input: strings.TrimSpace(m.interactionPrompt.input)}
-					m.interactionPrompt = nil
-					return m, m.waitRunMsgCmd()
-				case "esc", "q":
-					m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}
-					m.interactionPrompt = nil
-					return m, m.waitRunMsgCmd()
-				case "backspace", "ctrl+h":
-					if len(m.interactionPrompt.input) > 0 {
-						m.interactionPrompt.input = m.interactionPrompt.input[:len(m.interactionPrompt.input)-1]
-					}
-					return m, nil
-				default:
-					if len(typed.Runes) > 0 {
-						m.interactionPrompt.input += string(typed.Runes)
-					}
-					return m, nil
-				}
-			default:
-				return m, nil
-			}
+			return m, nil
 		}
 		if m.planLimitInputActive {
 			switch typed.String() {
@@ -574,6 +528,142 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 					m.timeoutInput += string(typed.Runes)
 					m.timeoutInputErr = ""
 				}
+				return m, nil
+			}
+		}
+		if m.planPrompt != nil {
+			if typed.String() == "l" {
+				m.timeoutInputActive = false
+				m.timeoutInput = ""
+				m.timeoutInputErr = ""
+				m.planLimitInputActive = true
+				m.planLimitInput = ""
+				m.planLimitInputErr = ""
+				return m, nil
+			}
+			if typed.String() == "tab" {
+				m.planPrompt.focusFilters = !m.planPrompt.focusFilters
+				if !m.planPrompt.focusFilters {
+					m.planPrompt.ensureCursorVisible()
+				}
+				return m, nil
+			}
+			if m.planPrompt.focusFilters {
+				switch typed.String() {
+				case "up", "k":
+					if m.planPrompt.filterCursor > 0 {
+						m.planPrompt.filterCursor--
+					}
+					return m, nil
+				case "down", "j":
+					if m.planPrompt.filterCursor < len(m.planPrompt.filters())-1 {
+						m.planPrompt.filterCursor++
+					}
+					return m, nil
+				case " ", "enter":
+					m.planPrompt.filter = m.planPrompt.filters()[m.planPrompt.filterCursor]
+					m.planPrompt.focusFilters = false
+					m.planPrompt.ensureCursorVisible()
+					return m, nil
+				case "ctrl+c", "q", "esc":
+					m.interactiveSelection = m.planPrompt.tuiInteractiveSelectionState
+					m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
+					m.planPrompt = nil
+					return m, m.waitRunMsgCmd()
+				default:
+					return m, nil
+				}
+			}
+			switch typed.String() {
+			case "up", "k":
+				m.planPrompt.moveCursor(-1)
+				return m, nil
+			case "down", "j":
+				m.planPrompt.moveCursor(1)
+				return m, nil
+			case " ":
+				row, ok := m.planPrompt.currentRow()
+				if !ok {
+					return m, nil
+				}
+				if !row.Toggleable {
+					return m, nil
+				}
+				m.planPrompt.setSelected(row.Index, !row.Selected)
+				return m, nil
+			case "a":
+				for _, row := range m.planPrompt.filteredRows() {
+					if row.Toggleable {
+						m.planPrompt.setSelected(row.Index, true)
+					}
+				}
+				return m, nil
+			case "n":
+				for _, row := range m.planPrompt.filteredRows() {
+					if row.Toggleable {
+						m.planPrompt.setSelected(row.Index, false)
+					}
+				}
+				return m, nil
+			case "enter":
+				m.interactiveSelection = m.planPrompt.tuiInteractiveSelectionState
+				m.planPrompt.reply <- tuiPlanSelectResult{SelectedIndices: m.planPrompt.selectedIndices()}
+				m.planPrompt = nil
+				return m, m.waitRunMsgCmd()
+			case "ctrl+c", "q", "esc":
+				m.interactiveSelection = m.planPrompt.tuiInteractiveSelectionState
+				m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
+				m.planPrompt = nil
+				return m, m.waitRunMsgCmd()
+			default:
+				return m, nil
+			}
+		}
+		if m.interactionPrompt != nil {
+			switch m.interactionPrompt.kind {
+			case tuiPromptKindConfirm:
+				switch typed.String() {
+				case "y":
+					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: true}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "n":
+					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: false}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "enter":
+					m.interactionPrompt.reply <- tuiPromptResult{Confirmed: m.interactionPrompt.defaultYes}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "esc", "q":
+					m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				default:
+					return m, nil
+				}
+			case tuiPromptKindInput:
+				switch typed.String() {
+				case "enter":
+					m.interactionPrompt.reply <- tuiPromptResult{Input: strings.TrimSpace(m.interactionPrompt.input)}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "esc", "q":
+					m.interactionPrompt.reply <- tuiPromptResult{Canceled: true, Err: engine.ErrInterrupted}
+					m.interactionPrompt = nil
+					return m, m.waitRunMsgCmd()
+				case "backspace", "ctrl+h":
+					if len(m.interactionPrompt.input) > 0 {
+						m.interactionPrompt.input = m.interactionPrompt.input[:len(m.interactionPrompt.input)-1]
+					}
+					return m, nil
+				default:
+					if len(typed.Runes) > 0 {
+						m.interactionPrompt.input += string(typed.Runes)
+					}
+					return m, nil
+				}
+			default:
 				return m, nil
 			}
 		}
@@ -699,6 +789,8 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			m.events = []string{}
 			m.lastFailure = nil
+			m.runStartedAt = time.Now()
+			m.runFinishedAt = time.Time{}
 			if m.progress == nil {
 				m.progress = output.NewStructuredProgressTracker(nil)
 			} else {
@@ -718,12 +810,15 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		if failure := tuiFailureStateFromEvent(typed.Event); failure != nil {
 			m.lastFailure = failure
 		}
-		for _, outcome := range m.progress.DrainTrackOutcomes() {
+		outcomes := m.progress.DrainTrackOutcomes()
+		for _, outcome := range outcomes {
 			m.events = append(m.events, output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames))
 		}
-		if line, ok := tuiSyncHistoryLine(typed.Event); ok {
-			m.events = append(m.events, line)
+		historyLine, historyOK := tuiSyncHistoryLine(typed.Event)
+		if historyOK {
+			m.events = append(m.events, historyLine)
 		}
+		m.appendInteractiveActivity(typed.Event, outcomes, historyLine, historyOK)
 		if m.eventCh != nil {
 			return m, m.waitRunMsgCmd()
 		}
@@ -737,6 +832,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		m.done = true
 		m.result = typed.Result
 		m.runErr = typed.Err
+		m.runFinishedAt = time.Now()
 		return m, nil
 	}
 	return m, nil
@@ -832,6 +928,71 @@ func (m tuiSyncModel) workflowTitle() string {
 		return "Interactive Sync Workflow"
 	}
 	return "Sync Workflow"
+}
+
+func (m tuiSyncModel) currentInteractiveSelection() *tuiInteractiveSelectionState {
+	if m.planPrompt != nil {
+		return m.planPrompt.tuiInteractiveSelectionState
+	}
+	return m.interactiveSelection
+}
+
+func (m tuiSyncModel) currentShellLayout() tuiShellLayout {
+	return newTUIShellLayout(m.width, m.height)
+}
+
+func (m *tuiSyncModel) appendInteractiveActivity(event output.Event, outcomes []output.StructuredTrackOutcome, historyLine string, historyOK bool) {
+	if m == nil || !m.isInteractiveSyncWorkflow() {
+		return
+	}
+	state := m.currentInteractiveSelection()
+	if state == nil {
+		return
+	}
+	for _, outcome := range outcomes {
+		level := output.LevelInfo
+		switch outcome.Kind {
+		case output.StructuredTrackOutcomeSkip:
+			level = output.LevelWarn
+		case output.StructuredTrackOutcomeFail:
+			level = output.LevelError
+		}
+		state.appendActivity(tuiActivityEntry{
+			Timestamp: event.Timestamp,
+			Level:     level,
+			Message:   output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames),
+			SourceID:  event.SourceID,
+		})
+	}
+	if historyOK {
+		state.appendActivity(tuiActivityEntry{
+			Timestamp: event.Timestamp,
+			Level:     event.Level,
+			Message:   historyLine,
+			SourceID:  event.SourceID,
+		})
+	}
+}
+
+func (m tuiSyncModel) elapsedLabel() string {
+	if m.runStartedAt.IsZero() {
+		return "0:00"
+	}
+	end := m.runFinishedAt
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if end.Before(m.runStartedAt) {
+		end = m.runStartedAt
+	}
+	elapsed := end.Sub(m.runStartedAt).Round(time.Second)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	totalSeconds := int(elapsed / time.Second)
+	minutes := totalSeconds / 60
+	seconds := totalSeconds % 60
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncRequest {
@@ -1237,54 +1398,65 @@ func (m tuiSyncModel) planPromptView() string {
 		if i == state.cursor {
 			cursor = ">"
 		}
-		marker := "[-]"
-		if row.Toggleable {
-			if state.selected[row.Index] {
-				marker = "[x]"
-			} else {
-				marker = "[ ]"
-			}
-		}
+		marker := state.selectionMarker(row)
 		title := strings.TrimSpace(row.Title)
 		if title == "" {
 			title = "(untitled)"
 		}
 		lines = append(lines, fmt.Sprintf("%s %s %3d  %-16s  %s (%s)", cursor, marker, row.Index, string(row.Status), title, row.RemoteID))
 	}
-	selectedCount := 0
-	totalToggleable := 0
-	for _, row := range state.rows {
-		if row.Toggleable {
-			totalToggleable++
-			if state.selected[row.Index] {
-				selectedCount++
-			}
-		}
-	}
 	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks", selectedCount, totalToggleable))
+	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks", state.selectedCount(), state.toggleableCount()))
 	return strings.Join(lines, "\n")
 }
 
-func newTUIPlanPromptState(req tuiPlanSelectRequestMsg) *tuiPlanPromptState {
+func newEmptyTUIInteractiveSelectionState() *tuiInteractiveSelectionState {
+	return &tuiInteractiveSelectionState{
+		selected: map[int]bool{},
+		filter:   tuiPlanFilterAll,
+	}
+}
+
+func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiveSelectionState {
 	selected := map[int]bool{}
+	rows := make([]tuiTrackRowState, 0, len(req.Rows))
 	for _, row := range req.Rows {
 		if row.Toggleable && row.SelectedByDefault {
 			selected[row.Index] = true
 		}
+		rows = append(rows, tuiTrackRowState{
+			SourceID:          req.SourceID,
+			SourceLabel:       req.Details.SourceID,
+			RemoteID:          row.RemoteID,
+			Title:             row.Title,
+			Index:             row.Index,
+			Toggleable:        row.Toggleable,
+			Selected:          row.Toggleable && row.SelectedByDefault,
+			Status:            row.Status,
+			StatusLabel:       tuiPlanRowStatusLabel(row.Status),
+			SelectedByDefault: row.SelectedByDefault,
+		})
 	}
-	return &tuiPlanPromptState{
+	state := &tuiInteractiveSelectionState{
 		sourceID:     req.SourceID,
-		rows:         append([]engine.PlanRow{}, req.Rows...),
+		rows:         rows,
 		details:      req.Details,
-		reply:        req.Reply,
 		selected:     selected,
 		filter:       tuiPlanFilterAll,
 		filterCursor: 0,
 	}
+	state.syncSelectedRows()
+	return state
 }
 
-func (s *tuiPlanPromptState) selectedIndices() []int {
+func newTUIPlanPromptState(req tuiPlanSelectRequestMsg) *tuiPlanPromptState {
+	return &tuiPlanPromptState{
+		tuiInteractiveSelectionState: newTUIInteractiveSelectionState(req),
+		reply:                        req.Reply,
+	}
+}
+
+func (s *tuiInteractiveSelectionState) selectedIndices() []int {
 	if s == nil {
 		return nil
 	}
@@ -1293,7 +1465,7 @@ func (s *tuiPlanPromptState) selectedIndices() []int {
 		if !row.Toggleable {
 			continue
 		}
-		if s.selected[row.Index] {
+		if row.Selected {
 			out = append(out, row.Index)
 		}
 	}
@@ -1301,7 +1473,7 @@ func (s *tuiPlanPromptState) selectedIndices() []int {
 	return out
 }
 
-func (s *tuiPlanPromptState) filters() []tuiPlanPromptFilter {
+func (s *tuiInteractiveSelectionState) filters() []tuiPlanPromptFilter {
 	return []tuiPlanPromptFilter{
 		tuiPlanFilterAll,
 		tuiPlanFilterSelected,
@@ -1311,11 +1483,11 @@ func (s *tuiPlanPromptState) filters() []tuiPlanPromptFilter {
 	}
 }
 
-func (s *tuiPlanPromptState) filteredRows() []engine.PlanRow {
+func (s *tuiInteractiveSelectionState) filteredRows() []tuiTrackRowState {
 	if s == nil {
 		return nil
 	}
-	rows := make([]engine.PlanRow, 0, len(s.rows))
+	rows := make([]tuiTrackRowState, 0, len(s.rows))
 	for _, row := range s.rows {
 		if s.matchesFilter(row) {
 			rows = append(rows, row)
@@ -1324,10 +1496,10 @@ func (s *tuiPlanPromptState) filteredRows() []engine.PlanRow {
 	return rows
 }
 
-func (s *tuiPlanPromptState) matchesFilter(row engine.PlanRow) bool {
+func (s *tuiInteractiveSelectionState) matchesFilter(row tuiTrackRowState) bool {
 	switch s.filter {
 	case tuiPlanFilterSelected:
-		return row.Toggleable && s.selected[row.Index]
+		return row.Toggleable && row.Selected
 	case tuiPlanFilterMissingNew:
 		return row.Status == engine.PlanRowMissingNew
 	case tuiPlanFilterKnownGap:
@@ -1339,7 +1511,7 @@ func (s *tuiPlanPromptState) matchesFilter(row engine.PlanRow) bool {
 	}
 }
 
-func (s *tuiPlanPromptState) visibleRowIndices() []int {
+func (s *tuiInteractiveSelectionState) visibleRowIndices() []int {
 	if s == nil {
 		return nil
 	}
@@ -1352,7 +1524,7 @@ func (s *tuiPlanPromptState) visibleRowIndices() []int {
 	return indices
 }
 
-func (s *tuiPlanPromptState) ensureCursorVisible() {
+func (s *tuiInteractiveSelectionState) ensureCursorVisible() {
 	if s == nil {
 		return
 	}
@@ -1369,7 +1541,7 @@ func (s *tuiPlanPromptState) ensureCursorVisible() {
 	s.cursor = visible[0]
 }
 
-func (s *tuiPlanPromptState) moveCursor(delta int) {
+func (s *tuiInteractiveSelectionState) moveCursor(delta int) {
 	if s == nil {
 		return
 	}
@@ -1395,9 +1567,9 @@ func (s *tuiPlanPromptState) moveCursor(delta int) {
 	s.cursor = visible[current]
 }
 
-func (s *tuiPlanPromptState) currentRow() (engine.PlanRow, bool) {
+func (s *tuiInteractiveSelectionState) currentRow() (tuiTrackRowState, bool) {
 	if s == nil {
-		return engine.PlanRow{}, false
+		return tuiTrackRowState{}, false
 	}
 	visible := s.visibleRowIndices()
 	for _, idx := range visible {
@@ -1405,10 +1577,10 @@ func (s *tuiPlanPromptState) currentRow() (engine.PlanRow, bool) {
 			return s.rows[idx], true
 		}
 	}
-	return engine.PlanRow{}, false
+	return tuiTrackRowState{}, false
 }
 
-func (s *tuiPlanPromptState) filterDisplayLabel(filter tuiPlanPromptFilter) string {
+func (s *tuiInteractiveSelectionState) filterDisplayLabel(filter tuiPlanPromptFilter) string {
 	switch filter {
 	case tuiPlanFilterSelected:
 		return "Selected"
@@ -1423,14 +1595,14 @@ func (s *tuiPlanPromptState) filterDisplayLabel(filter tuiPlanPromptFilter) stri
 	}
 }
 
-func (s *tuiPlanPromptState) filterLabel() string {
+func (s *tuiInteractiveSelectionState) filterLabel() string {
 	if s == nil {
 		return "all"
 	}
 	return strings.ToLower(s.filterDisplayLabel(s.filter))
 }
 
-func (s *tuiPlanPromptState) focusLabel() string {
+func (s *tuiInteractiveSelectionState) focusLabel() string {
 	if s == nil {
 		return "tracks"
 	}
@@ -1440,7 +1612,7 @@ func (s *tuiPlanPromptState) focusLabel() string {
 	return "tracks"
 }
 
-func (s *tuiPlanPromptState) filterCount(filter tuiPlanPromptFilter) int {
+func (s *tuiInteractiveSelectionState) filterCount(filter tuiPlanPromptFilter) int {
 	if s == nil {
 		return 0
 	}
@@ -1449,6 +1621,122 @@ func (s *tuiPlanPromptState) filterCount(filter tuiPlanPromptFilter) int {
 	rows := s.filteredRows()
 	s.filter = original
 	return len(rows)
+}
+
+func (s *tuiInteractiveSelectionState) selectedCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range s.rows {
+		if row.Toggleable && row.Selected {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *tuiInteractiveSelectionState) toggleableCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range s.rows {
+		if row.Toggleable {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *tuiInteractiveSelectionState) skippedCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range s.rows {
+		if row.Status == engine.PlanRowAlreadyDownloaded {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *tuiInteractiveSelectionState) setSelected(index int, selected bool) {
+	if s == nil {
+		return
+	}
+	if s.selected == nil {
+		s.selected = map[int]bool{}
+	}
+	s.selected[index] = selected
+	s.syncSelectedRows()
+}
+
+func (s *tuiInteractiveSelectionState) syncSelectedRows() {
+	if s == nil {
+		return
+	}
+	for idx := range s.rows {
+		row := &s.rows[idx]
+		row.Selected = row.Toggleable && s.selected[row.Index]
+	}
+}
+
+func (s *tuiInteractiveSelectionState) selectionMarker(row tuiTrackRowState) string {
+	if !row.Toggleable {
+		return "[-]"
+	}
+	if row.Selected {
+		return "[x]"
+	}
+	return "[ ]"
+}
+
+func (s *tuiInteractiveSelectionState) activityCollapsedFor(layout tuiShellLayout) bool {
+	if s == nil {
+		return layout.Compact
+	}
+	if s.activityCollapseConfigured {
+		return s.activityCollapsed
+	}
+	return layout.Compact
+}
+
+func (s *tuiInteractiveSelectionState) toggleActivity(layout tuiShellLayout) {
+	if s == nil {
+		return
+	}
+	if s.activityCollapseConfigured {
+		s.activityCollapsed = !s.activityCollapsed
+		return
+	}
+	s.activityCollapsed = !layout.Compact
+	s.activityCollapseConfigured = true
+}
+
+func (s *tuiInteractiveSelectionState) appendActivity(entry tuiActivityEntry) {
+	if s == nil || strings.TrimSpace(entry.Message) == "" {
+		return
+	}
+	s.activity = append(s.activity, entry)
+	const maxEntries = 18
+	if len(s.activity) > maxEntries {
+		s.activity = append([]tuiActivityEntry(nil), s.activity[len(s.activity)-maxEntries:]...)
+	}
+}
+
+func tuiPlanRowStatusLabel(status engine.PlanRowStatus) string {
+	switch status {
+	case engine.PlanRowMissingNew:
+		return "new"
+	case engine.PlanRowMissingKnownGap:
+		return "known gap"
+	case engine.PlanRowAlreadyDownloaded:
+		return "have it"
+	default:
+		return strings.ReplaceAll(string(status), "_", " ")
+	}
 }
 
 type tuiChannelEmitter struct {
