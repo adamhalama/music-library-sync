@@ -1,0 +1,1701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UDL TUI Design Lab</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@500;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;700;800&family=Bricolage+Grotesque:wght@500;700;800&display=swap');
+
+    :root {
+      --bg: #0b0c10;
+      --panel: #12151c;
+      --panel-2: #171a22;
+      --panel-3: #1b1f29;
+      --line: rgba(255,255,255,0.09);
+      --text: #eef2ff;
+      --muted: #a4adc2;
+      --soft: #69748d;
+      --accent: #63f0cf;
+      --accent-2: #8db2ff;
+      --danger: #ff7d7d;
+      --warn: #ffc86e;
+      --ok: #7df8ab;
+      --shadow: 0 30px 80px rgba(0,0,0,0.45);
+      --radius-lg: 28px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --display: "Syne", sans-serif;
+      --body: "Manrope", sans-serif;
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--body);
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 20%, rgba(99,240,207,0.14), transparent 28%),
+        radial-gradient(circle at 85% 18%, rgba(141,178,255,0.18), transparent 24%),
+        radial-gradient(circle at 50% 100%, rgba(255,200,110,0.12), transparent 30%),
+        linear-gradient(180deg, #090b10 0%, #0a0d14 55%, #090c13 100%);
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 42px 42px;
+      opacity: 0.35;
+      pointer-events: none;
+      mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+    }
+
+    .shell {
+      position: relative;
+      height: 100%;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 22px;
+      padding: 22px;
+    }
+
+    .chrome {
+      background: linear-gradient(180deg, rgba(18,22,30,0.92), rgba(12,14,19,0.94));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 30px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding: 22px;
+    }
+
+    .brand {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font: 800 34px/0.92 var(--display);
+      letter-spacing: -0.05em;
+    }
+
+    .brand small {
+      display: block;
+      color: var(--muted);
+      margin-top: 8px;
+      font: 500 12px/1.45 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+
+    .brand .led {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 18px rgba(99,240,207,0.8);
+      margin-top: 6px;
+      flex: 0 0 auto;
+    }
+
+    .section-label {
+      color: var(--soft);
+      font: 600 11px/1.2 var(--mono);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .design-list,
+    .control-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .design-btn,
+    .toggle-chip,
+    .mini-btn,
+    .footer-key,
+    .action-btn,
+    .card-btn {
+      appearance: none;
+      border: 0;
+      cursor: pointer;
+      color: inherit;
+      font: inherit;
+    }
+
+    .design-btn {
+      width: 100%;
+      text-align: left;
+      padding: 16px 16px 14px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border: 1px solid rgba(255,255,255,0.05);
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .design-btn:hover,
+    .design-btn:focus-visible {
+      transform: translateY(-1px);
+      border-color: rgba(255,255,255,0.14);
+      outline: none;
+    }
+
+    .design-btn.active {
+      background: linear-gradient(180deg, rgba(99,240,207,0.13), rgba(141,178,255,0.08));
+      border-color: rgba(99,240,207,0.35);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+    }
+
+    .design-btn strong {
+      display: block;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .design-btn span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .toggle-chip,
+    .mini-btn,
+    .footer-key,
+    .card-btn,
+    .action-btn {
+      border-radius: 999px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.06);
+      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+    }
+
+    .toggle-chip:hover,
+    .mini-btn:hover,
+    .card-btn:hover,
+    .action-btn:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.12);
+      transform: translateY(-1px);
+    }
+
+    .toggle-chip.active {
+      background: rgba(99,240,207,0.12);
+      border-color: rgba(99,240,207,0.35);
+      color: #dcfff8;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .stat-card {
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .stat-card .k {
+      color: var(--soft);
+      font: 500 11px/1.2 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      margin-bottom: 10px;
+    }
+
+    .stat-card .v {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+    }
+
+    .stat-card .hint {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 12px;
+    }
+
+    .small-note {
+      margin-top: auto;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .viewer {
+      min-width: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .viewer-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .viewer-meta h2 {
+      margin: 0;
+      font: 800 clamp(26px, 3vw, 40px)/0.95 var(--display);
+      letter-spacing: -0.06em;
+    }
+
+    .viewer-meta p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .app-frame {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      border-radius: 28px;
+      border: 1px solid rgba(255,255,255,0.07);
+      background: #0a0d13;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 24px 70px rgba(0,0,0,0.35);
+    }
+
+    .app-screen {
+      position: absolute;
+      inset: 0;
+      display: none;
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .app-screen.active { display: flex; }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .toolbar-left,
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .dot-row { display: flex; gap: 7px; }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      opacity: 0.9;
+    }
+
+    .dot:nth-child(1) { background: #ff7878; }
+    .dot:nth-child(2) { background: #ffc86e; }
+    .dot:nth-child(3) { background: #7df8ab; }
+
+    .title-tag {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      font: 600 12px/1 var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .kbd {
+      font: 600 11px/1 var(--mono);
+      color: var(--text);
+      padding: 5px 8px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: auto;
+    }
+
+    .footer-key {
+      cursor: default;
+      padding: 9px 11px;
+      background: rgba(255,255,255,0.045);
+      font: 500 12px/1 var(--mono);
+      color: var(--muted);
+    }
+
+    .footer-key b {
+      color: var(--text);
+      margin-right: 8px;
+      font-weight: 700;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font: 700 11px/1 var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 14px currentColor;
+    }
+
+    .state-new { color: var(--accent); }
+    .state-running { color: var(--warn); }
+    .state-done { color: var(--ok); }
+    .state-failed { color: var(--danger); }
+
+    .muted { color: var(--muted); }
+    .dim { opacity: 0.55; }
+
+    .progress {
+      width: 100%;
+      height: 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+
+    .progress > span {
+      display: block;
+      height: 100%;
+      width: var(--progress, 0%);
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(255,200,110,0.8), rgba(99,240,207,0.9));
+    }
+
+    .meter {
+      display: flex;
+      gap: 4px;
+      align-items: end;
+      height: 38px;
+    }
+
+    .meter span {
+      width: 7px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(99,240,207,1), rgba(141,178,255,0.35));
+      animation: pulse 1200ms ease-in-out infinite;
+      animation-delay: calc(var(--i) * 70ms);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.35; transform: scaleY(0.7); }
+      50% { opacity: 1; transform: scaleY(1.05); }
+    }
+
+    .sparkline {
+      display: flex;
+      align-items: end;
+      gap: 5px;
+      height: 42px;
+    }
+
+    .sparkline span {
+      width: 10px;
+      border-radius: 12px 12px 4px 4px;
+      background: linear-gradient(180deg, rgba(99,240,207,0.85), rgba(255,200,110,0.45));
+      box-shadow: 0 10px 20px rgba(99,240,207,0.15);
+    }
+
+    .table-head,
+    .table-row {
+      display: grid;
+      align-items: center;
+    }
+
+    .table-head {
+      color: var(--soft);
+      font: 600 11px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .table-row {
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
+      border: 1px solid transparent;
+    }
+
+    .table-row:hover {
+      background: rgba(255,255,255,0.04);
+      transform: translateY(-1px);
+    }
+
+    .table-row.active {
+      background: linear-gradient(90deg, rgba(99,240,207,0.12), rgba(141,178,255,0.08));
+      border-color: rgba(99,240,207,0.25);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      font: 600 11px/1 var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .split-3 {
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr) 300px;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .panel {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 22px;
+      padding: 16px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .panel h3,
+    .panel h4,
+    .panel h5 {
+      margin: 0;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .panel-header .t {
+      font: 700 12px/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--soft);
+    }
+
+    .nav-list,
+    .track-list,
+    .stack,
+    .log-list,
+    .column-list {
+      display: grid;
+      gap: 8px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .nav-item,
+    .track-card,
+    .log-item,
+    .kanban-card,
+    .editorial-list-item {
+      border-radius: 16px;
+      padding: 12px 13px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.03);
+      cursor: pointer;
+      transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+    }
+
+    .nav-item:hover,
+    .track-card:hover,
+    .log-item:hover,
+    .kanban-card:hover,
+    .editorial-list-item:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,0.045);
+    }
+
+    .nav-item.active,
+    .track-card.active,
+    .kanban-card.active,
+    .editorial-list-item.active {
+      background: linear-gradient(90deg, rgba(99,240,207,0.11), rgba(141,178,255,0.08));
+      border-color: rgba(99,240,207,0.28);
+    }
+
+    .nav-item strong,
+    .track-card strong,
+    .kanban-card strong,
+    .editorial-list-item strong {
+      display: block;
+      font-size: 14px;
+      letter-spacing: -0.02em;
+      margin-bottom: 5px;
+    }
+
+    .nav-item span,
+    .track-card span,
+    .kanban-card span,
+    .editorial-list-item span,
+    .log-item span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .detail-card {
+      display: grid;
+      gap: 14px;
+    }
+
+    .detail-hero {
+      padding: 18px;
+      border-radius: 20px;
+      background: linear-gradient(160deg, rgba(99,240,207,0.12), rgba(141,178,255,0.10), rgba(255,255,255,0.04));
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .detail-hero h3 {
+      margin: 0;
+      font: 800 28px/0.94 var(--display);
+      letter-spacing: -0.06em;
+    }
+
+    .detail-hero p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .meta-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .meta-row b {
+      color: var(--text);
+      font-weight: 700;
+      min-width: 86px;
+    }
+
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .action-btn.primary,
+    .card-btn.primary {
+      background: linear-gradient(90deg, rgba(99,240,207,0.18), rgba(141,178,255,0.16));
+      border-color: rgba(99,240,207,0.30);
+    }
+
+    /* DESIGN 1: CONTROL TOWER */
+    #screen-control {
+      flex-direction: column;
+      background:
+        radial-gradient(circle at 85% 15%, rgba(141,178,255,0.13), transparent 24%),
+        linear-gradient(180deg, #0b0f17 0%, #0a0d13 100%);
+      font-family: var(--body);
+    }
+
+    #screen-control .tower-grid {
+      display: grid;
+      grid-template-columns: 210px minmax(0,1fr) 300px;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #screen-control .track-table {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    #screen-control .table-head,
+    #screen-control .table-row {
+      grid-template-columns: 42px minmax(0,1fr) 88px 74px 98px;
+      gap: 10px;
+      padding: 12px 14px;
+    }
+
+    /* DESIGN 2: EDITORIAL */
+    #screen-editorial {
+      flex-direction: column;
+      background:
+        radial-gradient(circle at 16% 16%, rgba(255,220,180,0.13), transparent 24%),
+        radial-gradient(circle at 88% 14%, rgba(160,210,255,0.15), transparent 22%),
+        linear-gradient(180deg, #121114 0%, #18161b 100%);
+      color: #f7f2ea;
+      --line: rgba(247,242,234,0.10);
+      --muted: #c9bfb2;
+      --soft: #9a8d80;
+      --text: #f7f2ea;
+      --accent: #f6c27a;
+      --accent-2: #b6dbff;
+      --display: "Fraunces", serif;
+      --body: "Manrope", sans-serif;
+    }
+
+    #screen-editorial .editor-grid {
+      display: grid;
+      grid-template-columns: 250px minmax(0,1fr);
+      gap: 16px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #screen-editorial .editor-sidebar,
+    #screen-editorial .editor-main {
+      border-radius: 24px;
+      border: 1px solid rgba(247,242,234,0.09);
+      background: rgba(255,251,245,0.035);
+      padding: 18px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    #screen-editorial .hero-panel {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 14px;
+    }
+
+    #screen-editorial .eyebrow {
+      font: 700 11px/1 var(--mono);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--soft);
+    }
+
+    #screen-editorial .big-title {
+      font: 700 clamp(44px, 6vw, 78px)/0.9 var(--display);
+      letter-spacing: -0.08em;
+      max-width: 12ch;
+      margin: 4px 0 0;
+    }
+
+    #screen-editorial .body-copy {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+      max-width: 58ch;
+    }
+
+    #screen-editorial .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 10px;
+      align-self: end;
+    }
+
+    #screen-editorial .meta-card {
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid rgba(247,242,234,0.09);
+      background: rgba(255,251,245,0.05);
+    }
+
+    #screen-editorial .meta-card .l {
+      color: var(--soft);
+      font: 700 11px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    #screen-editorial .meta-card .v {
+      font-weight: 800;
+      font-size: 18px;
+    }
+
+    /* DESIGN 3: PIPELINE */
+    #screen-pipeline {
+      flex-direction: column;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(99,240,207,0.08), transparent 26%),
+        linear-gradient(180deg, #0d1216 0%, #0b1013 100%);
+    }
+
+    #screen-pipeline .pipeline-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0,1fr));
+      gap: 12px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #screen-pipeline .pipeline-col {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+      min-height: 0;
+      border-radius: 24px;
+      padding: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    #screen-pipeline .col-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    #screen-pipeline .col-head strong {
+      font: 700 12px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    #screen-pipeline .kanban-card {
+      display: grid;
+      gap: 8px;
+    }
+
+    #screen-pipeline .mini-progress {
+      --progress: 0%;
+      height: 7px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+
+    #screen-pipeline .mini-progress span {
+      display: block;
+      height: 100%;
+      width: var(--progress);
+      background: linear-gradient(90deg, rgba(255,200,110,1), rgba(99,240,207,0.95));
+    }
+
+    #screen-pipeline .inspector-bar {
+      margin-top: 12px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    /* DESIGN 4: COMPACT PRO */
+    #screen-compact {
+      flex-direction: column;
+      background:
+        linear-gradient(180deg, #070a10 0%, #0a0e17 100%);
+      --display: "Bricolage Grotesque", sans-serif;
+    }
+
+    #screen-compact .compact-grid {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #screen-compact .compact-table {
+      border-radius: 22px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+      padding: 12px;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 8px;
+    }
+
+    #screen-compact .table-head,
+    #screen-compact .table-row {
+      grid-template-columns: 38px 42px minmax(0,1.8fr) 70px 74px 60px 140px;
+      gap: 10px;
+      padding: 11px 12px;
+    }
+
+    #screen-compact .lower-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 12px;
+      min-height: 180px;
+    }
+
+    #screen-compact .code-preview {
+      height: 100%;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: linear-gradient(180deg, rgba(7,10,16,0.96), rgba(8,12,19,0.98));
+      padding: 16px;
+      font: 500 14px/1.65 var(--mono);
+      color: #c9e6ff;
+      white-space: pre-wrap;
+    }
+
+    #screen-compact .log-box {
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+      padding: 14px;
+      min-height: 0;
+    }
+
+    /* DESIGN 5: STUDIO NEON */
+    #screen-studio {
+      flex-direction: column;
+      background:
+        radial-gradient(circle at 12% 20%, rgba(160, 100, 255, 0.15), transparent 24%),
+        radial-gradient(circle at 85% 18%, rgba(40, 224, 255, 0.18), transparent 22%),
+        linear-gradient(180deg, #1b1330 0%, #100d1d 100%);
+      --text: #f8f5ff;
+      --muted: #b9aed8;
+      --soft: #8d82ab;
+      --accent: #42f5ff;
+      --accent-2: #b06dff;
+      --line: rgba(255,255,255,0.09);
+      --display: "Bricolage Grotesque", sans-serif;
+    }
+
+    #screen-studio::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(transparent 50%, rgba(255,255,255,0.015) 50%);
+      background-size: 100% 5px;
+      opacity: 0.35;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+
+    #screen-studio .studio-shell {
+      position: relative;
+      display: grid;
+      grid-template-columns: 220px minmax(0,1fr) 260px;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #screen-studio .neon-panel {
+      border-radius: 24px;
+      padding: 16px;
+      min-height: 0;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02), 0 0 0 1px rgba(66,245,255,0.06), 0 16px 40px rgba(0,0,0,0.22);
+    }
+
+    #screen-studio .neon-head {
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      font: 700 12px/1 var(--mono);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #d6ccff;
+    }
+
+    #screen-studio .crate-item,
+    #screen-studio .queue-item {
+      padding: 12px 13px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.04);
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    #screen-studio .crate-item:hover,
+    #screen-studio .queue-item:hover {
+      transform: translateY(-1px);
+    }
+
+    #screen-studio .crate-item.active,
+    #screen-studio .queue-item.active {
+      border-color: rgba(66,245,255,0.4);
+      background: linear-gradient(90deg, rgba(66,245,255,0.12), rgba(176,109,255,0.11));
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.03), 0 0 26px rgba(66,245,255,0.08);
+    }
+
+    #screen-studio .queue-list {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    #screen-studio .queue-item {
+      display: grid;
+      grid-template-columns: 28px minmax(0,1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    #screen-studio .track-no {
+      font: 700 12px/1 var(--mono);
+      color: #d3c8f7;
+      opacity: 0.85;
+    }
+
+    #screen-studio .signal-card {
+      display: grid;
+      gap: 14px;
+    }
+
+    #screen-studio .signal-box {
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+    }
+
+    #screen-studio .throughput {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    #screen-studio .throughput strong {
+      font-size: 28px;
+      letter-spacing: -0.05em;
+    }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 1300px) {
+      .shell { grid-template-columns: 280px 1fr; }
+      #screen-control .tower-grid { grid-template-columns: 190px minmax(0,1fr) 260px; }
+      #screen-studio .studio-shell { grid-template-columns: 190px minmax(0,1fr) 230px; }
+    }
+
+    @media (max-width: 1080px) {
+      body { overflow: auto; }
+      .shell {
+        height: auto;
+        min-height: 100%;
+        grid-template-columns: 1fr;
+      }
+      .viewer { min-height: 900px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar chrome">
+      <div class="brand">
+        <div>
+          <h1>UDL<br />Design Lab</h1>
+          <small>HTML prototype for terminal-inspired download management</small>
+        </div>
+        <div class="led"></div>
+      </div>
+
+      <section>
+        <div class="section-label">Design directions</div>
+        <div class="design-list" id="designList"></div>
+      </section>
+
+      <section>
+        <div class="section-label">Live controls</div>
+        <div class="control-list">
+          <div class="chip-row">
+            <button class="toggle-chip active" data-filter="all">All items</button>
+            <button class="toggle-chip" data-filter="actionable">Actionable</button>
+            <button class="toggle-chip" data-filter="running">Running</button>
+          </div>
+          <div class="chip-row">
+            <button class="mini-btn" id="shuffleBtn">Shuffle selection</button>
+            <button class="mini-btn" id="cycleBtn">Cycle states</button>
+            <button class="mini-btn" id="helpBtn">Toggle help</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-label">Session snapshot</div>
+        <div class="stat-grid" id="globalStats"></div>
+      </section>
+
+      <div class="small-note">
+        Each concept uses the same dataset and interaction model, but expresses hierarchy, density, feedback, and affordances differently. Use the design switcher to compare how the same download workflow feels under different visual systems.
+      </div>
+    </aside>
+
+    <main class="viewer chrome">
+      <div class="viewer-top">
+        <div class="viewer-meta">
+          <h2 id="designTitle">Control Tower</h2>
+          <p id="designDescription">A professional command-center layout with stable navigation, a focused queue, and a persistent inspector.</p>
+        </div>
+        <div class="chip-row">
+          <button class="card-btn primary" id="nextDesignBtn">Next design</button>
+          <button class="card-btn" id="randomTrackBtn">Random track</button>
+        </div>
+      </div>
+
+      <div class="app-frame">
+        <section class="app-screen active" id="screen-control"></section>
+        <section class="app-screen" id="screen-editorial"></section>
+        <section class="app-screen" id="screen-pipeline"></section>
+        <section class="app-screen" id="screen-compact"></section>
+        <section class="app-screen" id="screen-studio"></section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const baseTracks = [
+      { id: 2267387111, title: "Bengalo — All About", artist: "Bengalo", state: "done", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "8.2M", age: "3d", queue: "Likes", crate: "likes", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Already downloaded and indexed in the state file.", progress: 100 },
+      { id: 2263082507, title: "Bengalo — Let Me Play", artist: "Bengalo", state: "done", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "7.5M", age: "3d", queue: "Likes", crate: "likes", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Already downloaded and indexed in the state file.", progress: 100 },
+      { id: 2231274233, title: "Klint — Eternal Lie", artist: "Klint", state: "failed", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "9.0M", age: "2d", queue: "Failed", crate: "archive", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Last run failed after a credential refresh issue.", progress: 0 },
+      { id: 2275081589, title: "Lewis Legacy — Blue Tribe", artist: "Lewis Legacy", state: "running", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "6.9M", age: "2m", queue: "Likes", crate: "premieres", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Download in progress. Partial file locked for write.", progress: 41 },
+      { id: 2276806856, title: "No Valentia — i.know.xml", artist: "No Valentia", state: "new", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "8.8M", age: "5h", queue: "Likes", crate: "likes", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "New actionable track. Not yet queued in the current batch.", progress: 0 },
+      { id: 2251896527, title: "Nachtwasser — No Signal", artist: "Nachtwasser", state: "new", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "10.1M", age: "1m", queue: "Likes", crate: "premieres", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Freshly discovered by the latest sync plan.", progress: 0 },
+      { id: 2270743331, title: "Wie es Läuft", artist: "Unknown", state: "done", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "7.8M", age: "6d", queue: "Archive", crate: "archive", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Synced previously. Hidden by default in actionable modes.", progress: 100 },
+      { id: 2232613559, title: "VCS1 — Mythos", artist: "VCS1", state: "new", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "8.0M", age: "4h", queue: "Releases", crate: "premieres", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Queued candidate from release-monitoring source.", progress: 0 },
+      { id: 2270813344, title: "Dolph — My Shine (Udaii Remix)", artist: "Dolph", state: "running", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "11.4M", age: "7m", queue: "Releases", crate: "premieres", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Secondary worker is fetching this track in parallel.", progress: 88 },
+      { id: 2271900041, title: "Future.666 — XTRA LOOP", artist: "future.666", state: "failed", source: "SC", sourceName: "soundcloud-likes", adapter: "scdl", size: "9.4M", age: "11h", queue: "Failed", crate: "archive", target: "/Users/jaa/Music/downloaded/sc-likes", stateFile: "/Users/jaa/dev/music-down/statefiles/soundcloud-likes.sync.scdl", note: "Metadata resolved, stream URL expired before transfer began.", progress: 0 }
+    ];
+
+    const designs = [
+      {
+        id: "control",
+        name: "Control Tower",
+        short: "Operational / stable / professional",
+        description: "A professional command-center layout with stable navigation, a focused queue, and a persistent inspector. Best as a default production shell.",
+      },
+      {
+        id: "editorial",
+        name: "Editorial Focus",
+        short: "Premium / calm / hero-driven",
+        description: "A high-contrast editorial layout that turns the selected track into the hero and reduces the list to a lightweight navigation rail.",
+      },
+      {
+        id: "pipeline",
+        name: "Pipeline Board",
+        short: "Stage-based / batch-friendly / visual",
+        description: "A kanban-like pipeline that makes state transitions visible at a glance and encourages batch actions on stages instead of individual rows.",
+      },
+      {
+        id: "compact",
+        name: "Compact Pro Mode",
+        short: "Dense / efficient / power-user",
+        description: "A btop-inspired dense table with an event log and command preview for users who want maximum throughput and minimal wasted space.",
+      },
+      {
+        id: "studio",
+        name: "Studio Neon",
+        short: "Expressive / music-native / memorable",
+        description: "A retro-futuristic music workstation aesthetic with crates, queue cards, and live signal widgets that feel made for audio workflows.",
+      },
+    ];
+
+    const state = {
+      designIndex: 0,
+      filter: "all",
+      selectedTrackId: 2251896527,
+      selectedCrate: "likes",
+      helpVisible: true,
+      tracks: structuredClone(baseTracks),
+    };
+
+    const stateCycle = {
+      new: "running",
+      running: "done",
+      done: "failed",
+      failed: "new",
+    };
+
+    const screenEls = {
+      control: document.getElementById("screen-control"),
+      editorial: document.getElementById("screen-editorial"),
+      pipeline: document.getElementById("screen-pipeline"),
+      compact: document.getElementById("screen-compact"),
+      studio: document.getElementById("screen-studio"),
+    };
+
+    function counts(tracks = state.tracks) {
+      return {
+        new: tracks.filter(t => t.state === "new").length,
+        running: tracks.filter(t => t.state === "running").length,
+        done: tracks.filter(t => t.state === "done").length,
+        failed: tracks.filter(t => t.state === "failed").length,
+      };
+    }
+
+    function activeDesign() {
+      return designs[state.designIndex];
+    }
+
+    function currentTrack() {
+      const filtered = filteredTracks();
+      return filtered.find(t => t.id === state.selectedTrackId) || filtered[0] || state.tracks[0];
+    }
+
+    function filteredTracks() {
+      const tracks = state.selectedCrate === "all"
+        ? state.tracks
+        : state.tracks.filter(t => t.crate === state.selectedCrate || (state.selectedCrate === "failed" && t.state === "failed"));
+
+      if (state.filter === "actionable") return tracks.filter(t => t.state === "new" || t.state === "failed");
+      if (state.filter === "running") return tracks.filter(t => t.state === "running");
+      return tracks;
+    }
+
+    function setSelectedTrack(id) {
+      state.selectedTrackId = id;
+      renderScreens();
+    }
+
+    function setCrate(crate) {
+      state.selectedCrate = crate;
+      const filtered = filteredTracks();
+      if (!filtered.some(t => t.id === state.selectedTrackId) && filtered[0]) {
+        state.selectedTrackId = filtered[0].id;
+      }
+      renderScreens();
+    }
+
+    function stateLabel(s) {
+      return s === "new" ? "NEW" : s === "running" ? "RUN" : s === "done" ? "DONE" : "FAIL";
+    }
+
+    function titleOnly(track) {
+      return track.title.replace(/^.*?—\s*/, "");
+    }
+
+    function badge(stateName) {
+      return `<span class="badge state-${stateName}">${stateLabel(stateName)}</span>`;
+    }
+
+    function renderSidebar() {
+      const list = document.getElementById("designList");
+      list.innerHTML = designs.map((d, i) => `
+        <button class="design-btn ${i === state.designIndex ? "active" : ""}" data-design-index="${i}">
+          <strong>${d.name}</strong>
+          <span>${d.short}</span>
+        </button>
+      `).join("");
+
+      document.querySelectorAll(".design-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          state.designIndex = Number(btn.dataset.designIndex);
+          render();
+        });
+      });
+
+      document.querySelectorAll(".toggle-chip").forEach(btn => {
+        const active = btn.dataset.filter === state.filter;
+        btn.classList.toggle("active", active);
+      });
+
+      document.getElementById("designTitle").textContent = activeDesign().name;
+      document.getElementById("designDescription").textContent = activeDesign().description;
+
+      const c = counts();
+      const stats = [
+        ["New", c.new, "Ready to queue"],
+        ["Running", c.running, "Live downloads"],
+        ["Done", c.done, "Already synced"],
+        ["Failed", c.failed, "Needs attention"],
+      ];
+      document.getElementById("globalStats").innerHTML = stats.map(([k, v, hint]) => `
+        <div class="stat-card">
+          <div class="k">${k}</div>
+          <div class="v">${v}</div>
+          <div class="hint">${hint}</div>
+        </div>
+      `).join("");
+    }
+
+    function commonToolbar(label, right = "") {
+      return `
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <div class="dot-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+            <div class="title-tag">${label}</div>
+          </div>
+          <div class="toolbar-right">${right}</div>
+        </div>
+      `;
+    }
+
+    function helpFooter(entries) {
+      const cls = state.helpVisible ? "footer" : "footer hidden";
+      return `<div class="${cls}">${entries.map(([k, v]) => `<div class="footer-key"><b>${k}</b>${v}</div>`).join("")}</div>`;
+    }
+
+    function renderControlTower() {
+      const tracks = filteredTracks();
+      const selected = currentTrack();
+      const c = counts();
+      screenEls.control.innerHTML = `
+        ${commonToolbar("UDL · Control Tower", `
+          <div class="pill">new ${c.new}</div>
+          <div class="pill">running ${c.running}</div>
+          <div class="pill">done ${c.done}</div>
+          <div class="pill">failed ${c.failed}</div>
+        `)}
+        <div class="tower-grid">
+          <aside class="panel">
+            <div class="panel-header"><div class="t">Queue</div><div class="pill">source SC</div></div>
+            <div class="nav-list">
+              ${[
+                ["likes", "Likes", "Main source selection"],
+                ["premieres", "Premieres", "Curated releases"],
+                ["archive", "Archive", "Past synced items"],
+                ["failed", "Failed", "Error recovery queue"],
+                ["all", "All", "Everything visible"],
+              ].map(([id, name, sub]) => `
+                <div class="nav-item ${state.selectedCrate === id ? "active" : ""}" data-crate="${id}">
+                  <strong>${name}</strong>
+                  <span>${sub}</span>
+                </div>
+              `).join("")}
+            </div>
+          </aside>
+
+          <section class="panel track-table">
+            <div>
+              <div class="panel-header"><div class="t">Tracks</div><div class="muted">${tracks.length} visible</div></div>
+              <div class="table-head">
+                <div>#</div><div>Title</div><div>State</div><div>Source</div><div>Action</div>
+              </div>
+            </div>
+            <div class="track-list">
+              ${tracks.map((t, i) => `
+                <div class="table-row ${selected?.id === t.id ? "active" : ""} ${t.state === "done" ? "dim" : ""}" data-track-id="${t.id}">
+                  <div>${String(i + 1).padStart(2, "0")}</div>
+                  <div><strong>${t.title}</strong><div class="muted">${t.artist} · ${t.id}</div></div>
+                  <div>${badge(t.state)}</div>
+                  <div>${t.sourceName}</div>
+                  <div>${t.state === "new" ? "Queue" : t.state === "failed" ? "Retry" : t.state === "running" ? `${t.progress}%` : "Locked"}</div>
+                </div>
+              `).join("")}
+            </div>
+          </section>
+
+          <aside class="panel">
+            <div class="panel-header"><div class="t">Inspector</div><div class="pill">${selected.adapter}</div></div>
+            <div class="detail-card">
+              <div class="detail-hero">
+                <div class="eyebrow">Selected track</div>
+                <h3>${selected.title}</h3>
+                <p>${selected.note}</p>
+              </div>
+              ${selected.state === "running" ? `<div class="progress" style="--progress:${selected.progress}%"><span></span></div>` : ""}
+              <div class="meta-list">
+                <div class="meta-row"><b>Status</b><span>${badge(selected.state)}</span></div>
+                <div class="meta-row"><b>Target</b><span>${selected.target}</span></div>
+                <div class="meta-row"><b>State file</b><span>${selected.stateFile}</span></div>
+                <div class="meta-row"><b>Age</b><span>${selected.age}</span></div>
+              </div>
+              <div class="action-row">
+                <button class="action-btn primary">${selected.state === "failed" ? "Retry track" : selected.state === "done" ? "Open folder" : "Queue track"}</button>
+                <button class="action-btn">Copy URL</button>
+                <button class="action-btn">View log</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+        ${helpFooter([["j/k", "move"], ["enter", "inspect"], ["space", "queue"], ["/", "filter"], ["t", "retry"], ["r", "run batch"], ["?", "toggle help"]])}
+      `;
+    }
+
+    function renderEditorial() {
+      const tracks = filteredTracks();
+      const selected = currentTrack();
+      const subtitle = titleOnly(selected).toUpperCase();
+      screenEls.editorial.innerHTML = `
+        ${commonToolbar("UDL · Editorial Focus", `<div class="title-tag">source ${selected.sourceName}</div><div class="title-tag">plan 10</div>`)}
+        <div class="editor-grid">
+          <aside class="editor-sidebar">
+            <div class="panel-header"><div class="t">Queue</div><div class="muted">Selected story</div></div>
+            <div class="stack">
+              ${tracks.map(t => `
+                <div class="editorial-list-item ${selected.id === t.id ? "active" : ""} ${t.state === "done" ? "dim" : ""}" data-track-id="${t.id}">
+                  <strong>${titleOnly(t.title)}</strong>
+                  <span>${t.artist} · ${stateLabel(t.state)} · ${t.age}</span>
+                </div>
+              `).join("")}
+            </div>
+          </aside>
+          <section class="editor-main">
+            <div class="hero-panel">
+              <div>
+                <div class="eyebrow">Selected</div>
+                <div class="big-title">${subtitle}</div>
+                <div class="body-copy">${selected.note} This concept gives the active item room to breathe: large typography, tighter curation, fewer simultaneous signals, and a slower decision-making rhythm.</div>
+              </div>
+              <div class="chip-row">
+                ${badge(selected.state)}
+                <div class="pill">${selected.sourceName}</div>
+                <div class="pill">${selected.size}</div>
+                <div class="pill">${selected.id}</div>
+              </div>
+              <div class="meta-grid">
+                <div class="meta-card"><div class="l">Target</div><div class="v">${selected.target.split("/").slice(-1)[0]}</div></div>
+                <div class="meta-card"><div class="l">Adapter</div><div class="v">${selected.adapter}</div></div>
+                <div class="meta-card"><div class="l">Queue</div><div class="v">${selected.queue}</div></div>
+                <div class="meta-card"><div class="l">Age</div><div class="v">${selected.age}</div></div>
+              </div>
+              <div class="action-row">
+                <button class="action-btn primary">${selected.state === "failed" ? "Retry now" : selected.state === "done" ? "Reveal in Finder" : "Add to queue"}</button>
+                <button class="action-btn">Copy source</button>
+                <button class="action-btn">Expand metadata</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        ${helpFooter([["up/down", "browse"], ["enter", "primary action"], ["/", "search"], ["tab", "switch pane"], ["?", "toggle help"]])}
+      `;
+    }
+
+    function renderPipeline() {
+      const filtered = filteredTracks();
+      const selected = currentTrack();
+      const groups = {
+        new: filtered.filter(t => t.state === "new"),
+        running: filtered.filter(t => t.state === "running"),
+        done: filtered.filter(t => t.state === "done"),
+        failed: filtered.filter(t => t.state === "failed"),
+      };
+      screenEls.pipeline.innerHTML = `
+        ${commonToolbar("UDL · Pipeline Board", `<div class="title-tag">batch orchestration</div><div class="title-tag">source soundcloud-likes</div>`)}
+        <div class="pipeline-grid">
+          ${[
+            ["new", "New", "Add all"],
+            ["running", "Running", "Pause"],
+            ["done", "Done", "Hide complete"],
+            ["failed", "Failed", "Retry all"],
+          ].map(([key, label, action]) => `
+            <div class="pipeline-col">
+              <div class="col-head"><strong>${label}</strong><span class="pill">${groups[key].length}</span></div>
+              <div class="column-list">
+                ${groups[key].map(t => `
+                  <div class="kanban-card ${selected.id === t.id ? "active" : ""}" data-track-id="${t.id}">
+                    <strong>${titleOnly(t.title)}</strong>
+                    <span>${t.artist} · ${t.size} · ${t.age}</span>
+                    ${t.state === "running" ? `<div class="mini-progress" style="--progress:${t.progress}%"><span></span></div>` : ``}
+                  </div>
+                `).join("") || `<div class="log-item"><span>No items in this stage.</span></div>`}
+              </div>
+              <button class="mini-btn">${action}</button>
+            </div>
+          `).join("")}
+        </div>
+        <div class="inspector-bar">
+          <div><strong>${selected.title}</strong> <span class="muted">· ${selected.note}</span></div>
+          <div class="chip-row">
+            ${badge(selected.state)}
+            <div class="pill">${selected.sourceName}</div>
+            <div class="pill">${selected.target.split("/").slice(-1)[0]}</div>
+          </div>
+        </div>
+        ${helpFooter([["←/→", "switch stage"], ["↑/↓", "move card"], ["a", "batch action"], ["enter", "inspect"], ["?", "toggle help"]])}
+      `;
+    }
+
+    function renderCompact() {
+      const tracks = filteredTracks();
+      const selected = currentTrack();
+      screenEls.compact.innerHTML = `
+        ${commonToolbar("UDL · Compact Pro Mode", `<div class="title-tag">speed 8.1 MB/s</div><div class="title-tag">filter ${state.filter}</div><div class="title-tag">sort status</div>`)}
+        <div class="compact-grid">
+          <section class="compact-table">
+            <div class="table-head">
+              <div>#</div><div>S</div><div>Title</div><div>Src</div><div>Size</div><div>Age</div><div>Action</div>
+            </div>
+            <div class="track-list">
+              ${tracks.map((t, i) => `
+                <div class="table-row ${selected.id === t.id ? "active" : ""} ${t.state === "done" ? "dim" : ""}" data-track-id="${t.id}">
+                  <div>${i + 1}</div>
+                  <div>${stateLabel(t.state)[0]}</div>
+                  <div><strong>${t.title}</strong></div>
+                  <div>${t.source}</div>
+                  <div>${t.size}</div>
+                  <div>${t.age}</div>
+                  <div>${t.state === "running" ? `<div class="progress" style="--progress:${t.progress}%"><span></span></div>` : t.state === "failed" ? "retry" : t.state === "new" ? "queue" : "dim"}</div>
+                </div>
+              `).join("")}
+            </div>
+          </section>
+          <div class="lower-grid">
+            <div class="code-preview">udl sync --plan source=soundcloud-likes mode=run plan-limit=10
+adapter=${selected.adapter}
+target_dir=${selected.target}
+state_file=${selected.stateFile}
+selected_track=${selected.id}
+status=${selected.state}
+note=${selected.note}</div>
+            <div class="log-box">
+              <div class="panel-header"><div class="t">Event log</div><div class="pill">live</div></div>
+              <div class="log-list">
+                <div class="log-item"><span>11:42 · Sync plan generated for soundcloud-likes</span></div>
+                <div class="log-item"><span>11:43 · ${selected.title} focused in the UI</span></div>
+                <div class="log-item"><span>11:44 · Worker A downloading Blue Tribe at 8.1 MB/s</span></div>
+                <div class="log-item"><span>11:44 · Retry suggested for Future.666 — XTRA LOOP</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        ${helpFooter([["/", "search"], ["s", "sort"], ["f", "filter"], ["space", "queue"], ["a", "queue visible"], ["l", "toggle logs"], ["?", "toggle help"]])}
+      `;
+    }
+
+    function renderStudio() {
+      const tracks = filteredTracks();
+      const selected = currentTrack();
+      screenEls.studio.innerHTML = `
+        ${commonToolbar("UDL · Studio Neon", `<div class="title-tag">session 11:42 PM</div><div class="title-tag">run mode</div>`)}
+        <div class="studio-shell">
+          <aside class="neon-panel">
+            <div class="neon-head">Crates</div>
+            <div class="stack">
+              ${[
+                ["likes", "likes", "Main stream"],
+                ["premieres", "premieres", "Curated finds"],
+                ["archive", "archive", "Past grabs"],
+                ["failed", "failed", "Broken syncs"],
+                ["all", "all", "Everything"],
+              ].map(([id, title, sub]) => `
+                <div class="crate-item ${state.selectedCrate === id ? "active" : ""}" data-crate="${id}">
+                  <strong>${title}</strong>
+                  <span>${sub}</span>
+                </div>
+              `).join("")}
+            </div>
+          </aside>
+
+          <section class="neon-panel" style="display:grid; grid-template-rows:auto 1fr; gap:14px; min-height:0;">
+            <div class="neon-head">Queue</div>
+            <div class="queue-list">
+              ${tracks.map((t, i) => `
+                <div class="queue-item ${selected.id === t.id ? "active" : ""} ${t.state === "done" ? "dim" : ""}" data-track-id="${t.id}">
+                  <div class="track-no">${String(i + 1).padStart(2, "0")}</div>
+                  <div><strong>${titleOnly(t.title)}</strong><span>${t.artist} · ${t.id}</span></div>
+                  <div>${badge(t.state)}</div>
+                </div>
+              `).join("")}
+            </div>
+          </section>
+
+          <aside class="neon-panel">
+            <div class="neon-head">Signal</div>
+            <div class="signal-card">
+              <div class="signal-box">
+                <div class="throughput"><span class="muted">Throughput</span><strong>8.1</strong></div>
+                <div class="sparkline">
+                  <span style="height:20%"></span>
+                  <span style="height:34%"></span>
+                  <span style="height:52%"></span>
+                  <span style="height:78%"></span>
+                  <span style="height:92%"></span>
+                  <span style="height:72%"></span>
+                  <span style="height:56%"></span>
+                  <span style="height:38%"></span>
+                </div>
+              </div>
+              <div class="signal-box">
+                <div class="muted" style="margin-bottom:10px">Now playing in focus</div>
+                <strong style="display:block; font-size:20px; letter-spacing:-0.04em; margin-bottom:8px">${titleOnly(selected.title)}</strong>
+                <div class="chip-row">
+                  ${badge(selected.state)}
+                  <div class="pill">${selected.queue}</div>
+                </div>
+              </div>
+              <div class="signal-box">
+                <div class="muted" style="margin-bottom:10px">Activity</div>
+                <div class="meter">
+                  ${[18,26,34,28,38,24,32,36].map((h, i) => `<span style="height:${h}px; --i:${i}"></span>`).join("")}
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+        ${helpFooter([["j/k", "move"], ["h/l", "switch pane"], ["space", "queue"], ["r", "retry"], ["/", "search"], ["tab", "mode"], ["?", "toggle help"]])}
+      `;
+    }
+
+    function bindInteractiveElements() {
+      document.querySelectorAll("[data-track-id]").forEach(el => {
+        el.addEventListener("click", () => setSelectedTrack(Number(el.dataset.trackId)));
+      });
+      document.querySelectorAll("[data-crate]").forEach(el => {
+        el.addEventListener("click", () => setCrate(el.dataset.crate));
+      });
+    }
+
+    function renderScreens() {
+      renderControlTower();
+      renderEditorial();
+      renderPipeline();
+      renderCompact();
+      renderStudio();
+      bindInteractiveElements();
+    }
+
+    function renderActiveScreen() {
+      const id = activeDesign().id;
+      Object.entries(screenEls).forEach(([key, el]) => {
+        el.classList.toggle("active", key === id);
+      });
+    }
+
+    function render() {
+      renderSidebar();
+      renderScreens();
+      renderActiveScreen();
+    }
+
+    function randomTrack() {
+      const visible = filteredTracks();
+      if (!visible.length) return;
+      const t = visible[Math.floor(Math.random() * visible.length)];
+      state.selectedTrackId = t.id;
+      renderScreens();
+    }
+
+    function shuffleSelection() {
+      const crates = ["likes", "premieres", "archive", "failed", "all"];
+      state.selectedCrate = crates[Math.floor(Math.random() * crates.length)];
+      const visible = filteredTracks();
+      if (visible[0]) state.selectedTrackId = visible[Math.floor(Math.random() * visible.length)].id;
+      render();
+    }
+
+    function cycleStates() {
+      state.tracks = state.tracks.map((t, index) => {
+        if (index % 3 !== 0) return t;
+        const next = stateCycle[t.state];
+        return {
+          ...t,
+          state: next,
+          progress: next === "running" ? Math.floor(Math.random() * 72) + 18 : next === "done" ? 100 : 0,
+        };
+      });
+      render();
+    }
+
+    document.querySelectorAll(".toggle-chip").forEach(btn => {
+      btn.addEventListener("click", () => {
+        state.filter = btn.dataset.filter;
+        const visible = filteredTracks();
+        if (!visible.some(t => t.id === state.selectedTrackId) && visible[0]) {
+          state.selectedTrackId = visible[0].id;
+        }
+        render();
+      });
+    });
+
+    document.getElementById("shuffleBtn").addEventListener("click", shuffleSelection);
+    document.getElementById("cycleBtn").addEventListener("click", cycleStates);
+    document.getElementById("helpBtn").addEventListener("click", () => { state.helpVisible = !state.helpVisible; renderScreens(); });
+    document.getElementById("nextDesignBtn").addEventListener("click", () => {
+      state.designIndex = (state.designIndex + 1) % designs.length;
+      render();
+    });
+    document.getElementById("randomTrackBtn").addEventListener("click", randomTrack);
+
+    window.addEventListener("keydown", (e) => {
+      const visible = filteredTracks();
+      const idx = visible.findIndex(t => t.id === state.selectedTrackId);
+      if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault();
+        const next = visible[(idx + 1 + visible.length) % visible.length];
+        if (next) setSelectedTrack(next.id);
+      }
+      if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault();
+        const prev = visible[(idx - 1 + visible.length) % visible.length];
+        if (prev) setSelectedTrack(prev.id);
+      }
+      if (e.key === "?") {
+        e.preventDefault();
+        state.helpVisible = !state.helpVisible;
+        renderScreens();
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        state.designIndex = (state.designIndex + 1) % designs.length;
+        render();
+      }
+      if (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "4" || e.key === "5") {
+        state.designIndex = Number(e.key) - 1;
+        render();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

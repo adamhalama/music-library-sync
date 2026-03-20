@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TUI Design Concepts v4 — Running</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',monospace;background:#111;color:#ccc;padding:20px}
+.label-tag{font-family:sans-serif;font-size:11px;font-weight:500;color:#555;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+
+.tui-frame{border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.tui-titlebar{display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.tui-dots{display:flex;gap:5px}
+.tui-dots span{width:10px;height:10px;border-radius:50%}
+.tui-appname{font-size:10px;letter-spacing:.1em;color:var(--muted);margin-left:6px}
+
+/* body: fixed height, sidebar + main side by side */
+.tui-body{display:flex;background:var(--bg);align-items:stretch;height:560px}
+
+/* SIDEBAR */
+.tui-sidebar{width:190px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0}
+.sb-section{padding:0 10px;margin-bottom:14px}
+.sb-section-label{font-size:8px;letter-spacing:.12em;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px;padding:0 6px}
+.sb-source{display:flex;align-items:flex-start;gap:7px;padding:5px 8px;border-radius:4px;font-size:10px;color:var(--text-sb)}
+.sb-source-toggle{font-size:11px;flex-shrink:0;width:14px;text-align:center;margin-top:2px}
+.sb-source-body{flex:1;min-width:0}
+.sb-source-name{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.sb-source-adapter{font-size:8px;color:var(--dim);margin-top:2px;letter-spacing:.03em}
+.sb-source-count{font-size:9px;padding:1px 5px;border-radius:3px;background:var(--count-bg);color:var(--count-text);flex-shrink:0;margin-top:3px}
+.sb-filter{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background .1s;font-size:10px;color:var(--text-sb)}
+.sb-filter:hover{background:var(--sb-hover)}
+.sb-filter.active{background:var(--sb-active-bg);color:var(--sb-active-text)}
+.sb-filter-indicator{font-size:10px;width:12px;text-align:center;flex-shrink:0}
+.sb-filter.active .sb-filter-indicator{color:var(--accent)}
+.sb-filter-label{flex:1}
+.sb-filter-count{font-size:9px;color:var(--dim)}
+.sb-filter.active .sb-filter-count{color:var(--accent);font-weight:700}
+.sb-divider{margin:4px 16px;border:none;border-top:1px solid var(--border)}
+/* footer progress bar */
+.footer-prog-wrap{width:100px;height:4px;background:var(--border);border-radius:2px;flex-shrink:0;margin:0 4px}
+.footer-prog-fill{height:4px;background:var(--yellow);border-radius:2px}
+.footer-pct{font-size:10px;color:var(--yellow);margin-right:4px}
+
+/* MAIN */
+.tui-main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+/* TOPBAR */
+.main-topbar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.badge{font-size:10px;padding:2px 8px;border-radius:3px;letter-spacing:.05em;font-weight:600}
+.badge-running{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border);animation:badge-pulse 1.4s ease-in-out infinite}
+@keyframes badge-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.badge-dry-off{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border)}
+.badge-limit{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border)}
+.badge-timeout{background:var(--count-bg);color:var(--muted);border:1px solid var(--border)}
+.topbar-elapsed{margin-left:auto;font-size:10px;color:var(--dim)}
+.topbar-elapsed span{color:var(--muted)}
+
+/* CMD BAR (read-only during run) */
+.main-cmdbar{padding:5px 14px;background:var(--bg);border-bottom:1px solid var(--border-light);font-size:9px;color:var(--dim);line-height:1.8}
+.cmd-line{display:flex;flex-wrap:wrap;align-items:center}
+.cmd-token{display:inline-flex;align-items:center;gap:2px;margin-right:12px;white-space:nowrap}
+.cmd-key{color:var(--dim)}
+.cmd-val{color:var(--muted)}
+.cmd-program{color:var(--muted);font-weight:600;margin-right:12px}
+
+/* SHORTCUTS */
+.main-shortcuts{display:flex;gap:10px;flex-wrap:wrap;padding:5px 14px;background:var(--bg);border-bottom:1px solid var(--border-light)}
+.kb{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;white-space:nowrap}
+.kb kbd{font-family:inherit;font-size:9px;background:var(--kbd-bg);border:1px solid var(--kbd-border);border-bottom:2px solid var(--kbd-border);color:var(--text);border-radius:3px;padding:1px 5px}
+.kb.kb-danger kbd{color:var(--err);border-color:#4a1515}
+
+/* TABLE */
+.main-table-wrap{flex:1;overflow-y:auto}
+.main-table{width:100%;border-collapse:collapse}
+.main-table th{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;padding:5px 14px;text-align:left;color:var(--muted);background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0}
+.main-table td{padding:5px 14px;font-size:11px;border-bottom:1px solid var(--border-light);color:var(--text)}
+.t-row{cursor:default;transition:background .08s}
+.t-row:hover td{background:var(--row-hover)}
+/* outcome indicator column (replaces checkbox) */
+.t-out{width:26px;font-size:11px;text-align:center}
+.out-done{color:var(--green)}
+.out-skip{color:var(--dim)}
+.out-pending{color:var(--dim);opacity:.35}
+.out-fail{color:var(--err)}
+.out-active{color:var(--yellow);animation:badge-pulse 1s ease-in-out infinite}
+/* status pills */
+.t-status{width:148px}
+.t-num{color:var(--dim);width:28px;font-size:10px;text-align:right}
+.t-id{width:80px;text-align:right;font-size:9px;color:var(--dim)}
+.sp{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
+.sp-already_downloaded{background:var(--count-bg);color:var(--dim)}
+.sp-done{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.sp-pending{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border)}
+.sp-failed{background:#2a0f0f;color:#f85149;border:1px solid #4a1515}
+.sp-downloading{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border)}
+/* active (downloading) row */
+.t-row.t-active td{background:var(--active-bg)}
+.t-row.t-active td:first-child{border-left:2px solid var(--yellow);padding-left:12px}
+/* failed row */
+.t-row.t-failed td{background:#120808}
+.t-row.t-failed td:first-child{border-left:2px solid var(--err);padding-left:12px}
+/* muted rows */
+.t-row.t-past td{color:var(--dim)}
+
+/* ACTIVITY LOG */
+.activity-panel{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg)}
+.activity-header{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--bg2);border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
+.activity-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--muted)}
+.activity-live{font-size:8px;color:var(--yellow);animation:badge-pulse 1s ease-in-out infinite;margin-left:4px}
+.activity-toggle{margin-left:auto;font-size:9px;color:var(--dim)}
+.activity-log{height:96px;overflow-y:auto;padding:6px 0}
+.log-line{display:flex;gap:10px;padding:2px 14px;font-size:10px;line-height:1.5}
+.log-line:hover{background:var(--row-hover)}
+.log-ts{color:var(--dim);flex-shrink:0;width:52px}
+.log-msg{color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log-msg .log-em{color:var(--text)}
+.log-msg .log-good{color:var(--green)}
+.log-msg .log-active{color:var(--yellow)}
+.log-msg .log-bad{color:var(--err)}
+.log-cursor{display:inline-block;animation:badge-pulse .7s ease-in-out infinite;color:var(--yellow);margin-left:2px}
+
+/* FOOTER */
+.main-footer{display:flex;align-items:center;padding:6px 14px;background:var(--bg2);border-top:1px solid var(--border)}
+.footer-stat{font-size:10px;color:var(--muted)}
+.footer-stat .c-done{color:var(--green);font-weight:700}
+.footer-stat .c-fail{color:var(--err);font-weight:700}
+.footer-stat .c-skip{color:var(--dim)}
+.footer-elapsed{margin-left:auto;font-size:10px;color:var(--dim)}
+.footer-elapsed span{color:var(--muted)}
+.footer-sep{color:var(--border);margin:0 10px}
+
+/* THEME: CARBON */
+.theme-a{
+  --bg:#0d1117;--bg2:#161b22;--bg-sidebar:#161b22;
+  --border:#21262d;--border-light:#161b22;
+  --text:#c9d1d9;--muted:#8b949e;--dim:#484f58;
+  --accent:#58a6ff;--accent-bg:#1d2d3e;--accent-border:#1f6feb;
+  --green:#3fb950;--green-bg:#1a4730;--green-border:#2ea043;
+  --yellow:#d29922;--yellow-bg:#2d2016;--yellow-border:#9e6a03;
+  --text-sb:#8b949e;--sb-hover:#1c2128;--sb-active-bg:#1c2128;--sb-active-text:#c9d1d9;
+  --row-hover:#161b22;--row-cursor:#1c2128;--active-bg:#1e1a0d;
+  --count-bg:#21262d;--count-text:#8b949e;
+  --kbd-bg:#21262d;--kbd-border:#30363d;
+  --err:#f85149;--err-bg:#160a0a;--err-border:#3d1515;
+}
+</style>
+</head>
+<body>
+
+<div class="label-tag">v4 · running state — sync in progress, 2 done, 1 downloading, 13 pending</div>
+
+<div class="tui-frame theme-a">
+  <div class="tui-titlebar">
+    <div class="tui-dots">
+      <span style="background:#ff5f57"></span>
+      <span style="background:#febc2e"></span>
+      <span style="background:#28c840"></span>
+    </div>
+    <div class="tui-appname">UDL · SYNC WORKFLOW</div>
+  </div>
+  <div class="tui-body">
+    <div class="tui-sidebar" id="sidebar"></div>
+    <div class="tui-main" id="main"></div>
+  </div>
+</div>
+
+<script>
+// Tracks with run-time statuses baked in
+const tracks = [
+  // sc-likes — auto-skipped (already downloaded)
+  {id:'2267387111', name:'Premiere: Bengalo - All About [SELECTED031]',         status:'already_downloaded', source:'sc-likes'},
+  {id:'2263082507', name:'PREMIERE: Bengalo – Let Me Play [SELECTED031]',       status:'already_downloaded', source:'sc-likes'},
+  {id:'2231274233', name:'DS Premiere: Klint - Eternal Lie [BCCOVA18]',         status:'already_downloaded', source:'sc-likes'},
+  {id:'2275081589', name:'FREE DL : Lewis Legacy - Blue Tribe [OTPM007]',       status:'already_downloaded', source:'sc-likes'},
+  {id:'2270743331', name:'Wie es Läuft',                                         status:'already_downloaded', source:'sc-likes'},
+  {id:'2232613559', name:'VCS1 - Mythos | VDFD 035',                            status:'already_downloaded', source:'sc-likes'},
+  {id:'2276806856', name:'ASW Premiere: No Valentia - i.know.xml [BOI019]',     status:'already_downloaded', source:'sc-likes'},
+  {id:'2251896527', name:'Nachtwasser - No Signal',                              status:'already_downloaded', source:'sc-likes'},
+  {id:'2283044954', name:'[FREE DL] SELICATO - BAILA',                          status:'already_downloaded', source:'sc-likes'},
+  {id:'2174766756', name:'Bélavie - Das Crazy',                                  status:'already_downloaded', source:'sc-likes'},
+  {id:'2188421003', name:'Hadone - Turbo Trance [SOMA574D]',                    status:'already_downloaded', source:'sc-likes'},
+  {id:'2199034561', name:'Setaoc Mass - Obliquity [SK027]',                     status:'already_downloaded', source:'sc-likes'},
+  {id:'2204512877', name:'Surgeon - Speak To Me [BODY023]',                     status:'already_downloaded', source:'sc-likes'},
+  {id:'2211987234', name:'Phase Fatale - Hypnosis Display [ARCHIV012]',         status:'already_downloaded', source:'sc-likes'},
+  {id:'2220761509', name:'SPFDJ - Ignite [IAMT163]',                            status:'already_downloaded', source:'sc-likes'},
+  {id:'2238901122', name:'Paula Temple - Deformation [NMBRS025]',               status:'already_downloaded', source:'sc-likes'},
+  {id:'2245673841', name:'Dax J - Obsession [MODULARZ049]',                     status:'already_downloaded', source:'sc-likes'},
+  {id:'2253410098', name:'Truncate - Headroom [AUDIO013]',                      status:'already_downloaded', source:'sc-likes'},
+  // sc-likes — downloaded this run
+  {id:'2291234567', name:'Folamour - Dreamin (Extended Mix)',                    status:'done',               source:'sc-likes'},
+  {id:'2298765432', name:'Skee Mask - Dial 274',                                 status:'done',               source:'sc-likes'},
+  // sc-likes — CURRENTLY DOWNLOADING
+  {id:'2302184991', name:'Objekt - Needle & Thread [TJ003]',                    status:'downloading',         source:'sc-likes'},
+  // sc-likes — still pending
+  {id:'2308891234', name:'Blawan - Getting Me Down [HESSLE020]',                status:'pending',            source:'sc-likes'},
+  {id:'2315002341', name:'Drumcode Radio Live 812 - Adam Beyer',                status:'pending',            source:'sc-likes'},
+  {id:'2319874450', name:'Bicep - Glue (Club Edit)',                             status:'pending',            source:'sc-likes'},
+  // bc-wish — already downloaded (not yet reached)
+  {id:'0012345001', name:'Four Tet - Parallel 3',                                status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345002', name:'Burial - Antidawn EP',                                 status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345004', name:'Objekt - Flatland [PAN 40]',                          status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345005', name:'Actress - R.I.P.',                                     status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345006', name:'Andy Stott - Faith in Strangers',                     status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345007', name:'Demdike Stare - Testpressing #7',                     status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345008', name:'Shifted - Appropriation (And Similarities)',          status:'already_downloaded', source:'bc-wish'},
+  // bc-wish — pending
+  {id:'0012345003', name:'Actress - Karma & Desire (Deluxe)',                   status:'pending',            source:'bc-wish'},
+  {id:'0012345009', name:'Arca - KiCk iii',                                      status:'pending',            source:'bc-wish'},
+  {id:'0012345010', name:'Coil - Musick to Play in the Dark Vol. 2 (Remaster)',  status:'pending',            source:'bc-wish'},
+  {id:'0012345011', name:'Autechre - SIGN',                                      status:'pending',            source:'bc-wish'},
+];
+
+const logLines = [
+  {ts:'08:42:09', msg:'<span class="log-em">skipping</span> Dax J - Obsession [MODULARZ049] <span class="log-skip">(already downloaded)</span>'},
+  {ts:'08:42:10', msg:'<span class="log-em">skipping</span> Truncate - Headroom [AUDIO013] <span class="log-skip">(already downloaded)</span>'},
+  {ts:'08:42:11', msg:'<span class="log-good">✓ done</span> Folamour - Dreamin (Extended Mix) → sc-likes/folamour-dreamin-extended.mp3'},
+  {ts:'08:42:12', msg:'<span class="log-good">✓ done</span> Skee Mask - Dial 274 → sc-likes/skee-mask-dial-274.mp3'},
+  {ts:'08:42:13', msg:'<span class="log-active">↓ downloading</span> Objekt - Needle &amp; Thread [TJ003] [2302184991]<span class="log-cursor">▌</span>'},
+];
+
+const state = {
+  sources: [
+    {id:'sc-likes', name:'soundcloud-likes', type:'soundcloud', adapter:'scdl', enabled:true},
+    {id:'bc-wish',  name:'bandcamp-wishlist', type:'bandcamp',  adapter:'bcdl', enabled:true},
+  ],
+  filter: 'all',
+  cursor: 20, // points at the downloading track
+};
+
+window.setFilter = f => { state.filter = f; render(); };
+
+function getCounts() {
+  const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
+  const counts = {all:0, already_downloaded:0, done:0, downloading:0, pending:0, failed:0};
+  tracks.forEach(t => {
+    if (!enabled.has(t.source)) return;
+    counts.all++;
+    counts[t.status] = (counts[t.status] || 0) + 1;
+  });
+  return counts;
+}
+
+function getFiltered() {
+  const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
+  return tracks.map((t,i) => ({...t, origIdx:i})).filter(t => {
+    if (!enabled.has(t.source)) return false;
+    if (state.filter === 'pending') return t.status === 'pending' || t.status === 'downloading';
+    if (state.filter === 'done') return t.status === 'done';
+    if (state.filter === 'failed') return t.status === 'failed';
+    if (state.filter === 'already_downloaded') return t.status === 'already_downloaded';
+    return true;
+  });
+}
+
+function srcTotal(id) { return tracks.filter(t => t.source === id).length; }
+
+function outIndicator(status) {
+  if (status === 'done')               return '<span class="out-done">✓</span>';
+  if (status === 'already_downloaded') return '<span class="out-skip">–</span>';
+  if (status === 'downloading')        return '<span class="out-active">↓</span>';
+  if (status === 'failed')             return '<span class="out-fail">✕</span>';
+  return '<span class="out-pending">·</span>';
+}
+
+function renderSidebar() {
+  const counts = getCounts();
+  const filters = [
+    {id:'all',                label:'All',         count: counts.all},
+    {id:'pending',            label:'Pending',     count: counts.pending + counts.downloading},
+    {id:'done',               label:'Done',        count: counts.done},
+    {id:'failed',             label:'Failed',      count: counts.failed},
+    {id:'already_downloaded', label:'Skipped',     count: counts.already_downloaded},
+  ];
+  document.getElementById('sidebar').innerHTML = `
+    <div class="sb-section">
+      <div class="sb-section-label">Sources</div>
+      ${state.sources.map(src => `
+        <div class="sb-source">
+          <span class="sb-source-toggle" style="color:var(--yellow)">■</span>
+          <div class="sb-source-body">
+            <span class="sb-source-name">${src.name}</span>
+            <span class="sb-source-adapter">${src.type}/${src.adapter}</span>
+          </div>
+          <span class="sb-source-count">${srcTotal(src.id)}</span>
+        </div>`).join('')}
+    </div>
+    <hr class="sb-divider">
+    <div class="sb-section">
+      <div class="sb-section-label">Filters</div>
+      ${filters.map(f => `
+        <div class="sb-filter${state.filter === f.id ? ' active' : ''}" onclick="setFilter('${f.id}')">
+          <span class="sb-filter-indicator">${state.filter === f.id ? '►' : '·'}</span>
+          <span class="sb-filter-label">${f.label}</span>
+          <span class="sb-filter-count">${f.count}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderMain() {
+  const filtered = getFiltered();
+  const counts = getCounts();
+
+  document.getElementById('main').innerHTML = `
+    <div class="main-topbar">
+      <span class="badge badge-running">⬤ RUNNING</span>
+      <span class="badge badge-dry-off">DRY-RUN: OFF</span>
+      <span class="badge badge-limit">LIMIT: 10</span>
+      <span class="badge badge-timeout">TIMEOUT: default</span>
+    </div>
+    <div class="main-cmdbar">
+      <div class="cmd-line">
+        <span class="cmd-program">udl sync --plan</span>
+        <span class="cmd-token"><span class="cmd-key">source=</span><span class="cmd-val">soundcloud-likes</span></span>
+        <span class="cmd-token"><span class="cmd-key">mode=</span><span class="cmd-val">live</span></span>
+        <span class="cmd-token"><span class="cmd-key">plan-limit=</span><span class="cmd-val">10</span></span>
+      </div>
+      <div class="cmd-line">
+        <span class="cmd-token"><span class="cmd-key">type=</span><span class="cmd-val">soundcloud</span></span>
+        <span class="cmd-token"><span class="cmd-key">adapter=</span><span class="cmd-val">scdl</span></span>
+        <span class="cmd-token"><span class="cmd-key">target_dir=</span><span class="cmd-val">~/Music/downloaded/sc-likes</span></span>
+        <span class="cmd-token"><span class="cmd-key">url=</span><span class="cmd-val">https://soundcloud.com/janxadam</span></span>
+      </div>
+    </div>
+    <div class="main-shortcuts">
+      <span class="kb"><kbd>j</kbd><kbd>k</kbd> scroll</span>
+      <span class="kb"><kbd>l</kbd> log</span>
+      <span class="kb kb-danger"><kbd>x</kbd> cancel run</span>
+      <span class="kb"><kbd>q</kbd> quit</span>
+    </div>
+    <div class="main-table-wrap">
+      <table class="main-table">
+        <thead>
+          <tr>
+            <th class="t-num">#</th>
+            <th class="t-out"></th>
+            <th>TRACK</th>
+            <th class="t-status">STATUS</th>
+            <th class="t-id">ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.map((t, vi) => `
+            <tr class="t-row${t.status === 'downloading' ? ' t-active' : t.status === 'already_downloaded' ? ' t-past' : t.status === 'failed' ? ' t-failed' : ''}">
+              <td class="t-num">${vi + 1}</td>
+              <td class="t-out">${outIndicator(t.status)}</td>
+              <td>${t.name}</td>
+              <td><span class="sp sp-${t.status}">${t.status === 'already_downloaded' ? 'have it' : t.status}</span></td>
+              <td class="t-id">${t.id}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="activity-panel">
+      <div class="activity-header">
+        <span class="activity-title">Activity</span>
+        <span class="activity-live">⬤ live</span>
+        <span class="activity-toggle">l: toggle</span>
+      </div>
+      <div class="activity-log">
+        ${logLines.map(l => `
+          <div class="log-line">
+            <span class="log-ts">${l.ts}</span>
+            <span class="log-msg">${l.msg}</span>
+          </div>`).join('')}
+      </div>
+    </div>
+    <div class="main-footer">
+      <div class="footer-stat">In progress</div>
+      <span class="footer-sep">·</span>
+      <div class="footer-stat"><span class="c-done">↓ ${counts.done} done</span></div>
+      <span class="footer-sep">·</span>
+      <div class="footer-stat"><span class="c-skip">${counts.already_downloaded} skipped</span></div>
+      <span class="footer-sep">·</span>
+      <div class="footer-stat"><span class="c-fail">${counts.failed} failed</span></div>
+      <span class="footer-sep">·</span>
+      <div class="footer-prog-wrap"><div class="footer-prog-fill" style="width:${Math.round((counts.done + counts.already_downloaded) / counts.all * 100)}%"></div></div>
+      <span class="footer-pct">${Math.round((counts.done + counts.already_downloaded) / counts.all * 100)}%</span>
+      <div class="footer-elapsed">0:47</div>
+    </div>`;
+}
+
+function render() { renderSidebar(); renderMain(); }
+render();
+</script>
+</body>
+</html>
