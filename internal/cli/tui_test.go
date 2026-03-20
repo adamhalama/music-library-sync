@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -218,6 +219,46 @@ func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
 	}
 	if strings.Contains(view, "Prompt") {
 		t.Fatalf("expected plan selector not to render as prompt modal, got: %s", view)
+	}
+}
+
+func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 140
+	root.height = 20
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+
+	rows := make([]engine.PlanRow, 0, 30)
+	for i := 1; i <= 30; i++ {
+		rows = append(rows, engine.PlanRow{
+			Index:             i,
+			Title:             fmt.Sprintf("row-%02d", i),
+			RemoteID:          fmt.Sprintf("id-%02d", i),
+			Status:            engine.PlanRowAlreadyDownloaded,
+			Toggleable:        i%3 == 0,
+			SelectedByDefault: i%3 == 0,
+		})
+	}
+
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     rows,
+		Details:  planSourceDetails{SourceID: "source-a", PlanLimit: 10},
+		Reply:    reply,
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "STATE: ready") {
+		t.Fatalf("expected shell top bar to remain visible, got: %s", view)
+	}
+	if !strings.Contains(view, "row-01") {
+		t.Fatalf("expected early selector rows in view, got: %s", view)
+	}
+	if strings.Contains(view, "row-20") {
+		t.Fatalf("expected long selector rows to be windowed out, got: %s", view)
 	}
 }
 

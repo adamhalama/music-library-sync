@@ -24,6 +24,7 @@ type tuiShellState struct {
 	Shortcuts        []tuiShortcut
 	BodyTitle        string
 	Body             string
+	DenseBody        bool
 	FooterStats      []tuiFooterStat
 	Banner           *tuiBanner
 	Modal            *tuiModalState
@@ -77,6 +78,7 @@ const (
 	tuiShellDefaultHeight     = 36
 	tuiShellCompactBreakpoint = 110
 	tuiShellSidebarWidth      = 30
+	tuiShellBackgroundColor   = "235"
 )
 
 func newTUIShellLayout(width, height int) tuiShellLayout {
@@ -134,13 +136,13 @@ type tuiShellTheme struct {
 }
 
 func newTUIShellTheme() tuiShellTheme {
-	base := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("234"))
+	base := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color(tuiShellBackgroundColor))
 	return tuiShellTheme{
 		frame:         base.Copy().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("236")),
-		titlebar:      base.Copy().Background(lipgloss.Color("235")).Foreground(lipgloss.Color("245")).Padding(0, 1),
-		topbar:        base.Copy().Background(lipgloss.Color("235")).BorderBottom(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
-		sidebar:       base.Copy().Background(lipgloss.Color("235")).BorderRight(true).BorderForeground(lipgloss.Color("236")).Padding(1, 1),
-		navStrip:      base.Copy().Background(lipgloss.Color("235")).BorderBottom(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
+		titlebar:      base.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).Foreground(lipgloss.Color("245")).Padding(0, 1),
+		topbar:        base.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).BorderBottom(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
+		sidebar:       base.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).BorderRight(true).BorderForeground(lipgloss.Color("236")).Padding(1, 1),
+		navStrip:      base.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).BorderBottom(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
 		main:          base.Copy().Padding(0, 0),
 		row:           base.Copy().Padding(0, 1),
 		sectionLabel:  base.Copy().Foreground(lipgloss.Color("241")).Bold(true),
@@ -153,7 +155,7 @@ func newTUIShellTheme() tuiShellTheme {
 		bodyPanel:     base.Copy().Padding(1, 1),
 		bodyTitle:     base.Copy().Bold(true).Foreground(lipgloss.Color("252")),
 		bodyText:      base.Copy().Foreground(lipgloss.Color("252")),
-		footer:        base.Copy().Background(lipgloss.Color("235")).Foreground(lipgloss.Color("245")).BorderTop(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
+		footer:        base.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).Foreground(lipgloss.Color("245")).BorderTop(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
 		footerValue:   base.Copy().Foreground(lipgloss.Color("81")).Bold(true),
 		muted:         base.Copy().Foreground(lipgloss.Color("241")),
 		info:          base.Copy().Foreground(lipgloss.Color("81")),
@@ -162,7 +164,7 @@ func newTUIShellTheme() tuiShellTheme {
 		danger:        base.Copy().Foreground(lipgloss.Color("203")),
 		disabled:      base.Copy().Foreground(lipgloss.Color("240")),
 		dimmed:        base.Copy().Faint(true),
-		modalBox:      base.Copy().Background(lipgloss.Color("235")).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("239")).Padding(1, 2),
+		modalBox:      base.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("239")).Padding(1, 2),
 		modalTitle:    base.Copy().Bold(true).Foreground(lipgloss.Color("252")),
 		backdrop:      base.Copy().Faint(true),
 	}
@@ -211,7 +213,7 @@ func renderTUIShell(state tuiShellState, layout tuiShellLayout) string {
 	return lipgloss.NewStyle().
 		Width(layout.Width).
 		Height(layout.Height).
-		Background(lipgloss.Color("234")).
+		Background(lipgloss.Color(tuiShellBackgroundColor)).
 		Render(main)
 }
 
@@ -302,7 +304,7 @@ func renderTUIBadges(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 
 func renderTUIBadge(badge tuiBadge, theme tuiShellTheme) string {
 	if badge.Disabled {
-		return theme.disabled.Copy().Background(lipgloss.Color("236")).Padding(0, 1).Render(badge.Label)
+		return theme.disabled.Copy().Background(lipgloss.Color(tuiShellBackgroundColor)).Padding(0, 1).Render(badge.Label)
 	}
 	switch badge.Tone {
 	case "success":
@@ -387,9 +389,15 @@ func renderTUIBody(state tuiShellState, theme tuiShellTheme, layout tuiShellLayo
 		body = theme.muted.Render("(empty)")
 	}
 	parts = append(parts, theme.bodyText.Render(body))
-	panel := strings.Join(parts, "\n\n")
+	separator := "\n\n"
+	style := theme.bodyPanel
+	if state.DenseBody {
+		separator = "\n"
+		style = style.Padding(0, 1)
+	}
+	panel := strings.Join(parts, separator)
 	width := shellMainSectionWidth(layout)
-	return theme.bodyPanel.Width(width).Render(panel)
+	return style.Width(width).Render(panel)
 }
 
 func renderTUIFooter(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -546,7 +554,8 @@ func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 		CommandSummary:   syncModel.shellCommandSummary(),
 		Shortcuts:        syncModel.shellShortcuts(),
 		BodyTitle:        syncModel.shellBodyTitle(),
-		Body:             syncModel.shellBody(),
+		Body:             syncModel.shellBody(layout),
+		DenseBody:        syncModel.planPrompt != nil,
 		FooterStats:      syncModel.shellFooterStats(),
 		Banner:           syncModel.shellBanner(),
 		AllowBack:        m.canReturnToMenuOnEsc(),
@@ -823,7 +832,7 @@ func (m tuiSyncModel) shellBanner() *tuiBanner {
 	return nil
 }
 
-func (m tuiSyncModel) planPromptBody() string {
+func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 	state := m.planPrompt
 	if state == nil {
 		return ""
@@ -844,12 +853,11 @@ func (m tuiSyncModel) planPromptBody() string {
 		fmt.Sprintf("url=%s", state.details.URL),
 		"",
 		"up/down or j/k: move   space: toggle   a: select all   n: clear all   enter: confirm   q/esc: cancel",
-		"",
 	}
 	if len(state.rows) == 0 {
 		lines = append(lines, "No tracks found in selected preflight window.")
 	} else {
-		start, end := planSelectorWindow(len(state.rows), state.cursor, 0)
+		start, end := planSelectorWindow(len(state.rows), state.cursor, shellPlanPromptWindowHeight(layout))
 		for i := start; i < end; i++ {
 			row := state.rows[i]
 			cursor := " "
@@ -1049,11 +1057,19 @@ func (m tuiSyncModel) shellBodyTitle() string {
 	return m.workflowTitle()
 }
 
-func (m tuiSyncModel) shellBody() string {
+func (m tuiSyncModel) shellBody(layout tuiShellLayout) string {
 	if m.planPrompt != nil {
-		return m.planPromptBody()
+		return m.planPromptBody(layout)
 	}
 	return m.bodyView(false)
+}
+
+func shellPlanPromptWindowHeight(layout tuiShellLayout) int {
+	height := layout.Height - 18
+	if height < 0 {
+		return 0
+	}
+	return height
 }
 
 func (m tuiSyncModel) bodyView(includeSources bool) string {
