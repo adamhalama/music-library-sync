@@ -931,7 +931,7 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 				tuiFooterStat{Label: "selected", Value: fmt.Sprintf("%d", selected), Tone: "info"},
 				tuiFooterStat{Label: "pending", Value: fmt.Sprintf("%d", pending), Tone: "info"},
 				tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skipped), Tone: "muted"},
-				tuiFooterStat{Label: "progress", Value: "0%", Tone: "muted"},
+				tuiFooterStat{Label: "progress", Value: tuiRenderProgressBar(0, 10), Tone: "muted"},
 			)
 			return stats
 		}
@@ -947,10 +947,13 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 				doneCount = m.progress.Snapshot().Progress.Global.Completed
 			}
 		}
-		progressLabel := "0%"
-		if total > 0 {
-			progressLabel = fmt.Sprintf("%d/%d", current, total)
+		progressPercent := 0.0
+		if m.progress != nil {
+			progressPercent = m.progress.GlobalProgressPercent()
+		} else if total > 0 {
+			progressPercent = float64(current) * 100 / float64(total)
 		}
+		progressLabel := tuiRenderProgressBar(progressPercent, 10)
 		stats = append(stats,
 			tuiFooterStat{Label: "done", Value: fmt.Sprintf("%d", doneCount), Tone: "success"},
 			tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skippedCount), Tone: "muted"},
@@ -1454,7 +1457,7 @@ func renderPlanPromptTable(state *tuiInteractiveSelectionState, layout tuiShellL
 		width = 48
 	}
 	idWidth := 12
-	statusWidth := 14
+	statusWidth := 20
 	indexWidth := 4
 	selectWidth := 4
 	gapWidth := 8
@@ -1506,13 +1509,13 @@ func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, index
 			selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
 		}
 	}
-	statusLabel, statusStyle := planPromptStatusChip(row.Status)
+	statusLabel, statusStyle := planPromptStatusChip(row)
 	title := strings.TrimSpace(row.Title)
 	if title == "" {
 		title = "(untitled)"
 	}
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	if row.Status == engine.PlanRowAlreadyDownloaded {
+	if row.RuntimeStatus == tuiTrackStatusExisting {
 		titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	}
 	idStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
@@ -1529,14 +1532,31 @@ func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, index
 	return line
 }
 
-func planPromptStatusChip(status engine.PlanRowStatus) (string, lipgloss.Style) {
-	switch status {
-	case engine.PlanRowMissingNew:
-		return " new ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
-	case engine.PlanRowMissingKnownGap:
-		return " known-gap ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
-	default:
+func planPromptStatusChip(row tuiTrackRowState) (string, lipgloss.Style) {
+	switch row.RuntimeStatus {
+	case tuiTrackStatusDownloading:
+		label := " downloading "
+		if row.ProgressKnown {
+			label = fmt.Sprintf(" dl %3.0f%% %s ", row.ProgressPercent, tuiRenderMiniBar(row.ProgressPercent, 4))
+		}
+		return label, lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
+	case tuiTrackStatusDownloaded:
+		return " downloaded ", lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Background(lipgloss.Color("22")).Bold(true)
+	case tuiTrackStatusFailed:
+		return " failed ", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Background(lipgloss.Color("52")).Bold(true)
+	case tuiTrackStatusSkipped:
+		return " skipped ", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("238")).Bold(true)
+	case tuiTrackStatusExisting:
 		return " have-it ", lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Background(lipgloss.Color("237"))
+	default:
+		switch row.PlanStatus {
+		case engine.PlanRowMissingNew:
+			return " new ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
+		case engine.PlanRowMissingKnownGap:
+			return " known-gap ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
+		default:
+			return " pending ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
+		}
 	}
 }
 
@@ -1561,6 +1581,46 @@ func shellPlanPromptRowWindow(total, cursor int, layout tuiShellLayout) (int, in
 		start = end - maxRows
 	}
 	return start, end
+}
+
+func tuiRenderProgressBar(percent float64, width int) string {
+	if width < 4 {
+		width = 4
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	filled := int((percent/100)*float64(width) + 0.5)
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + fmt.Sprintf(" %3.0f%%", percent)
+}
+
+func tuiRenderMiniBar(percent float64, width int) string {
+	if width < 2 {
+		width = 2
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	filled := int((percent/100)*float64(width) + 0.5)
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 func (m tuiSyncModel) bodyView(includeSources bool) string {

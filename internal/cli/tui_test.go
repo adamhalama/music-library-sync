@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -216,7 +217,7 @@ func TestTUIRootInteractiveSyncIdleShowsStructuredPlaceholder(t *testing.T) {
 	if !strings.Contains(view, "no activity yet") {
 		t.Fatalf("expected empty activity panel, got: %s", view)
 	}
-	if !strings.Contains(view, "state: ready") || !strings.Contains(view, "selected: 0") || !strings.Contains(view, "pending: 0") || !strings.Contains(view, "skipped: 0") || !strings.Contains(view, "progress: 0%") {
+	if !strings.Contains(view, "state: ready") || !strings.Contains(view, "selected: 0") || !strings.Contains(view, "pending: 0") || !strings.Contains(view, "skipped: 0") || !strings.Contains(view, "progress: ░░░░░░░░░░   0%") {
 		t.Fatalf("expected idle interactive footer counts, got: %s", view)
 	}
 }
@@ -358,8 +359,103 @@ func TestTUIRootShellInteractiveFooterShowsSelectionCounts(t *testing.T) {
 	})
 
 	view := root.View()
-	if !strings.Contains(view, "selected: 1") || !strings.Contains(view, "pending: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "progress: 0%") {
+	if !strings.Contains(view, "selected: 1") || !strings.Contains(view, "pending: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "progress: ░░░░░░░░░░   0%") {
 		t.Fatalf("expected interactive footer selection counts, got: %s", view)
+	}
+}
+
+func TestTUISyncInteractiveRowsTransitionToDownloadedAndFilterCountsUpdate(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Piano Jazz", RemoteID: "1", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Existing", RemoteID: "2", Status: engine.PlanRowAlreadyDownloaded},
+		},
+		Details: planSourceDetails{SourceID: "soundcloud-likes"},
+		Reply:   reply,
+	})
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "soundcloud-likes",
+		Details: map[string]any{
+			"track_name": "Piano Jazz",
+			"index":      1,
+			"total":      1,
+		},
+	}})
+
+	if got := m.planPrompt.filterCount(tuiPlanFilterKnownGap); got != 0 {
+		t.Fatalf("expected known-gap filter count to drop to 0, got %d", got)
+	}
+	if got := m.planPrompt.filterCount(tuiPlanFilterDownloaded); got != 2 {
+		t.Fatalf("expected downloaded filter count to include completed row, got %d", got)
+	}
+
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = m
+
+	view := root.View()
+	if !strings.Contains(view, "downloaded") {
+		t.Fatalf("expected completed row to render downloaded status, got: %s", view)
+	}
+	if strings.Contains(view, "known-gap      Piano Jazz") {
+		t.Fatalf("expected row status to stop rendering as known-gap after completion, got: %s", view)
+	}
+	if !strings.Contains(view, "Downloaded (2)") || !strings.Contains(view, "Known Gap (0)") {
+		t.Fatalf("expected sidebar filters to reflect runtime state, got: %s", view)
+	}
+}
+
+func TestTUISyncInteractiveProgressRendersGraphicalBars(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Piano Jazz", RemoteID: "1", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "soundcloud-likes"},
+		Reply:   reply,
+	})
+	m.running = true
+	m.runStartedAt = time.Now().Add(-5 * time.Second)
+	m.progress.ObserveEvent(output.Event{
+		Event:    output.EventSourcePreflight,
+		SourceID: "soundcloud-likes",
+		Details:  map[string]any{"planned_download_count": 1},
+	})
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "soundcloud-likes",
+		Details: map[string]any{
+			"track_name": "Piano Jazz",
+			"index":      1,
+			"total":      1,
+			"percent":    50.0,
+		},
+	}})
+
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = m
+
+	view := root.View()
+	if !strings.Contains(view, "dl  50%") {
+		t.Fatalf("expected per-track graphical status to show progress, got: %s", view)
+	}
+	if !strings.Contains(view, "50%") || !strings.Contains(view, "█████") {
+		t.Fatalf("expected footer progress bar to render graphically, got: %s", view)
 	}
 }
 

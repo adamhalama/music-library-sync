@@ -354,11 +354,25 @@ type tuiTrackRowState struct {
 	Index             int
 	Toggleable        bool
 	Selected          bool
-	Status            engine.PlanRowStatus
+	PlanStatus        engine.PlanRowStatus
+	RuntimeStatus     tuiTrackRuntimeStatus
 	StatusLabel       string
 	FailureDetail     string
 	SelectedByDefault bool
+	ProgressKnown     bool
+	ProgressPercent   float64
 }
+
+type tuiTrackRuntimeStatus string
+
+const (
+	tuiTrackStatusExisting    tuiTrackRuntimeStatus = "existing"
+	tuiTrackStatusQueued      tuiTrackRuntimeStatus = "queued"
+	tuiTrackStatusDownloading tuiTrackRuntimeStatus = "downloading"
+	tuiTrackStatusDownloaded  tuiTrackRuntimeStatus = "downloaded"
+	tuiTrackStatusSkipped     tuiTrackRuntimeStatus = "skipped"
+	tuiTrackStatusFailed      tuiTrackRuntimeStatus = "failed"
+)
 
 type tuiActivityEntry struct {
 	Timestamp time.Time
@@ -807,6 +821,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.progress = output.NewStructuredProgressTracker(nil)
 		}
 		m.progress.ObserveEvent(typed.Event)
+		m.observeInteractiveTrackEvent(typed.Event)
 		if failure := tuiFailureStateFromEvent(typed.Event); failure != nil {
 			m.lastFailure = failure
 		}
@@ -972,6 +987,17 @@ func (m *tuiSyncModel) appendInteractiveActivity(event output.Event, outcomes []
 			SourceID:  event.SourceID,
 		})
 	}
+}
+
+func (m *tuiSyncModel) observeInteractiveTrackEvent(event output.Event) {
+	if m == nil || !m.isInteractiveSyncWorkflow() {
+		return
+	}
+	state := m.currentInteractiveSelection()
+	if state == nil {
+		return
+	}
+	state.observeTrackEvent(event)
 }
 
 func (m tuiSyncModel) elapsedLabel() string {
@@ -1263,6 +1289,34 @@ func tuiDetailInt(details map[string]any, key string) (int, bool) {
 	}
 }
 
+func tuiDetailFloat(details map[string]any, key string) (float64, bool) {
+	if details == nil {
+		return 0, false
+	}
+	raw, ok := details[key]
+	if !ok {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
 func tuiDetailBool(details map[string]any, key string) bool {
 	if details == nil {
 		return false
@@ -1403,7 +1457,7 @@ func (m tuiSyncModel) planPromptView() string {
 		if title == "" {
 			title = "(untitled)"
 		}
-		lines = append(lines, fmt.Sprintf("%s %s %3d  %-16s  %s (%s)", cursor, marker, row.Index, string(row.Status), title, row.RemoteID))
+		lines = append(lines, fmt.Sprintf("%s %s %3d  %-16s  %s (%s)", cursor, marker, row.Index, row.StatusLabel, title, row.RemoteID))
 	}
 	lines = append(lines, "")
 	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks", state.selectedCount(), state.toggleableCount()))
@@ -1432,8 +1486,9 @@ func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiv
 			Index:             row.Index,
 			Toggleable:        row.Toggleable,
 			Selected:          row.Toggleable && row.SelectedByDefault,
-			Status:            row.Status,
-			StatusLabel:       tuiPlanRowStatusLabel(row.Status),
+			PlanStatus:        row.Status,
+			RuntimeStatus:     tuiRuntimeStatusFromPlanRow(row),
+			StatusLabel:       tuiTrackStatusLabel(tuiRuntimeStatusFromPlanRow(row), 0, false, ""),
 			SelectedByDefault: row.SelectedByDefault,
 		})
 	}
@@ -1501,11 +1556,11 @@ func (s *tuiInteractiveSelectionState) matchesFilter(row tuiTrackRowState) bool 
 	case tuiPlanFilterSelected:
 		return row.Toggleable && row.Selected
 	case tuiPlanFilterMissingNew:
-		return row.Status == engine.PlanRowMissingNew
+		return row.RuntimeStatus == tuiTrackStatusQueued && row.PlanStatus == engine.PlanRowMissingNew
 	case tuiPlanFilterKnownGap:
-		return row.Status == engine.PlanRowMissingKnownGap
+		return row.RuntimeStatus == tuiTrackStatusQueued && row.PlanStatus == engine.PlanRowMissingKnownGap
 	case tuiPlanFilterDownloaded:
-		return row.Status == engine.PlanRowAlreadyDownloaded
+		return row.RuntimeStatus == tuiTrackStatusExisting || row.RuntimeStatus == tuiTrackStatusDownloaded
 	default:
 		return true
 	}
@@ -1655,7 +1710,7 @@ func (s *tuiInteractiveSelectionState) skippedCount() int {
 	}
 	count := 0
 	for _, row := range s.rows {
-		if row.Status == engine.PlanRowAlreadyDownloaded {
+		if row.RuntimeStatus == tuiTrackStatusExisting || row.RuntimeStatus == tuiTrackStatusSkipped {
 			count++
 		}
 	}
@@ -1726,16 +1781,112 @@ func (s *tuiInteractiveSelectionState) appendActivity(entry tuiActivityEntry) {
 	}
 }
 
-func tuiPlanRowStatusLabel(status engine.PlanRowStatus) string {
-	switch status {
-	case engine.PlanRowMissingNew:
-		return "new"
-	case engine.PlanRowMissingKnownGap:
-		return "known gap"
-	case engine.PlanRowAlreadyDownloaded:
-		return "have it"
+func (s *tuiInteractiveSelectionState) observeTrackEvent(event output.Event) {
+	if s == nil || strings.TrimSpace(event.SourceID) != strings.TrimSpace(s.sourceID) {
+		return
+	}
+	row := s.resolveRowForEvent(event)
+	if row == nil {
+		return
+	}
+	reason := strings.TrimSpace(tuiDetailString(event.Details, "reason"))
+	switch event.Event {
+	case output.EventTrackStarted:
+		row.RuntimeStatus = tuiTrackStatusDownloading
+		row.ProgressKnown = false
+		row.ProgressPercent = 0
+		row.FailureDetail = ""
+	case output.EventTrackProgress:
+		row.RuntimeStatus = tuiTrackStatusDownloading
+		if percent, ok := tuiDetailFloat(event.Details, "percent"); ok {
+			row.ProgressKnown = true
+			row.ProgressPercent = percent
+		}
+	case output.EventTrackDone:
+		row.RuntimeStatus = tuiTrackStatusDownloaded
+		row.ProgressKnown = true
+		row.ProgressPercent = 100
+		row.FailureDetail = ""
+	case output.EventTrackSkip:
+		row.RuntimeStatus = tuiTrackStatusSkipped
+		row.ProgressKnown = false
+		row.ProgressPercent = 0
+		row.FailureDetail = reason
+	case output.EventTrackFail:
+		row.RuntimeStatus = tuiTrackStatusFailed
+		row.ProgressKnown = false
+		row.ProgressPercent = 0
+		row.FailureDetail = reason
 	default:
-		return strings.ReplaceAll(string(status), "_", " ")
+		return
+	}
+	row.StatusLabel = tuiTrackStatusLabel(row.RuntimeStatus, row.ProgressPercent, row.ProgressKnown, row.FailureDetail)
+}
+
+func (s *tuiInteractiveSelectionState) resolveRowForEvent(event output.Event) *tuiTrackRowState {
+	if s == nil {
+		return nil
+	}
+	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
+		for i := range s.rows {
+			if s.rows[i].Index == idx {
+				return &s.rows[i]
+			}
+		}
+	}
+	trackID := strings.TrimSpace(tuiDetailString(event.Details, "track_id"))
+	if trackID != "" {
+		for i := range s.rows {
+			if strings.TrimSpace(s.rows[i].RemoteID) == trackID {
+				return &s.rows[i]
+			}
+		}
+	}
+	trackName := strings.TrimSpace(tuiDetailString(event.Details, "track_name"))
+	if trackName != "" {
+		for i := range s.rows {
+			if strings.TrimSpace(s.rows[i].Title) == trackName {
+				return &s.rows[i]
+			}
+		}
+	}
+	return nil
+}
+
+func tuiRuntimeStatusFromPlanRow(row engine.PlanRow) tuiTrackRuntimeStatus {
+	switch row.Status {
+	case engine.PlanRowAlreadyDownloaded:
+		return tuiTrackStatusExisting
+	default:
+		return tuiTrackStatusQueued
+	}
+}
+
+func tuiTrackStatusLabel(status tuiTrackRuntimeStatus, percent float64, progressKnown bool, failureDetail string) string {
+	switch status {
+	case tuiTrackStatusExisting:
+		return "have it"
+	case tuiTrackStatusQueued:
+		return "pending"
+	case tuiTrackStatusDownloading:
+		if progressKnown {
+			return fmt.Sprintf("downloading %.0f%%", percent)
+		}
+		return "downloading"
+	case tuiTrackStatusDownloaded:
+		return "downloaded"
+	case tuiTrackStatusSkipped:
+		if strings.TrimSpace(failureDetail) != "" {
+			return "skipped: " + strings.TrimSpace(failureDetail)
+		}
+		return "skipped"
+	case tuiTrackStatusFailed:
+		if strings.TrimSpace(failureDetail) != "" {
+			return "failed: " + strings.TrimSpace(failureDetail)
+		}
+		return "failed"
+	default:
+		return string(status)
 	}
 }
 
