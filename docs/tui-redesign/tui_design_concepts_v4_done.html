@@ -95,7 +95,7 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 
 /* ACTIVITY LOG */
 .activity-panel{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg)}
-.activity-header{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.activity-header{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--bg2);border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
 .activity-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--muted)}
 .activity-done-tag{font-size:8px;color:var(--green);margin-left:4px}
 .activity-toggle{margin-left:auto;font-size:9px;color:var(--dim)}
@@ -339,7 +339,7 @@ function renderMain() {
               <td class="t-num">${vi + 1}</td>
               <td class="t-out">${outIndicator(t.status)}</td>
               <td>${t.name}</td>
-              <td><span class="sp sp-${t.status}">${t.status === 'already_downloaded' ? 'skipped' : t.status}</span></td>
+              <td><span class="sp sp-${t.status}">${t.status === 'already_downloaded' ? 'have it' : t.status}</span></td>
               <td class="t-id">${t.id}</td>
             </tr>`).join('')}
         </tbody>
@@ -365,11 +365,12 @@ function renderMain() {
       <div class="footer-stat"><span class="c-done">↓ ${counts.done} downloaded</span></div>
       <span class="footer-sep">·</span>
       <div class="footer-stat"><span class="c-skip">${counts.already_downloaded} skipped</span></div>
-      ${counts.failed ? `<span class="footer-sep">·</span><div class="footer-stat"><span class="c-fail">${counts.failed} failed</span></div>` : ''}
+      <span class="footer-sep">·</span>
+      <div class="footer-stat"><span class="c-fail">${counts.failed} failed</span></div>
       <span class="footer-sep">·</span>
       <div class="footer-prog-wrap"><div class="footer-prog-fill" style="width:100%"></div></div>
       <span class="footer-pct">100%</span>
-      <div class="footer-elapsed">1:42 elapsed</div>
+      <div class="footer-elapsed">1:42</div>
     </div>`;
 }
 

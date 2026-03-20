@@ -103,14 +103,15 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 .chk-on{color:var(--green)}
 .chk-off{color:var(--dim);opacity:.5}
 .chk-locked{color:var(--dim)}
-.status-pill{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
-.status-already_downloaded{background:var(--count-bg);color:var(--dim);border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
-.status-pending{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
-.status-failed{background:#2a0f0f;color:#f85149;border:1px solid #4a1515;border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
+.sp{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
+.sp-already_downloaded{background:var(--count-bg);color:var(--dim)}
+.sp-pending{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border)}
+.sp-done{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.sp-failed{background:#2a0f0f;color:#f85149;border:1px solid #4a1515}
 
 /* ACTIVITY LOG */
 .activity-panel{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg)}
-.activity-header{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.activity-header{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--bg2);border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
 .activity-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--muted)}
 .activity-toggle{margin-left:auto;font-size:9px;color:var(--dim)}
 .activity-log{height:96px;overflow-y:auto;padding:6px 0}
@@ -386,7 +387,7 @@ function renderMain() {
                   <span class="${locked ? 'chk-locked' : checked ? 'chk-on' : 'chk-off'}">${locked ? '–' : checked ? '■' : '□'}</span>
                 </td>
                 <td>${t.name}</td>
-                <td><span class="status-${t.status}">${t.status === 'already_downloaded' ? 'already_downloaded' : t.status}</span></td>
+                <td><span class="sp sp-${t.status}">${t.status === 'already_downloaded' ? 'have it' : t.status}</span></td>
                 <td class="t-id">${t.id}</td>
               </tr>`;
               }).join('')}
