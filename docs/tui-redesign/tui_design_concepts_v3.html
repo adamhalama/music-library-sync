@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TUI Design Concepts v3</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',monospace;background:#111;color:#ccc;padding:20px}
+
+.designs-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.designs-nav button{font-family:inherit;font-size:11px;padding:5px 10px;border:1px solid #333;background:#1a1a1a;color:#777;border-radius:4px;cursor:pointer;transition:all .15s;font-weight:500;letter-spacing:.02em}
+.designs-nav button.active{background:#0f0f0f;color:#e2e2e2;border-color:#555}
+.design-panel{display:none}.design-panel.active{display:block}
+.label-tag{font-family:sans-serif;font-size:11px;font-weight:500;color:#555;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+
+/* ── CARBON BASE TOKENS ── */
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#0a0d10;
+  --border:#21262d;--border-light:#161b22;
+  --text:#c9d1d9;--muted:#8b949e;--dim:#484f58;--dimmer:#2a2f38;
+  --accent:#58a6ff;--accent-bg:#1d2d3e;--accent-border:#1f6feb;
+  --green:#3fb950;--green-bg:#1a4730;--green-border:#2ea043;
+  --yellow:#d29922;--yellow-bg:#2d2016;--yellow-border:#9e6a03;
+  --red:#f85149;--red-bg:#2d1216;--red-border:#8b1a1a;
+  --purple:#bc8cff;--purple-bg:#1e1733;
+  --row-hover:#161b22;--row-sel:#1c2128;
+  --kbd-bg:#21262d;--kbd-border:#30363d;
+}
+
+/* ── SHARED CHROME ── */
+.tui{border-radius:8px;overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg)}
+.tui-bar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0}
+.tui-dots{display:flex;gap:5px}
+.tui-dots span{width:10px;height:10px;border-radius:50%}
+.appname{font-size:10px;letter-spacing:.1em;color:var(--muted);margin-left:4px}
+.tui-body{display:flex;flex:1;align-items:stretch;overflow:hidden}
+.badge{font-size:10px;padding:2px 8px;border-radius:3px;letter-spacing:.05em;font-weight:600;cursor:pointer}
+.b-run{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.b-dry-off{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border)}
+.b-dry-on{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.b-lim{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);cursor:default}
+.ml-auto{margin-left:auto}
+.txt-muted{font-size:10px;color:var(--muted)}
+.txt-muted span{color:var(--text)}
+
+/* ── SIDEBAR ── */
+.sidebar{flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0;overflow:hidden;transition:width .15s}
+.sidebar.w175{width:175px}.sidebar.w32{width:32px}
+.sb-sec{padding:0 10px;margin-bottom:12px}
+.sb-hd{font-size:8px;letter-spacing:.12em;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:5px;padding:0 6px;white-space:nowrap}
+.sb-row{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:10px;color:var(--muted);white-space:nowrap}
+.sb-row:hover{background:var(--row-hover)}
+.sb-row.active{background:var(--row-sel);color:var(--text)}
+.sb-row.off{opacity:.38}
+.sb-icon{width:14px;text-align:center;flex-shrink:0;font-size:11px}
+.sb-row.active .sb-icon{color:var(--accent)}
+.sb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.sb-cnt{font-size:9px;padding:1px 5px;border-radius:3px;background:var(--bg3);color:var(--dim);flex-shrink:0}
+.sb-row.active .sb-cnt{color:var(--accent);font-weight:700}
+.sb-div{margin:4px 14px;border:none;border-top:1px solid var(--border)}
+.sb-collapse-btn{margin:auto 10px 8px;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:9px;color:var(--dim);text-align:center;border:1px solid var(--border);background:transparent}
+.sb-collapse-btn:hover{background:var(--row-hover);color:var(--muted)}
+
+/* ── MAIN PANEL ── */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.main-top{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap;flex-shrink:0}
+.shortcuts{display:flex;gap:12px;flex-wrap:wrap;padding:5px 14px;background:var(--bg);border-bottom:1px solid var(--border-light);flex-shrink:0}
+.kb{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.kb kbd{font-family:inherit;font-size:9px;background:var(--kbd-bg);border:1px solid var(--kbd-border);border-bottom:2px solid var(--kbd-border);color:var(--text);border-radius:3px;padding:1px 5px}
+.tbl-wrap{flex:1;overflow:auto}
+table.tracks{width:100%;border-collapse:collapse}
+table.tracks th{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;padding:5px 14px;text-align:left;color:var(--muted);background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0}
+table.tracks td{padding:6px 14px;font-size:11px;border-bottom:1px solid var(--border-light);color:var(--text)}
+.t-row{cursor:pointer;transition:background .08s}
+.t-row:hover td{background:var(--row-hover)}
+.t-row.cur td{background:var(--row-sel)}
+.t-row.cur td:first-child{border-left:2px solid var(--accent);padding-left:12px}
+.t-num{color:var(--dim);width:28px;font-size:10px;text-align:right}
+.t-chk{width:24px;cursor:pointer}
+.t-name{max-width:0}/* grows with flex-like behavior in table */
+.t-src{width:80px}
+.t-src-badge{font-size:9px;padding:1px 6px;border-radius:3px;background:var(--bg2);color:var(--muted);border:1px solid var(--border)}
+.t-stat{width:80px}
+.pill{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
+.p-done{background:var(--green-bg);color:var(--green)}
+.p-new{background:var(--accent-bg);color:var(--accent)}
+.t-id{width:82px;text-align:right;font-size:9px;color:var(--dim)}
+.chk-y{color:var(--green)}.chk-n{color:var(--dimmer)}
+.t-footer{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:var(--bg2);border-top:1px solid var(--border);flex-shrink:0}
+.prog{display:flex;gap:2px}
+.prog-seg{width:12px;height:5px;border-radius:2px}
+.empty-msg{padding:24px;text-align:center;color:var(--dim);font-size:11px}
+
+/* ══════════════════════════════════
+   DESIGN V: COMMAND BAR
+══════════════════════════════════ */
+.cmdbar{background:var(--bg3);border-top:1px solid var(--border);padding:0;flex-shrink:0;font-size:11px}
+.cmd-normal{display:flex;align-items:center;gap:12px;padding:6px 14px;flex-wrap:wrap}
+.cmd-mode{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--accent);min-width:40px}
+.cmd-input-row{display:flex;align-items:center;gap:8px;padding:0 14px 6px}
+.cmd-prompt{color:var(--accent);font-weight:700;font-size:12px;flex-shrink:0}
+.cmd-input{background:transparent;border:none;outline:none;font-family:inherit;font-size:11px;color:var(--text);flex:1;caret-color:var(--accent)}
+.cmd-hint{font-size:9px;color:var(--dim);margin-left:auto;padding-right:4px}
+.cmd-history{font-size:10px;color:var(--dim);padding:2px 14px 5px;letter-spacing:.03em}
+.cmd-history span{color:var(--muted)}
+
+/* ══════════════════════════════════
+   DESIGN W: WORKFLOW STEPS
+══════════════════════════════════ */
+.wf-steps{display:flex;align-items:center;padding:0;border-bottom:1px solid var(--border);background:var(--bg2);flex-shrink:0}
+.wf-step{display:flex;align-items:center;padding:10px 16px;font-size:10px;letter-spacing:.05em;color:var(--dim);border-right:1px solid var(--border);gap:7px;cursor:pointer;transition:background .1s;white-space:nowrap}
+.wf-step:hover{background:var(--row-hover)}
+.wf-step.done{color:var(--muted)}
+.wf-step.done .wf-num{background:var(--green-bg);color:var(--green);border-color:var(--green-border)}
+.wf-step.active{color:var(--text);background:var(--row-sel)}
+.wf-step.active .wf-num{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border)}
+.wf-num{width:18px;height:18px;border-radius:3px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0}
+.wf-arrow{color:var(--dim);font-size:10px;padding:0 0 0 0;flex-shrink:0}
+.wf-label{font-weight:500}
+.wf-sublabel{font-size:9px;color:var(--dim);margin-top:1px}
+.wf-step.active .wf-sublabel{color:var(--muted)}
+
+/* ══════════════════════════════════
+   DESIGN X: DETAIL PANEL
+══════════════════════════════════ */
+.detail-panel{width:210px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.det-header{padding:10px 12px 8px;border-bottom:1px solid var(--border)}
+.det-label{font-size:8px;letter-spacing:.12em;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+.det-name{font-size:11px;color:var(--text);line-height:1.45;word-break:break-word}
+.det-body{flex:1;padding:10px 12px;overflow:auto}
+.det-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px;gap:8px}
+.det-key{font-size:9px;color:var(--dim);flex-shrink:0}
+.det-val{font-size:10px;color:var(--muted);text-align:right;word-break:break-all}
+.det-val.accent{color:var(--accent)}
+.det-val.green{color:var(--green)}
+.det-val.yellow{color:var(--yellow)}
+.det-divider{border:none;border-top:1px solid var(--border);margin:8px 0}
+.det-actions{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:6px}
+.det-btn{flex:1;padding:5px 0;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--muted);font-family:inherit;font-size:9px;letter-spacing:.05em;cursor:pointer;text-align:center}
+.det-btn:hover{background:var(--row-hover);color:var(--text)}
+.det-btn.primary{border-color:var(--accent-border);color:var(--accent)}
+.det-btn.primary:hover{background:var(--accent-bg)}
+.det-empty{padding:20px 12px;text-align:center;color:var(--dim);font-size:10px;line-height:1.6}
+
+/* ══════════════════════════════════
+   DESIGN Y: GROUPED TABLE
+══════════════════════════════════ */
+.group-hd{cursor:pointer}
+.group-hd td{background:var(--bg2);padding:7px 14px;font-size:10px;letter-spacing:.06em;font-weight:700;color:var(--muted);border-bottom:1px solid var(--border);border-top:1px solid var(--border)}
+.group-hd:hover td{background:var(--row-hover)}
+.group-hd .g-toggle{color:var(--dim);margin-right:6px;font-size:10px}
+.group-hd .g-name{color:var(--text)}
+.group-hd .g-adapter{font-size:9px;color:var(--dim);font-weight:400;margin-left:8px}
+.group-hd .g-counts{margin-left:auto;font-size:9px;color:var(--dim);font-weight:400}
+.group-hd .g-sel-all{font-size:9px;color:var(--accent);margin-left:10px;cursor:pointer}
+.group-hd .g-sel-all:hover{text-decoration:underline}
+
+/* ══════════════════════════════════
+   DESIGN Z: RUN PREVIEW
+══════════════════════════════════ */
+.preview-panel{width:220px;flex-shrink:0;border-left:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg2)}
+.prev-hd{padding:10px 14px 8px;border-bottom:1px solid var(--border)}
+.prev-title{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text);text-transform:uppercase}
+.prev-subtitle{font-size:9px;color:var(--dim);margin-top:2px}
+.prev-body{flex:1;padding:10px 14px;overflow:auto}
+.prev-section-hd{font-size:8px;letter-spacing:.12em;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px;margin-top:4px}
+.prev-stat-row{display:flex;justify-content:space-between;margin-bottom:5px}
+.prev-stat-key{font-size:10px;color:var(--muted)}
+.prev-stat-val{font-size:10px;font-weight:700}
+.prev-stat-val.green{color:var(--green)}
+.prev-stat-val.accent{color:var(--accent)}
+.prev-stat-val.yellow{color:var(--yellow)}
+.prev-stat-val.dim{color:var(--dim)}
+.prev-div{border:none;border-top:1px solid var(--border);margin:10px 0}
+.prev-cmd-block{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:9px;color:var(--muted);line-height:1.7;word-break:break-all}
+.prev-cmd-block .cmd-name{color:var(--accent)}
+.prev-cmd-block .cmd-arg{color:var(--green)}
+.prev-cmd-block .cmd-flag{color:var(--yellow)}
+.prev-track-list{max-height:120px;overflow:auto}
+.prev-track{font-size:9px;color:var(--dim);padding:2px 0;border-bottom:1px solid var(--border-light);display:flex;gap:6px;align-items:baseline}
+.prev-track .ptname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.prev-track .ptst{color:var(--accent);flex-shrink:0}
+.prev-run-btn{margin:10px 14px 12px;padding:8px;border:1px solid var(--green-border);border-radius:4px;background:var(--green-bg);color:var(--green);font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.05em;cursor:pointer;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px}
+.prev-run-btn:hover{filter:brightness(1.15)}
+.prev-run-btn.disabled{opacity:.4;cursor:default}
+.prev-empty{padding:20px 14px;text-align:center;color:var(--dim);font-size:10px;line-height:1.7}
+</style>
+</head>
+<body>
+
+<div class="designs-nav">
+  <button class="active" onclick="sw('v')">V · Command Bar</button>
+  <button onclick="sw('w')">W · Workflow Steps</button>
+  <button onclick="sw('x')">X · Detail Panel</button>
+  <button onclick="sw('y')">Y · Grouped Sources</button>
+  <button onclick="sw('z')">Z · Run Preview</button>
+</div>
+
+<!-- ══════ V: COMMAND BAR ══════ -->
+<div class="design-panel active" id="panel-v">
+  <div class="label-tag">V · Command Bar — vim-style : commands + / live search. No badges to click — type to configure.</div>
+  <div class="tui" id="tui-v">
+    <div class="tui-bar">
+      <div class="tui-dots"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
+      <div class="appname">UDL · SYNC</div>
+      <div class="ml-auto" style="display:flex;gap:8px" id="v-badges"></div>
+    </div>
+    <div class="tui-body">
+      <div class="sidebar w175" id="sb-v"></div>
+      <div class="main">
+        <div class="tbl-wrap" id="tbl-v"></div>
+        <div class="t-footer">
+          <div class="txt-muted">selected: <span id="v-sel">0</span> / <span id="v-tot">0</span></div>
+          <div class="prog" id="v-prog"></div>
+        </div>
+      </div>
+    </div>
+    <div class="cmdbar">
+      <div id="v-cmd-normal" class="cmd-normal">
+        <span class="cmd-mode" id="v-mode">NORMAL</span>
+        <span class="kb"><kbd>:</kbd> command</span>
+        <span class="kb"><kbd>/</kbd> search</span>
+        <span class="kb"><kbd>j/k</kbd> move</span>
+        <span class="kb"><kbd>space</kbd> toggle</span>
+        <span class="kb"><kbd>enter</kbd> run</span>
+      </div>
+      <div id="v-cmd-active" style="display:none">
+        <div class="cmd-input-row">
+          <span class="cmd-prompt" id="v-prompt">:</span>
+          <input class="cmd-input" id="v-input" autocomplete="off" spellcheck="false" oninput="vcmdInput()" onkeydown="vcmdKey(event)">
+          <span class="cmd-hint" id="v-hint"></span>
+        </div>
+      </div>
+      <div class="cmd-history" id="v-history">last: <span>—</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ W: WORKFLOW STEPS ══════ -->
+<div class="design-panel" id="panel-w">
+  <div class="label-tag">W · Workflow Steps — explicit stage progress: Configure → Plan → Review → Run. Each step validates before advancing.</div>
+  <div class="tui" id="tui-w">
+    <div class="tui-bar">
+      <div class="tui-dots"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
+      <div class="appname">UDL · SYNC WORKFLOW</div>
+    </div>
+    <div class="wf-steps" id="w-steps"></div>
+    <div class="tui-body">
+      <div class="sidebar w175" id="sb-w"></div>
+      <div class="main" id="main-w"></div>
+    </div>
+    <div class="tui-bar" style="justify-content:space-between">
+      <div style="display:flex;gap:8px" id="w-badges"></div>
+      <div style="display:flex;gap:6px">
+        <button onclick="wStep(-1)" style="font-family:inherit;font-size:10px;padding:3px 10px;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer">◄ back</button>
+        <button onclick="wStep(1)" id="w-next-btn" style="font-family:inherit;font-size:10px;padding:3px 10px;background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:3px;color:var(--accent);cursor:pointer">next ►</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ X: DETAIL PANEL ══════ -->
+<div class="design-panel" id="panel-x">
+  <div class="label-tag">X · Detail Panel — right pane shows full metadata for focused track. Inspect before you commit.</div>
+  <div class="tui" id="tui-x">
+    <div class="tui-bar">
+      <div class="tui-dots"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
+      <div class="appname">UDL · SYNC</div>
+      <div class="ml-auto" style="display:flex;gap:8px" id="x-badges"></div>
+    </div>
+    <div class="tui-body">
+      <div class="sidebar w175" id="sb-x"></div>
+      <div class="main">
+        <div class="shortcuts">
+          <span class="kb"><kbd>j/k</kbd> move</span>
+          <span class="kb"><kbd>space</kbd> toggle</span>
+          <span class="kb"><kbd>a</kbd> all</span>
+          <span class="kb"><kbd>enter</kbd> run</span>
+          <span class="kb"><kbd>esc</kbd> back</span>
+        </div>
+        <div class="tbl-wrap" id="tbl-x"></div>
+        <div class="t-footer">
+          <div class="txt-muted">selected: <span id="x-sel">0</span> / <span id="x-tot">0</span></div>
+          <div class="prog" id="x-prog"></div>
+        </div>
+      </div>
+      <div class="detail-panel" id="det-x"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ Y: GROUPED SOURCES ══════ -->
+<div class="design-panel" id="panel-y">
+  <div class="label-tag">Y · Grouped Sources — tracks grouped by source inline. Collapse/expand groups. Select-all per group in table header.</div>
+  <div class="tui" id="tui-y">
+    <div class="tui-bar">
+      <div class="tui-dots"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
+      <div class="appname">UDL · SYNC</div>
+      <div class="ml-auto" style="display:flex;gap:8px" id="y-badges"></div>
+    </div>
+    <div class="tui-body">
+      <div class="sidebar w175" id="sb-y"></div>
+      <div class="main">
+        <div class="main-top" id="y-topbar"></div>
+        <div class="tbl-wrap" id="tbl-y"></div>
+        <div class="t-footer">
+          <div class="txt-muted">selected: <span id="y-sel">0</span></div>
+          <div class="prog" id="y-prog"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ Z: RUN PREVIEW ══════ -->
+<div class="design-panel" id="panel-z">
+  <div class="label-tag">Z · Run Preview — right pane shows a live "staged changes" diff: what will run, which tracks, which commands.</div>
+  <div class="tui" id="tui-z">
+    <div class="tui-bar">
+      <div class="tui-dots"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
+      <div class="appname">UDL · SYNC PLANNER</div>
+      <div class="ml-auto" style="display:flex;gap:8px" id="z-badges"></div>
+    </div>
+    <div class="tui-body">
+      <div class="sidebar w175" id="sb-z"></div>
+      <div class="main">
+        <div class="shortcuts">
+          <span class="kb"><kbd>j/k</kbd> move</span>
+          <span class="kb"><kbd>space</kbd> toggle</span>
+          <span class="kb"><kbd>a</kbd> select all new</span>
+          <span class="kb"><kbd>enter</kbd> stage →</span>
+        </div>
+        <div class="tbl-wrap" id="tbl-z"></div>
+        <div class="t-footer">
+          <div class="txt-muted">staged: <span id="z-sel">0</span> / <span id="z-tot">0</span></div>
+          <div class="prog" id="z-prog"></div>
+        </div>
+      </div>
+      <div class="preview-panel" id="prev-z"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══ DATA ═══ */
+const tracks = [
+  {id:'2267387111',name:'Bengalo - All About [SELECTED031]',  status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2263082507',name:'Bengalo - Let Me Play [SELECTED031]',status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2231274233',name:'Klint - Eternal Lie [BCCOVA18]',     status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2275081589',name:'Lewis Legacy - Blue Tribe [OTPM007]',status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2270743331',name:'Wie es Läuft',                        status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2232613559',name:'VCS1 - Mythos | VDFD 035',           status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2276806856',name:'No Valentia - i.know.xml [BOI019]',  status:'done',source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2291234567',name:'Folamour - Dreamin (Extended)',       status:'new', source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'2298765432',name:'Skee Mask - Dial 274',               status:'new', source:'sc-likes',adapter:'scdl',url:'https://soundcloud.com/janxadam/likes'},
+  {id:'0012345001',name:'Four Tet - Parallel 3',              status:'done',source:'bc-wish', adapter:'bcdl',url:'https://bandcamp.com/janxadam/wishlist'},
+  {id:'0012345002',name:'Burial - Antidawn EP',               status:'done',source:'bc-wish', adapter:'bcdl',url:'https://bandcamp.com/janxadam/wishlist'},
+  {id:'0012345003',name:'Actress - Karma & Desire (Deluxe)',  status:'new', source:'bc-wish', adapter:'bcdl',url:'https://bandcamp.com/janxadam/wishlist'},
+];
+
+const sources = [
+  {id:'sc-likes',name:'soundcloud-likes',adapter:'scdl',enabled:true},
+  {id:'bc-wish', name:'bandcamp-wishlist',adapter:'bcdl',enabled:true},
+];
+
+/* ═══ PER-DESIGN STATE ═══ */
+const S = {};
+['v','w','x','y','z'].forEach(id => {
+  S[id] = {
+    filter:'all', cursor:0,
+    checked: new Array(tracks.length).fill(false),
+    dryRun: false, planLimit:10,
+    srcEnabled: {
+      'sc-likes':true, 'bc-wish':true
+    }
+  };
+});
+
+/* V extra */
+let vCmdMode = false, vSearchMode = false, vSearchTerm = '';
+
+/* W extra */
+S.w.step = 1; // 1=configure 2=plan 3=review 4=run
+
+/* Y extra */
+S.y.collapsed = {};
+
+/* ═══ HELPERS ═══ */
+function filtered(id) {
+  const s = S[id];
+  return tracks.map((t,i)=>({...t,oi:i})).filter(t=>{
+    if(!s.srcEnabled[t.source]) return false;
+    if(id==='v' && vSearchTerm && !t.name.toLowerCase().includes(vSearchTerm.toLowerCase())) return false;
+    if(s.filter==='done') return t.status==='done';
+    if(s.filter==='new') return t.status==='new';
+    if(s.filter==='selected') return s.checked[t.oi];
+    return true;
+  });
+}
+
+function counts(id) {
+  const s = S[id];
+  let all=0,done=0,newt=0,sel=0;
+  tracks.forEach((t,i)=>{
+    if(!s.srcEnabled[t.source]) return;
+    all++; if(t.status==='done')done++; if(t.status==='new')newt++;
+    if(s.checked[i])sel++;
+  });
+  return {all,done,new:newt,selected:sel};
+}
+
+function badges(id) {
+  const s = S[id];
+  const dry = s.dryRun;
+  return `<span class="badge b-run">● RUN</span>
+    <span class="badge ${dry?'b-dry-on':'b-dry-off'}" onclick="S['${id}'].dryRun=!S['${id}'].dryRun;render('${id}')">${dry?'DRY: ON':'DRY: OFF'}</span>
+    <span class="badge b-lim">LIMIT:${s.planLimit}</span>`;
+}
+
+function sidebar(id) {
+  const s = S[id];
+  const c = counts(id);
+  const filters = [
+    {id:'all',     label:'All',        n:c.all},
+    {id:'done',    label:'Downloaded', n:c.done},
+    {id:'new',     label:'New',        n:c.new},
+    {id:'selected',label:'Selected',   n:c.selected},
+  ];
+  return `
+    <div class="sb-sec">
+      <div class="sb-hd">Sources</div>
+      ${sources.map(src=>`
+        <div class="sb-row${s.srcEnabled[src.id]?'':' off'}" onclick="S['${id}'].srcEnabled['${src.id}']=!S['${id}'].srcEnabled['${src.id}'];S['${id}'].cursor=0;render('${id}')">
+          <span class="sb-icon">${s.srcEnabled[src.id]?'■':'□'}</span>
+          <span class="sb-name">${src.name}</span>
+          <span class="sb-cnt">${tracks.filter(t=>t.source===src.id).length}</span>
+        </div>`).join('')}
+    </div>
+    <hr class="sb-div">
+    <div class="sb-sec">
+      <div class="sb-hd">Filters</div>
+      ${filters.map(f=>`
+        <div class="sb-row${s.filter===f.id?' active':''}" onclick="S['${id}'].filter='${f.id}';S['${id}'].cursor=0;render('${id}')">
+          <span class="sb-icon">${s.filter===f.id?'►':'·'}</span>
+          <span class="sb-name">${f.label}</span>
+          <span class="sb-cnt">${f.n}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+function tableRows(id, rows) {
+  const s = S[id];
+  return rows.map((t,vi)=>`
+    <tr class="t-row${t.oi===s.cursor?' cur':''}" onclick="S['${id}'].cursor=${t.oi};render('${id}')">
+      <td class="t-num">${vi+1}</td>
+      <td class="t-chk" onclick="event.stopPropagation();S['${id}'].checked[${t.oi}]=!S['${id}'].checked[${t.oi}];render('${id}')">
+        <span class="${s.checked[t.oi]?'chk-y':'chk-n'}">${s.checked[t.oi]?'■':'□'}</span>
+      </td>
+      <td>${t.name}</td>
+      <td class="t-stat"><span class="pill p-${t.status}">${t.status}</span></td>
+      <td class="t-id">${t.id}</td>
+    </tr>`).join('');
+}
+
+function progBar(id, rows) {
+  const s = S[id];
+  return rows.map(t=>`<div class="prog-seg" style="background:${s.checked[t.oi]?'var(--accent)':'var(--dimmer)'}"></div>`).join('');
+}
+
+/* ═══ RENDER V: COMMAND BAR ═══ */
+function renderV() {
+  const s = S.v;
+  const rows = filtered('v');
+  document.getElementById('sb-v').innerHTML = sidebar('v');
+  document.getElementById('v-badges').innerHTML = badges('v');
+  document.getElementById('tbl-v').innerHTML = `
+    <table class="tracks">
+      <thead><tr>
+        <th class="t-num">#</th><th class="t-chk"></th>
+        <th>${vSearchTerm?`<span style="color:var(--yellow)">/${vSearchTerm}</span> <span style="color:var(--dim);font-size:9px;font-weight:400">${rows.length} matches</span>`:'TRACK'}</th>
+        <th class="t-stat">STATUS</th><th class="t-id">ID</th>
+      </tr></thead>
+      <tbody>${rows.length?tableRows('v',rows):'<tr><td colspan="5" class="empty-msg">no matches</td></tr>'}</tbody>
+    </table>`;
+  const sel = s.checked.filter(Boolean).length;
+  document.getElementById('v-sel').textContent = sel;
+  document.getElementById('v-tot').textContent = rows.length;
+  document.getElementById('v-prog').innerHTML = progBar('v', rows);
+}
+
+/* V: command bar logic */
+const CMD_HINTS = {
+  ':dry':'toggle dry-run mode',':run':'execute sync',':clear':'deselect all',
+  ':all':'select all',':limit':'set plan limit (e.g. :limit 20)',
+  '/':'search tracks by name',
+};
+window.vcmdInput = function() {
+  const v = document.getElementById('v-input').value;
+  const hint = CMD_HINTS[v.split(' ')[0]] || '';
+  document.getElementById('v-hint').textContent = hint;
+};
+window.vcmdKey = function(e) {
+  const inp = document.getElementById('v-input');
+  if (e.key === 'Escape') { closeVCmd(); return; }
+  if (e.key === 'Enter') {
+    const val = inp.value.trim();
+    let last = val;
+    if (val === ':dry') S.v.dryRun = !S.v.dryRun;
+    else if (val === ':all') S.v.checked.fill(true);
+    else if (val === ':clear') S.v.checked.fill(false);
+    else if (val.startsWith(':limit ')) {
+      const n = parseInt(val.slice(7)); if(!isNaN(n)&&n>0) S.v.planLimit=n;
+    } else if (val.startsWith('/')) {
+      vSearchTerm = val.slice(1); last = val; closeVCmd(); renderV(); return;
+    }
+    document.getElementById('v-history').innerHTML = `last: <span>${last}</span>`;
+    closeVCmd(); renderV();
+  }
+};
+function openVCmd(prefix) {
+  vCmdMode = true;
+  document.getElementById('v-cmd-normal').style.display = 'none';
+  document.getElementById('v-cmd-active').style.display = 'block';
+  const inp = document.getElementById('v-input');
+  inp.value = prefix;
+  document.getElementById('v-prompt').textContent = prefix;
+  document.getElementById('v-hint').textContent = CMD_HINTS[prefix] || '';
+  inp.focus();
+}
+function closeVCmd() {
+  vCmdMode = false;
+  document.getElementById('v-cmd-normal').style.display = 'flex';
+  document.getElementById('v-cmd-active').style.display = 'none';
+  document.getElementById('v-input').value = '';
+}
+/* attach key listener for v */
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('panel-v').classList.contains('active')) return;
+  if (vCmdMode) return;
+  if (e.key === ':') { e.preventDefault(); openVCmd(':'); }
+  if (e.key === '/') { e.preventDefault(); vSearchTerm=''; openVCmd('/'); }
+});
+
+/* ═══ RENDER W: WORKFLOW STEPS ═══ */
+const W_STEPS = [
+  {n:1, label:'Configure',  sub:'sources & limits'},
+  {n:2, label:'Plan',       sub:'review track list'},
+  {n:3, label:'Stage',      sub:'select to download'},
+  {n:4, label:'Run',        sub:'execute sync'},
+];
+window.wStep = function(dir) {
+  S.w.step = Math.max(1, Math.min(4, S.w.step + dir));
+  renderW();
+};
+function renderW() {
+  const s = S.w;
+  /* steps */
+  document.getElementById('w-steps').innerHTML = W_STEPS.map((st,i)=>`
+    ${i>0?`<span style="color:var(--dim);font-size:10px;padding:0 4px;align-self:center;">›</span>`:''}
+    <div class="wf-step${st.n<s.step?' done':st.n===s.step?' active':''}" onclick="S.w.step=${st.n};renderW()">
+      <div class="wf-num">${st.n<s.step?'✓':st.n}</div>
+      <div><div class="wf-label">${st.label}</div><div class="wf-sublabel">${st.sub}</div></div>
+    </div>`).join('');
+  document.getElementById('sb-w').innerHTML = sidebar('w');
+  document.getElementById('w-badges').innerHTML = badges('w');
+  /* next btn label */
+  const nextBtn = document.getElementById('w-next-btn');
+  if(s.step===4){nextBtn.textContent='▶ execute run';nextBtn.style.borderColor='var(--green-border)';nextBtn.style.color='var(--green)';nextBtn.style.background='var(--green-bg)';}
+  else{nextBtn.textContent='next ►';nextBtn.style.borderColor='var(--accent-border)';nextBtn.style.color='var(--accent)';nextBtn.style.background='var(--accent-bg)';}
+  /* main content per step */
+  const rows = filtered('w');
+  const sel = s.checked.filter(Boolean).length;
+  let mainHtml = '';
+  if (s.step===1) {
+    mainHtml = `<div style="padding:20px 20px">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:16px;letter-spacing:.04em">CONFIGURE SYNC OPTIONS</div>
+      ${sources.map(src=>`
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
+          <div>
+            <div style="font-size:11px;color:var(--text)">${src.name}</div>
+            <div style="font-size:9px;color:var(--dim);margin-top:2px">adapter: ${src.adapter}</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span style="font-size:10px;color:var(--dim)">${tracks.filter(t=>t.source===src.id).length} tracks</span>
+            <span class="badge ${s.srcEnabled[src.id]?'b-run':'b-dry-off'}" onclick="S.w.srcEnabled['${src.id}']=!S.w.srcEnabled['${src.id}'];renderW()" style="cursor:pointer">
+              ${s.srcEnabled[src.id]?'● ACTIVE':'○ OFF'}
+            </span>
+          </div>
+        </div>`).join('')}
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
+        <div><div style="font-size:11px;color:var(--text)">plan-limit</div><div style="font-size:9px;color:var(--dim);margin-top:2px">max tracks to process</div></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button onclick="S.w.planLimit=Math.max(1,S.w.planLimit-5);renderW()" style="font-family:inherit;font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer">−</button>
+          <span style="font-size:12px;color:var(--text);font-weight:700;min-width:24px;text-align:center">${s.planLimit}</span>
+          <button onclick="S.w.planLimit=Math.min(100,S.w.planLimit+5);renderW()" style="font-family:inherit;font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer">+</button>
+        </div>
+      </div>
+    </div>`;
+  } else if (s.step===2) {
+    mainHtml = `<table class="tracks">
+      <thead><tr><th class="t-num">#</th><th class="t-chk"></th><th>TRACK</th><th class="t-stat">STATUS</th><th class="t-id">ID</th></tr></thead>
+      <tbody>${rows.length?tableRows('w',rows):'<tr><td colspan="5" class="empty-msg">no tracks</td></tr>'}</tbody>
+    </table>`;
+  } else if (s.step===3) {
+    mainHtml = `<table class="tracks">
+      <thead><tr><th class="t-num">#</th><th class="t-chk"></th><th>TRACK — select to stage for download</th><th class="t-stat">STATUS</th><th class="t-id">ID</th></tr></thead>
+      <tbody>${rows.length?tableRows('w',rows):'<tr><td colspan="5" class="empty-msg">no tracks</td></tr>'}</tbody>
+    </table>`;
+  } else {
+    const selTracks = tracks.filter((_,i)=>s.checked[i]);
+    mainHtml = `<div style="padding:16px 20px">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:12px;letter-spacing:.04em">EXECUTION PLAN — ${sel} tracks staged</div>
+      ${selTracks.length===0?`<div style="color:var(--dim);font-size:11px">No tracks staged. Go back to step 3.</div>`:
+        selTracks.map((t,i)=>`
+        <div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--border-light)">
+          <span style="font-size:9px;color:var(--dim);min-width:16px">${i+1}</span>
+          <span style="font-size:10px;color:var(--text);flex:1">${t.name}</span>
+          <span class="pill p-${t.status}">${t.status}</span>
+        </div>`).join('')}
+      ${selTracks.length>0?`<div style="margin-top:14px;padding:10px;background:var(--bg3);border-radius:4px;border:1px solid var(--border);font-size:10px;color:var(--muted);line-height:1.8">
+        <span style="color:var(--accent)">scdl</span> sync
+        <span style="color:var(--green)">--source sc-likes</span>
+        <span style="color:var(--yellow)">--limit ${s.planLimit}</span>
+        ${s.dryRun?'<span style="color:var(--yellow)">--dry-run</span>':''}
+      </div>`:''}
+    </div>`;
+  }
+  document.getElementById('main-w').innerHTML = `<div class="tbl-wrap">${mainHtml}</div>
+    <div class="t-footer">
+      <div class="txt-muted">step ${s.step}/4 · selected: <span>${sel}</span></div>
+      <div class="prog">${progBar('w',rows)}</div>
+    </div>`;
+}
+
+/* ═══ RENDER X: DETAIL PANEL ═══ */
+function renderX() {
+  const s = S.x;
+  const rows = filtered('x');
+  const cur = tracks[s.cursor];
+  document.getElementById('sb-x').innerHTML = sidebar('x');
+  document.getElementById('x-badges').innerHTML = badges('x');
+  document.getElementById('tbl-x').innerHTML = `
+    <table class="tracks">
+      <thead><tr><th class="t-num">#</th><th class="t-chk"></th><th>TRACK</th><th class="t-stat">STATUS</th><th class="t-id">ID</th></tr></thead>
+      <tbody>${rows.length?tableRows('x',rows):'<tr><td colspan="5" class="empty-msg">no tracks</td></tr>'}</tbody>
+    </table>`;
+  const sel = s.checked.filter(Boolean).length;
+  document.getElementById('x-sel').textContent = sel;
+  document.getElementById('x-tot').textContent = rows.length;
+  document.getElementById('x-prog').innerHTML = progBar('x', rows);
+  /* detail pane */
+  const det = document.getElementById('det-x');
+  if (!cur) { det.innerHTML = '<div class="det-empty">cursor out of range</div>'; return; }
+  const src = sources.find(s=>s.id===cur.source);
+  det.innerHTML = `
+    <div class="det-header">
+      <div class="det-label">Track detail</div>
+      <div class="det-name">${cur.name}</div>
+    </div>
+    <div class="det-body">
+      <div class="det-row"><span class="det-key">id</span><span class="det-val">${cur.id}</span></div>
+      <div class="det-row"><span class="det-key">status</span><span class="det-val ${cur.status==='done'?'green':'accent'}">${cur.status}</span></div>
+      <div class="det-row"><span class="det-key">source</span><span class="det-val accent">${cur.source}</span></div>
+      <div class="det-row"><span class="det-key">adapter</span><span class="det-val">${cur.adapter}</span></div>
+      <hr class="det-divider">
+      <div class="det-row"><span class="det-key">selected</span><span class="det-val ${s.checked[s.cursor]?'green':''}"> ${s.checked[s.cursor]?'yes':'no'}</span></div>
+      <div class="det-row"><span class="det-key">limit</span><span class="det-val">${s.planLimit}</span></div>
+      <div class="det-row"><span class="det-key">dry-run</span><span class="det-val ${s.dryRun?'yellow':''}">${s.dryRun?'on':'off'}</span></div>
+      <hr class="det-divider">
+      <div style="font-size:9px;color:var(--dim);margin-bottom:4px">url</div>
+      <div style="font-size:9px;color:var(--muted);word-break:break-all;line-height:1.5">${cur.url}</div>
+    </div>
+    <div class="det-actions">
+      <button class="det-btn ${s.checked[s.cursor]?'':'primary'}" onclick="S.x.checked[${s.cursor}]=!S.x.checked[${s.cursor}];renderX()">
+        ${s.checked[s.cursor]?'deselect':'select'}
+      </button>
+      <button class="det-btn" onclick="S.x.cursor=Math.min(${tracks.length-1},S.x.cursor+1);renderX()">next ↓</button>
+    </div>`;
+}
+
+/* ═══ RENDER Y: GROUPED TABLE ═══ */
+function renderY() {
+  const s = S.y;
+  document.getElementById('sb-y').innerHTML = sidebar('y');
+  document.getElementById('y-badges').innerHTML = badges('y');
+  document.getElementById('y-topbar').innerHTML = `
+    <span class="badge b-run">● RUN</span>
+    <span class="badge ${s.dryRun?'b-dry-on':'b-dry-off'}" onclick="S.y.dryRun=!S.y.dryRun;renderY()">DRY: ${s.dryRun?'ON':'OFF'}</span>
+    <span class="badge b-lim">LIMIT:${s.planLimit}</span>
+    <div class="ml-auto" style="display:flex;gap:12px">
+      ${[{id:'all',l:'All'},{id:'done',l:'Done'},{id:'new',l:'New'}].map(f=>
+        `<span style="font-size:10px;cursor:pointer;color:${s.filter===f.id?'var(--accent)':'var(--dim)'}" onclick="S.y.filter='${f.id}';renderY()">${f.l}</span>`).join('')}
+    </div>`;
+  /* build grouped table */
+  const enabledSrcs = sources.filter(src=>s.srcEnabled[src.id]);
+  let html = `<table class="tracks"><thead><tr>
+    <th class="t-num">#</th><th class="t-chk"></th><th>TRACK</th>
+    <th class="t-stat">STATUS</th><th class="t-id">ID</th>
+  </tr></thead><tbody>`;
+  let globalIdx = 0;
+  enabledSrcs.forEach(src => {
+    const collapsed = !!s.collapsed[src.id];
+    const srcTracks = tracks.map((t,i)=>({...t,oi:i})).filter(t=>{
+      if(t.source!==src.id) return false;
+      if(s.filter==='done') return t.status==='done';
+      if(s.filter==='new') return t.status==='new';
+      return true;
+    });
+    const srcSel = srcTracks.filter(t=>s.checked[t.oi]).length;
+    html += `<tr class="group-hd" onclick="S.y.collapsed['${src.id}']=!S.y.collapsed['${src.id}'];renderY()">
+      <td colspan="5">
+        <span class="g-toggle">${collapsed?'►':'▼'}</span>
+        <span class="g-name">${src.name}</span>
+        <span class="g-adapter">${src.adapter}</span>
+        <span class="g-counts">${srcTracks.length} tracks · ${srcSel} selected</span>
+        <span class="g-sel-all" onclick="event.stopPropagation();${collapsed?'':`srcTracks.forEach(t=>S.y.checked[t.oi]=true);renderY()`}">select all</span>
+      </td>
+    </tr>`;
+    if (!collapsed) {
+      srcTracks.forEach(t => {
+        globalIdx++;
+        html += `<tr class="t-row${t.oi===s.cursor?' cur':''}" onclick="S.y.cursor=${t.oi};renderY()">
+          <td class="t-num">${globalIdx}</td>
+          <td class="t-chk" onclick="event.stopPropagation();S.y.checked[${t.oi}]=!S.y.checked[${t.oi}];renderY()">
+            <span class="${s.checked[t.oi]?'chk-y':'chk-n'}">${s.checked[t.oi]?'■':'□'}</span>
+          </td>
+          <td>${t.name}</td>
+          <td class="t-stat"><span class="pill p-${t.status}">${t.status}</span></td>
+          <td class="t-id">${t.id}</td>
+        </tr>`;
+      });
+    }
+  });
+  html += '</tbody></table>';
+  document.getElementById('tbl-y').innerHTML = html;
+  const sel = s.checked.filter(Boolean).length;
+  document.getElementById('y-sel').textContent = sel;
+  const rows = filtered('y');
+  document.getElementById('y-prog').innerHTML = progBar('y', rows);
+}
+/* Inject select-all per group using a workaround since inline doesn't have srcTracks in scope */
+window.selectGroupAll = function(srcId, did) {
+  tracks.forEach((t,i)=>{ if(t.source===srcId) S[did].checked[i]=true; });
+  render(did);
+};
+
+/* ═══ RENDER Z: RUN PREVIEW ═══ */
+function renderZ() {
+  const s = S.z;
+  const rows = filtered('z');
+  document.getElementById('sb-z').innerHTML = sidebar('z');
+  document.getElementById('z-badges').innerHTML = badges('z');
+  document.getElementById('tbl-z').innerHTML = `
+    <table class="tracks">
+      <thead><tr><th class="t-num">#</th><th class="t-chk"></th><th>TRACK</th><th class="t-stat">STATUS</th><th class="t-id">ID</th></tr></thead>
+      <tbody>${rows.length?tableRows('z',rows):'<tr><td colspan="5" class="empty-msg">no tracks</td></tr>'}</tbody>
+    </table>`;
+  const selTracks = tracks.map((t,i)=>({...t,oi:i})).filter((_,i)=>s.checked[i]);
+  const selNew = selTracks.filter(t=>t.status==='new').length;
+  const selDone = selTracks.filter(t=>t.status==='done').length;
+  const selBySrc = {};
+  selTracks.forEach(t=>{ selBySrc[t.source]=(selBySrc[t.source]||0)+1; });
+  const sel = s.checked.filter(Boolean).length;
+  document.getElementById('z-sel').textContent = sel;
+  document.getElementById('z-tot').textContent = rows.length;
+  document.getElementById('z-prog').innerHTML = progBar('z', rows);
+
+  const prev = document.getElementById('prev-z');
+  if (sel===0) {
+    prev.innerHTML = `<div class="prev-hd"><div class="prev-title">Run Preview</div><div class="prev-subtitle">nothing staged</div></div>
+      <div class="prev-empty">Select tracks to see what will run.<br><br><span style="color:var(--muted)">Use <span style="color:var(--yellow)">space</span> to toggle,<br><span style="color:var(--yellow)">a</span> to select all new.</span></div>`;
+    return;
+  }
+  const scdlCount = Object.keys(selBySrc).filter(id=>sources.find(s=>s.id===id&&s.adapter==='scdl')).reduce((a,k)=>a+(selBySrc[k]||0),0);
+  const bcdlCount = Object.keys(selBySrc).filter(id=>sources.find(s=>s.id===id&&s.adapter==='bcdl')).reduce((a,k)=>a+(selBySrc[k]||0),0);
+  prev.innerHTML = `
+    <div class="prev-hd">
+      <div class="prev-title">Run Preview</div>
+      <div class="prev-subtitle">${sel} track${sel!==1?'s':''} staged</div>
+    </div>
+    <div class="prev-body">
+      <div class="prev-section-hd">Summary</div>
+      <div class="prev-stat-row"><span class="prev-stat-key">tracks</span><span class="prev-stat-val accent">${sel}</span></div>
+      <div class="prev-stat-row"><span class="prev-stat-key">new downloads</span><span class="prev-stat-val green">${selNew}</span></div>
+      <div class="prev-stat-row"><span class="prev-stat-key">re-downloads</span><span class="prev-stat-val yellow">${selDone}</span></div>
+      <div class="prev-stat-row"><span class="prev-stat-key">dry-run</span><span class="prev-stat-val ${s.dryRun?'yellow':'dim'}">${s.dryRun?'YES':'no'}</span></div>
+      <hr class="prev-div">
+      <div class="prev-section-hd">Commands</div>
+      ${scdlCount>0?`<div class="prev-cmd-block">
+        <span class="cmd-name">scdl</span> <span class="cmd-arg">--source sc-likes</span><br>
+        <span class="cmd-flag">--limit ${s.planLimit}</span><br>
+        <span class="cmd-flag">--tracks ${scdlCount}</span>
+        ${s.dryRun?'<br><span class="cmd-flag">--dry-run</span>':''}
+      </div>`:''}
+      ${bcdlCount>0?`<div class="prev-cmd-block" style="margin-top:6px">
+        <span class="cmd-name">bcdl</span> <span class="cmd-arg">--source bc-wish</span><br>
+        <span class="cmd-flag">--limit ${s.planLimit}</span><br>
+        <span class="cmd-flag">--tracks ${bcdlCount}</span>
+        ${s.dryRun?'<br><span class="cmd-flag">--dry-run</span>':''}
+      </div>`:''}
+      <hr class="prev-div">
+      <div class="prev-section-hd">Staged tracks</div>
+      <div class="prev-track-list">
+        ${selTracks.map(t=>`<div class="prev-track"><span class="ptname">${t.name}</span><span class="ptst">${t.status==='new'?'↓':'↻'}</span></div>`).join('')}
+      </div>
+    </div>
+    <button class="prev-run-btn" onclick="void(0)">▶ execute run</button>`;
+}
+
+/* ═══ MASTER RENDER ═══ */
+function render(id) {
+  if(id==='v') renderV();
+  else if(id==='w') renderW();
+  else if(id==='x') renderX();
+  else if(id==='y') renderY();
+  else if(id==='z') renderZ();
+}
+
+window.sw = function(id) {
+  document.querySelectorAll('.design-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.designs-nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+id).classList.add('active');
+  document.querySelectorAll('.designs-nav button')[['v','w','x','y','z'].indexOf(id)].classList.add('active');
+};
+
+/* init */
+['v','w','x','y','z'].forEach(id => render(id));
+</script>
+</body>
+</html>

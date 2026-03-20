@@ -34,8 +34,145 @@ func TestTUICommandHelp(t *testing.T) {
 	}
 }
 
+func TestTUIRootMenuShowsInteractiveSyncFirst(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+
+	if len(root.menuItems) < 2 {
+		t.Fatalf("expected at least two menu items, got %v", root.menuItems)
+	}
+	if root.menuItems[0] != "interactive sync" {
+		t.Fatalf("expected interactive sync first, got %v", root.menuItems)
+	}
+	if root.menuItems[1] != "sync" {
+		t.Fatalf("expected sync second, got %v", root.menuItems)
+	}
+	view := root.View()
+	if !strings.Contains(view, "> interactive sync") {
+		t.Fatalf("expected menu view to default to interactive sync, got: %s", view)
+	}
+}
+
+func TestTUIRootEnterOpensInteractiveSyncWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenInteractiveSync {
+		t.Fatalf("expected interactive sync screen, got %v", next.screen)
+	}
+	if next.syncModel.mode != tuiSyncWorkflowInteractive {
+		t.Fatalf("expected interactive sync mode, got %q", next.syncModel.mode)
+	}
+}
+
+func TestTUIRootEnterOpensStandardSyncWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.menuCursor = 1
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenSync {
+		t.Fatalf("expected sync screen, got %v", next.screen)
+	}
+	if next.syncModel.mode != tuiSyncWorkflowStandard {
+		t.Fatalf("expected standard sync mode, got %q", next.syncModel.mode)
+	}
+}
+
+func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
+	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	interactive.planLimit = 25
+	interactive.askOnExisting = true
+	interactive.askOnExistingSet = true
+	interactive.scanGaps = true
+	interactive.noPreflight = true
+
+	interactiveReq := interactive.buildSyncRequest([]string{"source-a"})
+	if !interactiveReq.Plan {
+		t.Fatalf("expected interactive sync to force plan mode")
+	}
+	if interactiveReq.PlanLimit != 25 {
+		t.Fatalf("expected interactive sync to keep plan limit, got %d", interactiveReq.PlanLimit)
+	}
+	if interactiveReq.AskOnExisting || interactiveReq.AskOnExistingSet || interactiveReq.ScanGaps || interactiveReq.NoPreflight {
+		t.Fatalf("expected interactive sync to omit standard-only flags: %+v", interactiveReq)
+	}
+
+	standard := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
+	standard.askOnExisting = true
+	standard.askOnExistingSet = true
+	standard.scanGaps = true
+	standard.noPreflight = true
+
+	standardReq := standard.buildSyncRequest([]string{"source-b"})
+	if standardReq.Plan {
+		t.Fatalf("expected standard sync to keep plan mode disabled")
+	}
+	if standardReq.PlanLimit != 0 {
+		t.Fatalf("expected standard sync to omit plan limit, got %d", standardReq.PlanLimit)
+	}
+	if !standardReq.AskOnExisting || !standardReq.AskOnExistingSet || !standardReq.ScanGaps || !standardReq.NoPreflight {
+		t.Fatalf("expected standard sync flags to pass through: %+v", standardReq)
+	}
+}
+
+func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
+	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	interactive.cfgLoaded = true
+	interactiveView := interactive.View()
+	if !strings.Contains(interactiveView, "Interactive Sync Workflow") {
+		t.Fatalf("expected interactive sync title, got: %s", interactiveView)
+	}
+	if !strings.Contains(interactiveView, "plan_limit=") {
+		t.Fatalf("expected interactive sync plan limit controls, got: %s", interactiveView)
+	}
+	if strings.Contains(interactiveView, "ask_on_existing=") || strings.Contains(interactiveView, "scan_gaps=") || strings.Contains(interactiveView, "no_preflight=") {
+		t.Fatalf("expected interactive sync to hide standard-only options, got: %s", interactiveView)
+	}
+
+	standard := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
+	standard.cfgLoaded = true
+	standardView := standard.View()
+	if !strings.Contains(standardView, "Sync Workflow") {
+		t.Fatalf("expected standard sync title, got: %s", standardView)
+	}
+	if strings.Contains(standardView, "Interactive Sync Workflow") {
+		t.Fatalf("expected standard sync title only, got: %s", standardView)
+	}
+	if strings.Contains(standardView, "plan_limit=") || strings.Contains(standardView, "type limit") {
+		t.Fatalf("expected standard sync to hide plan controls, got: %s", standardView)
+	}
+	if !strings.Contains(standardView, "ask_on_existing=") || !strings.Contains(standardView, "scan_gaps=") || !strings.Contains(standardView, "no_preflight=") {
+		t.Fatalf("expected standard sync options to remain visible, got: %s", standardView)
+	}
+}
+
+func TestTUISyncModelPlanPromptUsesInteractiveHeading(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
+		Details:  planSourceDetails{SourceID: "source-a", PlanLimit: 10},
+		Reply:    reply,
+	})
+
+	view := m.View()
+	if !strings.Contains(view, "Interactive Sync Workflow") {
+		t.Fatalf("expected interactive heading in plan prompt, got: %s", view)
+	}
+}
+
 func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 	m.running = true
 	m.eventCh = make(chan tea.Msg, 1)
@@ -121,7 +258,8 @@ func TestTUISyncModelInitValidatesConfig(t *testing.T) {
 
 func TestTUIRootEscDuringPlanPromptCancelsPlanInsteadOfLeavingScreen(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
-	root.screen = tuiScreenSync
+	root.screen = tuiScreenInteractiveSync
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	root.syncModel.cfgLoaded = true
 	root.syncModel.running = true
 	reply := make(chan tuiPlanSelectResult, 1)
@@ -139,7 +277,7 @@ func TestTUIRootEscDuringPlanPromptCancelsPlanInsteadOfLeavingScreen(t *testing.
 	if !ok {
 		t.Fatalf("unexpected model type %T", nextModel)
 	}
-	if next.screen != tuiScreenSync {
+	if next.screen != tuiScreenInteractiveSync {
 		t.Fatalf("expected to remain on sync screen, got %v", next.screen)
 	}
 	select {
@@ -194,7 +332,7 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 }
 
 func TestTUISyncModelPlanLimitControls(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 
 	if m.planLimit != tuiDefaultPlanLimit {
@@ -223,7 +361,7 @@ func TestTUISyncModelPlanLimitControls(t *testing.T) {
 }
 
 func TestTUISyncModelPlanLimitTypedEntry(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 	m.planLimit = 10
 
@@ -250,7 +388,7 @@ func TestTUISyncModelPlanLimitTypedEntry(t *testing.T) {
 }
 
 func TestTUISyncModelPlanLimitTypedEntryEscCancels(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 	m.planLimit = 17
 
@@ -268,7 +406,8 @@ func TestTUISyncModelPlanLimitTypedEntryEscCancels(t *testing.T) {
 
 func TestTUIRootEscDuringPlanLimitInputDoesNotLeaveSync(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
-	root.screen = tuiScreenSync
+	root.screen = tuiScreenInteractiveSync
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	root.syncModel.cfgLoaded = true
 	root.syncModel.planLimitInputActive = true
 	root.syncModel.planLimit = 10
@@ -278,7 +417,7 @@ func TestTUIRootEscDuringPlanLimitInputDoesNotLeaveSync(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected model type %T", nextModel)
 	}
-	if next.screen != tuiScreenSync {
+	if next.screen != tuiScreenInteractiveSync {
 		t.Fatalf("expected to remain on sync screen, got %v", next.screen)
 	}
 	if next.syncModel.planLimitInputActive {
@@ -352,9 +491,8 @@ func TestTUISyncInteractionInputMasksARLPrompt(t *testing.T) {
 }
 
 func TestTUISyncModelEnterValidatesIncompatiblePlanFlags(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
-	m.planEnabled = true
 	m.scanGaps = true
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -369,7 +507,7 @@ func TestTUISyncModelEnterValidatesIncompatiblePlanFlags(t *testing.T) {
 func TestTUISyncModelCancelKeyCancelsActiveRunAndPrompt(t *testing.T) {
 	cancelCalled := false
 	reply := make(chan tuiPromptResult, 1)
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
 	m.cfgLoaded = true
 	m.running = true
 	m.eventCh = make(chan tea.Msg, 1)
@@ -400,7 +538,7 @@ func TestTUISyncModelCancelKeyCancelsActiveRunAndPrompt(t *testing.T) {
 }
 
 func TestTUISyncModelRendersCompactProgressAndHistory(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
 	m.cfgLoaded = true
 	m.running = true
 
@@ -473,7 +611,7 @@ func TestTUISyncModelRendersCompactProgressAndHistory(t *testing.T) {
 }
 
 func TestTUISyncModelSuppressesTrackProgressSpamInActivity(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
 	m.cfgLoaded = true
 
 	progressEvent := output.Event{
@@ -522,7 +660,7 @@ func TestTUISyncModelSuppressesTrackProgressSpamInActivity(t *testing.T) {
 }
 
 func TestTUISyncModelShowsPinnedLastFailureDiagnostics(t *testing.T) {
-	m := newTUISyncModel(&AppContext{})
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
 	m.cfgLoaded = true
 	m.running = true
 

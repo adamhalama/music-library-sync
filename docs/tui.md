@@ -1,6 +1,7 @@
 # UDL TUI Guide
 
 `udl tui` launches an interactive Bubble Tea interface for the main workflows:
+- `interactive sync`
 - `sync`
 - `doctor`
 - `validate`
@@ -26,34 +27,27 @@ udl tui --debug-messages
 - Global: `esc` returns to menu when no active in-workflow prompt is open
 - Menu-only: `q` or `ctrl+c` quits
 
-## Sync Workflow
+## Interactive Sync Workflow
 
 ### Source selection
 
 - `j/k` or up/down: move between configured enabled sources
 - `space`: toggle source enabled for this run
 
-### Sync option panel
+### Interactive sync option panel
 
-- `p`: toggle plan mode
 - `[` / `]`: decrement/increment plan limit
 - `l`: type plan limit directly (`0` = unlimited)
 - `u`: toggle unlimited plan limit
 - `d`: toggle dry-run
-- `a`: toggle `ask_on_existing` override (`inherit` / `on`)
-- `g`: toggle `scan_gaps`
-- `f`: toggle `no_preflight`
 - `t`: type timeout override (Go duration, for example `10m`, `90s`, `1h`)
 - `enter`: start run
 
-Validation parity with CLI is enforced before run start:
-- `plan` cannot be combined with `scan_gaps`
-- `plan` cannot be combined with `ask_on_existing`
-- `plan` cannot be combined with `no_preflight`
+`interactive sync` always runs the existing `udl sync --plan` path. Standard sync-only flags such as `ask_on_existing`, `scan_gaps`, and `no_preflight` are intentionally hidden here.
 
-### Plan mode track selector (`--plan`)
+### Interactive track selector (`--plan`)
 
-For supported sources (currently `adapter.kind=scdl`), sync enters an interactive selector before download:
+For supported sources (currently `adapter.kind=scdl`), interactive sync enters an interactive selector before download:
 
 - `j/k` or up/down: move
 - `space`: toggle current row
@@ -68,6 +62,24 @@ Selector header includes source config context:
 - state file
 - source URL
 - current plan limit and run mode
+
+## Sync Workflow
+
+### Source selection
+
+- `j/k` or up/down: move between configured enabled sources
+- `space`: toggle source enabled for this run
+
+### Sync option panel
+
+- `d`: toggle dry-run
+- `a`: toggle `ask_on_existing` override (`inherit` / `on`)
+- `g`: toggle `scan_gaps`
+- `f`: toggle `no_preflight`
+- `t`: type timeout override (Go duration, for example `10m`, `90s`, `1h`)
+- `enter`: start run
+
+This workflow is the streamlined non-plan path and no longer exposes `--plan` controls.
 
 ### Runtime prompts (sync interaction parity)
 

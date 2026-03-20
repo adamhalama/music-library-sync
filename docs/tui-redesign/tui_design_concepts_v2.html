@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TUI Design Concepts v2</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',monospace;background:#111;color:#ccc;padding:20px}
+
+/* NAV */
+.designs-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.designs-nav button{font-family:inherit;font-size:11px;padding:5px 10px;border:1px solid #333;background:#1a1a1a;color:#777;border-radius:4px;cursor:pointer;transition:all .15s;font-weight:500;letter-spacing:.02em}
+.designs-nav button.active{background:#0f0f0f;color:#e2e2e2;border-color:#555}
+.design-panel{display:none}
+.design-panel.active{display:block}
+.label-tag{font-family:sans-serif;font-size:11px;font-weight:500;color:#555;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+
+/* FRAME */
+.tui-frame{border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+
+/* TITLEBAR */
+.tui-titlebar{display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.tui-dots{display:flex;gap:5px}
+.tui-dots span{width:10px;height:10px;border-radius:50%}
+.tui-appname{font-size:10px;letter-spacing:.1em;color:var(--muted);margin-left:6px}
+
+/* BODY */
+.tui-body{display:flex;background:var(--bg);align-items:stretch;min-height:340px}
+
+/* SIDEBAR */
+.tui-sidebar{width:175px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0}
+.sb-section{padding:0 10px;margin-bottom:14px}
+.sb-section-label{font-size:8px;letter-spacing:.12em;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px;padding:0 6px}
+.sb-source{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background .1s;font-size:10px;color:var(--text-sb)}
+.sb-source:hover{background:var(--sb-hover)}
+.sb-source.off{opacity:.4}
+.sb-source-toggle{font-size:11px;flex-shrink:0;width:14px;text-align:center}
+.sb-source-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-source-count{font-size:9px;padding:1px 5px;border-radius:3px;background:var(--count-bg);color:var(--count-text);flex-shrink:0}
+.sb-filter{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background .1s;font-size:10px;color:var(--text-sb)}
+.sb-filter:hover{background:var(--sb-hover)}
+.sb-filter.active{background:var(--sb-active-bg);color:var(--sb-active-text)}
+.sb-filter-indicator{font-size:10px;width:12px;text-align:center;flex-shrink:0}
+.sb-filter.active .sb-filter-indicator{color:var(--accent)}
+.sb-filter-label{flex:1}
+.sb-filter-count{font-size:9px;color:var(--dim)}
+.sb-filter.active .sb-filter-count{color:var(--accent);font-weight:700}
+.sb-divider{margin:4px 16px;border:none;border-top:1px solid var(--border)}
+
+/* MAIN */
+.tui-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.main-topbar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.badge{font-size:10px;padding:2px 8px;border-radius:3px;letter-spacing:.05em;font-weight:600}
+.badge-run{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.badge-dry-off{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border);cursor:pointer}
+.badge-dry-on{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border);cursor:pointer}
+.badge-limit{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border)}
+.topbar-right{margin-left:auto;font-size:11px;color:var(--muted)}
+.topbar-right span{color:var(--text)}
+.main-shortcuts{display:flex;gap:14px;flex-wrap:wrap;padding:5px 14px;background:var(--bg);border-bottom:1px solid var(--border-light)}
+.kb{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.kb kbd{font-family:inherit;font-size:9px;background:var(--kbd-bg);border:1px solid var(--kbd-border);border-bottom:2px solid var(--kbd-border);color:var(--text);border-radius:3px;padding:1px 5px}
+.main-table-wrap{flex:1}
+.main-table{width:100%;border-collapse:collapse}
+.main-table th{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;padding:5px 14px;text-align:left;color:var(--muted);background:var(--bg2);border-bottom:1px solid var(--border)}
+.main-table td{padding:6px 14px;font-size:11px;border-bottom:1px solid var(--border-light);color:var(--text)}
+.t-row{cursor:pointer;transition:background .08s}
+.t-row:hover td{background:var(--row-hover)}
+.t-row.t-cursor td{background:var(--row-cursor)}
+.t-row.t-cursor td:first-child{border-left:2px solid var(--accent);padding-left:12px}
+.t-num{color:var(--dim);width:28px;font-size:10px;text-align:right}
+.t-chk{width:26px}
+.t-chk-cell{cursor:pointer}
+.t-status{width:90px}
+.t-id{width:80px;text-align:right;font-size:9px;color:var(--dim)}
+.chk-on{color:var(--green)}
+.chk-off{color:var(--border)}
+.status-pill{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
+.status-done{background:var(--green-bg);color:var(--green)}
+.status-new{background:var(--accent-bg);color:var(--accent)}
+.main-footer{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:var(--bg2);border-top:1px solid var(--border)}
+.footer-stat{font-size:10px;color:var(--muted)}
+.footer-stat span{color:var(--accent);font-weight:700}
+.footer-prog{display:flex;gap:2px}
+.prog-seg{width:13px;height:5px;border-radius:2px}
+.empty-row td{text-align:center;padding:20px;color:var(--dim);font-style:italic}
+
+/* ═══ THEME A: CARBON (Sharp Grid core) ═══ */
+.theme-a{--bg:#0d1117;--bg2:#161b22;--bg-sidebar:#161b22;--border:#21262d;--border-light:#161b22;--text:#c9d1d9;--muted:#8b949e;--dim:#484f58;--accent:#58a6ff;--accent-bg:#1d2d3e;--accent-border:#1f6feb;--green:#3fb950;--green-bg:#1a4730;--green-border:#2ea043;--yellow:#d29922;--yellow-bg:#2d2016;--yellow-border:#9e6a03;--text-sb:#8b949e;--sb-hover:#1c2128;--sb-active-bg:#1c2128;--sb-active-text:#c9d1d9;--row-hover:#161b22;--row-cursor:#1c2128;--count-bg:#21262d;--count-text:#8b949e;--kbd-bg:#21262d;--kbd-border:#30363d}
+
+/* ═══ THEME B: COBALT (ice-blue enterprise) ═══ */
+.theme-b{--bg:#060f1c;--bg2:#0a1628;--bg-sidebar:#081220;--border:#112035;--border-light:#0a1628;--text:#b6d0ec;--muted:#486f96;--dim:#1e3a58;--accent:#4da8da;--accent-bg:#081e30;--accent-border:#155a85;--green:#4ec97b;--green-bg:#082515;--green-border:#1a6030;--yellow:#e0b545;--yellow-bg:#221900;--yellow-border:#705a10;--text-sb:#486f96;--sb-hover:#0c1c2e;--sb-active-bg:#0c1c2e;--sb-active-text:#b6d0ec;--row-hover:#0a1628;--row-cursor:#0e2038;--count-bg:#0e2038;--count-text:#486f96;--kbd-bg:#0e2038;--kbd-border:#183050}
+/* cobalt filter pills */
+.theme-b .sb-filter{border-radius:20px;margin-bottom:2px}
+.theme-b .sb-filter.active{border:1px solid var(--accent-border)}
+
+/* ═══ THEME C: GRAPHITE (near-monochrome) ═══ */
+.theme-c{--bg:#0f1012;--bg2:#181920;--bg-sidebar:#141518;--border:#242630;--border-light:#181920;--text:#d0d5de;--muted:#6a7080;--dim:#363b45;--accent:#dce3f0;--accent-bg:#20222a;--accent-border:#404858;--green:#7ee78a;--green-bg:#18281a;--green-border:#2a502e;--yellow:#d4b660;--yellow-bg:#24200c;--yellow-border:#504518;--text-sb:#6a7080;--sb-hover:#1e2028;--sb-active-bg:#1e2028;--sb-active-text:#dce3f0;--row-hover:#181920;--row-cursor:#1e2028;--count-bg:#1e2028;--count-text:#6a7080;--kbd-bg:#1e2028;--kbd-border:#2e3040}
+/* graphite: left-accent style active filter instead of bg */
+.theme-c .sb-filter.active{background:transparent;border-left:2px solid var(--accent);border-radius:0;padding-left:6px;color:var(--accent)}
+.theme-c .sb-filter.active .sb-filter-count{color:var(--muted)}
+
+/* ═══ THEME D: JADE (dark green terminal) ═══ */
+.theme-d{--bg:#060f07;--bg2:#0b180d;--bg-sidebar:#091409;--border:#133016;--border-light:#0b180d;--text:#9dd89e;--muted:#3f7a42;--dim:#1a3a1c;--accent:#4ece58;--accent-bg:#082510;--accent-border:#186020;--green:#4ece58;--green-bg:#082510;--green-border:#186020;--yellow:#b8c048;--yellow-bg:#1e1e05;--yellow-border:#484c10;--text-sb:#3f7a42;--sb-hover:#0d1e0f;--sb-active-bg:#0d1e0f;--sb-active-text:#9dd89e;--row-hover:#0b180d;--row-cursor:#0d1e0f;--count-bg:#0d1e0f;--count-text:#3f7a42;--kbd-bg:#0d1e0f;--kbd-border:#184518}
+/* jade: monochromatic dots in titlebar */
+.theme-d .tui-dots span{background:#1a3a1c !important}
+.theme-d .tui-dots span:last-child{background:#2a5030 !important}
+.theme-d .sb-source-toggle{color:var(--accent)}
+.theme-d .sb-source.off .sb-source-toggle{color:var(--dim)}
+.theme-d .sb-filter.active{color:var(--accent)}
+/* jade: status pill squared */
+.theme-d .status-pill{border-radius:2px;letter-spacing:.1em}
+
+/* ═══ THEME E: DUSK (warm purple-dark) ═══ */
+.theme-e{--bg:#13111e;--bg2:#1a1828;--bg-sidebar:#161422;--border:#242238;--border-light:#1a1828;--text:#ccd4f0;--muted:#646080;--dim:#2e2c45;--accent:#c792ea;--accent-bg:#221835;--accent-border:#58386a;--green:#a0e0a0;--green-bg:#18281a;--green-border:#386838;--yellow:#f0d890;--yellow-bg:#28200a;--yellow-border:#685510;--text-sb:#646080;--sb-hover:#1e1c30;--sb-active-bg:#1e1c30;--sb-active-text:#ccd4f0;--row-hover:#1a1828;--row-cursor:#1e1c30;--count-bg:#1e1c30;--count-text:#646080;--kbd-bg:#1e1c30;--kbd-border:#323050}
+/* dusk: larger source/filter items with inset accent border */
+.theme-e .sb-source,.theme-e .sb-filter{border-radius:6px;padding:6px 9px}
+.theme-e .sb-filter.active{box-shadow:inset 0 0 0 1px var(--accent-border)}
+/* dusk: source chips with adapter badge */
+.theme-e .sb-source-count{border-radius:8px}
+</style>
+</head>
+<body>
+
+<div class="designs-nav">
+  <button class="active" onclick="switchDesign('a')">A · Carbon</button>
+  <button onclick="switchDesign('b')">B · Cobalt</button>
+  <button onclick="switchDesign('c')">C · Graphite</button>
+  <button onclick="switchDesign('d')">D · Jade</button>
+  <button onclick="switchDesign('e')">E · Dusk</button>
+</div>
+
+<!-- PANEL A: CARBON -->
+<div class="design-panel active" id="panel-a">
+  <div class="label-tag">A · Carbon — Sharp Grid baseline extended: interactive sidebar, GitHub-dark, keyboard-first badges</div>
+  <div class="tui-frame theme-a">
+    <div class="tui-titlebar">
+      <div class="tui-dots">
+        <span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span>
+      </div>
+      <div class="tui-appname">UDL · SYNC WORKFLOW</div>
+    </div>
+    <div class="tui-body">
+      <div class="tui-sidebar" id="sb-a"></div>
+      <div class="tui-main" id="main-a"></div>
+    </div>
+  </div>
+</div>
+
+<!-- PANEL B: COBALT -->
+<div class="design-panel" id="panel-b">
+  <div class="label-tag">B · Cobalt — Icy blue enterprise dark, pill-shaped filter nav, softer Sharp Grid</div>
+  <div class="tui-frame theme-b">
+    <div class="tui-titlebar">
+      <div class="tui-dots">
+        <span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span>
+      </div>
+      <div class="tui-appname">udl sync</div>
+    </div>
+    <div class="tui-body">
+      <div class="tui-sidebar" id="sb-b"></div>
+      <div class="tui-main" id="main-b"></div>
+    </div>
+  </div>
+</div>
+
+<!-- PANEL C: GRAPHITE -->
+<div class="design-panel" id="panel-c">
+  <div class="label-tag">C · Graphite — Near-monochrome, maximum density, left-border active filter style</div>
+  <div class="tui-frame theme-c">
+    <div class="tui-titlebar">
+      <div class="tui-dots">
+        <span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span>
+      </div>
+      <div class="tui-appname">UDL</div>
+    </div>
+    <div class="tui-body">
+      <div class="tui-sidebar" id="sb-c"></div>
+      <div class="tui-main" id="main-c"></div>
+    </div>
+  </div>
+</div>
+
+<!-- PANEL D: JADE -->
+<div class="design-panel" id="panel-d">
+  <div class="label-tag">D · Jade — Dark green hacker terminal, Bloomberg density, monochrome accent</div>
+  <div class="tui-frame theme-d">
+    <div class="tui-titlebar">
+      <div class="tui-dots">
+        <span></span><span></span><span></span>
+      </div>
+      <div class="tui-appname">[UDL-SYNC] v2.1.0</div>
+    </div>
+    <div class="tui-body">
+      <div class="tui-sidebar" id="sb-d"></div>
+      <div class="tui-main" id="main-d"></div>
+    </div>
+  </div>
+</div>
+
+<!-- PANEL E: DUSK -->
+<div class="design-panel" id="panel-e">
+  <div class="label-tag">E · Dusk — Warm purple-dark, Catppuccin Mocha palette, spacious sidebar cards</div>
+  <div class="tui-frame theme-e">
+    <div class="tui-titlebar">
+      <div class="tui-dots">
+        <span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span>
+      </div>
+      <div class="tui-appname">udl · sync manager</div>
+    </div>
+    <div class="tui-body">
+      <div class="tui-sidebar" id="sb-e"></div>
+      <div class="tui-main" id="main-e"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const tracks = [
+  {id:'2267387111', name:'Bengalo - All About [SELECTED031]',       status:'done', source:'sc-likes'},
+  {id:'2263082507', name:'Bengalo - Let Me Play [SELECTED031]',      status:'done', source:'sc-likes'},
+  {id:'2231274233', name:'Klint - Eternal Lie [BCCOVA18]',           status:'done', source:'sc-likes'},
+  {id:'2275081589', name:'Lewis Legacy - Blue Tribe [OTPM007]',      status:'done', source:'sc-likes'},
+  {id:'2270743331', name:'Wie es Läuft',                              status:'done', source:'sc-likes'},
+  {id:'2232613559', name:'VCS1 - Mythos | VDFD 035',                 status:'done', source:'sc-likes'},
+  {id:'2276806856', name:'No Valentia - i.know.xml [BOI019]',        status:'done', source:'sc-likes'},
+  {id:'2291234567', name:'Folamour - Dreamin (Extended)',             status:'new',  source:'sc-likes'},
+  {id:'2298765432', name:'Skee Mask - Dial 274',                     status:'new',  source:'sc-likes'},
+  {id:'0012345001', name:'Four Tet - Parallel 3',                    status:'done', source:'bc-wish'},
+  {id:'0012345002', name:'Burial - Antidawn EP',                     status:'done', source:'bc-wish'},
+  {id:'0012345003', name:'Actress - Karma & Desire (Deluxe)',        status:'new',  source:'bc-wish'},
+];
+
+const state = {
+  sources: [
+    {id:'sc-likes', name:'soundcloud-likes', adapter:'scdl', enabled:true},
+    {id:'bc-wish',  name:'bandcamp-wishlist', adapter:'bcdl', enabled:true},
+  ],
+  filter: 'all',
+  cursor: 0,
+  checked: new Array(tracks.length).fill(false),
+  dryRun: false,
+  planLimit: 10,
+};
+
+// Per-theme visual tokens for interactive elements
+const THEME = {
+  a: {on:'■', off:'□', fAct:'►', fInd:'·'},
+  b: {on:'●', off:'○', fAct:'─', fInd:' '},
+  c: {on:'✓', off:'–', fAct:'▸', fInd:' '},
+  d: {on:'◆', off:'◇', fAct:'>', fInd:' '},
+  e: {on:'◉', off:'◎', fAct:'◈', fInd:' '},
+};
+
+function getFiltered() {
+  const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
+  return tracks.map((t, i) => ({...t, origIdx: i})).filter(t => {
+    if (!enabled.has(t.source)) return false;
+    if (state.filter === 'done') return t.status === 'done';
+    if (state.filter === 'new') return t.status === 'new';
+    if (state.filter === 'selected') return state.checked[t.origIdx];
+    return true;
+  });
+}
+
+function getCounts() {
+  const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
+  let all=0, done=0, newt=0, sel=0;
+  tracks.forEach((t, i) => {
+    if (!enabled.has(t.source)) return;
+    all++; if(t.status==='done') done++; if(t.status==='new') newt++; if(state.checked[i]) sel++;
+  });
+  return {all, done, new:newt, selected:sel};
+}
+
+function srcTotal(id) { return tracks.filter(t => t.source === id).length; }
+
+// Global handlers (called from inline onclick)
+window.toggleSource = id => {
+  const s = state.sources.find(s => s.id === id);
+  if (s) { s.enabled = !s.enabled; state.cursor = 0; renderAll(); }
+};
+window.setFilter = f => { state.filter = f; state.cursor = 0; renderAll(); };
+window.setCursor = i => { state.cursor = i; renderAll(); };
+window.toggleCheck = (i, ev) => { ev.stopPropagation(); state.checked[i] = !state.checked[i]; renderAll(); };
+window.toggleDry = () => { state.dryRun = !state.dryRun; renderAll(); };
+
+function renderSidebar(did) {
+  const th = THEME[did];
+  const counts = getCounts();
+  const filters = [
+    {id:'all',      label:'All',        count: counts.all},
+    {id:'done',     label:'Downloaded', count: counts.done},
+    {id:'new',      label:'New',        count: counts.new},
+    {id:'selected', label:'Selected',   count: counts.selected},
+  ];
+
+  document.getElementById(`sb-${did}`).innerHTML = `
+    <div class="sb-section">
+      <div class="sb-section-label">Sources</div>
+      ${state.sources.map(src => `
+        <div class="sb-source${src.enabled ? '' : ' off'}" onclick="toggleSource('${src.id}')">
+          <span class="sb-source-toggle">${src.enabled ? th.on : th.off}</span>
+          <span class="sb-source-name">${src.name}</span>
+          <span class="sb-source-count">${srcTotal(src.id)}</span>
+        </div>`).join('')}
+    </div>
+    <hr class="sb-divider">
+    <div class="sb-section">
+      <div class="sb-section-label">Filters</div>
+      ${filters.map(f => `
+        <div class="sb-filter${state.filter === f.id ? ' active' : ''}" onclick="setFilter('${f.id}')">
+          <span class="sb-filter-indicator">${state.filter === f.id ? th.fAct : th.fInd}</span>
+          <span class="sb-filter-label">${f.label}</span>
+          <span class="sb-filter-count">${f.count}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderMain(did) {
+  const filtered = getFiltered();
+  const selCount = state.checked.filter(Boolean).length;
+
+  document.getElementById(`main-${did}`).innerHTML = `
+    <div class="main-topbar">
+      <span class="badge badge-run">● RUN</span>
+      <span class="badge ${state.dryRun ? 'badge-dry-on' : 'badge-dry-off'}" onclick="toggleDry()">DRY-RUN: ${state.dryRun ? 'ON' : 'OFF'}</span>
+      <span class="badge badge-limit">LIMIT: ${state.planLimit}</span>
+      <div class="topbar-right">selected: <span>${selCount}</span> / ${filtered.length}</div>
+    </div>
+    <div class="main-shortcuts">
+      <span class="kb"><kbd>j/k</kbd> move</span>
+      <span class="kb"><kbd>space</kbd> toggle</span>
+      <span class="kb"><kbd>a</kbd> select all</span>
+      <span class="kb"><kbd>n</kbd> clear</span>
+      <span class="kb"><kbd>d</kbd> dry-run</span>
+      <span class="kb"><kbd>enter</kbd> run</span>
+      <span class="kb"><kbd>esc</kbd> back</span>
+    </div>
+    <div class="main-table-wrap">
+      <table class="main-table">
+        <thead>
+          <tr>
+            <th class="t-num">#</th>
+            <th class="t-chk"></th>
+            <th>TRACK</th>
+            <th class="t-status">STATUS</th>
+            <th class="t-id">ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.length === 0
+            ? `<tr class="empty-row"><td colspan="5">no tracks match current filters</td></tr>`
+            : filtered.map((t, vi) => `
+              <tr class="t-row${t.origIdx === state.cursor ? ' t-cursor' : ''}" onclick="setCursor(${t.origIdx})">
+                <td class="t-num">${vi + 1}</td>
+                <td class="t-chk-cell" onclick="toggleCheck(${t.origIdx}, event)">
+                  <span class="${state.checked[t.origIdx] ? 'chk-on' : 'chk-off'}">${state.checked[t.origIdx] ? '■' : '□'}</span>
+                </td>
+                <td>${t.name}</td>
+                <td><span class="status-pill status-${t.status}">${t.status}</span></td>
+                <td class="t-id">${t.id}</td>
+              </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="main-footer">
+      <div class="footer-stat">selected: <span>${selCount}</span> / ${filtered.length}</div>
+      <div class="footer-prog">
+        ${filtered.map(t => `<div class="prog-seg" style="background:${state.checked[t.origIdx] ? 'var(--accent)' : 'var(--border)'}"></div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderAll() {
+  ['a','b','c','d','e'].forEach(did => { renderSidebar(did); renderMain(did); });
+}
+
+function switchDesign(did) {
+  document.querySelectorAll('.design-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.designs-nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById(`panel-${did}`).classList.add('active');
+  document.querySelectorAll('.designs-nav button')[['a','b','c','d','e'].indexOf(did)].classList.add('active');
+}
+
+renderAll();
+</script>
+</body>
+</html>

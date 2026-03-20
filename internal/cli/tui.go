@@ -52,6 +52,7 @@ type tuiScreen int
 
 const (
 	tuiScreenMenu tuiScreen = iota
+	tuiScreenInteractiveSync
 	tuiScreenSync
 	tuiScreenDoctor
 	tuiScreenValidate
@@ -60,6 +61,13 @@ const (
 
 const tuiDefaultPlanLimit = 10
 const tuiMinPlanLimit = 1
+
+type tuiSyncWorkflowMode string
+
+const (
+	tuiSyncWorkflowInteractive tuiSyncWorkflowMode = "interactive"
+	tuiSyncWorkflowStandard    tuiSyncWorkflowMode = "standard"
+)
 
 type tuiRootModel struct {
 	app           *AppContext
@@ -82,7 +90,7 @@ func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
 	return tuiRootModel{
 		app:           app,
 		debugMessages: debugMessages,
-		menuItems:     []string{"sync", "doctor", "validate", "init", "quit"},
+		menuItems:     []string{"interactive sync", "sync", "doctor", "validate", "init", "quit"},
 		screen:        tuiScreenMenu,
 	}
 }
@@ -117,9 +125,13 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				switch m.menuItems[m.menuCursor] {
+				case "interactive sync":
+					m.screen = tuiScreenInteractiveSync
+					m.syncModel = newTUISyncModel(m.app, tuiSyncWorkflowInteractive)
+					return m, m.syncModel.Init()
 				case "sync":
 					m.screen = tuiScreenSync
-					m.syncModel = newTUISyncModel(m.app)
+					m.syncModel = newTUISyncModel(m.app, tuiSyncWorkflowStandard)
 					return m, m.syncModel.Init()
 				case "doctor":
 					m.screen = tuiScreenDoctor
@@ -145,7 +157,7 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.screen {
-	case tuiScreenSync:
+	case tuiScreenInteractiveSync, tuiScreenSync:
 		next, cmd := m.syncModel.Update(msg)
 		m.syncModel = next
 		return m, cmd
@@ -168,7 +180,7 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 	switch m.screen {
-	case tuiScreenSync:
+	case tuiScreenInteractiveSync, tuiScreenSync:
 		// Keep esc available for in-flow sync actions (for example plan cancel).
 		return !m.syncModel.running &&
 			!m.syncModel.hasActivePlanPrompt() &&
@@ -200,7 +212,7 @@ func (m tuiRootModel) View() string {
 			lines = append(lines, fmt.Sprintf("%s %s", cursor, item))
 		}
 		body = strings.Join(lines, "\n")
-	case tuiScreenSync:
+	case tuiScreenInteractiveSync, tuiScreenSync:
 		body = m.syncModel.View()
 	case tuiScreenDoctor:
 		body = m.doctorModel.View()
@@ -219,6 +231,7 @@ func (m tuiRootModel) View() string {
 
 type tuiSyncModel struct {
 	app                  *AppContext
+	mode                 tuiSyncWorkflowMode
 	cfg                  config.Config
 	cfgLoaded            bool
 	cfgErr               error
@@ -234,7 +247,6 @@ type tuiSyncModel struct {
 	askOnExistingSet     bool
 	scanGaps             bool
 	noPreflight          bool
-	planEnabled          bool
 	planLimit            int
 	running              bool
 	cancelRequested      bool
@@ -334,13 +346,14 @@ type tuiPlanPromptState struct {
 	selected map[int]bool
 }
 
-func newTUISyncModel(app *AppContext) tuiSyncModel {
+func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 	dryRun := false
 	if app != nil {
 		dryRun = app.Opts.DryRun
 	}
 	return tuiSyncModel{
 		app:       app,
+		mode:      mode,
 		selected:  map[string]bool{},
 		events:    []string{},
 		dryRun:    dryRun,
@@ -575,15 +588,14 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				m.selected[sourceID] = !m.selected[sourceID]
 			}
 			return m, nil
-		case "p":
-			m.planEnabled = !m.planEnabled
-			m.validationErr = ""
-			return m, nil
 		case "d":
 			m.dryRun = !m.dryRun
 			m.validationErr = ""
 			return m, nil
 		case "a":
+			if m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			if m.askOnExistingSet {
 				m.askOnExisting = false
 				m.askOnExistingSet = false
@@ -594,10 +606,16 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			return m, nil
 		case "g":
+			if m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			m.scanGaps = !m.scanGaps
 			m.validationErr = ""
 			return m, nil
 		case "f":
+			if m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			m.noPreflight = !m.noPreflight
 			m.validationErr = ""
 			return m, nil
@@ -614,6 +632,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.timeoutInputErr = ""
 			return m, nil
 		case "l":
+			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			m.timeoutInputActive = false
 			m.timeoutInput = ""
 			m.timeoutInputErr = ""
@@ -622,6 +643,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.planLimitInputErr = ""
 			return m, nil
 		case "]":
+			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			if m.planLimit == 0 {
 				m.planLimit = tuiDefaultPlanLimit
 			} else {
@@ -630,6 +654,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			return m, nil
 		case "[":
+			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			if m.planLimit == 0 {
 				m.planLimit = tuiDefaultPlanLimit
 			} else if m.planLimit > tuiMinPlanLimit {
@@ -638,6 +665,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			return m, nil
 		case "u":
+			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
 			if m.planLimit == 0 {
 				m.planLimit = tuiDefaultPlanLimit
 			} else {
@@ -735,19 +765,7 @@ func (m tuiSyncModel) startRunCmd(runCtx context.Context) tea.Cmd {
 			Runner:  engine.NewSubprocessRunner(m.app.IO.In, io.Discard, io.Discard),
 			Emitter: emitter,
 		}
-		req := workflows.SyncRequest{
-			SourceIDs:        selectedIDs,
-			DryRun:           m.dryRun,
-			TimeoutOverride:  m.timeoutOverride,
-			Plan:             m.planEnabled,
-			PlanLimit:        m.planLimit,
-			AllowPrompt:      m.app != nil && !m.app.Opts.NoInput,
-			AskOnExisting:    m.askOnExisting,
-			AskOnExistingSet: m.askOnExistingSet,
-			ScanGaps:         m.scanGaps,
-			NoPreflight:      m.noPreflight,
-			TrackStatus:      engine.TrackStatusNames,
-		}
+		req := m.buildSyncRequest(selectedIDs)
 		sourceByID := map[string]config.Source{}
 		for _, source := range m.sources {
 			sourceByID[source.ID] = source
@@ -780,12 +798,21 @@ func (m tuiSyncModel) View() string {
 		return m.interactionPromptView()
 	}
 	lines := []string{
-		"Sync Workflow",
-		"j/k: move  space: toggle source  p: plan  d: dry-run  a: ask-existing  g: scan-gaps  f: no-preflight  t: timeout  enter: run  esc: back",
-		"[/]: plan-limit  l: type limit  u: unlimited  x/ctrl+c: cancel active run",
+		m.workflowTitle(),
 		fmt.Sprintf("dry_run=%t  timeout=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride)),
-		fmt.Sprintf("plan_mode=%t  plan_limit=%s", m.planEnabled, formatPlanLimit(m.planLimit)),
-		fmt.Sprintf("ask_on_existing=%s  scan_gaps=%t  no_preflight=%t", formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight),
+	}
+	if m.isInteractiveSyncWorkflow() {
+		lines = append(lines,
+			"j/k: move  space: toggle source  d: dry-run  t: timeout  enter: run  esc: back",
+			"[/]: plan-limit  l: type limit  u: unlimited  x/ctrl+c: cancel active run",
+			fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit)),
+		)
+	} else {
+		lines = append(lines,
+			"j/k: move  space: toggle source  d: dry-run  a: ask-existing  g: scan-gaps  f: no-preflight  t: timeout  enter: run  esc: back",
+			"x/ctrl+c: cancel active run",
+			fmt.Sprintf("ask_on_existing=%s  scan_gaps=%t  no_preflight=%t", formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight),
+		)
 	}
 	if m.planLimitInputActive {
 		lines = append(lines,
@@ -883,6 +910,37 @@ func formatPlanLimit(limit int) string {
 		return "unlimited"
 	}
 	return fmt.Sprintf("%d", limit)
+}
+
+func (m tuiSyncModel) isInteractiveSyncWorkflow() bool {
+	return m.mode == tuiSyncWorkflowInteractive
+}
+
+func (m tuiSyncModel) workflowTitle() string {
+	if m.isInteractiveSyncWorkflow() {
+		return "Interactive Sync Workflow"
+	}
+	return "Sync Workflow"
+}
+
+func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncRequest {
+	req := workflows.SyncRequest{
+		SourceIDs:       selectedIDs,
+		DryRun:          m.dryRun,
+		TimeoutOverride: m.timeoutOverride,
+		AllowPrompt:     m.app != nil && !m.app.Opts.NoInput,
+		TrackStatus:     engine.TrackStatusNames,
+	}
+	if m.isInteractiveSyncWorkflow() {
+		req.Plan = true
+		req.PlanLimit = m.planLimit
+		return req
+	}
+	req.AskOnExisting = m.askOnExisting
+	req.AskOnExistingSet = m.askOnExistingSet
+	req.ScanGaps = m.scanGaps
+	req.NoPreflight = m.noPreflight
+	return req
 }
 
 func formatTimeoutOverride(timeout time.Duration) string {
@@ -1163,13 +1221,13 @@ func tuiDetailBool(details map[string]any, key string) bool {
 }
 
 func validateTUISyncOptions(m tuiSyncModel) string {
-	if m.planEnabled && m.scanGaps {
+	if m.isInteractiveSyncWorkflow() && m.scanGaps {
 		return "plan mode cannot be combined with scan-gaps"
 	}
-	if m.planEnabled && m.askOnExistingSet {
+	if m.isInteractiveSyncWorkflow() && m.askOnExistingSet {
 		return "plan mode cannot be combined with ask-on-existing"
 	}
-	if m.planEnabled && m.noPreflight {
+	if m.isInteractiveSyncWorkflow() && m.noPreflight {
 		return "plan mode cannot be combined with no-preflight"
 	}
 	return ""
@@ -1212,7 +1270,7 @@ func (m tuiSyncModel) interactionPromptView() string {
 			defaultLabel = "yes"
 		}
 		return strings.Join([]string{
-			"Sync Workflow",
+			m.workflowTitle(),
 			fmt.Sprintf("[%s] confirm", state.sourceID),
 			state.prompt,
 			fmt.Sprintf("y: yes  n: no  enter: default (%s)  esc/q: cancel run", defaultLabel),
@@ -1223,14 +1281,14 @@ func (m tuiSyncModel) interactionPromptView() string {
 			displayInput = strings.Repeat("*", len(state.input))
 		}
 		return strings.Join([]string{
-			"Sync Workflow",
+			m.workflowTitle(),
 			fmt.Sprintf("[%s] input", state.sourceID),
 			state.prompt,
 			fmt.Sprintf("value=%q", displayInput),
 			"type to edit  backspace: delete  enter: submit  esc/q: cancel run",
 		}, "\n")
 	default:
-		return "Sync Workflow\nUnknown prompt state"
+		return m.workflowTitle() + "\nUnknown prompt state"
 	}
 }
 
@@ -1248,7 +1306,7 @@ func (m tuiSyncModel) planPromptView() string {
 		modeLabel = "dry-run"
 	}
 	lines := []string{
-		"Sync Workflow",
+		m.workflowTitle(),
 		fmt.Sprintf("udl sync --plan  source=%s  mode=%s  plan-limit=%s", state.sourceID, modeLabel, limitLabel),
 		fmt.Sprintf("type=%s  adapter=%s", state.details.SourceType, state.details.Adapter),
 		fmt.Sprintf("target_dir=%s", state.details.TargetDir),

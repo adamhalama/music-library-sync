@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TUI Design Concepts v4</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',monospace;background:#111;color:#ccc;padding:20px}
+.label-tag{font-family:sans-serif;font-size:11px;font-weight:500;color:#555;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+
+/* FRAME */
+.tui-frame{border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+
+/* TITLEBAR */
+.tui-titlebar{display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.tui-dots{display:flex;gap:5px}
+.tui-dots span{width:10px;height:10px;border-radius:50%}
+.tui-appname{font-size:10px;letter-spacing:.1em;color:var(--muted);margin-left:6px}
+
+/* BODY */
+.tui-body{display:flex;background:var(--bg);align-items:stretch;min-height:420px}
+
+/* SIDEBAR */
+.tui-sidebar{width:190px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0}
+.sb-section{padding:0 10px;margin-bottom:14px}
+.sb-section-label{font-size:8px;letter-spacing:.12em;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px;padding:0 6px}
+.sb-source{display:flex;align-items:flex-start;gap:7px;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background .1s;color:var(--text-sb)}
+.sb-source:hover{background:var(--sb-hover)}
+.sb-source.off{opacity:.4}
+.sb-source-toggle{font-size:11px;flex-shrink:0;width:14px;text-align:center;margin-top:2px}
+.sb-source-body{flex:1;min-width:0}
+.sb-source-name{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.sb-source-adapter{font-size:8px;color:var(--dim);margin-top:2px;letter-spacing:.03em}
+.sb-source-count{font-size:9px;padding:1px 5px;border-radius:3px;background:var(--count-bg);color:var(--count-text);flex-shrink:0;margin-top:3px}
+.sb-filter{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background .1s;font-size:10px;color:var(--text-sb)}
+.sb-filter:hover{background:var(--sb-hover)}
+.sb-filter.active{background:var(--sb-active-bg);color:var(--sb-active-text)}
+.sb-filter-indicator{font-size:10px;width:12px;text-align:center;flex-shrink:0}
+.sb-filter.active .sb-filter-indicator{color:var(--accent)}
+.sb-filter-label{flex:1}
+.sb-filter-count{font-size:9px;color:var(--dim)}
+.sb-filter.active .sb-filter-count{color:var(--accent);font-weight:700}
+.sb-divider{margin:4px 16px;border:none;border-top:1px solid var(--border)}
+
+/* MAIN */
+.tui-main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+/* TOPBAR */
+.main-topbar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.badge{font-size:10px;padding:2px 8px;border-radius:3px;letter-spacing:.05em;font-weight:600}
+.badge-run{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.badge-stopped{background:#2a0f0f;color:#f85149;border:1px solid #4a1515}
+.badge-dry-off{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border);cursor:pointer}
+.badge-dry-on{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border);cursor:pointer}
+.badge-limit{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);cursor:pointer;user-select:none}
+.badge-timeout{background:var(--count-bg);color:var(--muted);border:1px solid var(--border)}
+.topbar-sep{color:var(--border)}
+.topbar-right{margin-left:auto;font-size:10px;color:var(--muted)}
+.topbar-right span{color:var(--text)}
+
+/* CMD BAR */
+.main-cmdbar{padding:5px 14px;background:var(--bg);border-bottom:1px solid var(--border-light);font-size:9px;color:var(--dim);line-height:1.8}
+.cmd-line{display:flex;gap:0;flex-wrap:wrap;align-items:center}
+.cmd-token{display:inline-flex;align-items:center;gap:2px;margin-right:12px;white-space:nowrap}
+.cmd-key{color:var(--dim)}
+.cmd-val{color:var(--muted)}
+.cmd-program{color:var(--text);font-weight:600;margin-right:12px}
+.cmd-flag{color:var(--muted)}
+
+/* RUN STATUS BAR */
+.main-runbar{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--err-bg);border-bottom:1px solid var(--err-border);font-size:10px}
+.main-runbar.hidden{display:none}
+.runbar-icon{color:var(--err)}
+.runbar-msg{color:var(--err)}
+.runbar-detail{color:var(--err-dim);flex:1}
+.runbar-dismiss{margin-left:auto;color:var(--dim);cursor:pointer;font-size:9px}
+.runbar-dismiss:hover{color:var(--muted)}
+
+/* SHORTCUTS */
+.main-shortcuts{display:flex;gap:10px;flex-wrap:wrap;padding:5px 14px;background:var(--bg);border-bottom:1px solid var(--border-light)}
+.kb{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;white-space:nowrap}
+.kb kbd{font-family:inherit;font-size:9px;background:var(--kbd-bg);border:1px solid var(--kbd-border);border-bottom:2px solid var(--kbd-border);color:var(--text);border-radius:3px;padding:1px 5px}
+.kb-sep{color:var(--border);margin:0 2px}
+
+/* TABLE */
+.main-table-wrap{flex:1;overflow-y:auto}
+.main-table{width:100%;border-collapse:collapse}
+.main-table th{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;padding:5px 14px;text-align:left;color:var(--muted);background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0}
+.main-table td{padding:5px 14px;font-size:11px;border-bottom:1px solid var(--border-light);color:var(--text)}
+.t-row{cursor:pointer;transition:background .08s}
+.t-row:hover td{background:var(--row-hover)}
+.t-row.t-cursor td{background:var(--row-cursor)}
+.t-row.t-cursor td:first-child{border-left:2px solid var(--accent);padding-left:12px}
+.t-row.t-locked{opacity:.5;cursor:default}
+.t-row.t-locked:hover td{background:transparent}
+.t-num{color:var(--dim);width:28px;font-size:10px;text-align:right}
+.t-chk{width:26px}
+.t-chk-cell{cursor:pointer}
+.t-row.t-locked .t-chk-cell{cursor:default}
+.t-status{width:148px}
+.t-id{width:80px;text-align:right;font-size:9px;color:var(--dim)}
+.chk-on{color:var(--green)}
+.chk-off{color:var(--border)}
+.chk-locked{color:var(--dim)}
+.status-pill{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
+.status-already_downloaded{color:var(--dim);font-size:9px;letter-spacing:.03em}
+.status-pending{background:var(--accent-bg);color:var(--accent);border-radius:10px;padding:2px 7px}
+.status-failed{background:#2a0f0f;color:#f85149;border-radius:10px;padding:2px 7px}
+
+/* FOOTER */
+.main-footer{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg2);border-top:1px solid var(--border)}
+.footer-stat{font-size:10px;color:var(--muted)}
+.footer-stat span{color:var(--accent);font-weight:700}
+.footer-prog{display:flex;gap:2px;align-items:center}
+.prog-seg{width:10px;height:4px;border-radius:2px}
+.empty-row td{text-align:center;padding:20px;color:var(--dim);font-style:italic}
+
+/* THEME: CARBON */
+.theme-a{
+  --bg:#0d1117;--bg2:#161b22;--bg-sidebar:#161b22;
+  --border:#21262d;--border-light:#161b22;
+  --text:#c9d1d9;--muted:#8b949e;--dim:#484f58;
+  --accent:#58a6ff;--accent-bg:#1d2d3e;--accent-border:#1f6feb;
+  --green:#3fb950;--green-bg:#1a4730;--green-border:#2ea043;
+  --yellow:#d29922;--yellow-bg:#2d2016;--yellow-border:#9e6a03;
+  --text-sb:#8b949e;--sb-hover:#1c2128;--sb-active-bg:#1c2128;--sb-active-text:#c9d1d9;
+  --row-hover:#161b22;--row-cursor:#1c2128;
+  --count-bg:#21262d;--count-text:#8b949e;
+  --kbd-bg:#21262d;--kbd-border:#30363d;
+  --err:#f85149;--err-dim:#8b3030;--err-bg:#160a0a;--err-border:#3d1515;
+}
+</style>
+</head>
+<body>
+
+<div class="label-tag">v4 · Carbon — Interactive sync workflow, full keybinds, command bar, run status</div>
+
+<div class="tui-frame theme-a">
+  <div class="tui-titlebar">
+    <div class="tui-dots">
+      <span style="background:#ff5f57"></span>
+      <span style="background:#febc2e"></span>
+      <span style="background:#28c840"></span>
+    </div>
+    <div class="tui-appname">UDL · SYNC WORKFLOW</div>
+  </div>
+  <div class="tui-body">
+    <div class="tui-sidebar" id="sidebar"></div>
+    <div class="tui-main" id="main"></div>
+  </div>
+</div>
+
+<script>
+const tracks = [
+  {id:'2267387111', name:'Premiere: Bengalo - All About [SELECTED031]',               status:'already_downloaded', source:'sc-likes'},
+  {id:'2263082507', name:'PREMIERE: Bengalo – Let Me Play [SELECTED031]',             status:'already_downloaded', source:'sc-likes'},
+  {id:'2231274233', name:'DS Premiere: Klint - Eternal Lie [BCCOVA18]',               status:'already_downloaded', source:'sc-likes'},
+  {id:'2275081589', name:'FREE DL : Lewis Legacy - Blue Tribe [OTPM007]',             status:'already_downloaded', source:'sc-likes'},
+  {id:'2270743331', name:'Wie es Läuft',                                               status:'already_downloaded', source:'sc-likes'},
+  {id:'2232613559', name:'VCS1 - Mythos | VDFD 035',                                  status:'already_downloaded', source:'sc-likes'},
+  {id:'2276806856', name:'ASW Premiere: No Valentia - i.know.xml [BOI019]',           status:'already_downloaded', source:'sc-likes'},
+  {id:'2291234567', name:'Folamour - Dreamin (Extended Mix)',                          status:'pending',            source:'sc-likes'},
+  {id:'2298765432', name:'Skee Mask - Dial 274',                                       status:'pending',            source:'sc-likes'},
+  {id:'0012345001', name:'Four Tet - Parallel 3',                                      status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345002', name:'Burial - Antidawn EP',                                       status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345003', name:'Actress - Karma & Desire (Deluxe)',                         status:'pending',            source:'bc-wish'},
+];
+
+const state = {
+  sources: [
+    {id:'sc-likes', name:'soundcloud-likes', type:'soundcloud', adapter:'scdl',
+     targetDir:'~/Music/downloaded/sc-likes', url:'https://soundcloud.com/janxadam', enabled:true},
+    {id:'bc-wish',  name:'bandcamp-wishlist', type:'bandcamp',  adapter:'bcdl',
+     targetDir:'~/Music/downloaded/bc-wishlist', url:'https://bandcamp.com/janxadam', enabled:true},
+  ],
+  filter: 'all',
+  cursor: 0,
+  checked: new Array(tracks.length).fill(false),
+  dryRun: false,
+  planLimit: 'unlimited',
+  timeout: 'default',
+  runStatus: {show: true, type: 'error', msg: 'Run failed: sync interrupted', detail: 'sync interrupted'},
+};
+
+function isToggleable(t) { return t.status !== 'already_downloaded'; }
+
+function getFiltered() {
+  const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
+  return tracks.map((t, i) => ({...t, origIdx: i})).filter(t => {
+    if (!enabled.has(t.source)) return false;
+    if (state.filter === 'already_downloaded') return t.status === 'already_downloaded';
+    if (state.filter === 'pending') return t.status === 'pending';
+    if (state.filter === 'selected') return state.checked[t.origIdx];
+    return true;
+  });
+}
+
+function getCounts() {
+  const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
+  let all=0, downloaded=0, pending=0, sel=0;
+  tracks.forEach((t, i) => {
+    if (!enabled.has(t.source)) return;
+    all++;
+    if (t.status === 'already_downloaded') downloaded++;
+    if (t.status === 'pending') pending++;
+    if (state.checked[i]) sel++;
+  });
+  return {all, downloaded, pending, selected: sel};
+}
+
+function srcTotal(id) { return tracks.filter(t => t.source === id).length; }
+function getActiveSrc() { return state.sources.find(s => s.enabled) || state.sources[0]; }
+
+window.toggleSource = id => {
+  const s = state.sources.find(s => s.id === id);
+  if (s) { s.enabled = !s.enabled; state.cursor = 0; render(); }
+};
+window.setFilter = f => { state.filter = f; state.cursor = 0; render(); };
+window.setCursor = i => { state.cursor = i; render(); };
+window.toggleCheck = (i, ev) => {
+  ev.stopPropagation();
+  if (tracks[i].status === 'already_downloaded') return;
+  state.checked[i] = !state.checked[i];
+  render();
+};
+window.toggleDry = () => { state.dryRun = !state.dryRun; render(); };
+window.cyclePlanLimit = () => {
+  const steps = ['unlimited', '10', '25', '50', '100'];
+  const cur = steps.indexOf(state.planLimit);
+  state.planLimit = steps[(cur + 1) % steps.length];
+  render();
+};
+window.dismissRun = () => { state.runStatus.show = false; render(); };
+
+function renderSidebar() {
+  const counts = getCounts();
+  const filters = [
+    {id:'all',                label:'All',              count: counts.all},
+    {id:'already_downloaded', label:'Downloaded',       count: counts.downloaded},
+    {id:'pending',            label:'Pending',          count: counts.pending},
+    {id:'selected',           label:'Selected',         count: counts.selected},
+  ];
+
+  document.getElementById('sidebar').innerHTML = `
+    <div class="sb-section">
+      <div class="sb-section-label">Sources</div>
+      ${state.sources.map(src => `
+        <div class="sb-source${src.enabled ? '' : ' off'}" onclick="toggleSource('${src.id}')">
+          <span class="sb-source-toggle">${src.enabled ? '■' : '□'}</span>
+          <div class="sb-source-body">
+            <span class="sb-source-name">${src.name}</span>
+            <span class="sb-source-adapter">${src.type}/${src.adapter}</span>
+          </div>
+          <span class="sb-source-count">${srcTotal(src.id)}</span>
+        </div>`).join('')}
+    </div>
+    <hr class="sb-divider">
+    <div class="sb-section">
+      <div class="sb-section-label">Filters</div>
+      ${filters.map(f => `
+        <div class="sb-filter${state.filter === f.id ? ' active' : ''}" onclick="setFilter('${f.id}')">
+          <span class="sb-filter-indicator">${state.filter === f.id ? '►' : '·'}</span>
+          <span class="sb-filter-label">${f.label}</span>
+          <span class="sb-filter-count">${f.count}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderMain() {
+  const filtered = getFiltered();
+  const counts = getCounts();
+  const selCount = state.checked.filter(Boolean).length;
+  const toggleableCount = tracks.filter(isToggleable).length;
+  const src = getActiveSrc();
+
+  const runbarHtml = state.runStatus.show ? `
+    <div class="main-runbar">
+      <span class="runbar-icon">✕</span>
+      <span class="runbar-msg">${state.runStatus.msg}</span>
+      <span class="runbar-detail"> — ${state.runStatus.detail}</span>
+      <span class="runbar-dismiss" onclick="dismissRun()">dismiss</span>
+    </div>` : '';
+
+  document.getElementById('main').innerHTML = `
+    <div class="main-topbar">
+      <span class="badge badge-run">● RUN</span>
+      <span class="badge ${state.dryRun ? 'badge-dry-on' : 'badge-dry-off'}" onclick="toggleDry()">DRY-RUN: ${state.dryRun ? 'ON' : 'OFF'}</span>
+      <span class="badge badge-limit" onclick="cyclePlanLimit()" title="[/] to adjust">LIMIT: ${state.planLimit}</span>
+      <span class="badge badge-timeout">TIMEOUT: ${state.timeout}</span>
+      <div class="topbar-right">selected: <span>${selCount}</span> / ${toggleableCount} toggleable</div>
+    </div>
+    <div class="main-cmdbar">
+      <div class="cmd-line">
+        <span class="cmd-program">udl sync --plan</span>
+        <span class="cmd-token"><span class="cmd-key">source=</span><span class="cmd-val">${src.name}</span></span>
+        <span class="cmd-token"><span class="cmd-key">mode=</span><span class="cmd-val">${state.dryRun ? 'dry-run' : 'live'}</span></span>
+        <span class="cmd-token"><span class="cmd-key">plan-limit=</span><span class="cmd-val">${state.planLimit}</span></span>
+      </div>
+      <div class="cmd-line">
+        <span class="cmd-token"><span class="cmd-key">type=</span><span class="cmd-val">${src.type}</span></span>
+        <span class="cmd-token"><span class="cmd-key">adapter=</span><span class="cmd-val">${src.adapter}</span></span>
+        <span class="cmd-token"><span class="cmd-key">target_dir=</span><span class="cmd-val">${src.targetDir}</span></span>
+        <span class="cmd-token"><span class="cmd-key">url=</span><span class="cmd-val">${src.url}</span></span>
+      </div>
+    </div>
+    ${runbarHtml}
+    <div class="main-shortcuts">
+      <span class="kb"><kbd>j</kbd><kbd>k</kbd> move</span>
+      <span class="kb"><kbd>space</kbd> toggle</span>
+      <span class="kb"><kbd>a</kbd> select all</span>
+      <span class="kb"><kbd>n</kbd> clear</span>
+      <span class="kb"><kbd>d</kbd> dry-run</span>
+      <span class="kb"><kbd>t</kbd> timeout</span>
+      <span class="kb"><kbd>[</kbd><kbd>]</kbd> limit</span>
+      <span class="kb"><kbd>l</kbd> type limit</span>
+      <span class="kb"><kbd>u</kbd> unlimited</span>
+      <span class="kb"><kbd>enter</kbd> run</span>
+      <span class="kb"><kbd>x</kbd> cancel</span>
+      <span class="kb"><kbd>esc</kbd> back</span>
+      <span class="kb"><kbd>q</kbd> quit</span>
+    </div>
+    <div class="main-table-wrap">
+      <table class="main-table">
+        <thead>
+          <tr>
+            <th class="t-num">#</th>
+            <th class="t-chk"></th>
+            <th>TRACK</th>
+            <th class="t-status">STATUS</th>
+            <th class="t-id">ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.length === 0
+            ? `<tr class="empty-row"><td colspan="5">no tracks match current filters</td></tr>`
+            : filtered.map((t, vi) => {
+                const locked = t.status === 'already_downloaded';
+                const checked = state.checked[t.origIdx];
+                const isCursor = t.origIdx === state.cursor;
+                return `
+              <tr class="t-row${isCursor ? ' t-cursor' : ''}${locked ? ' t-locked' : ''}" onclick="setCursor(${t.origIdx})">
+                <td class="t-num">${vi + 1}</td>
+                <td class="t-chk-cell" onclick="toggleCheck(${t.origIdx}, event)">
+                  <span class="${locked ? 'chk-locked' : checked ? 'chk-on' : 'chk-off'}">${locked ? '–' : checked ? '■' : '□'}</span>
+                </td>
+                <td>${t.name}</td>
+                <td><span class="status-${t.status}">${t.status === 'already_downloaded' ? 'already_downloaded' : t.status}</span></td>
+                <td class="t-id">${t.id}</td>
+              </tr>`;
+              }).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="main-footer">
+      <div class="footer-stat">Selected: <span>${selCount}</span>/${toggleableCount} toggleable tracks</div>
+      <div class="footer-prog">
+        ${tracks.filter(t => isToggleable(t)).map(t => `<div class="prog-seg" style="background:${state.checked[t.origIdx] ? 'var(--accent)' : 'var(--border)'}"></div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function render() {
+  renderSidebar();
+  renderMain();
+}
+
+render();
+</script>
+</body>
+</html>
