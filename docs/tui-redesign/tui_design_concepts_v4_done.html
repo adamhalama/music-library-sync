@@ -116,6 +116,9 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 .footer-stat .c-skip{color:var(--dim)}
 .footer-sep{color:var(--border);margin:0 10px}
 .footer-elapsed{margin-left:auto;font-size:10px;color:var(--dim)}
+.footer-prog-wrap{width:100px;height:4px;background:var(--border);border-radius:2px;flex-shrink:0;margin:0 4px}
+.footer-prog-fill{height:4px;background:var(--green);border-radius:2px}
+.footer-pct{font-size:10px;color:var(--green);margin-right:4px}
 
 /* THEME: CARBON */
 .theme-a{
@@ -233,6 +236,7 @@ function getFiltered() {
   const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
   return tracks.map((t,i) => ({...t, origIdx:i})).filter(t => {
     if (!enabled.has(t.source)) return false;
+    if (state.filter === 'pending')            return t.status === 'pending';
     if (state.filter === 'done')               return t.status === 'done';
     if (state.filter === 'failed')             return t.status === 'failed';
     if (state.filter === 'already_downloaded') return t.status === 'already_downloaded';
@@ -254,7 +258,8 @@ function renderSidebar() {
   const counts = getCounts();
   const filters = [
     {id:'all',                label:'All',          count: counts.all},
-    {id:'done',               label:'Downloaded',   count: counts.done},
+    {id:'pending',            label:'Pending',      count: counts.pending || 0},
+    {id:'done',               label:'Done',         count: counts.done},
     {id:'failed',             label:'Failed',       count: counts.failed},
     {id:'already_downloaded', label:'Skipped',      count: counts.already_downloaded},
   ];
@@ -361,6 +366,9 @@ function renderMain() {
       <span class="footer-sep">·</span>
       <div class="footer-stat"><span class="c-skip">${counts.already_downloaded} skipped</span></div>
       ${counts.failed ? `<span class="footer-sep">·</span><div class="footer-stat"><span class="c-fail">${counts.failed} failed</span></div>` : ''}
+      <span class="footer-sep">·</span>
+      <div class="footer-prog-wrap"><div class="footer-prog-fill" style="width:100%"></div></div>
+      <span class="footer-pct">100%</span>
       <div class="footer-elapsed">1:42 elapsed</div>
     </div>`;
 }

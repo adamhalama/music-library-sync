@@ -242,9 +242,10 @@ function getFiltered() {
   const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
   return tracks.map((t,i) => ({...t, origIdx:i})).filter(t => {
     if (!enabled.has(t.source)) return false;
-    if (state.filter === 'already_downloaded') return t.status === 'already_downloaded';
-    if (state.filter === 'done') return t.status === 'done';
     if (state.filter === 'pending') return t.status === 'pending' || t.status === 'downloading';
+    if (state.filter === 'done') return t.status === 'done';
+    if (state.filter === 'failed') return t.status === 'failed';
+    if (state.filter === 'already_downloaded') return t.status === 'already_downloaded';
     return true;
   });
 }
@@ -263,8 +264,9 @@ function renderSidebar() {
   const counts = getCounts();
   const filters = [
     {id:'all',                label:'All',         count: counts.all},
-    {id:'done',               label:'Done',        count: counts.done},
     {id:'pending',            label:'Pending',     count: counts.pending + counts.downloading},
+    {id:'done',               label:'Done',        count: counts.done},
+    {id:'failed',             label:'Failed',      count: counts.failed},
     {id:'already_downloaded', label:'Skipped',     count: counts.already_downloaded},
   ];
   document.getElementById('sidebar').innerHTML = `
@@ -362,6 +364,8 @@ function renderMain() {
       </div>
     </div>
     <div class="main-footer">
+      <div class="footer-stat">In progress</div>
+      <span class="footer-sep">·</span>
       <div class="footer-stat"><span class="c-done">↓ ${counts.done} done</span></div>
       <span class="footer-sep">·</span>
       <div class="footer-stat"><span class="c-skip">${counts.already_downloaded} skipped</span></div>

@@ -108,11 +108,24 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 .status-pending{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
 .status-failed{background:#2a0f0f;color:#f85149;border:1px solid #4a1515;border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
 
+/* ACTIVITY LOG */
+.activity-panel{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg)}
+.activity-header{display:flex;align-items:center;gap:8px;padding:4px 14px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.activity-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--muted)}
+.activity-toggle{margin-left:auto;font-size:9px;color:var(--dim)}
+.activity-log{height:96px;overflow-y:auto;padding:6px 0}
+.activity-log-empty{height:96px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);font-style:italic}
+
 /* FOOTER */
 .main-footer{display:flex;align-items:center;padding:6px 14px;background:var(--bg2);border-top:1px solid var(--border)}
 .footer-stat{font-size:10px;color:var(--muted)}
 .footer-stat span{color:var(--accent);font-weight:700}
+.footer-stat .c-skip{color:var(--dim)}
 .footer-sep{color:var(--border);margin:0 10px;font-size:10px}
+.footer-prog-wrap{width:100px;height:4px;background:var(--border);border-radius:2px;flex-shrink:0;margin:0 4px}
+.footer-prog-fill{height:4px;background:var(--accent);border-radius:2px}
+.footer-pct{font-size:10px;color:var(--dim);margin-right:4px}
+.footer-elapsed{margin-left:auto;font-size:10px;color:var(--dim)}
 .empty-row td{text-align:center;padding:20px;color:var(--dim);font-style:italic}
 
 /* THEME: CARBON */
@@ -215,24 +228,25 @@ function getFiltered() {
   const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
   return tracks.map((t, i) => ({...t, origIdx: i})).filter(t => {
     if (!enabled.has(t.source)) return false;
+    if (state.filter === 'pending')            return t.status === 'pending';
+    if (state.filter === 'done')               return t.status === 'done';
+    if (state.filter === 'failed')             return t.status === 'failed';
     if (state.filter === 'already_downloaded') return t.status === 'already_downloaded';
-    if (state.filter === 'pending') return t.status === 'pending';
-    if (state.filter === 'selected') return state.checked[t.origIdx];
     return true;
   });
 }
 
 function getCounts() {
   const enabled = new Set(state.sources.filter(s => s.enabled).map(s => s.id));
-  let all=0, downloaded=0, pending=0, sel=0;
+  let all=0, already_downloaded=0, pending=0, sel=0;
   tracks.forEach((t, i) => {
     if (!enabled.has(t.source)) return;
     all++;
-    if (t.status === 'already_downloaded') downloaded++;
+    if (t.status === 'already_downloaded') already_downloaded++;
     if (t.status === 'pending') pending++;
     if (state.checked[i]) sel++;
   });
-  return {all, downloaded, pending, selected: sel};
+  return {all, already_downloaded, pending, done: 0, failed: 0, selected: sel};
 }
 
 function srcTotal(id) { return tracks.filter(t => t.source === id).length; }
@@ -263,9 +277,10 @@ function renderSidebar() {
   const counts = getCounts();
   const filters = [
     {id:'all',                label:'All',              count: counts.all},
-    {id:'already_downloaded', label:'Downloaded',       count: counts.downloaded},
     {id:'pending',            label:'Pending',          count: counts.pending},
-    {id:'selected',           label:'Selected',         count: counts.selected},
+    {id:'done',               label:'Done',             count: counts.done},
+    {id:'failed',             label:'Failed',           count: counts.failed},
+    {id:'already_downloaded', label:'Skipped',          count: counts.already_downloaded},
   ];
 
   document.getElementById('sidebar').innerHTML = `
@@ -378,10 +393,22 @@ function renderMain() {
         </tbody>
       </table>
     </div>
+    <div class="activity-panel">
+      <div class="activity-header">
+        <span class="activity-title">Activity</span>
+        <span class="activity-toggle">l: toggle</span>
+      </div>
+      <div class="activity-log-empty">no activity yet</div>
+    </div>
     <div class="main-footer">
-      <div class="footer-stat">Selected: <span>${selCount}</span> / ${toggleableCount} toggleable</div>
+      <div class="footer-stat">Ready</div>
       <span class="footer-sep">·</span>
-      <div class="footer-stat">${filtered.length} shown</div>
+      <div class="footer-stat"><span>${selCount}</span> selected / ${toggleableCount} pending</div>
+      <span class="footer-sep">·</span>
+      <div class="footer-stat"><span class="c-skip">${counts.already_downloaded} skipped</span></div>
+      <span class="footer-sep">·</span>
+      <div class="footer-prog-wrap"><div class="footer-prog-fill" style="width:0%"></div></div>
+      <span class="footer-pct">0%</span>
     </div>`;
 }
 
