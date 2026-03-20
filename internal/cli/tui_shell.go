@@ -76,7 +76,7 @@ const (
 	tuiShellDefaultWidth      = 120
 	tuiShellDefaultHeight     = 36
 	tuiShellCompactBreakpoint = 110
-	tuiShellSidebarWidth      = 24
+	tuiShellSidebarWidth      = 30
 )
 
 func newTUIShellLayout(width, height int) tuiShellLayout {
@@ -377,6 +377,17 @@ func renderTUIFooter(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 		line = strings.Join(stats[:3], separator)
 	}
 	return theme.footer.Width(shellMainSectionWidth(layout)).Render(line)
+}
+
+func renderTUIModal(base string, state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
+	lines := append([]string{theme.modalTitle.Render(state.Modal.Title)}, state.Modal.Lines...)
+	boxWidth := minInt(shellMainSectionWidth(layout)-6, 72)
+	if boxWidth < 24 {
+		boxWidth = 24
+	}
+	box := theme.modalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
+	centered := lipgloss.Place(shellMainSectionWidth(layout), 0, lipgloss.Center, lipgloss.Top, box)
+	return theme.backdrop.Render(base) + "\n\n" + centered
 }
 
 func shellToneStyle(theme tuiShellTheme, tone string) lipgloss.Style {
@@ -1105,7 +1116,7 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 			Title: "workflow",
 			Items: []tuiSidebarItem{
 				{
-					Label:  strings.ToLower(m.workflowTitle()),
+					Label:  m.sidebarWorkflowLabel(),
 					Meta:   "esc to launcher",
 					Active: true,
 				},
@@ -1131,6 +1142,13 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 	}
 	sections = append(sections, tuiSidebarSection{Title: "sources", Items: sourceItems})
 	return sections
+}
+
+func (m tuiSyncModel) sidebarWorkflowLabel() string {
+	if m.isInteractiveSyncWorkflow() {
+		return "interactive sync"
+	}
+	return "sync"
 }
 
 func (m tuiSyncModel) runStateLabel() string {

@@ -42,6 +42,7 @@ Inside active workflows, the sidebar/top navigation is informational in this sta
 
 ### Source selection
 
+- sources render in the shell sidebar once the workflow is opened
 - `j/k` or up/down: move between configured enabled sources
 - `space`: toggle source enabled for this run
 
@@ -74,12 +75,13 @@ Selector header includes source config context:
 - source URL
 - current plan limit and run mode
 
-The selector is rendered as an in-shell modal instead of replacing the whole screen.
+The selector is rendered inline in the main content area instead of opening a separate overlay.
 
 ## Sync Workflow
 
 ### Source selection
 
+- sources render in the shell sidebar once the workflow is opened
 - `j/k` or up/down: move between configured enabled sources
 - `space`: toggle source enabled for this run
 

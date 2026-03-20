@@ -170,7 +170,29 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	}
 }
 
-func TestTUIRootShellRendersSyncPlanPromptModal(t *testing.T) {
+func TestTUIRootShellShowsSourcesInSidebarForInteractiveSync(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+
+	view := root.View()
+	if !strings.Contains(view, "SOURCES") {
+		t.Fatalf("expected sources section in sidebar, got: %s", view)
+	}
+	if !strings.Contains(view, "soundcloud-likes") {
+		t.Fatalf("expected source id in sidebar, got: %s", view)
+	}
+	if strings.Contains(view, "\nSources:\n") {
+		t.Fatalf("expected source list to be removed from body, got: %s", view)
+	}
+}
+
+func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenInteractiveSync
 	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
@@ -189,10 +211,13 @@ func TestTUIRootShellRendersSyncPlanPromptModal(t *testing.T) {
 		t.Fatalf("expected interactive sync shell title, got: %s", view)
 	}
 	if !strings.Contains(view, "Plan Selection") {
-		t.Fatalf("expected plan prompt modal title, got: %s", view)
+		t.Fatalf("expected inline plan selection body title, got: %s", view)
 	}
 	if !strings.Contains(view, "source=source-a") {
 		t.Fatalf("expected plan prompt source details, got: %s", view)
+	}
+	if strings.Contains(view, "Prompt") {
+		t.Fatalf("expected plan selector not to render as prompt modal, got: %s", view)
 	}
 }
 
