@@ -869,6 +869,20 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 
 func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 	if m.isInteractiveSyncWorkflow() {
+		if m.planPrompt != nil {
+			return nil
+		}
+		if m.running {
+			return []tuiShortcut{
+				{Key: "p", Label: "activity"},
+				{Key: "x", Label: "cancel active run"},
+			}
+		}
+		if m.done {
+			return []tuiShortcut{
+				{Key: "p", Label: "activity"},
+			}
+		}
 		shortcuts := []tuiShortcut{
 			{Key: "j/k", Label: "move"},
 			{Key: "space", Label: "toggle"},
@@ -880,13 +894,6 @@ func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 			{Key: "p", Label: "activity"},
 			{Key: "enter", Label: "run"},
 			{Key: "x", Label: "cancel active run", Disabled: !m.running},
-		}
-		if m.planPrompt != nil {
-			shortcuts = append([]tuiShortcut{
-				{Key: "tab", Label: "filters"},
-				{Key: "a", Label: "all visible"},
-				{Key: "n", Label: "clear visible"},
-			}, shortcuts...)
 		}
 		return shortcuts
 	}
@@ -1324,15 +1331,7 @@ func (m tuiSyncModel) interactiveSyncBody(layout tuiShellLayout) string {
 func (m tuiSyncModel) interactiveSelectionSummaryLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
 	lines := []string{}
 	if state != nil && len(state.rows) > 0 {
-		modeLabel := "run"
-		if state.details.DryRun {
-			modeLabel = "dry-run"
-		}
-		limitLabel := "unlimited"
-		if state.details.PlanLimit > 0 {
-			limitLabel = fmt.Sprintf("%d", state.details.PlanLimit)
-		}
-		lines = append(lines, planPromptHeaderLines(state, modeLabel, limitLabel, layout)...)
+		lines = append(lines, m.interactiveSelectionContextLines(state, layout)...)
 		lines = append(lines, fmt.Sprintf("selected=%d  pending=%d  skipped=%d", state.selectedCount(), state.toggleableCount(), state.skippedCount()))
 	} else {
 		lines = append(lines,
@@ -1369,6 +1368,31 @@ func (m tuiSyncModel) interactiveSelectionSummaryLines(state *tuiInteractiveSele
 		} else {
 			lines = append(lines, fmt.Sprintf("Run finished: attempted=%d succeeded=%d failed=%d skipped=%d", m.result.Attempted, m.result.Succeeded, m.result.Failed, m.result.Skipped))
 		}
+	}
+	return lines
+}
+
+func (m tuiSyncModel) interactiveSelectionContextLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+	modeLabel := "run"
+	if state.details.DryRun {
+		modeLabel = "dry-run"
+	}
+	limitLabel := "unlimited"
+	if state.details.PlanLimit > 0 {
+		limitLabel = fmt.Sprintf("%d", state.details.PlanLimit)
+	}
+	lines := []string{renderPlanPromptInfoBar(state, modeLabel, limitLabel)}
+	if layout.Height < 24 {
+		lines = append(lines, renderPlanPromptPathLine(
+			fmt.Sprintf("target %s", filepath.Base(state.details.TargetDir)),
+			fmt.Sprintf("state %s", filepath.Base(state.details.StateFile)),
+		))
+	} else {
+		lines = append(lines, renderPlanPromptPathLine("target "+state.details.TargetDir, "state "+state.details.StateFile))
+		lines = append(lines, renderPlanPromptPathLine("url "+state.details.URL, ""))
+	}
+	if m.planPrompt != nil {
+		lines = append(lines, renderPlanPromptControls(state))
 	}
 	return lines
 }

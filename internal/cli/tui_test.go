@@ -240,15 +240,32 @@ func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
 	}
 }
 
-func TestTUIRootShellKeepsShortcutsVisibleDuringPlanSelection(t *testing.T) {
+func TestTUIRootShellHidesGlobalShortcutsDuringPlanSelection(t *testing.T) {
 	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}})
 
 	view := root.View()
-	if !strings.Contains(view, "[tab] filters") {
-		t.Fatalf("expected plan selection shortcuts to remain visible, got: %s", view)
+	if strings.Contains(view, "[tab] filters") {
+		t.Fatalf("expected global shortcut bar to hide during inline plan selection, got: %s", view)
 	}
-	if !strings.Contains(view, "[p] activity") {
-		t.Fatalf("expected activity shortcut to remain visible, got: %s", view)
+	if !strings.Contains(view, "tab  switch") {
+		t.Fatalf("expected inline selection controls to remain visible, got: %s", view)
+	}
+}
+
+func TestTUIRootShellRunningInteractiveSyncShowsOnlyRuntimeShortcuts(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Title: "track", RemoteID: "a", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true}})
+	root.syncModel.running = true
+	root.syncModel.planPrompt = nil
+
+	view := root.View()
+	if !strings.Contains(view, "[p] activity") || !strings.Contains(view, "[x] cancel active run") {
+		t.Fatalf("expected runtime shortcuts to remain visible, got: %s", view)
+	}
+	if strings.Contains(view, "[tab] filters") || strings.Contains(view, "[enter] run") || strings.Contains(view, "[d] dry-run") {
+		t.Fatalf("expected selection/config shortcuts to be hidden while running, got: %s", view)
+	}
+	if strings.Contains(view, "tab  switch") || strings.Contains(view, "space  toggle/apply") || strings.Contains(view, "enter  confirm") {
+		t.Fatalf("expected inline selection controls to be hidden while running, got: %s", view)
 	}
 }
 
