@@ -104,6 +104,7 @@ func newTUIShellLayout(width, height int) tuiShellLayout {
 type tuiShellTheme struct {
 	frame         lipgloss.Style
 	titlebar      lipgloss.Style
+	topbar        lipgloss.Style
 	sidebar       lipgloss.Style
 	navStrip      lipgloss.Style
 	main          lipgloss.Style
@@ -137,6 +138,7 @@ func newTUIShellTheme() tuiShellTheme {
 	return tuiShellTheme{
 		frame:         base.Copy().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("236")),
 		titlebar:      base.Copy().Background(lipgloss.Color("235")).Foreground(lipgloss.Color("245")).Padding(0, 1),
+		topbar:        base.Copy().Background(lipgloss.Color("235")).BorderBottom(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
 		sidebar:       base.Copy().Background(lipgloss.Color("235")).BorderRight(true).BorderForeground(lipgloss.Color("236")).Padding(1, 1),
 		navStrip:      base.Copy().Background(lipgloss.Color("235")).BorderBottom(true).BorderForeground(lipgloss.Color("236")).Padding(0, 1),
 		main:          base.Copy().Padding(0, 0),
@@ -206,7 +208,11 @@ func renderTUIShell(state tuiShellState, layout tuiShellLayout) string {
 	if state.Modal != nil {
 		main = renderTUIModal(main, state, theme, layout)
 	}
-	return main
+	return lipgloss.NewStyle().
+		Width(layout.Width).
+		Height(layout.Height).
+		Background(lipgloss.Color("234")).
+		Render(main)
 }
 
 func renderTUITitlebar(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -289,13 +295,51 @@ func renderTUIBadges(state tuiShellState, theme tuiShellTheme, layout tuiShellLa
 	}
 	rendered := make([]string, 0, len(state.Badges))
 	for _, badge := range state.Badges {
-		style := shellToneStyle(theme, badge.Tone)
-		if badge.Disabled {
-			style = theme.disabled
-		}
-		rendered = append(rendered, style.Copy().Padding(0, 1).Border(lipgloss.NormalBorder()).BorderForeground(style.GetForeground()).Render(badge.Label))
+		rendered = append(rendered, renderTUIBadge(badge, theme))
 	}
-	return lipgloss.NewStyle().Padding(0, 1).Width(shellMainSectionWidth(layout)).Render(strings.Join(rendered, " "))
+	return theme.topbar.Width(shellMainSectionWidth(layout)).Render(strings.Join(rendered, " "))
+}
+
+func renderTUIBadge(badge tuiBadge, theme tuiShellTheme) string {
+	if badge.Disabled {
+		return theme.disabled.Copy().Background(lipgloss.Color("236")).Padding(0, 1).Render(badge.Label)
+	}
+	switch badge.Tone {
+	case "success":
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("78")).
+			Background(lipgloss.Color("22")).
+			Bold(true).
+			Padding(0, 1).
+			Render(badge.Label)
+	case "warning":
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("179")).
+			Background(lipgloss.Color("52")).
+			Bold(true).
+			Padding(0, 1).
+			Render(badge.Label)
+	case "danger":
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("203")).
+			Background(lipgloss.Color("52")).
+			Bold(true).
+			Padding(0, 1).
+			Render(badge.Label)
+	case "muted":
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")).
+			Background(lipgloss.Color("236")).
+			Padding(0, 1).
+			Render(badge.Label)
+	default:
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("81")).
+			Background(lipgloss.Color("17")).
+			Bold(true).
+			Padding(0, 1).
+			Render(badge.Label)
+	}
 }
 
 func renderTUICommandBar(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
@@ -344,13 +388,7 @@ func renderTUIBody(state tuiShellState, theme tuiShellTheme, layout tuiShellLayo
 	}
 	parts = append(parts, theme.bodyText.Render(body))
 	panel := strings.Join(parts, "\n\n")
-	width := layout.Width - 2
-	if !layout.Compact {
-		width = layout.MainWidth - 2
-	}
-	if width < 20 {
-		width = layout.Width - 2
-	}
+	width := shellMainSectionWidth(layout)
 	return theme.bodyPanel.Width(width).Render(panel)
 }
 
@@ -427,7 +465,7 @@ func shellMainSectionWidth(layout tuiShellLayout) int {
 	if layout.Compact {
 		return layout.Width - 2
 	}
-	width := layout.MainWidth - 2
+	width := layout.MainWidth
 	if width < 20 {
 		return layout.Width - 2
 	}
