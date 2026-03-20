@@ -19,7 +19,7 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 .tui-appname{font-size:10px;letter-spacing:.1em;color:var(--muted);margin-left:6px}
 
 /* BODY */
-.tui-body{display:flex;background:var(--bg);align-items:stretch;min-height:420px}
+.tui-body{display:flex;background:var(--bg);align-items:stretch;height:520px}
 
 /* SIDEBAR */
 .tui-sidebar{width:190px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0}
@@ -92,8 +92,8 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 .t-row:hover td{background:var(--row-hover)}
 .t-row.t-cursor td{background:var(--row-cursor)}
 .t-row.t-cursor td:first-child{border-left:2px solid var(--accent);padding-left:12px}
-.t-row.t-locked{opacity:.5;cursor:default}
-.t-row.t-locked:hover td{background:transparent}
+.t-row.t-locked td{color:var(--dim)}
+.t-row.t-locked:hover td{background:var(--row-hover)}
 .t-num{color:var(--dim);width:28px;font-size:10px;text-align:right}
 .t-chk{width:26px}
 .t-chk-cell{cursor:pointer}
@@ -101,19 +101,18 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 .t-status{width:148px}
 .t-id{width:80px;text-align:right;font-size:9px;color:var(--dim)}
 .chk-on{color:var(--green)}
-.chk-off{color:var(--border)}
+.chk-off{color:var(--dim);opacity:.5}
 .chk-locked{color:var(--dim)}
 .status-pill{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;display:inline-block}
-.status-already_downloaded{color:var(--dim);font-size:9px;letter-spacing:.03em}
-.status-pending{background:var(--accent-bg);color:var(--accent);border-radius:10px;padding:2px 7px}
-.status-failed{background:#2a0f0f;color:#f85149;border-radius:10px;padding:2px 7px}
+.status-already_downloaded{background:var(--count-bg);color:var(--dim);border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
+.status-pending{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
+.status-failed{background:#2a0f0f;color:#f85149;border:1px solid #4a1515;border-radius:10px;padding:2px 7px;font-size:9px;font-weight:600;letter-spacing:.04em}
 
 /* FOOTER */
-.main-footer{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg2);border-top:1px solid var(--border)}
+.main-footer{display:flex;align-items:center;padding:6px 14px;background:var(--bg2);border-top:1px solid var(--border)}
 .footer-stat{font-size:10px;color:var(--muted)}
 .footer-stat span{color:var(--accent);font-weight:700}
-.footer-prog{display:flex;gap:2px;align-items:center}
-.prog-seg{width:10px;height:4px;border-radius:2px}
+.footer-sep{color:var(--border);margin:0 10px;font-size:10px}
 .empty-row td{text-align:center;padding:20px;color:var(--dim);font-style:italic}
 
 /* THEME: CARBON */
@@ -153,6 +152,7 @@ body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Courier New',mono
 
 <script>
 const tracks = [
+  // sc-likes — already downloaded
   {id:'2267387111', name:'Premiere: Bengalo - All About [SELECTED031]',               status:'already_downloaded', source:'sc-likes'},
   {id:'2263082507', name:'PREMIERE: Bengalo – Let Me Play [SELECTED031]',             status:'already_downloaded', source:'sc-likes'},
   {id:'2231274233', name:'DS Premiere: Klint - Eternal Lie [BCCOVA18]',               status:'already_downloaded', source:'sc-likes'},
@@ -160,11 +160,37 @@ const tracks = [
   {id:'2270743331', name:'Wie es Läuft',                                               status:'already_downloaded', source:'sc-likes'},
   {id:'2232613559', name:'VCS1 - Mythos | VDFD 035',                                  status:'already_downloaded', source:'sc-likes'},
   {id:'2276806856', name:'ASW Premiere: No Valentia - i.know.xml [BOI019]',           status:'already_downloaded', source:'sc-likes'},
+  {id:'2251896527', name:'Nachtwasser - No Signal',                                    status:'already_downloaded', source:'sc-likes'},
+  {id:'2283044954', name:'[FREE DL] SELICATO - BAILA',                                status:'already_downloaded', source:'sc-likes'},
+  {id:'2174766756', name:'Bélavie - Das Crazy',                                        status:'already_downloaded', source:'sc-likes'},
+  {id:'2188421003', name:'Hadone - Turbo Trance [SOMA574D]',                          status:'already_downloaded', source:'sc-likes'},
+  {id:'2199034561', name:'Setaoc Mass - Obliquity [SK027]',                           status:'already_downloaded', source:'sc-likes'},
+  {id:'2204512877', name:'Surgeon - Speak To Me [BODY023]',                           status:'already_downloaded', source:'sc-likes'},
+  {id:'2211987234', name:'Phase Fatale - Hypnosis Display [ARCHIV012]',               status:'already_downloaded', source:'sc-likes'},
+  {id:'2220761509', name:'SPFDJ - Ignite [IAMT163]',                                  status:'already_downloaded', source:'sc-likes'},
+  {id:'2238901122', name:'Paula Temple - Deformation [NMBRS025]',                     status:'already_downloaded', source:'sc-likes'},
+  {id:'2245673841', name:'Dax J - Obsession [MODULARZ049]',                           status:'already_downloaded', source:'sc-likes'},
+  {id:'2253410098', name:'Truncate - Headroom [AUDIO013]',                            status:'already_downloaded', source:'sc-likes'},
+  // sc-likes — pending
   {id:'2291234567', name:'Folamour - Dreamin (Extended Mix)',                          status:'pending',            source:'sc-likes'},
   {id:'2298765432', name:'Skee Mask - Dial 274',                                       status:'pending',            source:'sc-likes'},
+  {id:'2302184991', name:'Objekt - Needle & Thread [TJ003]',                          status:'pending',            source:'sc-likes'},
+  {id:'2308891234', name:'Blawan - Getting Me Down [HESSLE020]',                      status:'pending',            source:'sc-likes'},
+  {id:'2315002341', name:'Drumcode Radio Live 812 - Adam Beyer',                      status:'pending',            source:'sc-likes'},
+  {id:'2319874450', name:'Bicep - Glue (Club Edit)',                                   status:'pending',            source:'sc-likes'},
+  // bc-wish — already downloaded
   {id:'0012345001', name:'Four Tet - Parallel 3',                                      status:'already_downloaded', source:'bc-wish'},
   {id:'0012345002', name:'Burial - Antidawn EP',                                       status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345004', name:'Objekt - Flatland [PAN 40]',                                status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345005', name:'Actress - R.I.P.',                                           status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345006', name:'Andy Stott - Faith in Strangers',                           status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345007', name:'Demdike Stare - Testpressing #7',                           status:'already_downloaded', source:'bc-wish'},
+  {id:'0012345008', name:'Shifted - Appropriation (And Similarities)',                status:'already_downloaded', source:'bc-wish'},
+  // bc-wish — pending
   {id:'0012345003', name:'Actress - Karma & Desire (Deluxe)',                         status:'pending',            source:'bc-wish'},
+  {id:'0012345009', name:'Arca - KiCk iii',                                            status:'pending',            source:'bc-wish'},
+  {id:'0012345010', name:'Coil - Musick to Play in the Dark Vol. 2 (Remaster)',       status:'pending',            source:'bc-wish'},
+  {id:'0012345011', name:'Autechre - SIGN',                                            status:'pending',            source:'bc-wish'},
 ];
 
 const state = {
@@ -353,10 +379,9 @@ function renderMain() {
       </table>
     </div>
     <div class="main-footer">
-      <div class="footer-stat">Selected: <span>${selCount}</span>/${toggleableCount} toggleable tracks</div>
-      <div class="footer-prog">
-        ${tracks.filter(t => isToggleable(t)).map(t => `<div class="prog-seg" style="background:${state.checked[t.origIdx] ? 'var(--accent)' : 'var(--border)'}"></div>`).join('')}
-      </div>
+      <div class="footer-stat">Selected: <span>${selCount}</span> / ${toggleableCount} toggleable</div>
+      <span class="footer-sep">·</span>
+      <div class="footer-stat">${filtered.length} shown</div>
     </div>`;
 }
 
