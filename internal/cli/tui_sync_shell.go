@@ -142,7 +142,7 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 			tuiFooterStat{Label: "failed", Value: fmt.Sprintf("%d", failedCount), Tone: failureCountTone(failedCount)},
 			tuiFooterStat{Label: "progress", Value: progressLabel, Tone: "info"},
 		)
-		if !m.runStartedAt.IsZero() {
+		if m.hasElapsedTiming() {
 			stats = append(stats, tuiFooterStat{Label: "elapsed", Value: m.elapsedLabel(), Tone: "muted"})
 		}
 		return stats
@@ -181,6 +181,13 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 		stats = append(stats, tuiFooterStat{Label: "elapsed", Value: m.elapsedLabel(), Tone: "muted"})
 	}
 	return stats
+}
+
+func (m tuiSyncModel) hasElapsedTiming() bool {
+	if m.isInteractiveSyncWorkflow() {
+		return m.interactiveTracker != nil && !m.interactiveTracker.startedAt.IsZero()
+	}
+	return !m.runStartedAt.IsZero()
 }
 
 func (m tuiSyncModel) shellBanner() *tuiBanner {

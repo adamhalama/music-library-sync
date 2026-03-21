@@ -814,6 +814,25 @@ func TestTUIRootInteractiveSyncRunningWithoutRowsShowsPreflightOnlyInTracks(t *t
 	}
 }
 
+func TestTUIRootInteractiveSyncFooterShowsElapsedFromTracker(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "new", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	})
+	root.syncModel.confirmInteractiveSelection("soundcloud-likes")
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = false
+	root.syncModel.done = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseDone
+	root.syncModel.runStartedAt = time.Time{}
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Date(2026, 3, 21, 12, 0, 0, 0, time.UTC))
+	root.syncModel.interactiveTracker.MarkRunFinished(time.Date(2026, 3, 21, 12, 1, 7, 0, time.UTC))
+
+	view := root.View()
+	if !strings.Contains(view, "elapsed: 1:07") {
+		t.Fatalf("expected footer to render elapsed time from interactive tracker, got: %s", view)
+	}
+}
+
 func TestTUIRootInteractiveSyncDoneWithoutRowsShowsTerminalTrackState(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenInteractiveSync
