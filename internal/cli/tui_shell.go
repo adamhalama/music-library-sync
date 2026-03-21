@@ -869,7 +869,7 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 
 func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 	if m.isInteractiveSyncWorkflow() {
-		if m.planPrompt != nil {
+		if state := m.currentInteractiveSelection(); state != nil && len(state.rows) > 0 {
 			return nil
 		}
 		if m.running {
@@ -1391,10 +1391,35 @@ func (m tuiSyncModel) interactiveSelectionContextLines(state *tuiInteractiveSele
 		lines = append(lines, renderPlanPromptPathLine("target "+state.details.TargetDir, "state "+state.details.StateFile))
 		lines = append(lines, renderPlanPromptPathLine("url "+state.details.URL, ""))
 	}
-	if m.planPrompt != nil {
-		lines = append(lines, renderPlanPromptControls(state))
-	}
+	lines = append(lines, m.renderInteractiveSelectionControls(state))
 	return lines
+}
+
+func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveSelectionState) string {
+	if m.planPrompt != nil {
+		return renderPlanPromptControls(state)
+	}
+	focusTone := "warning"
+	if !state.focusFilters {
+		focusTone = "info"
+	}
+	parts := []string{
+		planPromptChip("focus "+state.focusLabel(), focusTone),
+		planPromptChip("filter "+state.filterLabel(), "muted"),
+		renderPlanPromptKey("tab", "switch"),
+		renderPlanPromptKey("j/k", "move"),
+	}
+	if state.focusFilters {
+		parts = append(parts, renderPlanPromptKey("space/enter", "apply filter"))
+	}
+	parts = append(parts, renderPlanPromptKey("p", "activity"))
+	if m.running {
+		parts = append(parts, renderPlanPromptKey("x", "cancel run"))
+	}
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Padding(0, 1).
+		Render(strings.Join(parts, "  "))
 }
 
 func (m tuiSyncModel) interactiveTrackLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {

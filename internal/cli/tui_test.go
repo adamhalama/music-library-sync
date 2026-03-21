@@ -252,20 +252,20 @@ func TestTUIRootShellHidesGlobalShortcutsDuringPlanSelection(t *testing.T) {
 	}
 }
 
-func TestTUIRootShellRunningInteractiveSyncShowsOnlyRuntimeShortcuts(t *testing.T) {
+func TestTUIRootShellRunningInteractiveSyncKeepsInlineBrowseControls(t *testing.T) {
 	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Title: "track", RemoteID: "a", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true}})
 	root.syncModel.running = true
 	root.syncModel.planPrompt = nil
 
 	view := root.View()
-	if !strings.Contains(view, "[p] activity") || !strings.Contains(view, "[x] cancel active run") {
-		t.Fatalf("expected runtime shortcuts to remain visible, got: %s", view)
+	if strings.Contains(view, "[p] activity") || strings.Contains(view, "[x] cancel active run") {
+		t.Fatalf("expected global shortcut bar to stay hidden once inline selection controls exist, got: %s", view)
 	}
-	if strings.Contains(view, "[tab] filters") || strings.Contains(view, "[enter] run") || strings.Contains(view, "[d] dry-run") {
-		t.Fatalf("expected selection/config shortcuts to be hidden while running, got: %s", view)
+	if !strings.Contains(view, "tab  switch") || !strings.Contains(view, "j/k  move") || !strings.Contains(view, "p  activity") || !strings.Contains(view, "x  cancel run") {
+		t.Fatalf("expected inline runtime browse controls, got: %s", view)
 	}
-	if strings.Contains(view, "tab  switch") || strings.Contains(view, "space  toggle/apply") || strings.Contains(view, "enter  confirm") {
-		t.Fatalf("expected inline selection controls to be hidden while running, got: %s", view)
+	if strings.Contains(view, "space  toggle") || strings.Contains(view, "a  all visible") || strings.Contains(view, "enter  confirm") {
+		t.Fatalf("expected inline controls to drop selection-only actions while running, got: %s", view)
 	}
 }
 
@@ -507,6 +507,43 @@ func TestTUISyncModelPlanPromptLStillOpensTypedLimitInput(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	if !m.planLimitInputActive {
 		t.Fatalf("expected l to keep opening typed plan limit input during selection")
+	}
+}
+
+func TestTUISyncModelPostStartBrowsingKeepsFilteringAndBlocksConfigMutations(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+			{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Reply: reply,
+	})
+	m.interactiveSelection = m.planPrompt.tuiInteractiveSelectionState
+	m.planPrompt = nil
+	m.done = true
+	m.planLimit = 10
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.interactiveSelection.focusFilters {
+		t.Fatalf("expected tab to move focus to filters after sync start")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.interactiveSelection.focusFilters {
+		t.Fatalf("expected enter to apply filter and return focus to tracks after sync start")
+	}
+	if m.interactiveSelection.filter != tuiPlanFilterMissingNew {
+		t.Fatalf("expected filter browsing to remain available after sync start, got %q", m.interactiveSelection.filter)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if m.planLimitInputActive {
+		t.Fatalf("expected post-start config mutation keys to be blocked")
 	}
 }
 

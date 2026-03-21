@@ -681,6 +681,13 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.isInteractiveSyncWorkflow() && m.planPrompt == nil {
+			if state := m.currentInteractiveSelection(); state != nil && len(state.rows) > 0 {
+				if m.handleInteractiveSelectionBrowseKey(typed.String()) {
+					return m, nil
+				}
+			}
+		}
 		if !m.cfgLoaded || m.cfgErr != nil {
 			return m, nil
 		}
@@ -954,6 +961,63 @@ func (m tuiSyncModel) currentInteractiveSelection() *tuiInteractiveSelectionStat
 
 func (m tuiSyncModel) currentShellLayout() tuiShellLayout {
 	return newTUIShellLayout(m.width, m.height)
+}
+
+func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
+	if m == nil {
+		return false
+	}
+	state := m.currentInteractiveSelection()
+	if state == nil || len(state.rows) == 0 {
+		return false
+	}
+	switch key {
+	case "d", "t", "l", "[", "]", "u":
+		// Once rows are in the inline selection view, keep post-confirm
+		// interaction scoped to browsing and filtering only.
+		return true
+	}
+	if key == "tab" {
+		state.focusFilters = !state.focusFilters
+		if !state.focusFilters {
+			state.ensureCursorVisible()
+		}
+		return true
+	}
+	if state.focusFilters {
+		switch key {
+		case "up", "k":
+			if state.filterCursor > 0 {
+				state.filterCursor--
+			}
+			return true
+		case "down", "j":
+			if state.filterCursor < len(state.filters())-1 {
+				state.filterCursor++
+			}
+			return true
+		case " ", "enter":
+			state.filter = state.filters()[state.filterCursor]
+			state.focusFilters = false
+			state.ensureCursorVisible()
+			return true
+		default:
+			return false
+		}
+	}
+	switch key {
+	case "up", "k":
+		state.moveCursor(-1)
+		return true
+	case "down", "j":
+		state.moveCursor(1)
+		return true
+	case " ", "enter", "a", "n":
+		// Once selection has been confirmed, keep browsing/filtering alive but disable mutation.
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *tuiSyncModel) appendInteractiveActivity(event output.Event, outcomes []output.StructuredTrackOutcome, historyLine string, historyOK bool) {
