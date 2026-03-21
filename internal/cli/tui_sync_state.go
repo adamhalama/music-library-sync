@@ -25,9 +25,6 @@ func mergeInteractiveSelectionState(existing, next *tuiInteractiveSelectionState
 		return next
 	}
 	next.confirmed = next.confirmed || existing.confirmed
-	if len(existing.activity) > 0 && len(next.activity) == 0 {
-		next.activity = append([]tuiActivityEntry(nil), existing.activity...)
-	}
 	if existing.activityCollapseConfigured && !next.activityCollapseConfigured {
 		next.activityCollapseConfigured = true
 		next.activityCollapsed = existing.activityCollapsed
@@ -45,20 +42,20 @@ func (m *tuiSyncModel) resetInteractiveSourceLifecycle() {
 	if m == nil {
 		return
 	}
-	m.sourceLifecycle = map[string]tuiInteractiveSourceLifecycle{}
-	for _, source := range m.sources {
-		m.sourceLifecycle[source.ID] = tuiSourceLifecycleIdle
+	if m.interactiveTracker == nil {
+		m.interactiveTracker = newTUISyncRunTracker()
 	}
+	m.interactiveTracker.Reset(m.sources)
 }
 
 func (m *tuiSyncModel) setInteractiveSourceLifecycle(sourceID string, lifecycle tuiInteractiveSourceLifecycle) {
 	if m == nil || strings.TrimSpace(sourceID) == "" {
 		return
 	}
-	if m.sourceLifecycle == nil {
-		m.sourceLifecycle = map[string]tuiInteractiveSourceLifecycle{}
+	if m.interactiveTracker == nil {
+		m.interactiveTracker = newTUISyncRunTracker()
 	}
-	m.sourceLifecycle[sourceID] = lifecycle
+	m.interactiveTracker.SetSourceLifecycle(sourceID, lifecycle)
 }
 
 func (m *tuiSyncModel) storeInteractiveSelection(state *tuiInteractiveSelectionState) {
@@ -74,6 +71,9 @@ func (m *tuiSyncModel) storeInteractiveSelection(state *tuiInteractiveSelectionS
 	}
 	state = mergeInteractiveSelectionState(m.interactiveSelections[sourceID], state)
 	m.interactiveSelections[sourceID] = state
+	if m.interactiveTracker != nil {
+		m.interactiveTracker.UpsertSelectionState(state)
+	}
 	if strings.TrimSpace(m.interactiveDisplayID) == "" {
 		m.interactiveDisplayID = sourceID
 	}
@@ -101,6 +101,9 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForSource(sourceID string) *tui
 				state.details = m.planSourceDetailsForSource(source)
 			}
 		}
+		if m.interactiveTracker != nil {
+			m.interactiveTracker.applyToSelectionState(state)
+		}
 		return state
 	}
 	state := newEmptyTUIInteractiveSelectionState()
@@ -119,6 +122,9 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForEventSource(sourceID string)
 	sourceID = strings.TrimSpace(sourceID)
 	if m.planPrompt != nil && sourceID != "" && strings.TrimSpace(m.planPrompt.sourceID) == sourceID {
 		m.storeInteractiveSelection(m.planPrompt.tuiInteractiveSelectionState)
+		if m.interactiveTracker != nil {
+			m.interactiveTracker.applyToSelectionState(m.planPrompt.tuiInteractiveSelectionState)
+		}
 		return m.planPrompt.tuiInteractiveSelectionState
 	}
 	return m.ensureInteractiveSelectionForSource(sourceID)
@@ -134,6 +140,9 @@ func (m *tuiSyncModel) confirmInteractiveSelection(sourceID string) {
 	}
 	if state := m.ensureInteractiveSelectionForSource(sourceID); state != nil {
 		state.confirmed = true
+		if m.interactiveTracker != nil {
+			m.interactiveTracker.ConfirmSelection(state)
+		}
 	}
 }
 
@@ -873,26 +882,10 @@ func (m tuiSyncModel) interactiveConfirmedSelections() []*tuiInteractiveSelectio
 }
 
 func (m tuiSyncModel) interactiveAggregateCounts() (selected, completed, skipped, failed int, progressPercent float64) {
-	for _, state := range m.interactiveConfirmedSelections() {
-		selected += state.runtimeSelectedCount()
-		completed += state.runtimeCompletedCount()
-		skipped += state.runtimeSkippedCount()
-		failed += state.runtimeFailedCount()
-		progressPercent += state.runtimeProgressUnits()
+	if m.interactiveTracker != nil {
+		return m.interactiveTracker.AggregateCounts(m.interactivePhase == tuiInteractivePhaseDone && m.runErr == nil)
 	}
-	if selected > 0 {
-		progressPercent = (progressPercent / float64(selected)) * 100
-	}
-	if progressPercent < 0 {
-		progressPercent = 0
-	}
-	if progressPercent > 100 {
-		progressPercent = 100
-	}
-	if m.interactivePhase == tuiInteractivePhaseDone && m.runErr == nil {
-		progressPercent = 100
-	}
-	return selected, completed, skipped, failed, progressPercent
+	return 0, 0, 0, 0, 0
 }
 
 func (s *tuiInteractiveSelectionState) activityCollapsedFor(layout tuiShellLayout) bool {
@@ -915,89 +908,6 @@ func (s *tuiInteractiveSelectionState) toggleActivity(layout tuiShellLayout) {
 	}
 	s.activityCollapsed = !layout.Compact
 	s.activityCollapseConfigured = true
-}
-
-func (s *tuiInteractiveSelectionState) appendActivity(entry tuiActivityEntry) {
-	if s == nil || strings.TrimSpace(entry.Message) == "" {
-		return
-	}
-	s.activity = append(s.activity, entry)
-	const maxEntries = 18
-	if len(s.activity) > maxEntries {
-		s.activity = append([]tuiActivityEntry(nil), s.activity[len(s.activity)-maxEntries:]...)
-	}
-}
-
-func (s *tuiInteractiveSelectionState) observeTrackEvent(event output.Event) {
-	if s == nil || strings.TrimSpace(event.SourceID) != strings.TrimSpace(s.sourceID) {
-		return
-	}
-	row := s.resolveRowForEvent(event)
-	if row == nil {
-		return
-	}
-	reason := strings.TrimSpace(tuiDetailString(event.Details, "reason"))
-	switch event.Event {
-	case output.EventTrackStarted:
-		row.RuntimeStatus = tuiTrackStatusDownloading
-		row.ProgressKnown = false
-		row.ProgressPercent = 0
-		row.FailureDetail = ""
-	case output.EventTrackProgress:
-		row.RuntimeStatus = tuiTrackStatusDownloading
-		if percent, ok := tuiDetailFloat(event.Details, "percent"); ok {
-			row.ProgressKnown = true
-			row.ProgressPercent = percent
-		}
-	case output.EventTrackDone:
-		row.RuntimeStatus = tuiTrackStatusDownloaded
-		row.ProgressKnown = true
-		row.ProgressPercent = 100
-		row.FailureDetail = ""
-	case output.EventTrackSkip:
-		row.RuntimeStatus = tuiTrackStatusSkipped
-		row.ProgressKnown = false
-		row.ProgressPercent = 0
-		row.FailureDetail = reason
-	case output.EventTrackFail:
-		row.RuntimeStatus = tuiTrackStatusFailed
-		row.ProgressKnown = false
-		row.ProgressPercent = 0
-		row.FailureDetail = reason
-	default:
-		return
-	}
-	row.StatusLabel = tuiTrackStatusLabel(row.RuntimeStatus, row.ProgressPercent, row.ProgressKnown, row.FailureDetail)
-}
-
-func (s *tuiInteractiveSelectionState) resolveRowForEvent(event output.Event) *tuiTrackRowState {
-	if s == nil {
-		return nil
-	}
-	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
-		for i := range s.rows {
-			if s.rows[i].Index == idx {
-				return &s.rows[i]
-			}
-		}
-	}
-	trackID := strings.TrimSpace(tuiDetailString(event.Details, "track_id"))
-	if trackID != "" {
-		for i := range s.rows {
-			if strings.TrimSpace(s.rows[i].RemoteID) == trackID {
-				return &s.rows[i]
-			}
-		}
-	}
-	trackName := strings.TrimSpace(tuiDetailString(event.Details, "track_name"))
-	if trackName != "" {
-		for i := range s.rows {
-			if strings.TrimSpace(s.rows[i].Title) == trackName {
-				return &s.rows[i]
-			}
-		}
-	}
-	return nil
 }
 
 func tuiRuntimeStatusFromPlanRow(row engine.PlanRow) tuiTrackRuntimeStatus {

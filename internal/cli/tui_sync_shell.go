@@ -1324,7 +1324,11 @@ func (m tuiSyncModel) sidebarWorkflowLabel() string {
 }
 
 func (m tuiSyncModel) sourceSidebarTone(sourceID string) string {
-	switch m.sourceLifecycle[sourceID] {
+	lifecycle := tuiSourceLifecycleIdle
+	if m.interactiveTracker != nil {
+		lifecycle = m.interactiveTracker.SourceLifecycle(sourceID)
+	}
+	switch lifecycle {
 	case tuiSourceLifecycleFinished:
 		return "success"
 	case tuiSourceLifecycleFailed:

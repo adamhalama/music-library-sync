@@ -57,9 +57,9 @@ type tuiSyncModel struct {
 	standardLastSource    string
 	standardActivityState tuiStandardSyncActivityState
 	interactivePhase      tuiInteractiveSyncPhase
-	sourceLifecycle       map[string]tuiInteractiveSourceLifecycle
 	interactiveSelections map[string]*tuiInteractiveSelectionState
 	interactiveDisplayID  string
+	interactiveTracker    *tuiSyncRunTracker
 	planPrompt            *tuiPlanPromptState
 	interactionPrompt     *tuiInteractionPromptState
 	planLimitInputActive  bool

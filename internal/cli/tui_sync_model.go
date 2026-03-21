@@ -36,8 +36,8 @@ func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 		progress:              output.NewStructuredProgressTracker(nil),
 		standardSummaries:     map[string]*tuiStandardSyncSourceSummary{},
 		interactivePhase:      interactivePhase,
-		sourceLifecycle:       map[string]tuiInteractiveSourceLifecycle{},
 		interactiveSelections: map[string]*tuiInteractiveSelectionState{},
+		interactiveTracker:    newTUISyncRunTracker(),
 	}
 }
 
@@ -73,6 +73,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 	case tuiPlanSelectRequestMsg:
 		state := newTUIInteractiveSelectionState(typed)
 		m.storeInteractiveSelection(state)
+		if m.interactiveTracker != nil {
+			m.interactiveTracker.UpsertSelectionState(state)
+		}
 		m.setInteractiveDisplaySource(typed.SourceID)
 		if m.isInteractiveSyncWorkflow() {
 			m.interactivePhase = tuiInteractivePhaseReview
@@ -252,8 +255,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				m.confirmInteractiveSelection(m.planPrompt.sourceID)
 				if m.isInteractiveSyncWorkflow() {
 					m.interactivePhase = tuiInteractivePhaseSyncing
-					m.runStartedAt = time.Now()
-					m.runFinishedAt = time.Time{}
+					if m.interactiveTracker != nil {
+						m.interactiveTracker.MarkRuntimeStarted(time.Now())
+					}
 				}
 				m.planPrompt.syncFilterForPhase(tuiInteractivePhaseSyncing)
 				m.setInteractiveDisplaySource(m.planPrompt.sourceID)
@@ -487,25 +491,19 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		}
 		m.observeStandardSyncEvent(typed.Event)
 		if m.isInteractiveSyncWorkflow() {
+			state := m.ensureInteractiveSelectionForEventSource(typed.Event.SourceID)
+			if m.interactiveTracker != nil {
+				m.interactiveTracker.UpsertSelectionState(state)
+			}
 			switch typed.Event.Event {
-			case output.EventSourcePreflight:
-				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecyclePreflight)
-				m.setInteractiveDisplaySource(typed.Event.SourceID)
-			case output.EventSourceStarted:
-				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecycleRunning)
-				m.setInteractiveDisplaySource(typed.Event.SourceID)
-			case output.EventSourceFinished:
-				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecycleFinished)
-				m.setInteractiveDisplaySource(typed.Event.SourceID)
-			case output.EventSourceFailed:
-				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecycleFailed)
+			case output.EventSourcePreflight, output.EventSourceStarted, output.EventSourceFinished, output.EventSourceFailed:
 				m.setInteractiveDisplaySource(typed.Event.SourceID)
 			}
 			switch typed.Event.Event {
 			case output.EventSourceStarted:
 				m.interactivePhase = tuiInteractivePhaseSyncing
-				if m.runStartedAt.IsZero() {
-					m.runStartedAt = time.Now()
+				if m.interactiveTracker != nil && m.interactiveTracker.startedAt.IsZero() {
+					m.interactiveTracker.MarkRuntimeStarted(time.Now())
 				}
 			case output.EventSourcePreflight:
 				if m.interactivePhase == tuiInteractivePhaseIdle {
@@ -517,8 +515,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.runStartedAt = time.Now()
 		}
 		m.progress.ObserveEvent(typed.Event)
-		m.observeInteractiveTrackEvent(typed.Event)
-		if failure := tuiFailureStateFromEvent(typed.Event); failure != nil {
+		if failure := tuiFailureStateFromEvent(typed.Event); failure != nil && !m.isInteractiveSyncWorkflow() {
 			m.lastFailure = failure
 		}
 		outcomes := m.progress.DrainTrackOutcomes()
@@ -529,7 +526,15 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		if historyOK {
 			m.appendEventHistoryLine(historyLine)
 		}
-		m.appendInteractiveActivity(typed.Event, outcomes, historyLine, historyOK)
+		if m.isInteractiveSyncWorkflow() && m.interactiveTracker != nil {
+			m.interactiveTracker.ObserveEvent(typed.Event, outcomes, historyLine, historyOK)
+			if state := m.ensureInteractiveSelectionForEventSource(typed.Event.SourceID); state != nil {
+				m.interactiveTracker.applyToSelectionState(state)
+			}
+			if m.planPrompt != nil && m.planPrompt.sourceID == typed.Event.SourceID {
+				m.interactiveTracker.applyToSelectionState(m.planPrompt.tuiInteractiveSelectionState)
+			}
+		}
 		if m.eventCh != nil {
 			return m, m.waitRunMsgCmd()
 		}
@@ -543,6 +548,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		m.done = true
 		if m.isInteractiveSyncWorkflow() {
 			m.interactivePhase = tuiInteractivePhaseDone
+			if m.interactiveTracker != nil {
+				m.interactiveTracker.MarkRunFinished(time.Now())
+			}
 		}
 		m.result = typed.Result
 		m.runErr = typed.Err
@@ -723,51 +731,10 @@ func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
 	}
 }
 
-func (m *tuiSyncModel) appendInteractiveActivity(event output.Event, outcomes []output.StructuredTrackOutcome, historyLine string, historyOK bool) {
-	if m == nil || !m.isInteractiveSyncWorkflow() {
-		return
-	}
-	state := m.ensureInteractiveSelectionForEventSource(event.SourceID)
-	if state == nil {
-		return
-	}
-	for _, outcome := range outcomes {
-		level := output.LevelInfo
-		switch outcome.Kind {
-		case output.StructuredTrackOutcomeSkip:
-			level = output.LevelWarn
-		case output.StructuredTrackOutcomeFail:
-			level = output.LevelError
-		}
-		state.appendActivity(tuiActivityEntry{
-			Timestamp: event.Timestamp,
-			Level:     level,
-			Message:   output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames),
-			SourceID:  event.SourceID,
-		})
-	}
-	if historyOK {
-		state.appendActivity(tuiActivityEntry{
-			Timestamp: event.Timestamp,
-			Level:     event.Level,
-			Message:   historyLine,
-			SourceID:  event.SourceID,
-		})
-	}
-}
-
-func (m *tuiSyncModel) observeInteractiveTrackEvent(event output.Event) {
-	if m == nil || !m.isInteractiveSyncWorkflow() {
-		return
-	}
-	state := m.ensureInteractiveSelectionForEventSource(event.SourceID)
-	if state == nil {
-		return
-	}
-	state.observeTrackEvent(event)
-}
-
 func (m tuiSyncModel) elapsedLabel() string {
+	if m.isInteractiveSyncWorkflow() && m.interactiveTracker != nil {
+		return m.interactiveTracker.ElapsedLabel(time.Now())
+	}
 	if m.runStartedAt.IsZero() {
 		return "0:00"
 	}
@@ -944,10 +911,13 @@ func tuiSyncHistoryLine(event output.Event) (string, bool) {
 }
 
 func (m tuiSyncModel) lastFailureLines() []string {
-	if m.lastFailure == nil {
+	failure := m.lastFailure
+	if m.isInteractiveSyncWorkflow() && m.interactiveTracker != nil {
+		failure = m.interactiveTracker.LastFailure()
+	}
+	if failure == nil {
 		return nil
 	}
-	failure := m.lastFailure
 	headline := strings.TrimSpace(failure.Message)
 	prefix := fmt.Sprintf("[%s]", failure.SourceID)
 	if headline == "" {

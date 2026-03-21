@@ -439,7 +439,7 @@ func TestTUIRootShellRunningInteractiveSyncKeepsInlineBrowseControls(t *testing.
 	root.syncModel.running = true
 	root.syncModel.planPrompt = nil
 	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
-	root.syncModel.runStartedAt = time.Now().Add(-5 * time.Second)
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
 
 	view := root.View()
 	if strings.Contains(view, "[p] activity") || strings.Contains(view, "[x] cancel active run") {
@@ -727,7 +727,7 @@ func TestTUISyncInteractiveProgressRendersGraphicalBars(t *testing.T) {
 	m.planPrompt = nil
 	m.running = true
 	m.interactivePhase = tuiInteractivePhaseSyncing
-	m.runStartedAt = time.Now().Add(-5 * time.Second)
+	m.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
 	m.progress.ObserveEvent(output.Event{
 		Event:    output.EventSourcePreflight,
 		SourceID: "soundcloud-likes",
@@ -850,8 +850,8 @@ func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
 	root.syncModel.running = false
 	root.syncModel.interactivePhase = tuiInteractivePhaseDone
 	root.syncModel.result = engine.SyncResult{Attempted: 1, Succeeded: 1, Failed: 0, Skipped: 0}
-	root.syncModel.runStartedAt = time.Now().Add(-11 * time.Second)
-	root.syncModel.runFinishedAt = time.Now()
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-11 * time.Second))
+	root.syncModel.interactiveTracker.MarkRunFinished(time.Now())
 	selection := root.syncModel.currentInteractiveSelection()
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
@@ -866,6 +866,7 @@ func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
 		row := &selection.rows[i]
 		row.StatusLabel = tuiTrackStatusLabel(row.RuntimeStatus, row.ProgressPercent, row.ProgressKnown, row.FailureDetail)
 	}
+	root.syncModel.interactiveTracker.SyncSourceFromSelection(selection)
 
 	view := root.View()
 	if !strings.Contains(view, "completed: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
@@ -886,7 +887,7 @@ func TestTUIInteractiveFooterUsesTrackCountsWhileRunning(t *testing.T) {
 	root.syncModel.planPrompt = nil
 	root.syncModel.running = true
 	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
-	root.syncModel.runStartedAt = time.Now().Add(-6 * time.Second)
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-6 * time.Second))
 	selection := root.syncModel.currentInteractiveSelection()
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
@@ -900,6 +901,7 @@ func TestTUIInteractiveFooterUsesTrackCountsWhileRunning(t *testing.T) {
 		row := &selection.rows[i]
 		row.StatusLabel = tuiTrackStatusLabel(row.RuntimeStatus, row.ProgressPercent, row.ProgressKnown, row.FailureDetail)
 	}
+	root.syncModel.interactiveTracker.SyncSourceFromSelection(selection)
 
 	view := root.View()
 	if !strings.Contains(view, "in run: 3") {
@@ -926,12 +928,10 @@ func TestTUIInteractiveSidebarSourceLifecycleTones(t *testing.T) {
 		m.selected[source.ID] = true
 	}
 	m.cursor = 0
-	m.sourceLifecycle = map[string]tuiInteractiveSourceLifecycle{
-		"active":   tuiSourceLifecycleFinished,
-		"running":  tuiSourceLifecycleRunning,
-		"finished": tuiSourceLifecycleFinished,
-		"failed":   tuiSourceLifecycleFailed,
-	}
+	m.setInteractiveSourceLifecycle("active", tuiSourceLifecycleFinished)
+	m.setInteractiveSourceLifecycle("running", tuiSourceLifecycleRunning)
+	m.setInteractiveSourceLifecycle("finished", tuiSourceLifecycleFinished)
+	m.setInteractiveSourceLifecycle("failed", tuiSourceLifecycleFailed)
 
 	sections := m.sidebarSections(tuiScreenInteractiveSync)
 	var sourceItems []tuiSidebarItem
@@ -1090,7 +1090,7 @@ func TestTUIInteractiveFooterAggregatesAcrossConfirmedSources(t *testing.T) {
 	root.syncModel.planPrompt = nil
 	root.syncModel.running = true
 	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
-	root.syncModel.runStartedAt = time.Now().Add(-5 * time.Second)
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
 	root.syncModel.setInteractiveDisplaySource("source-b")
 
 	sourceA.rows[0].RuntimeStatus = tuiTrackStatusDownloaded
@@ -1102,6 +1102,8 @@ func TestTUIInteractiveFooterAggregatesAcrossConfirmedSources(t *testing.T) {
 	sourceB.rows[0].ProgressKnown = true
 	sourceB.rows[0].ProgressPercent = 50
 	sourceB.rows[0].StatusLabel = tuiTrackStatusLabel(sourceB.rows[0].RuntimeStatus, 50, true, "")
+	root.syncModel.interactiveTracker.SyncSourceFromSelection(sourceA)
+	root.syncModel.interactiveTracker.SyncSourceFromSelection(sourceB)
 
 	view := root.View()
 	if !strings.Contains(view, "B downloading") {
@@ -1205,6 +1207,8 @@ func TestTUIInteractiveAggregateExcludesDeselectedRows(t *testing.T) {
 	selection.rows[1].RuntimeStatus = tuiTrackStatusFailed
 	selection.rows[1].FailureDetail = "ignored"
 	selection.rows[1].StatusLabel = tuiTrackStatusLabel(selection.rows[1].RuntimeStatus, 0, false, selection.rows[1].FailureDetail)
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.interactiveTracker.SyncSourceFromSelection(selection)
 
 	view := root.View()
 	if !strings.Contains(view, "completed: 1") || !strings.Contains(view, "failed: 0") {
@@ -1514,7 +1518,7 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 	if m.interactivePhase != tuiInteractivePhaseSyncing {
 		t.Fatalf("expected confirm to start actual sync phase, got %q", m.interactivePhase)
 	}
-	if m.runStartedAt.IsZero() {
+	if m.interactiveTracker == nil || m.interactiveTracker.startedAt.IsZero() {
 		t.Fatalf("expected confirm to start elapsed timing for actual sync")
 	}
 	select {
@@ -1544,7 +1548,7 @@ func TestTUISyncModelInitialEnterStartsPreflightWithoutRuntimeTimer(t *testing.T
 	if m.interactivePhase != tuiInteractivePhasePreflight {
 		t.Fatalf("expected initial enter to start preflight phase, got %q", m.interactivePhase)
 	}
-	if !m.runStartedAt.IsZero() {
+	if m.interactiveTracker != nil && !m.interactiveTracker.startedAt.IsZero() {
 		t.Fatalf("expected elapsed timer to remain unset until final confirmation")
 	}
 }
