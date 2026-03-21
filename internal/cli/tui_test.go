@@ -633,13 +633,17 @@ func TestTUISyncInteractiveRowsTransitionToDownloadedAndFilterCountsUpdate(t *te
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
 	}
-	if got := selection.filterCount(tuiTrackFilterKnownGap, tuiInteractivePhaseSyncing); got != 0 {
+	displayState := m.currentInteractiveDisplayState()
+	if displayState == nil {
+		t.Fatalf("expected interactive display state")
+	}
+	if got := selection.filterCount(displayState.rows, tuiTrackFilterKnownGap, tuiInteractivePhaseSyncing); got != 0 {
 		t.Fatalf("expected runtime-only filter family to hide review-only known-gap counts, got %d", got)
 	}
-	if got := selection.filterCount(tuiTrackFilterDownloaded, tuiInteractivePhaseSyncing); got != 1 {
+	if got := selection.filterCount(displayState.rows, tuiTrackFilterDownloaded, tuiInteractivePhaseSyncing); got != 1 {
 		t.Fatalf("expected downloaded filter count to exclude already-have rows, got %d", got)
 	}
-	if got := selection.filterCount(tuiTrackFilterAlreadyHave, tuiInteractivePhaseSyncing); got != 1 {
+	if got := selection.filterCount(displayState.rows, tuiTrackFilterAlreadyHave, tuiInteractivePhaseSyncing); got != 1 {
 		t.Fatalf("expected already-have filter count to keep locked rows separate, got %d", got)
 	}
 
@@ -672,8 +676,8 @@ func TestTUIInteractiveRuntimeAllFilterShowsDeselectedRowsAsNotRun(t *testing.T)
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
 	}
-	selection.confirmed = true
 	selection.setSelected(2, false)
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
 
 	view := root.View()
 	if !strings.Contains(view, "not-run") || !strings.Contains(view, "· gap") {
@@ -697,10 +701,10 @@ func TestTUIInteractiveRuntimeRemapsReviewFilterToInRun(t *testing.T) {
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
 	}
-	selection.confirmed = true
 	selection.filter = tuiTrackFilterMissingNew
 	selection.focusFilters = true
 	selection.filterCursor = 2
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
 
 	view := root.View()
 	if selection.filter != tuiTrackFilterInRun {
@@ -856,17 +860,11 @@ func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
 	}
-	selection.confirmed = true
-	selection.rows[0].RuntimeStatus = tuiTrackStatusDownloaded
-	selection.rows[1].RuntimeStatus = tuiTrackStatusDownloaded
-	selection.rows[2].RuntimeStatus = tuiTrackStatusIdle
-	selection.rows[3].RuntimeStatus = tuiTrackStatusSkipped
-	selection.rows[4].RuntimeStatus = tuiTrackStatusFailed
-	for i := range selection.rows {
-		row := &selection.rows[i]
-		row.StatusLabel = tuiTrackStatusLabel(row.RuntimeStatus, row.ProgressPercent, row.ProgressKnown, row.FailureDetail)
-	}
-	root.syncModel.interactiveTracker.SyncSourceFromSelection(selection)
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 2}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 4, "reason": "ignored"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 5, "reason": "failed"}}, nil, "", false)
 
 	view := root.View()
 	if !strings.Contains(view, "completed: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
@@ -892,16 +890,10 @@ func TestTUIInteractiveFooterUsesTrackCountsWhileRunning(t *testing.T) {
 	if selection == nil {
 		t.Fatalf("expected interactive selection state")
 	}
-	selection.confirmed = true
-	selection.rows[0].RuntimeStatus = tuiTrackStatusDownloaded
-	selection.rows[1].RuntimeStatus = tuiTrackStatusSkipped
-	selection.rows[2].RuntimeStatus = tuiTrackStatusFailed
-	selection.rows[3].RuntimeStatus = tuiTrackStatusIdle
-	for i := range selection.rows {
-		row := &selection.rows[i]
-		row.StatusLabel = tuiTrackStatusLabel(row.RuntimeStatus, row.ProgressPercent, row.ProgressKnown, row.FailureDetail)
-	}
-	root.syncModel.interactiveTracker.SyncSourceFromSelection(selection)
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 2, "reason": "ignored"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 3, "reason": "failed"}}, nil, "", false)
 
 	view := root.View()
 	if !strings.Contains(view, "in run: 3") {
@@ -1070,7 +1062,7 @@ func TestTUIInteractiveFooterAggregatesAcrossConfirmedSources(t *testing.T) {
 	if sourceA == nil {
 		t.Fatalf("expected source-a selection")
 	}
-	sourceA.confirmed = true
+	root.syncModel.interactiveTracker.ConfirmSelection(sourceA)
 	root.syncModel.planPrompt = nil
 
 	replyB := make(chan tuiPlanSelectResult, 1)
@@ -1086,24 +1078,16 @@ func TestTUIInteractiveFooterAggregatesAcrossConfirmedSources(t *testing.T) {
 	if sourceB == nil {
 		t.Fatalf("expected source-b selection")
 	}
-	sourceB.confirmed = true
+	root.syncModel.interactiveTracker.ConfirmSelection(sourceB)
 	root.syncModel.planPrompt = nil
 	root.syncModel.running = true
 	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
 	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
 	root.syncModel.setInteractiveDisplaySource("source-b")
 
-	sourceA.rows[0].RuntimeStatus = tuiTrackStatusDownloaded
-	sourceA.rows[0].StatusLabel = tuiTrackStatusLabel(sourceA.rows[0].RuntimeStatus, 0, false, "")
-	sourceA.rows[1].RuntimeStatus = tuiTrackStatusSkipped
-	sourceA.rows[1].FailureDetail = "known gap"
-	sourceA.rows[1].StatusLabel = tuiTrackStatusLabel(sourceA.rows[1].RuntimeStatus, 0, false, sourceA.rows[1].FailureDetail)
-	sourceB.rows[0].RuntimeStatus = tuiTrackStatusDownloading
-	sourceB.rows[0].ProgressKnown = true
-	sourceB.rows[0].ProgressPercent = 50
-	sourceB.rows[0].StatusLabel = tuiTrackStatusLabel(sourceB.rows[0].RuntimeStatus, 50, true, "")
-	root.syncModel.interactiveTracker.SyncSourceFromSelection(sourceA)
-	root.syncModel.interactiveTracker.SyncSourceFromSelection(sourceB)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "source-a", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "source-a", Details: map[string]any{"index": 2, "reason": "known gap"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackProgress, SourceID: "source-b", Details: map[string]any{"index": 1, "percent": 50.0}}, nil, "", false)
 
 	view := root.View()
 	if !strings.Contains(view, "B downloading") {
@@ -1131,7 +1115,7 @@ func TestTUIInteractiveSourceActivityPersistsAcrossSourceSwitches(t *testing.T) 
 		Details:  map[string]any{"planned_download_count": 2},
 	}})
 	stateA := m.interactiveSelectionForSource("source-a")
-	if stateA == nil || len(stateA.activity) == 0 {
+	if stateA == nil || len(m.interactiveTracker.SourceSnapshot("source-a").activity) == 0 {
 		t.Fatalf("expected source-a activity to be recorded")
 	}
 
@@ -1142,7 +1126,7 @@ func TestTUIInteractiveSourceActivityPersistsAcrossSourceSwitches(t *testing.T) 
 		Details:  planSourceDetails{SourceID: "source-a"},
 		Reply:    replyA,
 	})
-	if got := len(m.interactiveSelectionForSource("source-a").activity); got == 0 {
+	if got := len(m.interactiveTracker.SourceSnapshot("source-a").activity); got == 0 {
 		t.Fatalf("expected source-a activity to survive plan prompt replacement")
 	}
 
@@ -1156,7 +1140,7 @@ func TestTUIInteractiveSourceActivityPersistsAcrossSourceSwitches(t *testing.T) 
 	if m.currentInteractiveDisplaySourceID() != "source-b" {
 		t.Fatalf("expected plan prompt to focus the source-b display")
 	}
-	if got := len(m.interactiveSelectionForSource("source-a").activity); got == 0 {
+	if got := len(m.interactiveTracker.SourceSnapshot("source-a").activity); got == 0 {
 		t.Fatalf("expected source-a activity to remain after source-b prompt")
 	}
 
@@ -1197,18 +1181,13 @@ func TestTUIInteractiveAggregateExcludesDeselectedRows(t *testing.T) {
 		t.Fatalf("expected interactive selection state")
 	}
 	selection.setSelected(2, false)
-	selection.confirmed = true
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
 	root.syncModel.planPrompt = nil
 	root.syncModel.running = true
 	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
 
-	selection.rows[0].RuntimeStatus = tuiTrackStatusDownloaded
-	selection.rows[0].StatusLabel = tuiTrackStatusLabel(selection.rows[0].RuntimeStatus, 0, false, "")
-	selection.rows[1].RuntimeStatus = tuiTrackStatusFailed
-	selection.rows[1].FailureDetail = "ignored"
-	selection.rows[1].StatusLabel = tuiTrackStatusLabel(selection.rows[1].RuntimeStatus, 0, false, selection.rows[1].FailureDetail)
-	root.syncModel.interactiveTracker.ConfirmSelection(selection)
-	root.syncModel.interactiveTracker.SyncSourceFromSelection(selection)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "source-a", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "source-a", Details: map[string]any{"index": 2, "reason": "ignored"}}, nil, "", false)
 
 	view := root.View()
 	if !strings.Contains(view, "completed: 1") || !strings.Contains(view, "failed: 0") {

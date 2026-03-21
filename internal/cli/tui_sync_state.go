@@ -24,7 +24,6 @@ func mergeInteractiveSelectionState(existing, next *tuiInteractiveSelectionState
 	if existing == nil {
 		return next
 	}
-	next.confirmed = next.confirmed || existing.confirmed
 	if existing.activityCollapseConfigured && !next.activityCollapseConfigured {
 		next.activityCollapseConfigured = true
 		next.activityCollapsed = existing.activityCollapsed
@@ -71,9 +70,6 @@ func (m *tuiSyncModel) storeInteractiveSelection(state *tuiInteractiveSelectionS
 	}
 	state = mergeInteractiveSelectionState(m.interactiveSelections[sourceID], state)
 	m.interactiveSelections[sourceID] = state
-	if m.interactiveTracker != nil {
-		m.interactiveTracker.UpsertSelectionState(state)
-	}
 	if strings.TrimSpace(m.interactiveDisplayID) == "" {
 		m.interactiveDisplayID = sourceID
 	}
@@ -101,9 +97,6 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForSource(sourceID string) *tui
 				state.details = m.planSourceDetailsForSource(source)
 			}
 		}
-		if m.interactiveTracker != nil {
-			m.interactiveTracker.applyToSelectionState(state)
-		}
 		return state
 	}
 	state := newEmptyTUIInteractiveSelectionState()
@@ -122,9 +115,6 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForEventSource(sourceID string)
 	sourceID = strings.TrimSpace(sourceID)
 	if m.planPrompt != nil && sourceID != "" && strings.TrimSpace(m.planPrompt.sourceID) == sourceID {
 		m.storeInteractiveSelection(m.planPrompt.tuiInteractiveSelectionState)
-		if m.interactiveTracker != nil {
-			m.interactiveTracker.applyToSelectionState(m.planPrompt.tuiInteractiveSelectionState)
-		}
 		return m.planPrompt.tuiInteractiveSelectionState
 	}
 	return m.ensureInteractiveSelectionForSource(sourceID)
@@ -138,11 +128,8 @@ func (m *tuiSyncModel) confirmInteractiveSelection(sourceID string) {
 	if m.planPrompt != nil && sourceID != "" && strings.TrimSpace(m.planPrompt.sourceID) == sourceID {
 		m.storeInteractiveSelection(m.planPrompt.tuiInteractiveSelectionState)
 	}
-	if state := m.ensureInteractiveSelectionForSource(sourceID); state != nil {
-		state.confirmed = true
-		if m.interactiveTracker != nil {
-			m.interactiveTracker.ConfirmSelection(state)
-		}
+	if state := m.ensureInteractiveSelectionForSource(sourceID); state != nil && m.interactiveTracker != nil {
+		m.interactiveTracker.ConfirmSelection(state)
 	}
 }
 
@@ -399,30 +386,24 @@ func (m *tuiSyncModel) toggleStandardActivity(layout tuiShellLayout) {
 
 func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiveSelectionState {
 	selected := map[int]bool{}
-	rows := make([]tuiTrackRowState, 0, len(req.Rows))
+	rows := make([]tuiPlanTrackRow, 0, len(req.Rows))
 	for _, row := range req.Rows {
 		if row.Toggleable && row.SelectedByDefault {
 			selected[row.Index] = true
 		}
-		planClass := tuiTrackPlanClassFromPlanStatus(row.Status)
-		runtimeStatus := tuiRuntimeStatusFromPlanRow(row)
-		rows = append(rows, tuiTrackRowState{
+		rows = append(rows, tuiPlanTrackRow{
 			SourceID:          req.SourceID,
 			SourceLabel:       req.Details.SourceID,
 			RemoteID:          row.RemoteID,
 			Title:             row.Title,
 			Index:             row.Index,
 			Toggleable:        row.Toggleable,
-			Selected:          row.Toggleable && row.SelectedByDefault,
 			PlanStatus:        row.Status,
-			PlanClass:         planClass,
-			RunScope:          tuiTrackRunScopeForRow(row.Toggleable, row.SelectedByDefault),
-			RuntimeStatus:     runtimeStatus,
-			StatusLabel:       tuiTrackStatusLabel(runtimeStatus, 0, false, ""),
+			PlanClass:         tuiTrackPlanClassFromPlanStatus(row.Status),
 			SelectedByDefault: row.SelectedByDefault,
 		})
 	}
-	state := &tuiInteractiveSelectionState{
+	return &tuiInteractiveSelectionState{
 		sourceID:     req.SourceID,
 		rows:         rows,
 		details:      req.Details,
@@ -430,8 +411,6 @@ func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiv
 		filter:       tuiTrackFilterAll,
 		filterCursor: 0,
 	}
-	state.syncSelectedRows()
-	return state
 }
 
 func newTUIPlanPromptState(req tuiPlanSelectRequestMsg) *tuiPlanPromptState {
@@ -450,7 +429,7 @@ func (s *tuiInteractiveSelectionState) selectedIndices() []int {
 		if !row.Toggleable {
 			continue
 		}
-		if row.Selected {
+		if s.isSelected(row.Index) {
 			out = append(out, row.Index)
 		}
 	}
@@ -518,20 +497,20 @@ func (s *tuiInteractiveSelectionState) syncFilterForPhase(phase tuiInteractiveSy
 	}
 }
 
-func (s *tuiInteractiveSelectionState) filteredRowsForPhase(phase tuiInteractiveSyncPhase) []tuiTrackRowState {
+func (s *tuiInteractiveSelectionState) filteredRowsForPhase(rows []tuiTrackRowState, phase tuiInteractiveSyncPhase) []tuiTrackRowState {
 	if s == nil {
 		return nil
 	}
-	rows := make([]tuiTrackRowState, 0, len(s.rows))
-	for _, row := range s.rows {
-		if s.matchesFilter(row, phase, s.filter) {
-			rows = append(rows, row)
+	filtered := make([]tuiTrackRowState, 0, len(rows))
+	for _, row := range rows {
+		if tuiTrackRowMatchesFilter(row, phase, s.filter) {
+			filtered = append(filtered, row)
 		}
 	}
-	return rows
+	return filtered
 }
 
-func (s *tuiInteractiveSelectionState) matchesFilter(row tuiTrackRowState, phase tuiInteractiveSyncPhase, filter tuiPlanPromptFilter) bool {
+func tuiTrackRowMatchesFilter(row tuiTrackRowState, phase tuiInteractiveSyncPhase, filter tuiPlanPromptFilter) bool {
 	if tuiInteractiveRuntimePhase(phase) {
 		switch filter {
 		case tuiTrackFilterInRun:
@@ -565,25 +544,25 @@ func (s *tuiInteractiveSelectionState) matchesFilter(row tuiTrackRowState, phase
 	}
 }
 
-func (s *tuiInteractiveSelectionState) visibleRowIndicesForPhase(phase tuiInteractiveSyncPhase) []int {
+func (s *tuiInteractiveSelectionState) visibleRowIndicesForPhase(rows []tuiTrackRowState, phase tuiInteractiveSyncPhase) []int {
 	if s == nil {
 		return nil
 	}
-	indices := make([]int, 0, len(s.rows))
-	for idx, row := range s.rows {
-		if s.matchesFilter(row, phase, s.filter) {
+	indices := make([]int, 0, len(rows))
+	for idx, row := range rows {
+		if tuiTrackRowMatchesFilter(row, phase, s.filter) {
 			indices = append(indices, idx)
 		}
 	}
 	return indices
 }
 
-func (s *tuiInteractiveSelectionState) ensureCursorVisible(phase tuiInteractiveSyncPhase) {
+func (s *tuiInteractiveSelectionState) ensureCursorVisible(rows []tuiTrackRowState, phase tuiInteractiveSyncPhase) {
 	if s == nil {
 		return
 	}
 	s.syncFilterForPhase(phase)
-	visible := s.visibleRowIndicesForPhase(phase)
+	visible := s.visibleRowIndicesForPhase(rows, phase)
 	if len(visible) == 0 {
 		s.cursor = 0
 		return
@@ -596,12 +575,12 @@ func (s *tuiInteractiveSelectionState) ensureCursorVisible(phase tuiInteractiveS
 	s.cursor = visible[0]
 }
 
-func (s *tuiInteractiveSelectionState) moveCursor(delta int, phase tuiInteractiveSyncPhase) {
+func (s *tuiInteractiveSelectionState) moveCursor(rows []tuiTrackRowState, delta int, phase tuiInteractiveSyncPhase) {
 	if s == nil {
 		return
 	}
 	s.syncFilterForPhase(phase)
-	visible := s.visibleRowIndicesForPhase(phase)
+	visible := s.visibleRowIndicesForPhase(rows, phase)
 	if len(visible) == 0 {
 		s.cursor = 0
 		return
@@ -623,15 +602,15 @@ func (s *tuiInteractiveSelectionState) moveCursor(delta int, phase tuiInteractiv
 	s.cursor = visible[current]
 }
 
-func (s *tuiInteractiveSelectionState) currentRow(phase tuiInteractiveSyncPhase) (tuiTrackRowState, bool) {
+func (s *tuiInteractiveSelectionState) currentRow(rows []tuiTrackRowState, phase tuiInteractiveSyncPhase) (tuiTrackRowState, bool) {
 	if s == nil {
 		return tuiTrackRowState{}, false
 	}
 	s.syncFilterForPhase(phase)
-	visible := s.visibleRowIndicesForPhase(phase)
+	visible := s.visibleRowIndicesForPhase(rows, phase)
 	for _, idx := range visible {
 		if idx == s.cursor {
-			return s.rows[idx], true
+			return rows[idx], true
 		}
 	}
 	return tuiTrackRowState{}, false
@@ -679,13 +658,13 @@ func (s *tuiInteractiveSelectionState) focusLabel() string {
 	return "tracks"
 }
 
-func (s *tuiInteractiveSelectionState) filterCount(filter tuiPlanPromptFilter, phase tuiInteractiveSyncPhase) int {
+func (s *tuiInteractiveSelectionState) filterCount(rows []tuiTrackRowState, filter tuiPlanPromptFilter, phase tuiInteractiveSyncPhase) int {
 	if s == nil {
 		return 0
 	}
 	count := 0
-	for _, row := range s.rows {
-		if s.matchesFilter(row, phase, filter) {
+	for _, row := range rows {
+		if tuiTrackRowMatchesFilter(row, phase, filter) {
 			count++
 		}
 	}
@@ -698,93 +677,11 @@ func (s *tuiInteractiveSelectionState) selectedCount() int {
 	}
 	count := 0
 	for _, row := range s.rows {
-		if row.RunScope == tuiTrackRunScopeIncluded {
+		if row.Toggleable && s.isSelected(row.Index) {
 			count++
 		}
 	}
 	return count
-}
-
-func (s *tuiInteractiveSelectionState) runtimeSelectedCount() int {
-	if s == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range s.rows {
-		if row.RunScope == tuiTrackRunScopeIncluded {
-			count++
-		}
-	}
-	return count
-}
-
-func (s *tuiInteractiveSelectionState) runtimeCompletedCount() int {
-	if s == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range s.rows {
-		if row.RunScope != tuiTrackRunScopeIncluded {
-			continue
-		}
-		if row.RuntimeStatus == tuiTrackStatusDownloaded {
-			count++
-		}
-	}
-	return count
-}
-
-func (s *tuiInteractiveSelectionState) runtimeSkippedCount() int {
-	if s == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range s.rows {
-		if row.RunScope != tuiTrackRunScopeIncluded {
-			continue
-		}
-		if row.RuntimeStatus == tuiTrackStatusSkipped {
-			count++
-		}
-	}
-	return count
-}
-
-func (s *tuiInteractiveSelectionState) runtimeFailedCount() int {
-	if s == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range s.rows {
-		if row.RunScope != tuiTrackRunScopeIncluded {
-			continue
-		}
-		if row.RuntimeStatus == tuiTrackStatusFailed {
-			count++
-		}
-	}
-	return count
-}
-
-func (s *tuiInteractiveSelectionState) runtimeProgressUnits() float64 {
-	if s == nil {
-		return 0
-	}
-	total := 0.0
-	for _, row := range s.rows {
-		if row.RunScope != tuiTrackRunScopeIncluded {
-			continue
-		}
-		switch row.RuntimeStatus {
-		case tuiTrackStatusDownloaded, tuiTrackStatusSkipped, tuiTrackStatusFailed:
-			total += 1
-		case tuiTrackStatusDownloading:
-			if row.ProgressKnown {
-				total += row.ProgressPercent / 100.0
-			}
-		}
-	}
-	return total
 }
 
 func (s *tuiInteractiveSelectionState) alreadyHaveCount() int {
@@ -834,51 +731,13 @@ func (s *tuiInteractiveSelectionState) setSelected(index int, selected bool) {
 		s.selected = map[int]bool{}
 	}
 	s.selected[index] = selected
-	s.syncSelectedRows()
 }
 
-func (s *tuiInteractiveSelectionState) syncSelectedRows() {
+func (s *tuiInteractiveSelectionState) isSelected(index int) bool {
 	if s == nil {
-		return
+		return false
 	}
-	for idx := range s.rows {
-		row := &s.rows[idx]
-		row.Selected = row.Toggleable && s.selected[row.Index]
-		row.RunScope = tuiTrackRunScopeForRow(row.Toggleable, row.Selected)
-	}
-}
-
-func (s *tuiInteractiveSelectionState) selectionMarker(row tuiTrackRowState) string {
-	if !row.Toggleable {
-		return "[-]"
-	}
-	if row.Selected {
-		return "[x]"
-	}
-	return "[ ]"
-}
-
-func (m tuiSyncModel) interactiveConfirmedSelections() []*tuiInteractiveSelectionState {
-	if len(m.interactiveSelections) == 0 {
-		return nil
-	}
-	selections := make([]*tuiInteractiveSelectionState, 0, len(m.interactiveSelections))
-	for _, source := range m.sources {
-		state := m.interactiveSelectionForSource(source.ID)
-		if state == nil || !state.confirmed {
-			continue
-		}
-		selections = append(selections, state)
-	}
-	if len(selections) > 0 {
-		return selections
-	}
-	for _, state := range m.interactiveSelections {
-		if state != nil && state.confirmed {
-			selections = append(selections, state)
-		}
-	}
-	return selections
+	return s.selected[index]
 }
 
 func (m tuiSyncModel) interactiveAggregateCounts() (selected, completed, skipped, failed int, progressPercent float64) {
@@ -910,8 +769,8 @@ func (s *tuiInteractiveSelectionState) toggleActivity(layout tuiShellLayout) {
 	s.activityCollapseConfigured = true
 }
 
-func tuiRuntimeStatusFromPlanRow(row engine.PlanRow) tuiTrackRuntimeStatus {
-	switch row.Status {
+func tuiRuntimeStatusFromPlanStatus(status engine.PlanRowStatus) tuiTrackRuntimeStatus {
+	switch status {
 	case engine.PlanRowAlreadyDownloaded:
 		return tuiTrackStatusIdle
 	default:
@@ -938,6 +797,27 @@ func tuiTrackRunScopeForRow(toggleable, selected bool) tuiTrackRunScope {
 		return tuiTrackRunScopeIncluded
 	}
 	return tuiTrackRunScopeExcluded
+}
+
+func tuiDisplayRowFromPlanRow(row tuiPlanTrackRow, selected bool) tuiTrackRowState {
+	runtimeStatus := tuiRuntimeStatusFromPlanStatus(row.PlanStatus)
+	return tuiTrackRowState{
+		SourceID:        row.SourceID,
+		SourceLabel:     row.SourceLabel,
+		RemoteID:        row.RemoteID,
+		Title:           row.Title,
+		Index:           row.Index,
+		Toggleable:      row.Toggleable,
+		PlanStatus:      row.PlanStatus,
+		PlanClass:       row.PlanClass,
+		Selected:        row.Toggleable && selected,
+		RunScope:        tuiTrackRunScopeForRow(row.Toggleable, selected),
+		RuntimeStatus:   runtimeStatus,
+		StatusLabel:     tuiTrackStatusLabel(runtimeStatus, 0, false, ""),
+		FailureDetail:   "",
+		ProgressKnown:   false,
+		ProgressPercent: 0,
+	}
 }
 
 func containsTUITrackFilter(filters []tuiPlanPromptFilter, filter tuiPlanPromptFilter) bool {

@@ -73,9 +73,6 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 	case tuiPlanSelectRequestMsg:
 		state := newTUIInteractiveSelectionState(typed)
 		m.storeInteractiveSelection(state)
-		if m.interactiveTracker != nil {
-			m.interactiveTracker.UpsertSelectionState(state)
-		}
 		m.setInteractiveDisplaySource(typed.SourceID)
 		if m.isInteractiveSyncWorkflow() {
 			m.interactivePhase = tuiInteractivePhaseReview
@@ -177,6 +174,11 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		if m.planPrompt != nil {
 			filterPhase := tuiInteractivePhaseReview
 			m.planPrompt.syncFilterForPhase(filterPhase)
+			displayState := m.interactiveDisplayStateForSelection(m.planPrompt.tuiInteractiveSelectionState)
+			displayRows := []tuiTrackRowState(nil)
+			if displayState != nil {
+				displayRows = displayState.rows
+			}
 			if typed.String() == "l" {
 				m.timeoutInputActive = false
 				m.timeoutInput = ""
@@ -189,7 +191,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			if typed.String() == "tab" {
 				m.planPrompt.focusFilters = !m.planPrompt.focusFilters
 				if !m.planPrompt.focusFilters {
-					m.planPrompt.ensureCursorVisible(filterPhase)
+					m.planPrompt.ensureCursorVisible(displayRows, filterPhase)
 				}
 				return m, nil
 			}
@@ -209,7 +211,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				case " ", "enter":
 					m.planPrompt.filter = filters[m.planPrompt.filterCursor]
 					m.planPrompt.focusFilters = false
-					m.planPrompt.ensureCursorVisible(filterPhase)
+					m.planPrompt.ensureCursorVisible(displayRows, filterPhase)
 					return m, nil
 				case "ctrl+c", "q", "esc":
 					m.planPrompt.reply <- tuiPlanSelectResult{Canceled: true}
@@ -222,13 +224,13 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			}
 			switch typed.String() {
 			case "up", "k":
-				m.planPrompt.moveCursor(-1, filterPhase)
+				m.planPrompt.moveCursor(displayRows, -1, filterPhase)
 				return m, nil
 			case "down", "j":
-				m.planPrompt.moveCursor(1, filterPhase)
+				m.planPrompt.moveCursor(displayRows, 1, filterPhase)
 				return m, nil
 			case " ":
-				row, ok := m.planPrompt.currentRow(filterPhase)
+				row, ok := m.planPrompt.currentRow(displayRows, filterPhase)
 				if !ok {
 					return m, nil
 				}
@@ -238,14 +240,14 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				m.planPrompt.setSelected(row.Index, !row.Selected)
 				return m, nil
 			case "a":
-				for _, row := range m.planPrompt.filteredRowsForPhase(filterPhase) {
+				for _, row := range m.planPrompt.filteredRowsForPhase(displayRows, filterPhase) {
 					if row.Toggleable {
 						m.planPrompt.setSelected(row.Index, true)
 					}
 				}
 				return m, nil
 			case "n":
-				for _, row := range m.planPrompt.filteredRowsForPhase(filterPhase) {
+				for _, row := range m.planPrompt.filteredRowsForPhase(displayRows, filterPhase) {
 					if row.Toggleable {
 						m.planPrompt.setSelected(row.Index, false)
 					}
@@ -491,10 +493,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		}
 		m.observeStandardSyncEvent(typed.Event)
 		if m.isInteractiveSyncWorkflow() {
-			state := m.ensureInteractiveSelectionForEventSource(typed.Event.SourceID)
-			if m.interactiveTracker != nil {
-				m.interactiveTracker.UpsertSelectionState(state)
-			}
+			m.ensureInteractiveSelectionForEventSource(typed.Event.SourceID)
 			switch typed.Event.Event {
 			case output.EventSourcePreflight, output.EventSourceStarted, output.EventSourceFinished, output.EventSourceFailed:
 				m.setInteractiveDisplaySource(typed.Event.SourceID)
@@ -528,12 +527,6 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		}
 		if m.isInteractiveSyncWorkflow() && m.interactiveTracker != nil {
 			m.interactiveTracker.ObserveEvent(typed.Event, outcomes, historyLine, historyOK)
-			if state := m.ensureInteractiveSelectionForEventSource(typed.Event.SourceID); state != nil {
-				m.interactiveTracker.applyToSelectionState(state)
-			}
-			if m.planPrompt != nil && m.planPrompt.sourceID == typed.Event.SourceID {
-				m.interactiveTracker.applyToSelectionState(m.planPrompt.tuiInteractiveSelectionState)
-			}
 		}
 		if m.eventCh != nil {
 			return m, m.waitRunMsgCmd()
@@ -660,6 +653,62 @@ func (m tuiSyncModel) currentInteractiveSelection() *tuiInteractiveSelectionStat
 	return m.interactiveSelectionForSource(m.currentInteractiveDisplaySourceID())
 }
 
+func (m tuiSyncModel) currentInteractiveDisplayState() *tuiInteractiveDisplayState {
+	return m.interactiveDisplayStateForSelection(m.currentInteractiveSelection())
+}
+
+func (m tuiSyncModel) interactiveDisplayStateForSelection(state *tuiInteractiveSelectionState) *tuiInteractiveDisplayState {
+	sourceID := ""
+	if state != nil {
+		sourceID = strings.TrimSpace(state.sourceID)
+	}
+	if sourceID == "" {
+		sourceID = m.currentInteractiveDisplaySourceID()
+	}
+	if sourceID == "" {
+		return nil
+	}
+
+	display := &tuiInteractiveDisplayState{sourceID: sourceID}
+	if source, ok := m.interactiveSourceByID(sourceID); ok {
+		display.details = m.planSourceDetailsForSource(source)
+	} else if state != nil {
+		display.details = state.details
+	}
+	if state != nil && display.details.SourceID == "" {
+		display.details = state.details
+	}
+
+	snapshot := tuiTrackedSourceSnapshot{lifecycle: tuiSourceLifecycleIdle}
+	if m.interactiveTracker != nil {
+		snapshot = m.interactiveTracker.SourceSnapshot(sourceID)
+	}
+	display.lifecycle = snapshot.lifecycle
+	display.confirmed = snapshot.confirmed
+	display.activity = snapshot.activity
+
+	if state != nil && len(state.rows) > 0 {
+		display.rows = make([]tuiTrackRowState, 0, len(state.rows))
+		runtimeRows := map[int]tuiTrackRowState{}
+		if snapshot.confirmed {
+			for _, row := range snapshot.rows {
+				runtimeRows[row.Index] = row
+			}
+		}
+		for _, planRow := range state.rows {
+			row := tuiDisplayRowFromPlanRow(planRow, state.isSelected(planRow.Index))
+			if tracked, ok := runtimeRows[planRow.Index]; ok {
+				row = tracked
+			}
+			display.rows = append(display.rows, row)
+		}
+		return display
+	}
+
+	display.rows = snapshot.rows
+	return display
+}
+
 func (m tuiSyncModel) currentShellLayout() tuiShellLayout {
 	return newTUIShellLayout(m.width, m.height)
 }
@@ -679,7 +728,8 @@ func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
 		return false
 	}
 	state := m.currentInteractiveSelection()
-	if state == nil || len(state.rows) == 0 {
+	displayState := m.currentInteractiveDisplayState()
+	if state == nil || displayState == nil || len(displayState.rows) == 0 {
 		return false
 	}
 	filterPhase := m.interactiveFilterPhase()
@@ -691,7 +741,7 @@ func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
 	if key == "tab" {
 		state.focusFilters = !state.focusFilters
 		if !state.focusFilters {
-			state.ensureCursorVisible(filterPhase)
+			state.ensureCursorVisible(displayState.rows, filterPhase)
 		}
 		return true
 	}
@@ -711,7 +761,7 @@ func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
 		case " ", "enter":
 			state.filter = filters[state.filterCursor]
 			state.focusFilters = false
-			state.ensureCursorVisible(filterPhase)
+			state.ensureCursorVisible(displayState.rows, filterPhase)
 			return true
 		default:
 			return false
@@ -719,10 +769,10 @@ func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
 	}
 	switch key {
 	case "up", "k":
-		state.moveCursor(-1, filterPhase)
+		state.moveCursor(displayState.rows, -1, filterPhase)
 		return true
 	case "down", "j":
-		state.moveCursor(1, filterPhase)
+		state.moveCursor(displayState.rows, 1, filterPhase)
 		return true
 	case " ", "enter", "a", "n":
 		return true

@@ -18,7 +18,6 @@ func TestTUISyncRunTrackerObserveEventMapsRowsByIndexTrackIDAndTrackName(t *test
 			{Index: 3, Title: "Name Match", RemoteID: "track-3", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
 		},
 	})
-	state.confirmed = true
 	tracker.ConfirmSelection(state)
 
 	tracker.ObserveEvent(output.Event{
@@ -37,10 +36,7 @@ func TestTUISyncRunTrackerObserveEventMapsRowsByIndexTrackIDAndTrackName(t *test
 		Details:  map[string]any{"track_name": "Name Match", "reason": "network"},
 	}, nil, "", false)
 
-	source := tracker.sources["source-a"]
-	if source == nil {
-		t.Fatalf("expected source state")
-	}
+	source := tracker.SourceSnapshot("source-a")
 	if source.rows[0].RuntimeStatus != tuiTrackStatusDownloaded {
 		t.Fatalf("expected index-matched row to be downloaded, got %q", source.rows[0].RuntimeStatus)
 	}
@@ -62,14 +58,17 @@ func TestTUISyncRunTrackerAggregateCountsAcrossConfirmedSources(t *testing.T) {
 			{Index: 2, Title: "A skipped", RemoteID: "a-2", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
 		},
 	})
-	sourceA.confirmed = true
-	sourceA.rows[0].RuntimeStatus = tuiTrackStatusDownloaded
-	sourceA.rows[0].StatusLabel = tuiTrackStatusLabel(sourceA.rows[0].RuntimeStatus, 0, false, "")
-	sourceA.rows[1].RuntimeStatus = tuiTrackStatusSkipped
-	sourceA.rows[1].FailureDetail = "duplicate"
-	sourceA.rows[1].StatusLabel = tuiTrackStatusLabel(sourceA.rows[1].RuntimeStatus, 0, false, sourceA.rows[1].FailureDetail)
 	tracker.ConfirmSelection(sourceA)
-	tracker.SyncSourceFromSelection(sourceA)
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details:  map[string]any{"index": 1},
+	}, nil, "", false)
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackSkip,
+		SourceID: "source-a",
+		Details:  map[string]any{"index": 2, "reason": "duplicate"},
+	}, nil, "", false)
 
 	sourceB := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
 		SourceID: "source-b",
@@ -78,13 +77,12 @@ func TestTUISyncRunTrackerAggregateCountsAcrossConfirmedSources(t *testing.T) {
 			{Index: 2, Title: "locked", RemoteID: "b-2", Status: engine.PlanRowAlreadyDownloaded},
 		},
 	})
-	sourceB.confirmed = true
-	sourceB.rows[0].RuntimeStatus = tuiTrackStatusDownloading
-	sourceB.rows[0].ProgressKnown = true
-	sourceB.rows[0].ProgressPercent = 50
-	sourceB.rows[0].StatusLabel = tuiTrackStatusLabel(sourceB.rows[0].RuntimeStatus, 50, true, "")
 	tracker.ConfirmSelection(sourceB)
-	tracker.SyncSourceFromSelection(sourceB)
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "source-b",
+		Details:  map[string]any{"index": 1, "percent": 50.0},
+	}, nil, "", false)
 
 	selected, completed, skipped, failed, progress := tracker.AggregateCounts(false)
 	if selected != 3 {
@@ -121,10 +119,7 @@ func TestTUISyncRunTrackerBoundsActivityAndTracksFailure(t *testing.T) {
 		},
 	}, nil, "", false)
 
-	source := tracker.sources["source-a"]
-	if source == nil {
-		t.Fatalf("expected source state")
-	}
+	source := tracker.SourceSnapshot("source-a")
 	if len(source.activity) != 18 {
 		t.Fatalf("expected bounded activity length of 18, got %d", len(source.activity))
 	}

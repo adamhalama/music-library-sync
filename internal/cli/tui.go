@@ -217,23 +217,34 @@ const (
 	tuiTrackRunScopeLocked   tuiTrackRunScope = "locked"
 )
 
-type tuiTrackRowState struct {
+type tuiPlanTrackRow struct {
 	SourceID          string
 	SourceLabel       string
 	RemoteID          string
 	Title             string
 	Index             int
 	Toggleable        bool
-	Selected          bool
 	PlanStatus        engine.PlanRowStatus
 	PlanClass         tuiTrackPlanClass
-	RunScope          tuiTrackRunScope
-	RuntimeStatus     tuiTrackRuntimeStatus
-	StatusLabel       string
-	FailureDetail     string
 	SelectedByDefault bool
-	ProgressKnown     bool
-	ProgressPercent   float64
+}
+
+type tuiTrackRowState struct {
+	SourceID        string
+	SourceLabel     string
+	RemoteID        string
+	Title           string
+	Index           int
+	Toggleable      bool
+	PlanStatus      engine.PlanRowStatus
+	PlanClass       tuiTrackPlanClass
+	Selected        bool
+	RunScope        tuiTrackRunScope
+	RuntimeStatus   tuiTrackRuntimeStatus
+	StatusLabel     string
+	FailureDetail   string
+	ProgressKnown   bool
+	ProgressPercent float64
 }
 
 type tuiTrackRuntimeStatus string
@@ -254,17 +265,24 @@ type tuiActivityEntry struct {
 	SourceID  string
 }
 
+type tuiInteractiveDisplayState struct {
+	sourceID  string
+	details   planSourceDetails
+	rows      []tuiTrackRowState
+	activity  []tuiActivityEntry
+	lifecycle tuiInteractiveSourceLifecycle
+	confirmed bool
+}
+
 type tuiInteractiveSelectionState struct {
 	sourceID                   string
-	rows                       []tuiTrackRowState
+	rows                       []tuiPlanTrackRow
 	details                    planSourceDetails
-	confirmed                  bool
 	cursor                     int
 	selected                   map[int]bool
 	filter                     tuiStatusFilter
 	filterCursor               int
 	focusFilters               bool
-	activity                   []tuiActivityEntry
 	activityCollapsed          bool
 	activityCollapseConfigured bool
 }

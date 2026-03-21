@@ -23,6 +23,13 @@ type tuiTrackedSourceState struct {
 	activity  []tuiActivityEntry
 }
 
+type tuiTrackedSourceSnapshot struct {
+	lifecycle tuiInteractiveSourceLifecycle
+	confirmed bool
+	rows      []tuiTrackRowState
+	activity  []tuiActivityEntry
+}
+
 func newTUISyncRunTracker() *tuiSyncRunTracker {
 	return &tuiSyncRunTracker{
 		sources: map[string]*tuiTrackedSourceState{},
@@ -61,17 +68,6 @@ func (t *tuiSyncRunTracker) ensureSource(sourceID string) *tuiTrackedSourceState
 	return state
 }
 
-func (t *tuiSyncRunTracker) UpsertSelectionState(state *tuiInteractiveSelectionState) {
-	if t == nil || state == nil {
-		return
-	}
-	source := t.ensureSource(state.sourceID)
-	if source == nil {
-		return
-	}
-	t.applyToSelectionState(state)
-}
-
 func (t *tuiSyncRunTracker) ConfirmSelection(state *tuiInteractiveSelectionState) {
 	if t == nil || state == nil {
 		return
@@ -81,21 +77,7 @@ func (t *tuiSyncRunTracker) ConfirmSelection(state *tuiInteractiveSelectionState
 		return
 	}
 	source.confirmed = true
-	source.rows = cloneTUITrackRows(state.rows)
-	t.applyToSelectionState(state)
-}
-
-func (t *tuiSyncRunTracker) SyncSourceFromSelection(state *tuiInteractiveSelectionState) {
-	if t == nil || state == nil {
-		return
-	}
-	source := t.ensureSource(state.sourceID)
-	if source == nil {
-		return
-	}
-	source.confirmed = source.confirmed || state.confirmed
-	source.rows = cloneTUITrackRows(state.rows)
-	t.applyToSelectionState(state)
+	source.rows = buildTrackedRowsForSelection(state)
 }
 
 func (t *tuiSyncRunTracker) SetSourceLifecycle(sourceID string, lifecycle tuiInteractiveSourceLifecycle) {
@@ -112,6 +94,19 @@ func (t *tuiSyncRunTracker) SourceLifecycle(sourceID string) tuiInteractiveSourc
 		return tuiSourceLifecycleIdle
 	}
 	return source.lifecycle
+}
+
+func (t *tuiSyncRunTracker) SourceSnapshot(sourceID string) tuiTrackedSourceSnapshot {
+	source := t.ensureSource(sourceID)
+	if source == nil {
+		return tuiTrackedSourceSnapshot{lifecycle: tuiSourceLifecycleIdle}
+	}
+	return tuiTrackedSourceSnapshot{
+		lifecycle: source.lifecycle,
+		confirmed: source.confirmed,
+		rows:      cloneTUITrackRows(source.rows),
+		activity:  cloneTUIActivityEntries(source.activity),
+	}
 }
 
 func (t *tuiSyncRunTracker) MarkRuntimeStarted(at time.Time) {
@@ -182,35 +177,6 @@ func (t *tuiSyncRunTracker) ObserveEvent(event output.Event, outcomes []output.S
 	}
 	if failure := tuiFailureStateFromEvent(event); failure != nil {
 		t.lastFailure = failure
-	}
-}
-
-func (t *tuiSyncRunTracker) applyToSelectionState(state *tuiInteractiveSelectionState) {
-	if t == nil || state == nil {
-		return
-	}
-	source := t.ensureSource(state.sourceID)
-	if source == nil {
-		return
-	}
-	state.confirmed = state.confirmed || source.confirmed
-	state.activity = append([]tuiActivityEntry(nil), source.activity...)
-	if len(source.rows) == 0 {
-		return
-	}
-	for idx := range state.rows {
-		row := &state.rows[idx]
-		tracked := source.resolveTrackedRow(*row)
-		if tracked == nil {
-			continue
-		}
-		row.RuntimeStatus = tracked.RuntimeStatus
-		row.StatusLabel = tracked.StatusLabel
-		row.FailureDetail = tracked.FailureDetail
-		row.ProgressKnown = tracked.ProgressKnown
-		row.ProgressPercent = tracked.ProgressPercent
-		row.Selected = tracked.Selected
-		row.RunScope = tracked.RunScope
 	}
 }
 
@@ -292,12 +258,32 @@ func formatElapsedLabel(minutes, seconds int) string {
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
+func buildTrackedRowsForSelection(state *tuiInteractiveSelectionState) []tuiTrackRowState {
+	if state == nil || len(state.rows) == 0 {
+		return nil
+	}
+	rows := make([]tuiTrackRowState, 0, len(state.rows))
+	for _, row := range state.rows {
+		rows = append(rows, tuiDisplayRowFromPlanRow(row, state.isSelected(row.Index)))
+	}
+	return rows
+}
+
 func cloneTUITrackRows(rows []tuiTrackRowState) []tuiTrackRowState {
 	if len(rows) == 0 {
 		return nil
 	}
 	cloned := make([]tuiTrackRowState, len(rows))
 	copy(cloned, rows)
+	return cloned
+}
+
+func cloneTUIActivityEntries(entries []tuiActivityEntry) []tuiActivityEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	cloned := make([]tuiActivityEntry, len(entries))
+	copy(cloned, entries)
 	return cloned
 }
 
@@ -310,32 +296,6 @@ func (s *tuiTrackedSourceState) appendActivity(entry tuiActivityEntry) {
 	if len(s.activity) > maxEntries {
 		s.activity = append([]tuiActivityEntry(nil), s.activity[len(s.activity)-maxEntries:]...)
 	}
-}
-
-func (s *tuiTrackedSourceState) resolveTrackedRow(row tuiTrackRowState) *tuiTrackRowState {
-	if s == nil {
-		return nil
-	}
-	for idx := range s.rows {
-		if s.rows[idx].Index == row.Index {
-			return &s.rows[idx]
-		}
-	}
-	if strings.TrimSpace(row.RemoteID) != "" {
-		for idx := range s.rows {
-			if strings.TrimSpace(s.rows[idx].RemoteID) == strings.TrimSpace(row.RemoteID) {
-				return &s.rows[idx]
-			}
-		}
-	}
-	if strings.TrimSpace(row.Title) != "" {
-		for idx := range s.rows {
-			if strings.TrimSpace(s.rows[idx].Title) == strings.TrimSpace(row.Title) {
-				return &s.rows[idx]
-			}
-		}
-	}
-	return nil
 }
 
 func (s *tuiTrackedSourceState) resolveRowForEvent(event output.Event) *tuiTrackRowState {
