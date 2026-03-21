@@ -2,14 +2,18 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
 )
@@ -47,8 +51,34 @@ func TestTUIRootMenuShowsInteractiveSyncFirst(t *testing.T) {
 		t.Fatalf("expected sync second, got %v", root.menuItems)
 	}
 	view := root.View()
-	if !strings.Contains(view, "> interactive sync") {
-		t.Fatalf("expected menu view to default to interactive sync, got: %s", view)
+	if !strings.Contains(view, "WORKFLOW LAUNCHER") {
+		t.Fatalf("expected landing shell title, got: %s", view)
+	}
+	if !strings.Contains(view, "interactive sync") {
+		t.Fatalf("expected interactive sync in landing navigation, got: %s", view)
+	}
+	if !strings.Contains(view, "Review enabled sources, set plan options") {
+		t.Fatalf("expected landing body summary, got: %s", view)
+	}
+}
+
+func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.width = 110
+
+	view := root.View()
+	if !strings.Contains(view, "WORKFLOWS") {
+		t.Fatalf("expected full shell sidebar section at width 110, got: %s", view)
+	}
+}
+
+func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.width = 109
+
+	view := root.View()
+	if strings.Contains(view, "WORKFLOWS") {
+		t.Fatalf("expected compact shell without sidebar section label, got: %s", view)
 	}
 }
 
@@ -126,9 +156,6 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.cfgLoaded = true
 	interactiveView := interactive.View()
-	if !strings.Contains(interactiveView, "Interactive Sync Workflow") {
-		t.Fatalf("expected interactive sync title, got: %s", interactiveView)
-	}
 	if !strings.Contains(interactiveView, "plan_limit=") {
 		t.Fatalf("expected interactive sync plan limit controls, got: %s", interactiveView)
 	}
@@ -139,12 +166,6 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	standard := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
 	standard.cfgLoaded = true
 	standardView := standard.View()
-	if !strings.Contains(standardView, "Sync Workflow") {
-		t.Fatalf("expected standard sync title, got: %s", standardView)
-	}
-	if strings.Contains(standardView, "Interactive Sync Workflow") {
-		t.Fatalf("expected standard sync title only, got: %s", standardView)
-	}
 	if strings.Contains(standardView, "plan_limit=") || strings.Contains(standardView, "type limit") {
 		t.Fatalf("expected standard sync to hide plan controls, got: %s", standardView)
 	}
@@ -153,21 +174,1310 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	}
 }
 
-func TestTUISyncModelPlanPromptUsesInteractiveHeading(t *testing.T) {
+func TestTUIRootStandardSyncShellShowsSectionedBodyAndShortcuts(t *testing.T) {
+	root := renderStandardShellFixture(150, 30)
+
+	view := root.View()
+	if !strings.Contains(view, "Selection") || !strings.Contains(view, "Run") || !strings.Contains(view, "Activity") {
+		t.Fatalf("expected sectioned standard sync shell body, got: %s", view)
+	}
+	if !strings.Contains(view, "[p] activity") {
+		t.Fatalf("expected standard sync shortcut bar to include activity toggle, got: %s", view)
+	}
+	if !strings.Contains(view, "ask_on_existing=") || !strings.Contains(view, "scan_gaps=") || !strings.Contains(view, "no_preflight=") {
+		t.Fatalf("expected standard sync command summary to include standard-only flags, got: %s", view)
+	}
+	if strings.Contains(view, "plan_limit=") {
+		t.Fatalf("expected standard sync shell to keep plan controls hidden, got: %s", view)
+	}
+}
+
+func TestTUIRootStandardSyncActivityPanelDefaultsCollapsedInCompactAndPToggles(t *testing.T) {
+	root := renderStandardShellFixture(100, 40)
+
+	view := root.View()
+	if !strings.Contains(view, "collapsed") {
+		t.Fatalf("expected compact standard-sync activity panel to default collapsed, got: %s", view)
+	}
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	next := nextModel.(tuiRootModel)
+	view = next.View()
+	if !strings.Contains(view, "no activity yet") {
+		t.Fatalf("expected p to expand standard-sync activity panel, got: %s", view)
+	}
+}
+
+func TestTUIRootStandardSyncRunningShowsProgressAndSourceSummary(t *testing.T) {
+	root := renderStandardShellFixture(160, 30)
+	root.syncModel.running = true
+	root.syncModel.runStartedAt = time.Now().Add(-5 * time.Second)
+
+	events := []output.Event{
+		{
+			Event:    output.EventSourcePreflight,
+			SourceID: "soundcloud-likes",
+			Details:  map[string]any{"planned_download_count": 3},
+		},
+		{
+			Event:    output.EventSourceStarted,
+			SourceID: "soundcloud-likes",
+		},
+		{
+			Event:    output.EventTrackStarted,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"track_name": "Structured Song",
+				"index":      1,
+				"total":      3,
+			},
+		},
+		{
+			Event:    output.EventTrackProgress,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"track_name": "Structured Song",
+				"index":      1,
+				"total":      3,
+				"percent":    67.5,
+			},
+		},
+	}
+	for _, event := range events {
+		var cmd tea.Cmd
+		root.syncModel, cmd = root.syncModel.Update(tuiSyncEventMsg{Event: event})
+		if cmd != nil {
+			t.Fatalf("expected no wait command without event channel")
+		}
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "Current Source: soundcloud-likes (running)") {
+		t.Fatalf("expected current source headline in run section, got: %s", view)
+	}
+	if !strings.Contains(view, "Structured Song") || !strings.Contains(view, "[overall]") {
+		t.Fatalf("expected structured progress lines in run section, got: %s", view)
+	}
+	if !strings.Contains(view, "SOURCE") || !strings.Contains(view, "OUTCOME") {
+		t.Fatalf("expected standard sync source summary table, got: %s", view)
+	}
+	if !strings.Contains(view, "soundcloud-likes") {
+		t.Fatalf("expected source summary row to render source id, got: %s", view)
+	}
+}
+
+func TestTUIStandardSyncSummariesAndFooterUseRuntimeCounts(t *testing.T) {
+	root := renderStandardShellFixture(160, 30)
+	root.syncModel.running = true
+	root.syncModel.runStartedAt = time.Now().Add(-11 * time.Second)
+
+	events := []output.Event{
+		{Event: output.EventSourcePreflight, SourceID: "source-a", Details: map[string]any{"planned_download_count": 3}},
+		{Event: output.EventSourceStarted, SourceID: "source-a"},
+		{Event: output.EventTrackDone, SourceID: "source-a", Details: map[string]any{"track_name": "Done Song", "index": 1, "total": 3}},
+		{Event: output.EventTrackSkip, SourceID: "source-a", Details: map[string]any{"track_name": "Skip Song", "index": 2, "total": 3, "reason": "duplicate"}},
+		{Event: output.EventTrackFail, SourceID: "source-a", Details: map[string]any{"track_name": "Fail Song", "index": 3, "total": 3, "reason": "network"}},
+		{Event: output.EventSourceFinished, SourceID: "source-a"},
+		{Event: output.EventSourcePreflight, SourceID: "source-b", Details: map[string]any{"planned_download_count": 1}},
+		{Event: output.EventSourceStarted, SourceID: "source-b"},
+		{Event: output.EventSourceFailed, Level: output.LevelError, SourceID: "source-b", Message: "[source-b] failed"},
+	}
+	for _, event := range events {
+		var cmd tea.Cmd
+		root.syncModel, cmd = root.syncModel.Update(tuiSyncEventMsg{Event: event})
+		if cmd != nil {
+			t.Fatalf("expected no wait command without event channel")
+		}
+	}
+	root.syncModel.running = false
+	root.syncModel.done = true
+	root.syncModel.runFinishedAt = time.Now()
+
+	sourceA := root.syncModel.standardSummaries["source-a"]
+	if sourceA == nil || sourceA.Planned != 3 || sourceA.Done != 1 || sourceA.Skipped != 1 || sourceA.Failed != 1 || sourceA.Lifecycle != tuiStandardSyncSourceFinished {
+		t.Fatalf("expected source-a summary to reflect structured runtime updates, got: %+v", sourceA)
+	}
+	sourceB := root.syncModel.standardSummaries["source-b"]
+	if sourceB == nil || sourceB.Planned != 1 || sourceB.Lifecycle != tuiStandardSyncSourceFailed {
+		t.Fatalf("expected source-b summary to reflect source failure, got: %+v", sourceB)
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "done: 1") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
+		t.Fatalf("expected footer to use runtime summary counts, got: %s", view)
+	}
+	if !strings.Contains(view, "elapsed:") {
+		t.Fatalf("expected footer to include elapsed time after runtime, got: %s", view)
+	}
+	if strings.Contains(view, "attempted:") {
+		t.Fatalf("expected footer not to fall back to old attempted-source stats, got: %s", view)
+	}
+}
+
+func TestTUIRootStandardSyncPromptModalAndFailureDiagnostics(t *testing.T) {
+	root := renderStandardShellFixture(150, 40)
+	root.syncModel.interactionPrompt = &tuiInteractionPromptState{
+		kind:       tuiPromptKindConfirm,
+		sourceID:   "spotify-source",
+		prompt:     "Retry login?",
+		defaultYes: true,
+	}
+	root.syncModel.lastFailure = &tuiSyncFailureState{
+		SourceID:       "spotify-source",
+		Message:        "[spotify-source] command failed with exit code 1",
+		TimedOut:       true,
+		StdoutTail:     "line one",
+		StderrTail:     "fatal line",
+		FailureLogPath: "/tmp/udl-state/sync-failures.jsonl",
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "Prompt") || !strings.Contains(view, "Retry login?") {
+		t.Fatalf("expected standard sync shell prompt modal, got: %s", view)
+	}
+	if !strings.Contains(view, "last failure:") || !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
+		t.Fatalf("expected failure diagnostics to render in activity section, got: %s", view)
+	}
+}
+
+func TestTUIRootShellShowsSourcesInSidebarForInteractiveSync(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+
+	view := root.View()
+	if !strings.Contains(view, "SOURCES") {
+		t.Fatalf("expected sources section in sidebar, got: %s", view)
+	}
+	if !strings.Contains(view, "soundcloud-likes") {
+		t.Fatalf("expected source id in sidebar, got: %s", view)
+	}
+	if strings.Contains(view, "\nSources:\n") {
+		t.Fatalf("expected source list to be removed from body, got: %s", view)
+	}
+}
+
+func TestTUIRootInteractiveSyncIdleShowsStructuredPlaceholder(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 150
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, TargetDir: "/tmp/music", URL: "https://soundcloud.com/janxadam", StateFile: "/tmp/soundcloud.sync.scdl", Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+
+	view := root.View()
+	if !strings.Contains(view, "Plan Selection") || !strings.Contains(view, "source=soundcloud-likes") {
+		t.Fatalf("expected idle selection to show focused source header, got: %s", view)
+	}
+	if !strings.Contains(view, "target /tmp/music") || !strings.Contains(view, "url https://soundcloud.com/janxadam") {
+		t.Fatalf("expected idle selection to show focused source details, got: %s", view)
+	}
+	if !strings.Contains(view, "source controls") || !strings.Contains(view, "space  toggle source") || !strings.Contains(view, "enter  run") {
+		t.Fatalf("expected idle controls to render inside selection, got: %s", view)
+	}
+	if strings.Contains(view, "dry_run=false  timeout=default  plan_limit=10") || strings.Contains(view, "Rows appear here after interactive preflight starts.") || strings.Contains(view, "Press enter to run `udl sync --plan` for the selected sources.") {
+		t.Fatalf("expected old duplicate selection summary to be removed, got: %s", view)
+	}
+	if strings.Contains(view, "[j/k] move") || strings.Contains(view, "[enter] run") {
+		t.Fatalf("expected global shortcut bar to be removed for interactive sync, got: %s", view)
+	}
+	if !strings.Contains(view, "SEL  #  STATUS  TRACK  ID") {
+		t.Fatalf("expected empty table shell, got: %s", view)
+	}
+	if !strings.Contains(view, "start preflight") {
+		t.Fatalf("expected tracks section to own the launch hint, got: %s", view)
+	}
+	if !strings.Contains(view, "no activity yet") {
+		t.Fatalf("expected empty activity panel, got: %s", view)
+	}
+	if !strings.Contains(view, "state: ready") || !strings.Contains(view, "will sync: 0") || !strings.Contains(view, "new: 0") || !strings.Contains(view, "known gap: 0") || !strings.Contains(view, "already have: 0") || !strings.Contains(view, "progress: ░░░░░░░░░░   0%") {
+		t.Fatalf("expected idle interactive footer counts, got: %s", view)
+	}
+}
+
+func TestTUIRootShellRendersSyncPlanPromptInline(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}})
+
+	view := root.View()
+	if !strings.Contains(view, "INTERACTIVE SYNC WORKFLOW") {
+		t.Fatalf("expected interactive sync shell title, got: %s", view)
+	}
+	if !strings.Contains(view, "Plan Selection") {
+		t.Fatalf("expected inline plan selection body title, got: %s", view)
+	}
+	if !strings.Contains(view, "source=soundcloud-likes") {
+		t.Fatalf("expected plan prompt source details, got: %s", view)
+	}
+	if strings.Contains(view, "Prompt") {
+		t.Fatalf("expected plan selector not to render as prompt modal, got: %s", view)
+	}
+}
+
+func TestTUIRootShellHidesGlobalShortcutsDuringPlanSelection(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}})
+
+	view := root.View()
+	if strings.Contains(view, "[tab] filters") || strings.Contains(view, "[enter] run") {
+		t.Fatalf("expected global shortcut bar to stay hidden during interactive sync, got: %s", view)
+	}
+	if !strings.Contains(view, "tab  switch") {
+		t.Fatalf("expected inline selection controls to remain visible, got: %s", view)
+	}
+}
+
+func TestTUIRootShellRunningInteractiveSyncKeepsInlineBrowseControls(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Title: "track", RemoteID: "a", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true}})
+	root.syncModel.running = true
+	root.syncModel.planPrompt = nil
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
+
+	view := root.View()
+	if strings.Contains(view, "[p] activity") || strings.Contains(view, "[x] cancel active run") {
+		t.Fatalf("expected global shortcut bar to stay hidden once inline selection controls exist, got: %s", view)
+	}
+	if !strings.Contains(view, "tab  switch") || !strings.Contains(view, "j/k  move") || !strings.Contains(view, "p  activity") || !strings.Contains(view, "x  cancel run") {
+		t.Fatalf("expected inline runtime browse controls, got: %s", view)
+	}
+	if strings.Contains(view, "space  toggle") || strings.Contains(view, "a  all visible") || strings.Contains(view, "enter  confirm") {
+		t.Fatalf("expected inline controls to drop selection-only actions while running, got: %s", view)
+	}
+	if strings.Contains(view, "selected=") || strings.Contains(view, "pending=") || strings.Contains(view, "skipped=") || strings.Contains(view, "Running sync... press x or ctrl+c to cancel.") {
+		t.Fatalf("expected selection panel to avoid duplicating runtime status, got: %s", view)
+	}
+}
+
+func TestTUIRootInteractiveSyncIdleSelectionFollowsFocusedSource(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 150
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, TargetDir: "/tmp/sc", URL: "https://soundcloud.com/janxadam", StateFile: "/tmp/sc.sync.scdl", Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "spotify-list", Type: config.SourceTypeSpotify, TargetDir: "/tmp/sp", URL: "https://open.spotify.com/playlist/abc", StateFile: "/tmp/sp.sync.spotify", Adapter: config.AdapterSpec{Kind: "spotdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+	root.syncModel.selected["spotify-list"] = true
+	root.syncModel.cursor = 1
+
+	view := root.View()
+	if !strings.Contains(view, "source=spotify-list") || !strings.Contains(view, "type=spotify/spotdl") {
+		t.Fatalf("expected selection to reflect focused source, got: %s", view)
+	}
+	if !strings.Contains(view, "target /tmp/sp") || !strings.Contains(view, "url https://open.spotify.com/playlist/abc") {
+		t.Fatalf("expected focused source details in idle selection, got: %s", view)
+	}
+	if strings.Contains(view, "source=soundcloud-likes") {
+		t.Fatalf("expected unfocused source details to be absent from idle selection, got: %s", view)
+	}
+}
+
+func TestTUIRootShellKeepsChromeVisibleForLongPlanSelection(t *testing.T) {
+	rows := make([]engine.PlanRow, 0, 30)
+	for i := 1; i <= 30; i++ {
+		rows = append(rows, engine.PlanRow{
+			Index:             i,
+			Title:             fmt.Sprintf("row-%02d", i),
+			RemoteID:          fmt.Sprintf("id-%02d", i),
+			Status:            engine.PlanRowAlreadyDownloaded,
+			Toggleable:        i%3 == 0,
+			SelectedByDefault: i%3 == 0,
+		})
+	}
+	root := renderPlanPromptFixture(rows)
+	root.width = 140
+	root.height = 20
+
+	view := root.View()
+	if !strings.Contains(view, "STATE: review") {
+		t.Fatalf("expected shell top bar to remain visible, got: %s", view)
+	}
+	if !strings.Contains(view, "row-01") {
+		t.Fatalf("expected early selector rows in view, got: %s", view)
+	}
+	if strings.Contains(view, "row-20") {
+		t.Fatalf("expected long selector rows to be windowed out, got: %s", view)
+	}
+	if got := lipgloss.Height(view); got > root.height {
+		t.Fatalf("expected rendered shell height <= %d, got %d", root.height, got)
+	}
+}
+
+func TestTUIRootShellRendersPlanRowsWithStatusAndLockedMarker(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "id-have", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "id-new", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "gap", RemoteID: "id-gap", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "have-it") || !strings.Contains(view, "known-gap") {
+		t.Fatalf("expected status chips in table, got: %s", view)
+	}
+	if !strings.Contains(view, "id-have") || !strings.Contains(view, "id-new") {
+		t.Fatalf("expected remote ids in table, got: %s", view)
+	}
+	if !strings.Contains(view, ">[-]") {
+		t.Fatalf("expected locked row selection marker, got: %s", view)
+	}
+}
+
+func TestTUIRootShellRendersPlanFiltersInSidebar(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "gap", RemoteID: "c", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "FILTERS") {
+		t.Fatalf("expected filters sidebar section, got: %s", view)
+	}
+	if !strings.Contains(view, "Will Sync (1)") || !strings.Contains(view, "New (1)") || !strings.Contains(view, "Known Gap (1)") || !strings.Contains(view, "Already Have (1)") {
+		t.Fatalf("expected filter counts in sidebar, got: %s", view)
+	}
+	if !strings.Contains(view, "SEL") || !strings.Contains(view, "STATUS") || !strings.Contains(view, "TRACK") || !strings.Contains(view, "ID") {
+		t.Fatalf("expected table header columns, got: %s", view)
+	}
+}
+
+func TestTUISyncPlanPromptTabFocusesFiltersAndAppliesFilter(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 	reply := make(chan tuiPlanSelectResult, 1)
-
-	m, _ = m.Update(tuiPlanSelectRequestMsg{
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
 		SourceID: "source-a",
-		Rows:     []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
-		Details:  planSourceDetails{SourceID: "source-a", PlanLimit: 10},
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+			{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 3, Title: "gap", RemoteID: "c", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a"},
+		Reply:   reply,
+	})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.planPrompt.focusFilters {
+		t.Fatalf("expected tab to move focus to filters")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.planPrompt.focusFilters {
+		t.Fatalf("expected enter to apply filter and return focus to tracks")
+	}
+	if m.planPrompt.filter != tuiTrackFilterMissingNew {
+		t.Fatalf("expected missing_new filter, got %q", m.planPrompt.filter)
+	}
+}
+
+func TestTUIRootShellInteractiveFooterShowsSelectionCounts(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "gap", RemoteID: "c", Status: engine.PlanRowMissingKnownGap, Toggleable: true},
+	})
+
+	view := root.View()
+	if !strings.Contains(view, "state: review") {
+		t.Fatalf("expected interactive review state before actual sync starts, got: %s", view)
+	}
+	if !strings.Contains(view, "will sync: 1") || !strings.Contains(view, "new: 1") || !strings.Contains(view, "known gap: 1") || !strings.Contains(view, "already have: 1") || !strings.Contains(view, "progress: ░░░░░░░░░░   0%") {
+		t.Fatalf("expected interactive footer selection counts, got: %s", view)
+	}
+	if strings.Contains(view, "elapsed:") {
+		t.Fatalf("expected no elapsed timer during review phase, got: %s", view)
+	}
+}
+
+func TestTUISyncInteractiveRowsTransitionToDownloadedAndFilterCountsUpdate(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Piano Jazz", RemoteID: "1", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Existing", RemoteID: "2", Status: engine.PlanRowAlreadyDownloaded},
+		},
+		Details: planSourceDetails{SourceID: "soundcloud-likes"},
+		Reply:   reply,
+	})
+	m.confirmInteractiveSelection(m.planPrompt.sourceID)
+	m.planPrompt = nil
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseSyncing
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "soundcloud-likes",
+		Details: map[string]any{
+			"track_name": "Piano Jazz",
+			"index":      1,
+			"total":      1,
+		},
+	}})
+
+	selection := m.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	displayState := m.currentInteractiveDisplayState()
+	if displayState == nil {
+		t.Fatalf("expected interactive display state")
+	}
+	if got := selection.filterCount(displayState.rows, tuiTrackFilterKnownGap, tuiInteractivePhaseSyncing); got != 0 {
+		t.Fatalf("expected runtime-only filter family to hide review-only known-gap counts, got %d", got)
+	}
+	if got := selection.filterCount(displayState.rows, tuiTrackFilterDownloaded, tuiInteractivePhaseSyncing); got != 1 {
+		t.Fatalf("expected downloaded filter count to exclude already-have rows, got %d", got)
+	}
+	if got := selection.filterCount(displayState.rows, tuiTrackFilterAlreadyHave, tuiInteractivePhaseSyncing); got != 1 {
+		t.Fatalf("expected already-have filter count to keep locked rows separate, got %d", got)
+	}
+
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = m
+
+	view := root.View()
+	if !strings.Contains(view, "downloaded") || !strings.Contains(view, "· gap") {
+		t.Fatalf("expected completed row to render downloaded status, got: %s", view)
+	}
+	if !strings.Contains(view, "Downloaded (1)") || !strings.Contains(view, "Already Have (1)") || !strings.Contains(view, "In Run (1)") {
+		t.Fatalf("expected sidebar filters to reflect runtime state, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveRuntimeAllFilterShowsDeselectedRowsAsNotRun(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "Selected", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 2, Title: "Deselected", RemoteID: "b", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "Have", RemoteID: "c", Status: engine.PlanRowAlreadyDownloaded},
+	})
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	selection.setSelected(2, false)
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+
+	view := root.View()
+	if !strings.Contains(view, "not-run") || !strings.Contains(view, "· gap") {
+		t.Fatalf("expected deselected runtime row to render as not-run, got: %s", view)
+	}
+	if strings.Contains(view, "In Run (2)") {
+		t.Fatalf("expected deselected row to be excluded from runtime in-run count, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveRuntimeRemapsReviewFilterToInRun(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "New", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 2, Title: "Have", RemoteID: "b", Status: engine.PlanRowAlreadyDownloaded},
+	})
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	selection.filter = tuiTrackFilterMissingNew
+	selection.focusFilters = true
+	selection.filterCursor = 2
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+
+	view := root.View()
+	if selection.filter != tuiTrackFilterInRun {
+		t.Fatalf("expected runtime phase to remap review filter to in-run, got %q", selection.filter)
+	}
+	if !strings.Contains(view, "In Run (1)") {
+		t.Fatalf("expected remapped runtime filter to render in sidebar, got: %s", view)
+	}
+}
+
+func TestTUISyncInteractiveProgressRendersGraphicalBars(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Piano Jazz", RemoteID: "1", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "soundcloud-likes"},
+		Reply:   reply,
+	})
+	m.confirmInteractiveSelection(m.planPrompt.sourceID)
+	m.planPrompt = nil
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseSyncing
+	m.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
+	m.progress.ObserveEvent(output.Event{
+		Event:    output.EventSourcePreflight,
+		SourceID: "soundcloud-likes",
+		Details:  map[string]any{"planned_download_count": 1},
+	})
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "soundcloud-likes",
+		Details: map[string]any{
+			"track_name": "Piano Jazz",
+			"index":      1,
+			"total":      1,
+			"percent":    50.0,
+		},
+	}})
+
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = m
+
+	view := root.View()
+	if !strings.Contains(view, "dl  50%") {
+		t.Fatalf("expected per-track graphical status to show progress, got: %s", view)
+	}
+	if !strings.Contains(view, "completed: 0") {
+		t.Fatalf("expected footer to use completed track label, got: %s", view)
+	}
+	if !strings.Contains(view, "50%") || !strings.Contains(view, "█████") {
+		t.Fatalf("expected footer progress bar to render graphically, got: %s", view)
+	}
+}
+
+func TestTUIRootShellActivityPanelDefaultsCollapsedInCompactAndPToggles(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{{Index: 1, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true}})
+	root.width = 100
+	root.height = 40
+
+	view := root.View()
+	if !strings.Contains(view, "collapsed") {
+		t.Fatalf("expected compact activity panel to default collapsed, got: %s", view)
+	}
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	next := nextModel.(tuiRootModel)
+	view = next.View()
+	if !strings.Contains(view, "no activity yet") {
+		t.Fatalf("expected p to expand activity panel, got: %s", view)
+	}
+}
+
+func TestTUIRootInteractiveSyncRunningWithoutRowsShowsPreflightOnlyInTracks(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 150
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhasePreflight
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, TargetDir: "/tmp/music", URL: "https://soundcloud.com/janxadam", StateFile: "/tmp/soundcloud.sync.scdl", Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+
+	view := root.View()
+	if !strings.Contains(view, "Preflight running... loading tracks for selection.") {
+		t.Fatalf("expected tracks to show preflight loading state, got: %s", view)
+	}
+	if !strings.Contains(view, "state: preflight") {
+		t.Fatalf("expected footer to show preflight state, got: %s", view)
+	}
+	if strings.Contains(view, "elapsed:") {
+		t.Fatalf("expected no elapsed timer during preflight, got: %s", view)
+	}
+	if strings.Contains(view, "Running sync... press x or ctrl+c to cancel.") {
+		t.Fatalf("expected selection to avoid duplicate running status before rows exist, got: %s", view)
+	}
+}
+
+func TestTUIRootInteractiveSyncFooterShowsElapsedFromTracker(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "new", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	})
+	root.syncModel.confirmInteractiveSelection("soundcloud-likes")
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = false
+	root.syncModel.done = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseDone
+	root.syncModel.runStartedAt = time.Time{}
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Date(2026, 3, 21, 12, 0, 0, 0, time.UTC))
+	root.syncModel.interactiveTracker.MarkRunFinished(time.Date(2026, 3, 21, 12, 1, 7, 0, time.UTC))
+
+	view := root.View()
+	if !strings.Contains(view, "elapsed: 1:07") {
+		t.Fatalf("expected footer to render elapsed time from interactive tracker, got: %s", view)
+	}
+}
+
+func TestTUIRootInteractiveSyncDoneWithoutRowsShowsTerminalTrackState(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 150
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.done = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseDone
+	root.syncModel.result = engine.SyncResult{Attempted: 1, Succeeded: 1}
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, TargetDir: "/tmp/music", URL: "https://soundcloud.com/janxadam", StateFile: "/tmp/soundcloud.sync.scdl", Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+
+	view := root.View()
+	if !strings.Contains(view, "No track rows were returned. Source is up to date or no downloads were planned.") {
+		t.Fatalf("expected terminal no-row state to render in tracks, got: %s", view)
+	}
+	if !strings.Contains(view, "completed: 0") {
+		t.Fatalf("expected terminal footer to stay track-based, got: %s", view)
+	}
+	if strings.Contains(view, "Run finished: attempted=1 succeeded=1 failed=0 skipped=0") {
+		t.Fatalf("expected selection to avoid duplicating terminal no-row status, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "downloaded-a", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 2, Title: "downloaded-b", RemoteID: "b", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "existing", RemoteID: "c", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 4, Title: "skipped", RemoteID: "d", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 5, Title: "failed", RemoteID: "e", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	})
+	root.syncModel.planPrompt = nil
+	root.syncModel.done = true
+	root.syncModel.running = false
+	root.syncModel.interactivePhase = tuiInteractivePhaseDone
+	root.syncModel.result = engine.SyncResult{Attempted: 1, Succeeded: 1, Failed: 0, Skipped: 0}
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-11 * time.Second))
+	root.syncModel.interactiveTracker.MarkRunFinished(time.Now())
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 2}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 4, "reason": "ignored"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 5, "reason": "failed"}}, nil, "", false)
+
+	view := root.View()
+	if !strings.Contains(view, "completed: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
+		t.Fatalf("expected terminal footer to use track totals, got: %s", view)
+	}
+	if strings.Contains(view, "completed: 1") || strings.Contains(view, "done:") {
+		t.Fatalf("expected footer not to fall back to source result counts, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveFooterUsesTrackCountsWhileRunning(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "downloaded-a", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 2, Title: "skipped", RemoteID: "b", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		{Index: 3, Title: "failed", RemoteID: "c", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 4, Title: "existing", RemoteID: "d", Status: engine.PlanRowAlreadyDownloaded},
+	})
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-6 * time.Second))
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 2, "reason": "ignored"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 3, "reason": "failed"}}, nil, "", false)
+
+	view := root.View()
+	if !strings.Contains(view, "in run: 3") {
+		t.Fatalf("expected runtime footer to include in-run count, got: %s", view)
+	}
+	if !strings.Contains(view, "completed: 1") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
+		t.Fatalf("expected runtime footer to use track totals, got: %s", view)
+	}
+	if strings.Contains(view, "done:") {
+		t.Fatalf("expected footer label to be renamed to completed, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveSidebarSourceLifecycleTones(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{ID: "active", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "running", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "finished", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "failed", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	for _, source := range m.sources {
+		m.selected[source.ID] = true
+	}
+	m.cursor = 0
+	m.setInteractiveSourceLifecycle("active", tuiSourceLifecycleFinished)
+	m.setInteractiveSourceLifecycle("running", tuiSourceLifecycleRunning)
+	m.setInteractiveSourceLifecycle("finished", tuiSourceLifecycleFinished)
+	m.setInteractiveSourceLifecycle("failed", tuiSourceLifecycleFailed)
+
+	sections := m.sidebarSections(tuiScreenInteractiveSync)
+	var sourceItems []tuiSidebarItem
+	for _, section := range sections {
+		if section.Title == "sources" {
+			sourceItems = section.Items
+			break
+		}
+	}
+	if len(sourceItems) != 4 {
+		t.Fatalf("expected source sidebar items, got %+v", sourceItems)
+	}
+	if !sourceItems[0].Active || sourceItems[0].Tone != "success" {
+		t.Fatalf("expected active source to preserve active highlight state while retaining success tone metadata, got %+v", sourceItems[0])
+	}
+	if sourceItems[1].Tone != "warning" {
+		t.Fatalf("expected running source tone=warning, got %+v", sourceItems[1])
+	}
+	if sourceItems[2].Tone != "success" {
+		t.Fatalf("expected finished source tone=success, got %+v", sourceItems[2])
+	}
+	if sourceItems[3].Tone != "danger" {
+		t.Fatalf("expected failed source tone=danger, got %+v", sourceItems[3])
+	}
+}
+
+func TestTUISyncModelPlanPromptLStillOpensTypedLimitInput(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     []engine.PlanRow{{Index: 1, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true}},
 		Reply:    reply,
 	})
 
-	view := m.View()
-	if !strings.Contains(view, "Interactive Sync Workflow") {
-		t.Fatalf("expected interactive heading in plan prompt, got: %s", view)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if !m.planLimitInputActive {
+		t.Fatalf("expected l to keep opening typed plan limit input during selection")
+	}
+}
+
+func TestTUISyncModelPostStartBrowsingKeepsFilteringAndBlocksConfigMutations(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+			{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Reply: reply,
+	})
+	m.confirmInteractiveSelection(m.planPrompt.sourceID)
+	m.planPrompt = nil
+	m.done = true
+	m.interactivePhase = tuiInteractivePhaseDone
+	m.planLimit = 10
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	selection := m.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	if !selection.focusFilters {
+		t.Fatalf("expected tab to move focus to filters after sync start")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	selection = m.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	if selection.focusFilters {
+		t.Fatalf("expected enter to apply filter and return focus to tracks after sync start")
+	}
+	if selection.filter != tuiTrackFilterRemaining {
+		t.Fatalf("expected filter browsing to remain available after sync start, got %q", selection.filter)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if m.planLimitInputActive {
+		t.Fatalf("expected post-start config mutation keys to be blocked")
+	}
+}
+
+func TestTUIRootShellPostStartFilterFocusShowsVisibleSidebarCursor(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "have", RemoteID: "a", Status: engine.PlanRowAlreadyDownloaded},
+		{Index: 2, Title: "new", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	})
+	root.syncModel.planPrompt = nil
+	root.syncModel.done = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseDone
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	selection.focusFilters = true
+	selection.filterCursor = 6
+	selection.filter = tuiTrackFilterAlreadyHave
+
+	view := root.View()
+	if !strings.Contains(view, "> Already Have (1)") {
+		t.Fatalf("expected focused filter cursor to remain visible after sync start, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveFooterAggregatesAcrossConfirmedSources(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "source-a", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "source-b", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["source-a"] = true
+	root.syncModel.selected["source-b"] = true
+
+	replyA := make(chan tuiPlanSelectResult, 1)
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "A done", RemoteID: "a-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "A skipped", RemoteID: "a-2", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a"},
+		Reply:   replyA,
+	})
+	sourceA := root.syncModel.currentInteractiveSelection()
+	if sourceA == nil {
+		t.Fatalf("expected source-a selection")
+	}
+	root.syncModel.interactiveTracker.ConfirmSelection(sourceA)
+	root.syncModel.planPrompt = nil
+
+	replyB := make(chan tuiPlanSelectResult, 1)
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-b",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "B downloading", RemoteID: "b-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-b"},
+		Reply:   replyB,
+	})
+	sourceB := root.syncModel.currentInteractiveSelection()
+	if sourceB == nil {
+		t.Fatalf("expected source-b selection")
+	}
+	root.syncModel.interactiveTracker.ConfirmSelection(sourceB)
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+	root.syncModel.interactiveTracker.MarkRuntimeStarted(time.Now().Add(-5 * time.Second))
+	root.syncModel.setInteractiveDisplaySource("source-b")
+
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "source-a", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "source-a", Details: map[string]any{"index": 2, "reason": "known gap"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackProgress, SourceID: "source-b", Details: map[string]any{"index": 1, "percent": 50.0}}, nil, "", false)
+
+	view := root.View()
+	if !strings.Contains(view, "B downloading") {
+		t.Fatalf("expected displayed source body to stay on source-b, got: %s", view)
+	}
+	if !strings.Contains(view, "completed: 1") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 0") {
+		t.Fatalf("expected footer to aggregate counts across confirmed sources, got: %s", view)
+	}
+	if !strings.Contains(view, " 83%") {
+		t.Fatalf("expected aggregate progress to include source-a completion and source-b partial progress, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveSourceActivityPersistsAcrossSourceSwitches(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{ID: "source-a", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "source-b", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventSourcePreflight,
+		SourceID: "source-a",
+		Details:  map[string]any{"planned_download_count": 2},
+	}})
+	stateA := m.interactiveSelectionForSource("source-a")
+	if stateA == nil || len(m.interactiveTracker.SourceSnapshot("source-a").activity) == 0 {
+		t.Fatalf("expected source-a activity to be recorded")
+	}
+
+	replyA := make(chan tuiPlanSelectResult, 1)
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     []engine.PlanRow{{Index: 1, Title: "A", RemoteID: "a-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true}},
+		Details:  planSourceDetails{SourceID: "source-a"},
+		Reply:    replyA,
+	})
+	if got := len(m.interactiveTracker.SourceSnapshot("source-a").activity); got == 0 {
+		t.Fatalf("expected source-a activity to survive plan prompt replacement")
+	}
+
+	replyB := make(chan tuiPlanSelectResult, 1)
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-b",
+		Rows:     []engine.PlanRow{{Index: 1, Title: "B", RemoteID: "b-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true}},
+		Details:  planSourceDetails{SourceID: "source-b"},
+		Reply:    replyB,
+	})
+	if m.currentInteractiveDisplaySourceID() != "source-b" {
+		t.Fatalf("expected plan prompt to focus the source-b display")
+	}
+	if got := len(m.interactiveTracker.SourceSnapshot("source-a").activity); got == 0 {
+		t.Fatalf("expected source-a activity to remain after source-b prompt")
+	}
+
+	m.planPrompt = nil
+	m, _ = m.Update(tuiSyncEventMsg{Event: output.Event{
+		Event:    output.EventSourceStarted,
+		SourceID: "source-b",
+	}})
+	if m.currentInteractiveDisplaySourceID() != "source-b" {
+		t.Fatalf("expected latest active source to control display focus, got %q", m.currentInteractiveDisplaySourceID())
+	}
+}
+
+func TestTUIInteractiveAggregateExcludesDeselectedRows(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "source-a", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["source-a"] = true
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Selected", RemoteID: "a-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Deselected", RemoteID: "a-2", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a"},
+		Reply:   reply,
+	})
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	selection.setSelected(2, false)
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "source-a", Details: map[string]any{"index": 1}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "source-a", Details: map[string]any{"index": 2, "reason": "ignored"}}, nil, "", false)
+
+	view := root.View()
+	if !strings.Contains(view, "completed: 1") || !strings.Contains(view, "failed: 0") {
+		t.Fatalf("expected deselected row to be excluded from aggregate footer counts, got: %s", view)
+	}
+	if !strings.Contains(view, "100%") {
+		t.Fatalf("expected progress to be based only on selected rows, got: %s", view)
+	}
+}
+
+func renderPlanPromptFixture(rows []engine.PlanRow) tuiRootModel {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 28
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows:     rows,
+		Details: planSourceDetails{
+			SourceID:   "soundcloud-likes",
+			SourceType: "soundcloud",
+			Adapter:    "scdl",
+			URL:        "https://soundcloud.com/janxadam",
+			TargetDir:  "/tmp/music",
+			StateFile:  "/tmp/soundcloud.sync.scdl",
+			PlanLimit:  10,
+		},
+		Reply: reply,
+	})
+	return root
+}
+
+func renderStandardShellFixture(width, height int) tuiRootModel {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenSync
+	root.width = width
+	root.height = height
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
+	root.syncModel.width = width
+	root.syncModel.height = height
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "spotify-source", Type: config.SourceTypeSpotify, Adapter: config.AdapterSpec{Kind: "spotdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+	root.syncModel.selected["spotify-source"] = true
+	return root
+}
+
+func TestTUIRootShellRendersInitPromptModal(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(&AppContext{})
+	root.initModel.prompt = &tuiInteractionPromptState{
+		kind:       tuiPromptKindConfirm,
+		prompt:     "Overwrite existing config?",
+		defaultYes: false,
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "INIT") {
+		t.Fatalf("expected init shell title, got: %s", view)
+	}
+	if !strings.Contains(view, "Init Prompt") {
+		t.Fatalf("expected init modal title, got: %s", view)
+	}
+	if !strings.Contains(view, "Overwrite existing config?") {
+		t.Fatalf("expected init prompt body, got: %s", view)
+	}
+}
+
+func TestTUIRootDoctorShellShowsSeverityOrderedChecklist(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenDoctor
+	root.width = 150
+	root.height = 36
+	root.doctorModel = newTUIDoctorModel(&AppContext{})
+	checks := []doctor.Check{
+		{Severity: doctor.SeverityInfo, Name: "filesystem", Message: "target_dir is writable"},
+		{Severity: doctor.SeverityWarn, Name: "security", Message: "credentials should be treated as sensitive"},
+		{Severity: doctor.SeverityError, Name: "dependency", Message: "scdl not found in PATH"},
+	}
+	root.doctorModel.phase = tuiDoctorPhaseComplete
+	root.doctorModel.checks = tuiSortedDoctorChecks(checks)
+	root.doctorModel.summary = tuiDoctorSummary(checks)
+
+	view := root.View()
+	if !strings.Contains(view, "Summary") || !strings.Contains(view, "Checks") || !strings.Contains(view, "Next Step") {
+		t.Fatalf("expected doctor shell sections, got: %s", view)
+	}
+	if !strings.Contains(view, "Errors: 1") || !strings.Contains(view, "Warnings: 1") || !strings.Contains(view, "Infos: 1") {
+		t.Fatalf("expected doctor summary counts, got: %s", view)
+	}
+	errorIdx := strings.Index(view, "[ERROR]")
+	warnIdx := strings.Index(view, "[WARN]")
+	infoIdx := strings.Index(view, "[INFO]")
+	if errorIdx < 0 || warnIdx < 0 || infoIdx < 0 || !(errorIdx < warnIdx && warnIdx < infoIdx) {
+		t.Fatalf("expected severity-first ordering in doctor view, got: %s", view)
+	}
+}
+
+func TestTUIRootDoctorShellShowsSetupFailure(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenDoctor
+	root.doctorModel = newTUIDoctorModel(&AppContext{})
+	root.doctorModel.phase = tuiDoctorPhaseComplete
+	root.doctorModel.setupErr = fmt.Errorf("config file does not exist: /tmp/missing.yaml")
+
+	view := root.View()
+	if !strings.Contains(view, "FAILED") || !strings.Contains(view, "setup failed") || !strings.Contains(view, "/tmp/missing.yaml") {
+		t.Fatalf("expected setup failure rendering in doctor shell, got: %s", view)
+	}
+}
+
+func TestTUIRootValidateShellShowsExplicitConfigContext(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenValidate
+	root.validateModel = newTUIValidateModel(&AppContext{})
+	root.validateModel.phase = tuiValidatePhaseComplete
+	root.validateModel.result = tuiValidateResultState{
+		Valid:              true,
+		ConfigLoaded:       true,
+		ConfigContextLabel: "/tmp/explicit-config.yaml",
+		SourceCount:        2,
+		EnabledSourceCount: 1,
+		DetailLines:        []string{"Config schema and source definitions passed validation."},
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "VALID") || !strings.Contains(view, "Config valid") {
+		t.Fatalf("expected valid badge and status, got: %s", view)
+	}
+	if !strings.Contains(view, "/tmp/explicit-config.yaml") || !strings.Contains(view, "Sources: 2 total") || !strings.Contains(view, "Enabled: 1") {
+		t.Fatalf("expected explicit config context and counts, got: %s", view)
+	}
+}
+
+func TestTUIRootValidateShellShowsDefaultSearchContextOnFailure(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenValidate
+	root.width = 100
+	root.validateModel = newTUIValidateModel(&AppContext{})
+	root.validateModel.phase = tuiValidatePhaseComplete
+	root.validateModel.result = tuiValidateResultState{
+		FailureKind:        tuiValidateFailureLoad,
+		ConfigContextLabel: "/home/test/.config/udl/config.yaml + /repo/udl.yaml",
+		DetailLines:        []string{"parse config file /repo/udl.yaml: yaml: line 4: did not find expected key"},
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "INVALID") || !strings.Contains(view, "Config load failed") {
+		t.Fatalf("expected invalid load failure status, got: %s", view)
+	}
+	if !strings.Contains(view, "/home/test/.config/udl/config.yaml + /repo/udl.yaml") {
+		t.Fatalf("expected default search-path context, got: %s", view)
+	}
+	if !strings.Contains(view, "did not find expected key") {
+		t.Fatalf("expected validation details in shell, got: %s", view)
+	}
+}
+
+func TestTUIInitWorkflowStartsAtIntroAndEnterStartsRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "udl.yaml")
+	root := newTUIRootModel(&AppContext{
+		Opts: GlobalOptions{ConfigPath: configPath},
+	}, false)
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(root.app)
+
+	if root.initModel.phase != tuiInitPhaseIntro {
+		t.Fatalf("expected init intro phase, got %q", root.initModel.phase)
+	}
+	if root.initModel.eventCh != nil {
+		t.Fatalf("expected intro phase not to start run channel")
+	}
+	view := root.View()
+	if !strings.Contains(view, "Actions") || !strings.Contains(view, "enter: start init") {
+		t.Fatalf("expected guided init intro view, got: %s", view)
+	}
+
+	nextModel, cmd := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := nextModel.(tuiRootModel)
+	if cmd == nil {
+		t.Fatalf("expected enter in init intro to start run")
+	}
+	if next.initModel.phase != tuiInitPhaseRunning {
+		t.Fatalf("expected init to enter running phase, got %q", next.initModel.phase)
+	}
+	if next.canReturnToMenuOnEsc() {
+		t.Fatalf("expected esc to be disabled while init is running")
+	}
+}
+
+func TestTUIRootInitEscBehaviorFollowsPhaseAndPromptState(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(&AppContext{})
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := nextModel.(tuiRootModel)
+	if next.screen != tuiScreenMenu {
+		t.Fatalf("expected intro esc to return to menu, got screen %v", next.screen)
+	}
+
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(&AppContext{})
+	root.initModel.phase = tuiInitPhaseRunning
+	nextModel, _ = root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = nextModel.(tuiRootModel)
+	if next.screen != tuiScreenInit {
+		t.Fatalf("expected running init to stay on init screen, got %v", next.screen)
+	}
+
+	root.initModel.phase = tuiInitPhaseDone
+	root.initModel.prompt = &tuiInteractionPromptState{
+		kind:   tuiPromptKindConfirm,
+		prompt: "Overwrite?",
+		reply:  make(chan tuiPromptResult, 1),
+	}
+	nextModel, _ = root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = nextModel.(tuiRootModel)
+	if next.screen != tuiScreenInit {
+		t.Fatalf("expected active prompt to block esc navigation, got %v", next.screen)
+	}
+
+	root.initModel.prompt = nil
+	nextModel, _ = root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = nextModel.(tuiRootModel)
+	if next.screen != tuiScreenMenu {
+		t.Fatalf("expected completed init esc to return to menu, got %v", next.screen)
+	}
+}
+
+func TestTUIRootInitResultStatesRenderExpectedSummaries(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInit
+	root.width = 120
+	root.initModel = newTUIInitModel(&AppContext{})
+	root.initModel.result = tuiInitResultState{
+		ConfigPath: "/tmp/udl.yaml",
+		StateDir:   "/tmp/.udl-state",
+	}
+
+	root.initModel.phase = tuiInitPhaseDone
+	root.initModel.result.DetailLines = []string{"Starter config written.", "State directory ensured."}
+	view := root.View()
+	if !strings.Contains(view, "Initialization complete.") || !strings.Contains(view, "udl validate") {
+		t.Fatalf("expected success summary and next step, got: %s", view)
+	}
+
+	root.initModel.phase = tuiInitPhaseCanceled
+	root.initModel.result.DetailLines = []string{"Initialization canceled before writing a new config."}
+	view = root.View()
+	if !strings.Contains(view, "Initialization canceled.") {
+		t.Fatalf("expected canceled summary, got: %s", view)
+	}
+
+	root.initModel.phase = tuiInitPhaseFailed
+	root.initModel.result.DetailLines = []string{"write config file: permission denied"}
+	view = root.View()
+	if !strings.Contains(view, "Initialization failed.") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("expected failure summary, got: %s", view)
 	}
 }
 
@@ -175,6 +1485,7 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 	m.running = true
+	m.interactivePhase = tuiInteractivePhaseReview
 	m.eventCh = make(chan tea.Msg, 1)
 	reply := make(chan tuiPlanSelectResult, 1)
 	rows := []engine.PlanRow{
@@ -202,6 +1513,12 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 	if m.planPrompt != nil {
 		t.Fatalf("expected plan prompt to close after confirm")
 	}
+	if m.interactivePhase != tuiInteractivePhaseSyncing {
+		t.Fatalf("expected confirm to start actual sync phase, got %q", m.interactivePhase)
+	}
+	if m.interactiveTracker == nil || m.interactiveTracker.startedAt.IsZero() {
+		t.Fatalf("expected confirm to start elapsed timing for actual sync")
+	}
 	select {
 	case got := <-reply:
 		if got.Canceled {
@@ -213,6 +1530,24 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 		}
 	default:
 		t.Fatalf("expected selection reply")
+	}
+}
+
+func TestTUISyncModelInitialEnterStartsPreflightWithoutRuntimeTimer(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}}}
+	m.selected["soundcloud-likes"] = true
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.running {
+		t.Fatalf("expected interactive workflow goroutine to start on enter")
+	}
+	if m.interactivePhase != tuiInteractivePhasePreflight {
+		t.Fatalf("expected initial enter to start preflight phase, got %q", m.interactivePhase)
+	}
+	if m.interactiveTracker != nil && !m.interactiveTracker.startedAt.IsZero() {
+		t.Fatalf("expected elapsed timer to remain unset until final confirmation")
 	}
 }
 
@@ -263,14 +1598,13 @@ func TestTUIRootEscDuringPlanPromptCancelsPlanInsteadOfLeavingScreen(t *testing.
 	root.syncModel.cfgLoaded = true
 	root.syncModel.running = true
 	reply := make(chan tuiPlanSelectResult, 1)
-	root.syncModel.planPrompt = &tuiPlanPromptState{
-		sourceID: "source-a",
-		rows: []engine.PlanRow{
+	root.syncModel.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
 			{Index: 1, Toggleable: true, SelectedByDefault: true},
 		},
-		reply:    reply,
-		selected: map[int]bool{1: true},
-	}
+		Reply: reply,
+	})
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	next, ok := nextModel.(tuiRootModel)
@@ -734,8 +2068,8 @@ func TestTUIInitStartRunRequestsOverwriteConfirmAndCanCancel(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected init done message, got %T", finished)
 	}
-	if !strings.Contains(strings.ToLower(doneMsg.Result), "canceled") {
-		t.Fatalf("expected canceled init result, got %q", doneMsg.Result)
+	if !doneMsg.Canceled {
+		t.Fatalf("expected canceled init result, got %+v", doneMsg)
 	}
 	<-done
 }
