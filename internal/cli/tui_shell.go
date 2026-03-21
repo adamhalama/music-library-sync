@@ -276,17 +276,8 @@ func renderTUISidebarItem(item tuiSidebarItem, theme tuiShellTheme, layout tuiSh
 		prefix = "> "
 		style = theme.sidebarActive
 	}
-	if !item.Active && !item.Disabled {
-		switch item.Tone {
-		case "info":
-			style = style.Copy().Foreground(lipgloss.Color("81"))
-		case "success":
-			style = style.Copy().Foreground(lipgloss.Color("78"))
-		case "warning":
-			style = style.Copy().Foreground(lipgloss.Color("179"))
-		case "muted":
-			style = style.Copy().Foreground(lipgloss.Color("243"))
-		}
+	if !item.Disabled {
+		style = applySidebarTone(style, item.Tone)
 	}
 	labelWidth := shellSidebarWidth(layout, theme) - theme.sidebar.GetHorizontalFrameSize() - 2
 	if labelWidth < 8 {
@@ -299,6 +290,23 @@ func renderTUISidebarItem(item tuiSidebarItem, theme tuiShellTheme, layout tuiSh
 	}
 	meta := theme.sidebarMeta.Render("  " + truncateForWidth(item.Meta, labelWidth))
 	return line + "\n" + meta
+}
+
+func applySidebarTone(style lipgloss.Style, tone string) lipgloss.Style {
+	switch tone {
+	case "info":
+		return style.Copy().Foreground(lipgloss.Color("81"))
+	case "success":
+		return style.Copy().Foreground(lipgloss.Color("78"))
+	case "warning":
+		return style.Copy().Foreground(lipgloss.Color("179"))
+	case "danger":
+		return style.Copy().Foreground(lipgloss.Color("203"))
+	case "muted":
+		return style.Copy().Foreground(lipgloss.Color("243"))
+	default:
+		return style
+	}
 }
 
 func renderTUITopNav(state tuiShellState, theme tuiShellTheme, layout tuiShellLayout) string {
