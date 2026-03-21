@@ -21,47 +21,48 @@ const (
 )
 
 type tuiSyncModel struct {
-	app                  *AppContext
-	mode                 tuiSyncWorkflowMode
-	width                int
-	height               int
-	cfg                  config.Config
-	cfgLoaded            bool
-	cfgErr               error
-	sources              []config.Source
-	selected             map[string]bool
-	cursor               int
-	dryRun               bool
-	timeoutOverride      time.Duration
-	timeoutInputActive   bool
-	timeoutInput         string
-	timeoutInputErr      string
-	askOnExisting        bool
-	askOnExistingSet     bool
-	scanGaps             bool
-	noPreflight          bool
-	planLimit            int
-	running              bool
-	cancelRequested      bool
-	runCancel            context.CancelFunc
-	done                 bool
-	result               engine.SyncResult
-	runErr               error
-	validationErr        string
-	events               []string
-	progress             *output.StructuredProgressTracker
-	lastFailure          *tuiSyncFailureState
-	eventCh              chan tea.Msg
-	interactivePhase     tuiInteractiveSyncPhase
-	sourceLifecycle      map[string]tuiInteractiveSourceLifecycle
-	interactiveSelection *tuiInteractiveSelectionState
-	planPrompt           *tuiPlanPromptState
-	interactionPrompt    *tuiInteractionPromptState
-	planLimitInputActive bool
-	planLimitInput       string
-	planLimitInputErr    string
-	runStartedAt         time.Time
-	runFinishedAt        time.Time
+	app                   *AppContext
+	mode                  tuiSyncWorkflowMode
+	width                 int
+	height                int
+	cfg                   config.Config
+	cfgLoaded             bool
+	cfgErr                error
+	sources               []config.Source
+	selected              map[string]bool
+	cursor                int
+	dryRun                bool
+	timeoutOverride       time.Duration
+	timeoutInputActive    bool
+	timeoutInput          string
+	timeoutInputErr       string
+	askOnExisting         bool
+	askOnExistingSet      bool
+	scanGaps              bool
+	noPreflight           bool
+	planLimit             int
+	running               bool
+	cancelRequested       bool
+	runCancel             context.CancelFunc
+	done                  bool
+	result                engine.SyncResult
+	runErr                error
+	validationErr         string
+	events                []string
+	progress              *output.StructuredProgressTracker
+	lastFailure           *tuiSyncFailureState
+	eventCh               chan tea.Msg
+	interactivePhase      tuiInteractiveSyncPhase
+	sourceLifecycle       map[string]tuiInteractiveSourceLifecycle
+	interactiveSelections map[string]*tuiInteractiveSelectionState
+	interactiveDisplayID  string
+	planPrompt            *tuiPlanPromptState
+	interactionPrompt     *tuiInteractionPromptState
+	planLimitInputActive  bool
+	planLimitInput        string
+	planLimitInputErr     string
+	runStartedAt          time.Time
+	runFinishedAt         time.Time
 }
 
 type tuiSyncFailureState struct {
@@ -158,11 +159,32 @@ type tuiInteractionPromptState struct {
 type tuiStatusFilter string
 
 const (
-	tuiPlanFilterAll        tuiStatusFilter = "all"
-	tuiPlanFilterSelected   tuiStatusFilter = "selected"
-	tuiPlanFilterMissingNew tuiStatusFilter = "missing_new"
-	tuiPlanFilterKnownGap   tuiStatusFilter = "known_gap"
-	tuiPlanFilterDownloaded tuiStatusFilter = "downloaded"
+	tuiTrackFilterAll         tuiStatusFilter = "all"
+	tuiTrackFilterWillSync    tuiStatusFilter = "will_sync"
+	tuiTrackFilterMissingNew  tuiStatusFilter = "missing_new"
+	tuiTrackFilterKnownGap    tuiStatusFilter = "known_gap"
+	tuiTrackFilterAlreadyHave tuiStatusFilter = "already_have"
+	tuiTrackFilterInRun       tuiStatusFilter = "in_run"
+	tuiTrackFilterRemaining   tuiStatusFilter = "remaining"
+	tuiTrackFilterDownloaded  tuiStatusFilter = "downloaded"
+	tuiTrackFilterSkipped     tuiStatusFilter = "skipped"
+	tuiTrackFilterFailed      tuiStatusFilter = "failed"
+)
+
+type tuiTrackPlanClass string
+
+const (
+	tuiTrackPlanClassNew         tuiTrackPlanClass = "new"
+	tuiTrackPlanClassKnownGap    tuiTrackPlanClass = "known_gap"
+	tuiTrackPlanClassAlreadyHave tuiTrackPlanClass = "already_have"
+)
+
+type tuiTrackRunScope string
+
+const (
+	tuiTrackRunScopeIncluded tuiTrackRunScope = "included"
+	tuiTrackRunScopeExcluded tuiTrackRunScope = "excluded"
+	tuiTrackRunScopeLocked   tuiTrackRunScope = "locked"
 )
 
 type tuiTrackRowState struct {
@@ -174,6 +196,8 @@ type tuiTrackRowState struct {
 	Toggleable        bool
 	Selected          bool
 	PlanStatus        engine.PlanRowStatus
+	PlanClass         tuiTrackPlanClass
+	RunScope          tuiTrackRunScope
 	RuntimeStatus     tuiTrackRuntimeStatus
 	StatusLabel       string
 	FailureDetail     string
@@ -185,7 +209,7 @@ type tuiTrackRowState struct {
 type tuiTrackRuntimeStatus string
 
 const (
-	tuiTrackStatusExisting    tuiTrackRuntimeStatus = "existing"
+	tuiTrackStatusIdle        tuiTrackRuntimeStatus = "idle"
 	tuiTrackStatusQueued      tuiTrackRuntimeStatus = "queued"
 	tuiTrackStatusDownloading tuiTrackRuntimeStatus = "downloading"
 	tuiTrackStatusDownloaded  tuiTrackRuntimeStatus = "downloaded"
@@ -204,6 +228,7 @@ type tuiInteractiveSelectionState struct {
 	sourceID                   string
 	rows                       []tuiTrackRowState
 	details                    planSourceDetails
+	confirmed                  bool
 	cursor                     int
 	selected                   map[int]bool
 	filter                     tuiStatusFilter

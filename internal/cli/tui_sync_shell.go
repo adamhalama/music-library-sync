@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jaa/update-downloads/internal/config"
-	"github.com/jaa/update-downloads/internal/engine"
 )
 
 func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
@@ -109,42 +108,34 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 	if m.isInteractiveSyncWorkflow() {
 		state := m.currentInteractiveSelection()
 		stats := []tuiFooterStat{{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()}}
+		filterPhase := m.interactiveFilterPhase()
+		if state != nil {
+			state.syncFilterForPhase(filterPhase)
+		}
 		if !m.interactiveRuntimeActive() && m.interactivePhase != tuiInteractivePhaseDone {
-			selected := 0
-			pending := 0
-			skipped := 0
+			willSync := 0
+			newCount := 0
+			knownGapCount := 0
+			alreadyHaveCount := 0
 			if state != nil {
-				selected = state.selectedCount()
-				pending = state.toggleableCount()
-				skipped = state.skippedCount()
+				willSync = state.selectedCount()
+				newCount = state.newCount()
+				knownGapCount = state.knownGapCount()
+				alreadyHaveCount = state.alreadyHaveCount()
 			}
 			stats = append(stats,
-				tuiFooterStat{Label: "selected", Value: fmt.Sprintf("%d", selected), Tone: "info"},
-				tuiFooterStat{Label: "pending", Value: fmt.Sprintf("%d", pending), Tone: "info"},
-				tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skipped), Tone: "muted"},
+				tuiFooterStat{Label: "will sync", Value: fmt.Sprintf("%d", willSync), Tone: "info"},
+				tuiFooterStat{Label: "new", Value: fmt.Sprintf("%d", newCount), Tone: "success"},
+				tuiFooterStat{Label: "known gap", Value: fmt.Sprintf("%d", knownGapCount), Tone: "warning"},
+				tuiFooterStat{Label: "already have", Value: fmt.Sprintf("%d", alreadyHaveCount), Tone: "muted"},
 				tuiFooterStat{Label: "progress", Value: tuiRenderProgressBar(0, 10), Tone: "muted"},
 			)
 			return stats
 		}
-		completedCount := 0
-		skippedCount := 0
-		failedCount := 0
-		if state != nil {
-			completedCount = state.completedCount()
-			skippedCount = state.skippedTrackCount()
-			failedCount = state.failedCount()
-		}
-		progressPercent := 0.0
-		if m.progress != nil {
-			progressPercent = m.progress.GlobalProgressPercent()
-			if m.interactivePhase == tuiInteractivePhaseDone && m.runErr == nil {
-				progressPercent = 100
-			}
-		} else if m.interactivePhase == tuiInteractivePhaseDone && m.runErr == nil {
-			progressPercent = 100
-		}
+		inRunCount, completedCount, skippedCount, failedCount, progressPercent := m.interactiveAggregateCounts()
 		progressLabel := tuiRenderProgressBar(progressPercent, 10)
 		stats = append(stats,
+			tuiFooterStat{Label: "in run", Value: fmt.Sprintf("%d", inRunCount), Tone: "info"},
 			tuiFooterStat{Label: "completed", Value: fmt.Sprintf("%d", completedCount), Tone: "success"},
 			tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skippedCount), Tone: "muted"},
 			tuiFooterStat{Label: "failed", Value: fmt.Sprintf("%d", failedCount), Tone: failureCountTone(failedCount)},
@@ -204,6 +195,8 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 	if state == nil {
 		return ""
 	}
+	filterPhase := tuiInteractivePhaseReview
+	state.syncFilterForPhase(filterPhase)
 	limitLabel := "unlimited"
 	if state.details.PlanLimit > 0 {
 		limitLabel = fmt.Sprintf("%d", state.details.PlanLimit)
@@ -212,15 +205,15 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 	if state.details.DryRun {
 		modeLabel = "dry-run"
 	}
-	state.ensureCursorVisible()
+	state.ensureCursorVisible(filterPhase)
 	lines := planPromptHeaderLines(state, modeLabel, limitLabel, layout)
-	filteredRows := state.filteredRows()
+	filteredRows := state.filteredRowsForPhase(filterPhase)
 	if len(filteredRows) == 0 {
 		lines = append(lines, "No tracks found in selected preflight window.")
 	} else {
-		lines = append(lines, strings.Split(renderPlanPromptTable(state, layout), "\n")...)
+		lines = append(lines, strings.Split(renderPlanPromptTable(state, filterPhase, layout), "\n")...)
 	}
-	lines = append(lines, fmt.Sprintf("Selected: %d/%d toggleable tracks  |  Showing: %d/%d", state.selectedCount(), state.toggleableCount(), len(filteredRows), len(state.rows)))
+	lines = append(lines, fmt.Sprintf("Will Sync: %d tracks  |  Showing: %d/%d", state.selectedCount(), len(filteredRows), len(state.rows)))
 	theme := newTUIShellTheme()
 	bodyStyle := theme.bodyPanel.Padding(0, 1)
 	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize() - 4
@@ -284,6 +277,7 @@ func renderPlanPromptPathLine(left, right string) string {
 }
 
 func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+	state.syncFilterForPhase(tuiInteractivePhaseReview)
 	focusTone := "warning"
 	if !state.focusFilters {
 		focusTone = "info"
@@ -539,9 +533,18 @@ func (m tuiSyncModel) interactiveSelectionSummaryLines(state *tuiInteractiveSele
 
 func (m tuiSyncModel) interactiveSelectionDisplayState(state *tuiInteractiveSelectionState) *tuiInteractiveSelectionState {
 	if state != nil && len(state.rows) > 0 {
+		if state.details.SourceID == "" {
+			if source, ok := m.interactiveSourceByID(state.sourceID); ok {
+				state.details = m.planSourceDetailsForSource(source)
+			}
+		}
 		return state
 	}
-	source, ok := m.focusedInteractiveSource()
+	sourceID := m.currentInteractiveDisplaySourceID()
+	source, ok := m.interactiveSourceByID(sourceID)
+	if !ok {
+		source, ok = m.focusedInteractiveSource()
+	}
 	if !ok {
 		return nil
 	}
@@ -609,6 +612,8 @@ func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveSe
 	if state == nil || len(state.rows) == 0 {
 		return renderInteractiveIdleControls(layout)
 	}
+	filterPhase := m.interactiveFilterPhase()
+	state.syncFilterForPhase(filterPhase)
 	focusTone := "warning"
 	if !state.focusFilters {
 		focusTone = "info"
@@ -697,15 +702,21 @@ func (m tuiSyncModel) interactiveTrackLines(state *tuiInteractiveSelectionState,
 		}
 		return lines
 	}
-	state.ensureCursorVisible()
-	filteredRows := state.filteredRows()
+	filterPhase := m.interactiveFilterPhase()
+	state.syncFilterForPhase(filterPhase)
+	state.ensureCursorVisible(filterPhase)
+	filteredRows := state.filteredRowsForPhase(filterPhase)
 	lines := []string{}
 	if len(filteredRows) == 0 {
 		lines = append(lines, "No tracks match the current filter.")
 	} else {
-		lines = append(lines, strings.Split(renderPlanPromptTable(state, layout), "\n")...)
+		lines = append(lines, strings.Split(renderPlanPromptTable(state, filterPhase, layout), "\n")...)
 	}
-	lines = append(lines, fmt.Sprintf("Showing %d/%d rows", len(filteredRows), len(state.rows)))
+	if tuiInteractiveRuntimePhase(filterPhase) {
+		lines = append(lines, fmt.Sprintf("In Run: %d tracks  |  Showing %d/%d rows", state.runtimeSelectedCount(), len(filteredRows), len(state.rows)))
+	} else {
+		lines = append(lines, fmt.Sprintf("Will Sync: %d tracks  |  Showing %d/%d rows", state.selectedCount(), len(filteredRows), len(state.rows)))
+	}
 	return lines
 }
 
@@ -772,7 +783,7 @@ func renderPlanSection(title string, lines []string, width int) string {
 		Render(header + "\n" + body)
 }
 
-func renderPlanPromptTable(state *tuiInteractiveSelectionState, layout tuiShellLayout) string {
+func renderPlanPromptTable(state *tuiInteractiveSelectionState, phase tuiInteractiveSyncPhase, layout tuiShellLayout) string {
 	theme := newTUIShellTheme()
 	bodyStyle := theme.bodyPanel.Padding(0, 1)
 	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize() - 4
@@ -798,8 +809,9 @@ func renderPlanPromptTable(state *tuiInteractiveSelectionState, layout tuiShellL
 	}, "  ")
 	header = lipgloss.NewStyle().Background(lipgloss.Color("237")).Padding(0, 1).Render(header)
 
-	filtered := state.filteredRows()
-	visibleIndices := state.visibleRowIndices()
+	state.syncFilterForPhase(phase)
+	filtered := state.filteredRowsForPhase(phase)
+	visibleIndices := state.visibleRowIndicesForPhase(phase)
 	filteredCursor := 0
 	for i, idx := range visibleIndices {
 		if idx == state.cursor {
@@ -812,12 +824,12 @@ func renderPlanPromptTable(state *tuiInteractiveSelectionState, layout tuiShellL
 	for i := start; i < end; i++ {
 		row := filtered[i]
 		isCursor := i == filteredCursor
-		lines = append(lines, renderPlanPromptRow(row, isCursor, selectWidth, indexWidth, statusWidth, titleWidth, idWidth))
+		lines = append(lines, renderPlanPromptRow(row, phase, isCursor, selectWidth, indexWidth, statusWidth, titleWidth, idWidth))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, indexWidth, statusWidth, titleWidth, idWidth int) string {
+func renderPlanPromptRow(row tuiTrackRowState, phase tuiInteractiveSyncPhase, isCursor bool, selectWidth, indexWidth, statusWidth, titleWidth, idWidth int) string {
 	cursorPrefix := " "
 	if isCursor {
 		cursorPrefix = ">"
@@ -832,20 +844,20 @@ func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, index
 			selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
 		}
 	}
-	statusLabel, statusStyle := planPromptStatusChip(row, statusWidth)
+	statusCell := renderTrackStatusCell(row, phase, statusWidth)
 	title := strings.TrimSpace(row.Title)
 	if title == "" {
 		title = "(untitled)"
 	}
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	if row.RuntimeStatus == tuiTrackStatusExisting {
+	if row.PlanClass == tuiTrackPlanClassAlreadyHave || (tuiInteractiveRuntimePhase(phase) && row.RunScope != tuiTrackRunScopeIncluded) {
 		titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	}
 	idStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	line := strings.Join([]string{
 		selectTone.Width(selectWidth).Render(cursorPrefix + selectLabel),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Width(indexWidth).Render(fmt.Sprintf("%d", row.Index)),
-		statusStyle.Width(statusWidth).Render(statusLabel),
+		statusCell,
 		titleStyle.Width(titleWidth).Render(ansi.Truncate(title, titleWidth, "")),
 		idStyle.Width(idWidth).Render(ansi.Truncate(row.RemoteID, idWidth, "")),
 	}, "  ")
@@ -855,7 +867,41 @@ func renderPlanPromptRow(row tuiTrackRowState, isCursor bool, selectWidth, index
 	return line
 }
 
-func planPromptStatusChip(row tuiTrackRowState, statusWidth int) (string, lipgloss.Style) {
+func renderTrackStatusCell(row tuiTrackRowState, phase tuiInteractiveSyncPhase, statusWidth int) string {
+	primaryLabel, primaryStyle := planPromptStatusChip(row, phase, statusWidth)
+	secondaryLabel := trackStatusSecondaryLabel(row, phase)
+	if strings.TrimSpace(secondaryLabel) == "" {
+		return primaryStyle.Width(statusWidth).Render(primaryLabel)
+	}
+	secondaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	if row.PlanClass == tuiTrackPlanClassAlreadyHave || row.RunScope != tuiTrackRunScopeIncluded {
+		secondaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	}
+	availableSecondaryWidth := statusWidth - lipgloss.Width(primaryLabel)
+	if availableSecondaryWidth <= 0 {
+		return primaryStyle.Width(statusWidth).Render(primaryLabel)
+	}
+	secondaryRendered := secondaryStyle.Render(ansi.Truncate(secondaryLabel, availableSecondaryWidth, ""))
+	return lipgloss.NewStyle().Width(statusWidth).Render(primaryStyle.Render(primaryLabel) + secondaryRendered)
+}
+
+func planPromptStatusChip(row tuiTrackRowState, phase tuiInteractiveSyncPhase, statusWidth int) (string, lipgloss.Style) {
+	if !tuiInteractiveRuntimePhase(phase) {
+		switch row.PlanClass {
+		case tuiTrackPlanClassAlreadyHave:
+			return " have-it ", lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Background(lipgloss.Color("237"))
+		case tuiTrackPlanClassKnownGap:
+			return " known-gap ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
+		default:
+			return " new ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
+		}
+	}
+	if row.RunScope == tuiTrackRunScopeLocked && row.PlanClass == tuiTrackPlanClassAlreadyHave {
+		return " have-it ", lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Background(lipgloss.Color("237"))
+	}
+	if row.RunScope == tuiTrackRunScopeExcluded {
+		return " not-run ", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("238"))
+	}
 	switch row.RuntimeStatus {
 	case tuiTrackStatusDownloading:
 		label := " downloading "
@@ -873,17 +919,22 @@ func planPromptStatusChip(row tuiTrackRowState, statusWidth int) (string, lipglo
 		return " failed ", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Background(lipgloss.Color("52")).Bold(true)
 	case tuiTrackStatusSkipped:
 		return " skipped ", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("238")).Bold(true)
-	case tuiTrackStatusExisting:
-		return " have-it ", lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Background(lipgloss.Color("237"))
 	default:
-		switch row.PlanStatus {
-		case engine.PlanRowMissingNew:
-			return " new ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
-		case engine.PlanRowMissingKnownGap:
-			return " known-gap ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
-		default:
-			return " pending ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
-		}
+		return " pending ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
+	}
+}
+
+func trackStatusSecondaryLabel(row tuiTrackRowState, phase tuiInteractiveSyncPhase) string {
+	if !tuiInteractiveRuntimePhase(phase) {
+		return ""
+	}
+	switch row.PlanClass {
+	case tuiTrackPlanClassNew:
+		return " · new"
+	case tuiTrackPlanClassKnownGap:
+		return " · gap"
+	default:
+		return ""
 	}
 }
 
@@ -1076,9 +1127,12 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 	}
 	sections = append(sections, tuiSidebarSection{Title: "sources", Items: sourceItems})
 	if state := m.currentInteractiveSelection(); state != nil && len(state.rows) > 0 {
-		filterItems := make([]tuiSidebarItem, 0, len(state.filters()))
-		for idx, filter := range state.filters() {
-			count := state.filterCount(filter)
+		filterPhase := m.interactiveFilterPhase()
+		state.syncFilterForPhase(filterPhase)
+		filters := state.filtersForPhase(filterPhase)
+		filterItems := make([]tuiSidebarItem, 0, len(filters))
+		for idx, filter := range filters {
+			count := state.filterCount(filter, filterPhase)
 			item := tuiSidebarItem{
 				Label:  fmt.Sprintf("%s (%d)", state.filterDisplayLabel(filter), count),
 				Active: state.focusFilters && idx == state.filterCursor,
@@ -1087,12 +1141,14 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 				item.Tone = "info"
 			}
 			switch filter {
-			case tuiPlanFilterMissingNew:
+			case tuiTrackFilterMissingNew, tuiTrackFilterDownloaded:
 				item.Tone = "success"
-			case tuiPlanFilterKnownGap:
+			case tuiTrackFilterKnownGap:
 				item.Tone = "warning"
-			case tuiPlanFilterDownloaded:
+			case tuiTrackFilterAlreadyHave, tuiTrackFilterSkipped:
 				item.Tone = "muted"
+			case tuiTrackFilterFailed:
+				item.Tone = "danger"
 			}
 			filterItems = append(filterItems, item)
 		}
