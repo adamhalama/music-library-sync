@@ -211,6 +211,183 @@ func (m tuiSyncModel) interactiveSourceByID(sourceID string) (config.Source, boo
 	return config.Source{}, false
 }
 
+func (m *tuiSyncModel) resetStandardSyncState() {
+	if m == nil {
+		return
+	}
+	m.standardSummaries = map[string]*tuiStandardSyncSourceSummary{}
+	m.standardActiveSource = ""
+	m.standardLastSource = ""
+}
+
+func (m *tuiSyncModel) ensureStandardSummary(sourceID string) *tuiStandardSyncSourceSummary {
+	if m == nil {
+		return nil
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil
+	}
+	if m.standardSummaries == nil {
+		m.standardSummaries = map[string]*tuiStandardSyncSourceSummary{}
+	}
+	if summary, ok := m.standardSummaries[sourceID]; ok {
+		return summary
+	}
+	summary := &tuiStandardSyncSourceSummary{
+		SourceID:  sourceID,
+		Lifecycle: tuiStandardSyncSourceIdle,
+		Planned:   -1,
+	}
+	m.standardSummaries[sourceID] = summary
+	return summary
+}
+
+func (m *tuiSyncModel) observeStandardSyncEvent(event output.Event) {
+	if m == nil || m.isInteractiveSyncWorkflow() {
+		return
+	}
+	sourceID := strings.TrimSpace(event.SourceID)
+	if sourceID != "" {
+		m.standardLastSource = sourceID
+	}
+	if event.Event == output.EventSyncStarted {
+		m.resetStandardSyncState()
+		return
+	}
+	summary := m.ensureStandardSummary(sourceID)
+	if summary == nil {
+		return
+	}
+	if total, ok := tuiDetailInt(event.Details, "total"); ok && summary.Planned < 0 {
+		summary.Planned = total
+	}
+	if trackName := tuiStandardSyncTrackName(event); trackName != "" {
+		summary.LastTrack = trackName
+	}
+	switch event.Event {
+	case output.EventSourcePreflight:
+		summary.Lifecycle = tuiStandardSyncSourcePreflight
+		if planned, ok := tuiDetailInt(event.Details, "planned_download_count"); ok {
+			summary.Planned = planned
+		}
+	case output.EventSourceStarted:
+		summary.Lifecycle = tuiStandardSyncSourceRunning
+		m.standardActiveSource = sourceID
+	case output.EventSourceFinished:
+		summary.Lifecycle = tuiStandardSyncSourceFinished
+		if m.standardActiveSource == sourceID {
+			m.standardActiveSource = ""
+		}
+	case output.EventSourceFailed:
+		summary.Lifecycle = tuiStandardSyncSourceFailed
+		if m.standardActiveSource == sourceID {
+			m.standardActiveSource = ""
+		}
+	case output.EventTrackStarted, output.EventTrackProgress:
+		summary.Lifecycle = tuiStandardSyncSourceRunning
+		m.standardActiveSource = sourceID
+	case output.EventTrackDone:
+		summary.Lifecycle = tuiStandardSyncSourceRunning
+		summary.Done++
+		summary.LastOutcome = "done"
+		m.standardActiveSource = sourceID
+	case output.EventTrackSkip:
+		summary.Lifecycle = tuiStandardSyncSourceRunning
+		summary.Skipped++
+		summary.LastOutcome = tuiStandardSyncOutcomeLabel("skip", tuiDetailString(event.Details, "reason"))
+		m.standardActiveSource = sourceID
+	case output.EventTrackFail:
+		summary.Lifecycle = tuiStandardSyncSourceRunning
+		summary.Failed++
+		summary.LastOutcome = tuiStandardSyncOutcomeLabel("fail", tuiDetailString(event.Details, "reason"))
+		m.standardActiveSource = sourceID
+	}
+}
+
+func tuiStandardSyncTrackName(event output.Event) string {
+	name := strings.TrimSpace(tuiDetailString(event.Details, "track_name"))
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(tuiDetailString(event.Details, "track_id"))
+}
+
+func tuiStandardSyncOutcomeLabel(kind, reason string) string {
+	kind = strings.TrimSpace(kind)
+	reason = strings.TrimSpace(reason)
+	if kind == "" {
+		return ""
+	}
+	if reason == "" {
+		return kind
+	}
+	return kind + ": " + reason
+}
+
+func (m tuiSyncModel) standardSourceSummaryRows() []*tuiStandardSyncSourceSummary {
+	if len(m.standardSummaries) == 0 {
+		return nil
+	}
+	rows := make([]*tuiStandardSyncSourceSummary, 0, len(m.standardSummaries))
+	seen := map[string]bool{}
+	for _, source := range m.sources {
+		summary, ok := m.standardSummaries[source.ID]
+		if !ok {
+			continue
+		}
+		rows = append(rows, summary)
+		seen[source.ID] = true
+	}
+	extraIDs := make([]string, 0, len(m.standardSummaries))
+	for sourceID := range m.standardSummaries {
+		if seen[sourceID] {
+			continue
+		}
+		extraIDs = append(extraIDs, sourceID)
+	}
+	sort.Strings(extraIDs)
+	for _, sourceID := range extraIDs {
+		rows = append(rows, m.standardSummaries[sourceID])
+	}
+	return rows
+}
+
+func (m tuiSyncModel) standardAggregateCounts() (done, skipped, failed int) {
+	for _, summary := range m.standardSourceSummaryRows() {
+		done += summary.Done
+		skipped += summary.Skipped
+		failed += summary.Failed
+	}
+	return done, skipped, failed
+}
+
+func (m tuiSyncModel) standardCurrentSourceID() string {
+	if strings.TrimSpace(m.standardActiveSource) != "" {
+		return strings.TrimSpace(m.standardActiveSource)
+	}
+	return strings.TrimSpace(m.standardLastSource)
+}
+
+func (m tuiSyncModel) standardActivityCollapsedFor(layout tuiShellLayout) bool {
+	if m.standardActivityState.CollapseConfigured {
+		return m.standardActivityState.Collapsed
+	}
+	return layout.Compact
+}
+
+func (m *tuiSyncModel) toggleStandardActivity(layout tuiShellLayout) {
+	if m == nil {
+		return
+	}
+	if m.standardActivityState.CollapseConfigured {
+		m.standardActivityState.Collapsed = !m.standardActivityState.Collapsed
+		return
+	}
+	m.standardActivityState.Collapsed = !layout.Compact
+	m.standardActivityState.CollapseConfigured = true
+}
+
 func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiveSelectionState {
 	selected := map[int]bool{}
 	rows := make([]tuiTrackRowState, 0, len(req.Rows))

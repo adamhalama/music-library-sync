@@ -21,8 +21,8 @@ func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 		Shortcuts:        syncModel.shellShortcuts(),
 		BodyTitle:        syncModel.shellBodyTitle(),
 		Body:             syncModel.shellBody(layout),
-		DenseBody:        syncModel.planPrompt != nil || syncModel.isInteractiveSyncWorkflow(),
-		StyledBody:       syncModel.planPrompt != nil || syncModel.isInteractiveSyncWorkflow(),
+		DenseBody:        true,
+		StyledBody:       true,
 		FooterStats:      syncModel.shellFooterStats(),
 		Banner:           syncModel.shellBanner(),
 		AllowBack:        m.canReturnToMenuOnEsc(),
@@ -85,6 +85,7 @@ func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 		{Key: "space", Label: "toggle source"},
 		{Key: "d", Label: "dry-run"},
 		{Key: "t", Label: "timeout"},
+		{Key: "p", Label: "activity"},
 		{Key: "enter", Label: "run"},
 	}
 	if m.isInteractiveSyncWorkflow() {
@@ -146,10 +147,7 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 		}
 		return stats
 	}
-	stats := []tuiFooterStat{
-		{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()},
-		{Label: "sources", Value: fmt.Sprintf("%d/%d", m.selectedSourceCount(), len(m.sources)), Tone: "info"},
-	}
+	stats := []tuiFooterStat{{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()}}
 	if m.planPrompt != nil {
 		focus := "tracks"
 		if m.planPrompt.focusFilters {
@@ -160,19 +158,27 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 			tuiFooterStat{Label: "focus", Value: focus, Tone: "warning"},
 		)
 	}
-	if m.done {
+	progressPercent := 0.0
+	if m.progress != nil {
+		progressPercent = m.progress.GlobalProgressPercent()
+	}
+	progressLabel := tuiRenderProgressBar(progressPercent, 10)
+	if !m.running && !m.done {
 		stats = append(stats,
-			tuiFooterStat{Label: "attempted", Value: fmt.Sprintf("%d", m.result.Attempted), Tone: "info"},
-			tuiFooterStat{Label: "failed", Value: fmt.Sprintf("%d", m.result.Failed), Tone: failureCountTone(m.result.Failed)},
+			tuiFooterStat{Label: "sources", Value: fmt.Sprintf("%d/%d", m.selectedSourceCount(), len(m.sources)), Tone: "info"},
+			tuiFooterStat{Label: "progress", Value: progressLabel, Tone: "muted"},
 		)
 		return stats
 	}
-	total := 0
-	if m.progress != nil {
-		total = m.progress.EffectiveTotal()
-	}
-	if total > 0 {
-		stats = append(stats, tuiFooterStat{Label: "progress", Value: fmt.Sprintf("%d/%d", m.progress.CurrentIndex(), total), Tone: "info"})
+	done, skipped, failed := m.standardAggregateCounts()
+	stats = append(stats,
+		tuiFooterStat{Label: "done", Value: fmt.Sprintf("%d", done), Tone: "success"},
+		tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skipped), Tone: "muted"},
+		tuiFooterStat{Label: "failed", Value: fmt.Sprintf("%d", failed), Tone: failureCountTone(failed)},
+		tuiFooterStat{Label: "progress", Value: progressLabel, Tone: "info"},
+	)
+	if !m.runStartedAt.IsZero() {
+		stats = append(stats, tuiFooterStat{Label: "elapsed", Value: m.elapsedLabel(), Tone: "muted"})
 	}
 	return stats
 }
@@ -469,17 +475,269 @@ func (m tuiSyncModel) selectedSourceCount() int {
 }
 
 func (m tuiSyncModel) shellBodyTitle() string {
-	if m.isInteractiveSyncWorkflow() {
-		return ""
-	}
-	return m.workflowTitle()
+	return ""
 }
 
 func (m tuiSyncModel) shellBody(layout tuiShellLayout) string {
 	if m.isInteractiveSyncWorkflow() {
 		return m.interactiveSyncBody(layout)
 	}
-	return m.bodyView(false)
+	return m.standardSyncBody(layout)
+}
+
+func (m tuiSyncModel) standardSyncBody(layout tuiShellLayout) string {
+	width := shellMainSectionWidth(layout, newTUIShellTheme()) - 4
+	if width < 36 {
+		width = shellMainSectionWidth(layout, newTUIShellTheme())
+	}
+	if !m.cfgLoaded {
+		return strings.Join([]string{
+			renderPlanSection("Selection", []string{"Loading config..."}, width),
+			renderPlanSection("Run", []string{"Waiting for config before runtime state can render."}, width),
+			renderPlanSection("Activity", []string{"no activity yet"}, width),
+		}, "\n")
+	}
+	if m.cfgErr != nil {
+		return strings.Join([]string{
+			renderPlanSection("Selection", []string{fmt.Sprintf("Config load failed: %v", m.cfgErr)}, width),
+			renderPlanSection("Run", []string{"Runtime state unavailable while config is invalid."}, width),
+			renderPlanSection("Activity", []string{"no activity yet"}, width),
+		}, "\n")
+	}
+	sections := []string{
+		renderPlanSection("Selection", m.standardSelectionLines(), width),
+		renderPlanSection("Run", m.standardRunLines(layout), width),
+		renderPlanSection("Activity", m.standardActivityLines(layout), width),
+	}
+	return strings.Join(sections, "\n")
+}
+
+func (m tuiSyncModel) standardSelectionLines() []string {
+	lines := []string{fmt.Sprintf("Selected Sources: %d/%d", m.selectedSourceCount(), len(m.sources))}
+	if len(m.sources) == 0 {
+		lines = append(lines, "Focused: (no enabled sources)")
+	} else {
+		cursor := m.cursor
+		if cursor < 0 || cursor >= len(m.sources) {
+			cursor = 0
+		}
+		source := m.sources[cursor]
+		lines = append(lines, fmt.Sprintf("Focused: %s (%s/%s)", source.ID, source.Type, source.Adapter.Kind))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Options: dry_run=%t  ask_on_existing=%s  scan_gaps=%t  no_preflight=%t  timeout=%s", m.dryRun, formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight, formatTimeoutOverride(m.timeoutOverride)),
+	)
+	if m.timeoutInputActive {
+		lines = append(lines, fmt.Sprintf("timeout_input=%q  enter apply  esc cancel", m.timeoutInput))
+		if m.timeoutInputErr != "" {
+			lines = append(lines, "input_error: "+m.timeoutInputErr)
+		}
+	}
+	if m.validationErr != "" {
+		lines = append(lines, "validation_error: "+m.validationErr)
+	}
+	return lines
+}
+
+func (m tuiSyncModel) standardRunLines(layout tuiShellLayout) []string {
+	lines := []string{m.standardCurrentSourceHeadline()}
+	if progressLines := m.progressLines(); len(progressLines) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, progressLines...)
+	}
+	summaries := m.standardSourceSummaryRows()
+	if len(summaries) == 0 {
+		lines = append(lines, "", "No source activity yet.")
+		return lines
+	}
+	lines = append(lines, "")
+	if layout.Compact {
+		lines = append(lines, m.renderStandardSyncCompactSummaryRows(summaries)...)
+		return lines
+	}
+	lines = append(lines, strings.Split(m.renderStandardSyncSummaryTable(summaries, layout), "\n")...)
+	return lines
+}
+
+func (m tuiSyncModel) standardCurrentSourceHeadline() string {
+	sourceID := m.standardCurrentSourceID()
+	if sourceID == "" {
+		switch {
+		case m.running:
+			return "Current Source: waiting for source events"
+		case m.done:
+			return "Current Source: run complete"
+		default:
+			return "Current Source: ready"
+		}
+	}
+	if summary, ok := m.standardSummaries[sourceID]; ok && summary != nil {
+		return fmt.Sprintf("Current Source: %s (%s)", sourceID, m.standardLifecycleLabel(summary.Lifecycle))
+	}
+	return "Current Source: " + sourceID
+}
+
+func (m tuiSyncModel) renderStandardSyncSummaryTable(summaries []*tuiStandardSyncSourceSummary, layout tuiShellLayout) string {
+	theme := newTUIShellTheme()
+	bodyStyle := theme.bodyPanel.Padding(0, 1)
+	width := shellMainSectionWidth(layout, theme) - bodyStyle.GetHorizontalFrameSize() - 4
+	if width < 72 {
+		width = 72
+	}
+	sourceWidth := 18
+	stateWidth := 11
+	planWidth := 6
+	doneWidth := 6
+	skipWidth := 6
+	failWidth := 6
+	gapWidth := 14
+	trackWidth := 16
+	outcomeWidth := width - sourceWidth - stateWidth - planWidth - doneWidth - skipWidth - failWidth - trackWidth - gapWidth
+	if outcomeWidth < 12 {
+		outcomeWidth = 12
+		trackWidth = width - sourceWidth - stateWidth - planWidth - doneWidth - skipWidth - failWidth - outcomeWidth - gapWidth
+		if trackWidth < 12 {
+			trackWidth = 12
+		}
+	}
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	header := strings.Join([]string{
+		headerStyle.Width(sourceWidth).Render("SOURCE"),
+		headerStyle.Width(stateWidth).Render("STATE"),
+		headerStyle.Width(planWidth).Render("PLAN"),
+		headerStyle.Width(doneWidth).Render("DONE"),
+		headerStyle.Width(skipWidth).Render("SKIP"),
+		headerStyle.Width(failWidth).Render("FAIL"),
+		headerStyle.Width(trackWidth).Render("TRACK"),
+		headerStyle.Width(outcomeWidth).Render("OUTCOME"),
+	}, "  ")
+	header = lipgloss.NewStyle().Background(lipgloss.Color("237")).Padding(0, 1).Render(header)
+	lines := []string{header, lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render(strings.Repeat("─", maxInt(16, width)))}
+	for _, summary := range summaries {
+		lines = append(lines, m.renderStandardSyncSummaryRow(summary, sourceWidth, stateWidth, planWidth, doneWidth, skipWidth, failWidth, trackWidth, outcomeWidth))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m tuiSyncModel) renderStandardSyncSummaryRow(summary *tuiStandardSyncSourceSummary, sourceWidth, stateWidth, planWidth, doneWidth, skipWidth, failWidth, trackWidth, outcomeWidth int) string {
+	if summary == nil {
+		return ""
+	}
+	prefix := " "
+	if strings.TrimSpace(summary.SourceID) == m.standardCurrentSourceID() && m.running {
+		prefix = ">"
+	}
+	sourceStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	stateStyle := shellToneStyle(newTUIShellTheme(), m.standardLifecycleTone(summary.Lifecycle))
+	track := summary.LastTrack
+	if strings.TrimSpace(track) == "" {
+		track = "-"
+	}
+	outcome := summary.LastOutcome
+	if strings.TrimSpace(outcome) == "" {
+		outcome = "-"
+	}
+	line := strings.Join([]string{
+		sourceStyle.Width(sourceWidth).Render(ansi.Truncate(prefix+summary.SourceID, sourceWidth, "")),
+		stateStyle.Width(stateWidth).Render(m.standardLifecycleLabel(summary.Lifecycle)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(planWidth).Render(m.standardPlannedLabel(summary.Planned)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Width(doneWidth).Render(fmt.Sprintf("%d", summary.Done)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(skipWidth).Render(fmt.Sprintf("%d", summary.Skipped)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Width(failWidth).Render(fmt.Sprintf("%d", summary.Failed)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Width(trackWidth).Render(ansi.Truncate(track, trackWidth, "")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(outcomeWidth).Render(ansi.Truncate(outcome, outcomeWidth, "")),
+	}, "  ")
+	if prefix == ">" {
+		return lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(line)
+	}
+	return line
+}
+
+func (m tuiSyncModel) renderStandardSyncCompactSummaryRows(summaries []*tuiStandardSyncSourceSummary) []string {
+	lines := []string{"SRC  STATE  PLAN  DONE  SKIP  FAIL"}
+	for _, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		line := fmt.Sprintf("%s%s  %s  %s  %d  %d  %d",
+			m.standardCompactSourcePrefix(summary.SourceID),
+			summary.SourceID,
+			m.standardLifecycleLabel(summary.Lifecycle),
+			m.standardPlannedLabel(summary.Planned),
+			summary.Done,
+			summary.Skipped,
+			summary.Failed,
+		)
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func (m tuiSyncModel) standardCompactSourcePrefix(sourceID string) string {
+	if strings.TrimSpace(sourceID) == m.standardCurrentSourceID() && m.running {
+		return ">"
+	}
+	return " "
+}
+
+func (m tuiSyncModel) standardActivityLines(layout tuiShellLayout) []string {
+	if m.standardActivityCollapsedFor(layout) {
+		return []string{"collapsed", "press p to expand"}
+	}
+	lines := []string{"p: collapse"}
+	if len(m.events) == 0 {
+		lines = append(lines, "no activity yet")
+	} else {
+		limit := 10
+		if layout.Compact {
+			limit = 6
+		}
+		start := 0
+		if len(m.events) > limit {
+			start = len(m.events) - limit
+		}
+		lines = append(lines, m.events[start:]...)
+	}
+	if failureLines := m.lastFailureLines(); len(failureLines) > 0 {
+		lines = append(lines, "", "last failure:")
+		lines = append(lines, failureLines...)
+	}
+	return lines
+}
+
+func (m tuiSyncModel) standardLifecycleLabel(lifecycle tuiStandardSyncSourceLifecycle) string {
+	switch lifecycle {
+	case tuiStandardSyncSourcePreflight:
+		return "preflight"
+	case tuiStandardSyncSourceRunning:
+		return "running"
+	case tuiStandardSyncSourceFinished:
+		return "done"
+	case tuiStandardSyncSourceFailed:
+		return "failed"
+	default:
+		return "idle"
+	}
+}
+
+func (m tuiSyncModel) standardLifecycleTone(lifecycle tuiStandardSyncSourceLifecycle) string {
+	switch lifecycle {
+	case tuiStandardSyncSourcePreflight, tuiStandardSyncSourceRunning:
+		return "warning"
+	case tuiStandardSyncSourceFinished:
+		return "success"
+	case tuiStandardSyncSourceFailed:
+		return "danger"
+	default:
+		return "muted"
+	}
+}
+
+func (m tuiSyncModel) standardPlannedLabel(planned int) string {
+	if planned < 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", planned)
 }
 
 func (m tuiSyncModel) interactiveSyncBody(layout tuiShellLayout) string {

@@ -99,6 +99,7 @@ Interactive sync now keeps the shell shortcuts/footer active during selection:
 - `g`: toggle `scan_gaps`
 - `f`: toggle `no_preflight`
 - `t`: type timeout override (Go duration, for example `10m`, `90s`, `1h`)
+- `p`: collapse/expand the activity panel
 - `enter`: start run
 
 This workflow is the streamlined non-plan path and no longer exposes `--plan` controls.
@@ -114,10 +115,11 @@ These prompts render as shell modals rather than full-screen prompt pages.
 ### Runtime output
 
 During active sync runs, the TUI renders:
-- a compact live progress panel for the current track and overall run progress
-- a short compact activity history (`[done]`, `[skip]`, `[fail]`, plus source/sync summaries)
+- a shell-native `Run` section with the current source headline, current track progress, and overall run progress
+- per-source summary rows with lifecycle, planned count, done/skipped/failed totals, and latest track/outcome on wide layouts
+- a shell-native `Activity` section with recent outcomes (`[done]`, `[skip]`, `[fail]`) plus source/sync summaries and pinned failure diagnostics
 
-This mirrors the streamlined default `udl sync` experience more closely than the earlier raw event-log-only view.
+The activity panel is expanded by default on wide layouts and collapsed by default on compact layouts.
 
 ### Cancellation
 

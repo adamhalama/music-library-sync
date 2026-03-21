@@ -173,6 +173,172 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	}
 }
 
+func TestTUIRootStandardSyncShellShowsSectionedBodyAndShortcuts(t *testing.T) {
+	root := renderStandardShellFixture(150, 30)
+
+	view := root.View()
+	if !strings.Contains(view, "Selection") || !strings.Contains(view, "Run") || !strings.Contains(view, "Activity") {
+		t.Fatalf("expected sectioned standard sync shell body, got: %s", view)
+	}
+	if !strings.Contains(view, "[p] activity") {
+		t.Fatalf("expected standard sync shortcut bar to include activity toggle, got: %s", view)
+	}
+	if !strings.Contains(view, "ask_on_existing=") || !strings.Contains(view, "scan_gaps=") || !strings.Contains(view, "no_preflight=") {
+		t.Fatalf("expected standard sync command summary to include standard-only flags, got: %s", view)
+	}
+	if strings.Contains(view, "plan_limit=") {
+		t.Fatalf("expected standard sync shell to keep plan controls hidden, got: %s", view)
+	}
+}
+
+func TestTUIRootStandardSyncActivityPanelDefaultsCollapsedInCompactAndPToggles(t *testing.T) {
+	root := renderStandardShellFixture(100, 40)
+
+	view := root.View()
+	if !strings.Contains(view, "collapsed") {
+		t.Fatalf("expected compact standard-sync activity panel to default collapsed, got: %s", view)
+	}
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	next := nextModel.(tuiRootModel)
+	view = next.View()
+	if !strings.Contains(view, "no activity yet") {
+		t.Fatalf("expected p to expand standard-sync activity panel, got: %s", view)
+	}
+}
+
+func TestTUIRootStandardSyncRunningShowsProgressAndSourceSummary(t *testing.T) {
+	root := renderStandardShellFixture(160, 30)
+	root.syncModel.running = true
+	root.syncModel.runStartedAt = time.Now().Add(-5 * time.Second)
+
+	events := []output.Event{
+		{
+			Event:    output.EventSourcePreflight,
+			SourceID: "soundcloud-likes",
+			Details:  map[string]any{"planned_download_count": 3},
+		},
+		{
+			Event:    output.EventSourceStarted,
+			SourceID: "soundcloud-likes",
+		},
+		{
+			Event:    output.EventTrackStarted,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"track_name": "Structured Song",
+				"index":      1,
+				"total":      3,
+			},
+		},
+		{
+			Event:    output.EventTrackProgress,
+			SourceID: "soundcloud-likes",
+			Details: map[string]any{
+				"track_name": "Structured Song",
+				"index":      1,
+				"total":      3,
+				"percent":    67.5,
+			},
+		},
+	}
+	for _, event := range events {
+		var cmd tea.Cmd
+		root.syncModel, cmd = root.syncModel.Update(tuiSyncEventMsg{Event: event})
+		if cmd != nil {
+			t.Fatalf("expected no wait command without event channel")
+		}
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "Current Source: soundcloud-likes (running)") {
+		t.Fatalf("expected current source headline in run section, got: %s", view)
+	}
+	if !strings.Contains(view, "Structured Song") || !strings.Contains(view, "[overall]") {
+		t.Fatalf("expected structured progress lines in run section, got: %s", view)
+	}
+	if !strings.Contains(view, "SOURCE") || !strings.Contains(view, "OUTCOME") {
+		t.Fatalf("expected standard sync source summary table, got: %s", view)
+	}
+	if !strings.Contains(view, "soundcloud-likes") {
+		t.Fatalf("expected source summary row to render source id, got: %s", view)
+	}
+}
+
+func TestTUIStandardSyncSummariesAndFooterUseRuntimeCounts(t *testing.T) {
+	root := renderStandardShellFixture(160, 30)
+	root.syncModel.running = true
+	root.syncModel.runStartedAt = time.Now().Add(-11 * time.Second)
+
+	events := []output.Event{
+		{Event: output.EventSourcePreflight, SourceID: "source-a", Details: map[string]any{"planned_download_count": 3}},
+		{Event: output.EventSourceStarted, SourceID: "source-a"},
+		{Event: output.EventTrackDone, SourceID: "source-a", Details: map[string]any{"track_name": "Done Song", "index": 1, "total": 3}},
+		{Event: output.EventTrackSkip, SourceID: "source-a", Details: map[string]any{"track_name": "Skip Song", "index": 2, "total": 3, "reason": "duplicate"}},
+		{Event: output.EventTrackFail, SourceID: "source-a", Details: map[string]any{"track_name": "Fail Song", "index": 3, "total": 3, "reason": "network"}},
+		{Event: output.EventSourceFinished, SourceID: "source-a"},
+		{Event: output.EventSourcePreflight, SourceID: "source-b", Details: map[string]any{"planned_download_count": 1}},
+		{Event: output.EventSourceStarted, SourceID: "source-b"},
+		{Event: output.EventSourceFailed, Level: output.LevelError, SourceID: "source-b", Message: "[source-b] failed"},
+	}
+	for _, event := range events {
+		var cmd tea.Cmd
+		root.syncModel, cmd = root.syncModel.Update(tuiSyncEventMsg{Event: event})
+		if cmd != nil {
+			t.Fatalf("expected no wait command without event channel")
+		}
+	}
+	root.syncModel.running = false
+	root.syncModel.done = true
+	root.syncModel.runFinishedAt = time.Now()
+
+	sourceA := root.syncModel.standardSummaries["source-a"]
+	if sourceA == nil || sourceA.Planned != 3 || sourceA.Done != 1 || sourceA.Skipped != 1 || sourceA.Failed != 1 || sourceA.Lifecycle != tuiStandardSyncSourceFinished {
+		t.Fatalf("expected source-a summary to reflect structured runtime updates, got: %+v", sourceA)
+	}
+	sourceB := root.syncModel.standardSummaries["source-b"]
+	if sourceB == nil || sourceB.Planned != 1 || sourceB.Lifecycle != tuiStandardSyncSourceFailed {
+		t.Fatalf("expected source-b summary to reflect source failure, got: %+v", sourceB)
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "done: 1") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
+		t.Fatalf("expected footer to use runtime summary counts, got: %s", view)
+	}
+	if !strings.Contains(view, "elapsed:") {
+		t.Fatalf("expected footer to include elapsed time after runtime, got: %s", view)
+	}
+	if strings.Contains(view, "attempted:") {
+		t.Fatalf("expected footer not to fall back to old attempted-source stats, got: %s", view)
+	}
+}
+
+func TestTUIRootStandardSyncPromptModalAndFailureDiagnostics(t *testing.T) {
+	root := renderStandardShellFixture(150, 40)
+	root.syncModel.interactionPrompt = &tuiInteractionPromptState{
+		kind:       tuiPromptKindConfirm,
+		sourceID:   "spotify-source",
+		prompt:     "Retry login?",
+		defaultYes: true,
+	}
+	root.syncModel.lastFailure = &tuiSyncFailureState{
+		SourceID:       "spotify-source",
+		Message:        "[spotify-source] command failed with exit code 1",
+		TimedOut:       true,
+		StdoutTail:     "line one",
+		StderrTail:     "fatal line",
+		FailureLogPath: "/tmp/udl-state/sync-failures.jsonl",
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "Prompt") || !strings.Contains(view, "Retry login?") {
+		t.Fatalf("expected standard sync shell prompt modal, got: %s", view)
+	}
+	if !strings.Contains(view, "last failure:") || !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
+		t.Fatalf("expected failure diagnostics to render in activity section, got: %s", view)
+	}
+}
+
 func TestTUIRootShellShowsSourcesInSidebarForInteractiveSync(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenInteractiveSync
@@ -1074,6 +1240,24 @@ func renderPlanPromptFixture(rows []engine.PlanRow) tuiRootModel {
 		},
 		Reply: reply,
 	})
+	return root
+}
+
+func renderStandardShellFixture(width, height int) tuiRootModel {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenSync
+	root.width = width
+	root.height = height
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
+	root.syncModel.width = width
+	root.syncModel.height = height
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+		{ID: "spotify-source", Type: config.SourceTypeSpotify, Adapter: config.AdapterSpec{Kind: "spotdl"}},
+	}
+	root.syncModel.selected["soundcloud-likes"] = true
+	root.syncModel.selected["spotify-source"] = true
 	return root
 }
 

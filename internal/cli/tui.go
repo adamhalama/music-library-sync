@@ -52,6 +52,10 @@ type tuiSyncModel struct {
 	progress              *output.StructuredProgressTracker
 	lastFailure           *tuiSyncFailureState
 	eventCh               chan tea.Msg
+	standardSummaries     map[string]*tuiStandardSyncSourceSummary
+	standardActiveSource  string
+	standardLastSource    string
+	standardActivityState tuiStandardSyncActivityState
 	interactivePhase      tuiInteractiveSyncPhase
 	sourceLifecycle       map[string]tuiInteractiveSourceLifecycle
 	interactiveSelections map[string]*tuiInteractiveSelectionState
@@ -74,6 +78,32 @@ type tuiSyncFailureState struct {
 	StdoutTail     string
 	StderrTail     string
 	FailureLogPath string
+}
+
+type tuiStandardSyncSourceLifecycle string
+
+const (
+	tuiStandardSyncSourceIdle      tuiStandardSyncSourceLifecycle = "idle"
+	tuiStandardSyncSourcePreflight tuiStandardSyncSourceLifecycle = "preflight"
+	tuiStandardSyncSourceRunning   tuiStandardSyncSourceLifecycle = "running"
+	tuiStandardSyncSourceFinished  tuiStandardSyncSourceLifecycle = "finished"
+	tuiStandardSyncSourceFailed    tuiStandardSyncSourceLifecycle = "failed"
+)
+
+type tuiStandardSyncSourceSummary struct {
+	SourceID    string
+	Lifecycle   tuiStandardSyncSourceLifecycle
+	Planned     int
+	Done        int
+	Skipped     int
+	Failed      int
+	LastTrack   string
+	LastOutcome string
+}
+
+type tuiStandardSyncActivityState struct {
+	Collapsed          bool
+	CollapseConfigured bool
 }
 
 type tuiConfigLoadedMsg struct {

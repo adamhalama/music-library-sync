@@ -34,6 +34,7 @@ func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 		dryRun:                dryRun,
 		planLimit:             tuiDefaultPlanLimit,
 		progress:              output.NewStructuredProgressTracker(nil),
+		standardSummaries:     map[string]*tuiStandardSyncSourceSummary{},
 		interactivePhase:      interactivePhase,
 		sourceLifecycle:       map[string]tuiInteractiveSourceLifecycle{},
 		interactiveSelections: map[string]*tuiInteractiveSelectionState{},
@@ -95,6 +96,10 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		if m.running && (typed.String() == "x" || typed.String() == "ctrl+c") {
 			m = m.cancelActiveRun()
 			return m, m.waitRunMsgCmd()
+		}
+		if !m.isInteractiveSyncWorkflow() && typed.String() == "p" && !m.timeoutInputActive && !m.planLimitInputActive && m.interactionPrompt == nil {
+			m.toggleStandardActivity(m.currentShellLayout())
+			return m, nil
 		}
 		if m.isInteractiveSyncWorkflow() && typed.String() == "p" && !m.timeoutInputActive && !m.planLimitInputActive && m.interactionPrompt == nil {
 			if state := m.ensureInteractiveSelectionForSource(m.currentInteractiveDisplaySourceID()); state != nil {
@@ -455,8 +460,15 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			m.events = []string{}
 			m.lastFailure = nil
+			if !m.isInteractiveSyncWorkflow() {
+				m.resetStandardSyncState()
+			}
 			m.resetInteractiveSourceLifecycle()
-			m.runStartedAt = time.Time{}
+			if m.isInteractiveSyncWorkflow() {
+				m.runStartedAt = time.Time{}
+			} else {
+				m.runStartedAt = time.Now()
+			}
 			m.runFinishedAt = time.Time{}
 			if m.progress == nil {
 				m.progress = output.NewStructuredProgressTracker(nil)
@@ -473,6 +485,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		if m.progress == nil {
 			m.progress = output.NewStructuredProgressTracker(nil)
 		}
+		m.observeStandardSyncEvent(typed.Event)
 		if m.isInteractiveSyncWorkflow() {
 			switch typed.Event.Event {
 			case output.EventSourcePreflight:
@@ -500,6 +513,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				}
 			}
 		}
+		if !m.isInteractiveSyncWorkflow() && typed.Event.Event == output.EventSourceStarted && m.runStartedAt.IsZero() {
+			m.runStartedAt = time.Now()
+		}
 		m.progress.ObserveEvent(typed.Event)
 		m.observeInteractiveTrackEvent(typed.Event)
 		if failure := tuiFailureStateFromEvent(typed.Event); failure != nil {
@@ -507,11 +523,11 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		}
 		outcomes := m.progress.DrainTrackOutcomes()
 		for _, outcome := range outcomes {
-			m.events = append(m.events, output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames))
+			m.appendEventHistoryLine(output.FormatCompactTrackOutcome(outcome, output.CompactTrackStatusNames))
 		}
 		historyLine, historyOK := tuiSyncHistoryLine(typed.Event)
 		if historyOK {
-			m.events = append(m.events, historyLine)
+			m.appendEventHistoryLine(historyLine)
 		}
 		m.appendInteractiveActivity(typed.Event, outcomes, historyLine, historyOK)
 		if m.eventCh != nil {
@@ -1010,6 +1026,21 @@ func tuiFailureStateFromEvent(event output.Event) *tuiSyncFailureState {
 		failure.ExitCode = &exitCode
 	}
 	return failure
+}
+
+func (m *tuiSyncModel) appendEventHistoryLine(line string) {
+	if m == nil {
+		return
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	m.events = append(m.events, line)
+	const maxHistory = 50
+	if len(m.events) > maxHistory {
+		m.events = append([]string(nil), m.events[len(m.events)-maxHistory:]...)
+	}
 }
 
 func tuiDetailString(details map[string]any, key string) string {
