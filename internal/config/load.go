@@ -109,11 +109,24 @@ func mergeFile(cfg *Config, path string, required bool) error {
 		return fmt.Errorf("read config file %s: %w", path, err)
 	}
 
+	fc, err := parseFileConfig(payload, path)
+	if err != nil {
+		return err
+	}
+	applyFileConfig(cfg, fc)
+
+	return nil
+}
+
+func parseFileConfig(payload []byte, path string) (fileConfig, error) {
 	var fc fileConfig
 	if err := yaml.Unmarshal(payload, &fc); err != nil {
-		return fmt.Errorf("parse config file %s: %w", path, err)
+		return fileConfig{}, fmt.Errorf("parse config file %s: %w", path, err)
 	}
+	return fc, nil
+}
 
+func applyFileConfig(cfg *Config, fc fileConfig) {
 	if fc.Version != nil {
 		cfg.Version = *fc.Version
 	}
@@ -162,8 +175,6 @@ func mergeFile(cfg *Config, path string, required bool) error {
 			cfg.Sources = append(cfg.Sources, source)
 		}
 	}
-
-	return nil
 }
 
 func applyEnvOverrides(cfg *Config, env map[string]string) error {

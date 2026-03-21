@@ -115,6 +115,157 @@ func TestTUIRootEnterOpensStandardSyncWorkflow(t *testing.T) {
 	}
 }
 
+func TestTUIRootMenuIncludesConfigEditorWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+
+	found := false
+	for _, item := range root.menuItems {
+		if item == "config editor" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected config editor workflow in menu, got %v", root.menuItems)
+	}
+}
+
+func TestTUIRootEnterOpensConfigEditorWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.menuCursor = 4
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenConfigEditor {
+		t.Fatalf("expected config editor screen, got %v", next.screen)
+	}
+	if next.configModel.phase != tuiConfigEditorPhaseTarget {
+		t.Fatalf("expected config editor target phase, got %v", next.configModel.phase)
+	}
+}
+
+func TestTUIConfigEditorUsesExplicitConfigPath(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "custom.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: /tmp/udl-state",
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"sources:",
+		"  - id: sc",
+		"    type: soundcloud",
+		"    enabled: true",
+		"    target_dir: /tmp/music",
+		"    url: https://soundcloud.com/user",
+		"    adapter:",
+		"      kind: scdl",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if model.targetKind != tuiConfigEditorTargetExplicit {
+		t.Fatalf("expected explicit target kind, got %q", model.targetKind)
+	}
+	if model.targetPath != configPath {
+		t.Fatalf("expected explicit target path %q, got %q", configPath, model.targetPath)
+	}
+	if !model.fileExists {
+		t.Fatalf("expected explicit config to exist")
+	}
+}
+
+func TestTUIConfigEditorDefaultsToUserConfigPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg"))
+
+	model := newTUIConfigEditorModel(&AppContext{})
+	userPath, err := config.UserConfigPath()
+	if err != nil {
+		t.Fatalf("user config path: %v", err)
+	}
+	if model.targetKind != tuiConfigEditorTargetNew {
+		t.Fatalf("expected missing default target to be marked new, got %q", model.targetKind)
+	}
+	if model.targetPath != userPath {
+		t.Fatalf("expected user config path %q, got %q", userPath, model.targetPath)
+	}
+}
+
+func TestTUIConfigEditorParseErrorRecoveryResetsToDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "broken.yaml")
+	if err := os.WriteFile(configPath, []byte("version: [oops\n"), 0o644); err != nil {
+		t.Fatalf("write broken config: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if model.parseErr == nil {
+		t.Fatalf("expected parse error")
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if next.modal == nil || next.modal.Kind != tuiConfigEditorModalReset {
+		t.Fatalf("expected reset modal, got %+v", next.modal)
+	}
+	next, cmd := next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd != nil {
+		t.Fatalf("expected reset confirmation not to trigger exit")
+	}
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected defaults phase after reset, got %v", next.phase)
+	}
+	if next.parseErr != nil {
+		t.Fatalf("expected parse error to clear after reset, got %v", next.parseErr)
+	}
+}
+
+func TestTUIConfigEditorSourceIDUpdatesLinkedDefaults(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+
+	state := model.currentSourceState()
+	if state == nil {
+		t.Fatalf("expected source state")
+	}
+	originalTarget := state.Source.TargetDir
+	model.startEdit("source.id", "Edit Source ID", state.Source.ID)
+	model.edit.Buffer = "spotify-groove"
+	if err := model.applyEdit(); err != nil {
+		t.Fatalf("applyEdit: %v", err)
+	}
+
+	if state.Source.TargetDir == originalTarget {
+		t.Fatalf("expected linked target_dir to update after id change")
+	}
+	if state.Source.TargetDir != filepath.Join("~", "Music", "downloaded", "spotify-groove") {
+		t.Fatalf("unexpected linked target_dir: %q", state.Source.TargetDir)
+	}
+	if state.Source.StateFile != "spotify-groove.sync.scdl" {
+		t.Fatalf("unexpected linked state_file: %q", state.Source.StateFile)
+	}
+
+	state.ManualTargetDir = true
+	state.Source.TargetDir = "/custom/music"
+	model.startEdit("source.id", "Edit Source ID", state.Source.ID)
+	model.edit.Buffer = "spotify-groove-2"
+	if err := model.applyEdit(); err != nil {
+		t.Fatalf("applyEdit second id: %v", err)
+	}
+	if state.Source.TargetDir != "/custom/music" {
+		t.Fatalf("expected manual target_dir to remain unchanged, got %q", state.Source.TargetDir)
+	}
+}
+
 func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.planLimit = 25

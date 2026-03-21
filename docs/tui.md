@@ -5,6 +5,7 @@
 - `sync`
 - `doctor`
 - `validate`
+- `config editor`
 - `init`
 
 The TUI is additive. Existing CLI commands (`udl sync`, `udl doctor`, etc.) remain unchanged.
@@ -177,8 +178,41 @@ Cancellation also works while waiting in plan selection or prompt dialogs.
 
 Init prompts render as shell modals.
 
+## Config Editor Workflow
+
+`config editor` is a shell-native guided editor for a single config file.
+
+### Target behavior
+
+- if `--config` is set, the editor targets that file
+- otherwise it targets the user config path (`$XDG_CONFIG_HOME/udl/config.yaml` or `~/.config/udl/config.yaml`)
+- it edits one concrete file, not the merged runtime config view
+- saves rewrite canonical YAML and ensure `defaults.state_dir` exists
+
+### Flow
+
+- `Target`: inspect the target file and recover from invalid YAML
+- `Defaults`: edit global defaults such as `state_dir`, `archive_file`, threads, and timeout
+- `Sources`: add, duplicate, delete, reorder, enable, and edit sources
+- `Review`: inspect human-readable summary, validation issues, and canonical YAML
+- `Save`: write the config and show next-step guidance
+
+### Controls
+
+- `j/k`: move inside the active list/form
+- `tab` / `shift+tab`: switch panes or toggle preview depending on step
+- `enter`: edit/apply/advance
+- `a`: add source
+- `d`: duplicate source
+- `D`: delete source
+- `[` / `]`: reorder source
+- `p`: toggle canonical YAML preview in review/save
+- `s`: save from review or save step
+- `esc`: back, or prompt to discard unsaved changes
+
 ## Current Limitations
 
 - `promote-freedl` and `version` are not exposed as TUI workflows.
 - `sync` output style controls (`progress`, `preflight-summary`, `track-status`) are not currently configurable from TUI.
 - Workflow sidebar/top-nav switching is not active yet; use `esc` to return to the landing screen first.
+- The config editor rewrites canonical YAML; it does not preserve hand-written comments or original layout.

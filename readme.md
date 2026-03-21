@@ -131,7 +131,7 @@ Global flags:
 
 `tui`:
 - Launch with `udl tui`
-- Includes `interactive sync`, `sync`, `doctor`, `validate`, and `init` workflows
+- Includes `interactive sync`, `sync`, `doctor`, `validate`, `config editor`, and `init` workflows
 - See `docs/tui.md` for keybindings, workflow-specific sync options, interactive plan flow, and known limitations
 
 `promote-freedl` flags:

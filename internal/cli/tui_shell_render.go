@@ -319,6 +319,8 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 		return buildDoctorShellState(m, layout)
 	case tuiScreenValidate:
 		return buildValidateShellState(m, layout)
+	case tuiScreenConfigEditor:
+		return buildConfigEditorShellState(m, layout)
 	case tuiScreenInit:
 		return buildInitShellState(m, layout)
 	default:
@@ -429,6 +431,8 @@ func workflowNavigationItems(screen tuiScreen, menuCursor int, menuItems []strin
 			active = item == "doctor"
 		case tuiScreenValidate:
 			active = item == "validate"
+		case tuiScreenConfigEditor:
+			active = item == "config editor"
 		case tuiScreenInit:
 			active = item == "init"
 		}
@@ -453,6 +457,8 @@ func landingWorkflowMeta(item string) string {
 		return "config"
 	case "init":
 		return "setup"
+	case "config editor":
+		return "editor"
 	case "quit":
 		return "exit"
 	default:
@@ -491,6 +497,8 @@ func landingWorkflowSummary(item string) string {
 		return "Validate the current configuration file."
 	case "init":
 		return "Create or update the starter configuration."
+	case "config editor":
+		return "Edit a single config file through the shell-native guided editor."
 	case "quit":
 		return "Exit the TUI shell."
 	default:
