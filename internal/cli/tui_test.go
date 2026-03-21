@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
 )
@@ -1283,6 +1284,201 @@ func TestTUIRootShellRendersInitPromptModal(t *testing.T) {
 	}
 }
 
+func TestTUIRootDoctorShellShowsSeverityOrderedChecklist(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenDoctor
+	root.width = 150
+	root.height = 36
+	root.doctorModel = newTUIDoctorModel(&AppContext{})
+	checks := []doctor.Check{
+		{Severity: doctor.SeverityInfo, Name: "filesystem", Message: "target_dir is writable"},
+		{Severity: doctor.SeverityWarn, Name: "security", Message: "credentials should be treated as sensitive"},
+		{Severity: doctor.SeverityError, Name: "dependency", Message: "scdl not found in PATH"},
+	}
+	root.doctorModel.phase = tuiDoctorPhaseComplete
+	root.doctorModel.checks = tuiSortedDoctorChecks(checks)
+	root.doctorModel.summary = tuiDoctorSummary(checks)
+
+	view := root.View()
+	if !strings.Contains(view, "Summary") || !strings.Contains(view, "Checks") || !strings.Contains(view, "Next Step") {
+		t.Fatalf("expected doctor shell sections, got: %s", view)
+	}
+	if !strings.Contains(view, "Errors: 1") || !strings.Contains(view, "Warnings: 1") || !strings.Contains(view, "Infos: 1") {
+		t.Fatalf("expected doctor summary counts, got: %s", view)
+	}
+	errorIdx := strings.Index(view, "[ERROR]")
+	warnIdx := strings.Index(view, "[WARN]")
+	infoIdx := strings.Index(view, "[INFO]")
+	if errorIdx < 0 || warnIdx < 0 || infoIdx < 0 || !(errorIdx < warnIdx && warnIdx < infoIdx) {
+		t.Fatalf("expected severity-first ordering in doctor view, got: %s", view)
+	}
+}
+
+func TestTUIRootDoctorShellShowsSetupFailure(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenDoctor
+	root.doctorModel = newTUIDoctorModel(&AppContext{})
+	root.doctorModel.phase = tuiDoctorPhaseComplete
+	root.doctorModel.setupErr = fmt.Errorf("config file does not exist: /tmp/missing.yaml")
+
+	view := root.View()
+	if !strings.Contains(view, "FAILED") || !strings.Contains(view, "setup failed") || !strings.Contains(view, "/tmp/missing.yaml") {
+		t.Fatalf("expected setup failure rendering in doctor shell, got: %s", view)
+	}
+}
+
+func TestTUIRootValidateShellShowsExplicitConfigContext(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenValidate
+	root.validateModel = newTUIValidateModel(&AppContext{})
+	root.validateModel.phase = tuiValidatePhaseComplete
+	root.validateModel.result = tuiValidateResultState{
+		Valid:              true,
+		ConfigLoaded:       true,
+		ConfigContextLabel: "/tmp/explicit-config.yaml",
+		SourceCount:        2,
+		EnabledSourceCount: 1,
+		DetailLines:        []string{"Config schema and source definitions passed validation."},
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "VALID") || !strings.Contains(view, "Config valid") {
+		t.Fatalf("expected valid badge and status, got: %s", view)
+	}
+	if !strings.Contains(view, "/tmp/explicit-config.yaml") || !strings.Contains(view, "Sources: 2 total") || !strings.Contains(view, "Enabled: 1") {
+		t.Fatalf("expected explicit config context and counts, got: %s", view)
+	}
+}
+
+func TestTUIRootValidateShellShowsDefaultSearchContextOnFailure(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenValidate
+	root.width = 100
+	root.validateModel = newTUIValidateModel(&AppContext{})
+	root.validateModel.phase = tuiValidatePhaseComplete
+	root.validateModel.result = tuiValidateResultState{
+		FailureKind:        tuiValidateFailureLoad,
+		ConfigContextLabel: "/home/test/.config/udl/config.yaml + /repo/udl.yaml",
+		DetailLines:        []string{"parse config file /repo/udl.yaml: yaml: line 4: did not find expected key"},
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "INVALID") || !strings.Contains(view, "Config load failed") {
+		t.Fatalf("expected invalid load failure status, got: %s", view)
+	}
+	if !strings.Contains(view, "/home/test/.config/udl/config.yaml + /repo/udl.yaml") {
+		t.Fatalf("expected default search-path context, got: %s", view)
+	}
+	if !strings.Contains(view, "did not find expected key") {
+		t.Fatalf("expected validation details in shell, got: %s", view)
+	}
+}
+
+func TestTUIInitWorkflowStartsAtIntroAndEnterStartsRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "udl.yaml")
+	root := newTUIRootModel(&AppContext{
+		Opts: GlobalOptions{ConfigPath: configPath},
+	}, false)
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(root.app)
+
+	if root.initModel.phase != tuiInitPhaseIntro {
+		t.Fatalf("expected init intro phase, got %q", root.initModel.phase)
+	}
+	if root.initModel.eventCh != nil {
+		t.Fatalf("expected intro phase not to start run channel")
+	}
+	view := root.View()
+	if !strings.Contains(view, "Actions") || !strings.Contains(view, "enter: start init") {
+		t.Fatalf("expected guided init intro view, got: %s", view)
+	}
+
+	nextModel, cmd := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := nextModel.(tuiRootModel)
+	if cmd == nil {
+		t.Fatalf("expected enter in init intro to start run")
+	}
+	if next.initModel.phase != tuiInitPhaseRunning {
+		t.Fatalf("expected init to enter running phase, got %q", next.initModel.phase)
+	}
+	if next.canReturnToMenuOnEsc() {
+		t.Fatalf("expected esc to be disabled while init is running")
+	}
+}
+
+func TestTUIRootInitEscBehaviorFollowsPhaseAndPromptState(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(&AppContext{})
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := nextModel.(tuiRootModel)
+	if next.screen != tuiScreenMenu {
+		t.Fatalf("expected intro esc to return to menu, got screen %v", next.screen)
+	}
+
+	root.screen = tuiScreenInit
+	root.initModel = newTUIInitModel(&AppContext{})
+	root.initModel.phase = tuiInitPhaseRunning
+	nextModel, _ = root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = nextModel.(tuiRootModel)
+	if next.screen != tuiScreenInit {
+		t.Fatalf("expected running init to stay on init screen, got %v", next.screen)
+	}
+
+	root.initModel.phase = tuiInitPhaseDone
+	root.initModel.prompt = &tuiInteractionPromptState{
+		kind:   tuiPromptKindConfirm,
+		prompt: "Overwrite?",
+		reply:  make(chan tuiPromptResult, 1),
+	}
+	nextModel, _ = root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = nextModel.(tuiRootModel)
+	if next.screen != tuiScreenInit {
+		t.Fatalf("expected active prompt to block esc navigation, got %v", next.screen)
+	}
+
+	root.initModel.prompt = nil
+	nextModel, _ = root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = nextModel.(tuiRootModel)
+	if next.screen != tuiScreenMenu {
+		t.Fatalf("expected completed init esc to return to menu, got %v", next.screen)
+	}
+}
+
+func TestTUIRootInitResultStatesRenderExpectedSummaries(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInit
+	root.width = 120
+	root.initModel = newTUIInitModel(&AppContext{})
+	root.initModel.result = tuiInitResultState{
+		ConfigPath: "/tmp/udl.yaml",
+		StateDir:   "/tmp/.udl-state",
+	}
+
+	root.initModel.phase = tuiInitPhaseDone
+	root.initModel.result.DetailLines = []string{"Starter config written.", "State directory ensured."}
+	view := root.View()
+	if !strings.Contains(view, "Initialization complete.") || !strings.Contains(view, "udl validate") {
+		t.Fatalf("expected success summary and next step, got: %s", view)
+	}
+
+	root.initModel.phase = tuiInitPhaseCanceled
+	root.initModel.result.DetailLines = []string{"Initialization canceled before writing a new config."}
+	view = root.View()
+	if !strings.Contains(view, "Initialization canceled.") {
+		t.Fatalf("expected canceled summary, got: %s", view)
+	}
+
+	root.initModel.phase = tuiInitPhaseFailed
+	root.initModel.result.DetailLines = []string{"write config file: permission denied"}
+	view = root.View()
+	if !strings.Contains(view, "Initialization failed.") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("expected failure summary, got: %s", view)
+	}
+}
+
 func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
@@ -1870,8 +2066,8 @@ func TestTUIInitStartRunRequestsOverwriteConfirmAndCanCancel(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected init done message, got %T", finished)
 	}
-	if !strings.Contains(strings.ToLower(doneMsg.Result), "canceled") {
-		t.Fatalf("expected canceled init result, got %q", doneMsg.Result)
+	if !doneMsg.Canceled {
+		t.Fatalf("expected canceled init result, got %+v", doneMsg)
 	}
 	<-done
 }

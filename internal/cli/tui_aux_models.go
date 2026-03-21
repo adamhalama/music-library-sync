@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -12,20 +14,39 @@ import (
 	"github.com/jaa/update-downloads/internal/doctor"
 )
 
+type tuiDoctorPhase string
+
+const (
+	tuiDoctorPhaseRunning  tuiDoctorPhase = "running"
+	tuiDoctorPhaseComplete tuiDoctorPhase = "complete"
+)
+
+type tuiDoctorSummaryState struct {
+	Total      int
+	ErrorCount int
+	WarnCount  int
+	InfoCount  int
+}
+
 type tuiDoctorModel struct {
-	app    *AppContext
-	lines  []string
-	done   bool
-	runErr error
+	app      *AppContext
+	phase    tuiDoctorPhase
+	report   doctor.Report
+	checks   []doctor.Check
+	summary  tuiDoctorSummaryState
+	setupErr error
 }
 
 type tuiDoctorDoneMsg struct {
-	Lines []string
-	Err   error
+	Report doctor.Report
+	Err    error
 }
 
 func newTUIDoctorModel(app *AppContext) tuiDoctorModel {
-	return tuiDoctorModel{app: app}
+	return tuiDoctorModel{
+		app:   app,
+		phase: tuiDoctorPhaseRunning,
+	}
 }
 
 func (m tuiDoctorModel) Init() tea.Cmd {
@@ -40,115 +61,179 @@ func (m tuiDoctorModel) Init() tea.Cmd {
 			}
 		}
 		report := workflows.DoctorUseCase{Checker: doctor.NewChecker()}.Run(context.Background(), cfg)
-		checks := append([]doctor.Check{}, report.Checks...)
-		sort.SliceStable(checks, func(i, j int) bool {
-			return checks[i].Name < checks[j].Name
-		})
-		lines := make([]string, 0, len(checks)+1)
-		for _, check := range checks {
-			lines = append(lines, fmt.Sprintf("[%s] %s: %s", check.Severity, check.Name, check.Message))
-		}
-		if report.HasErrors() {
-			lines = append(lines, fmt.Sprintf("doctor found %d error(s)", report.ErrorCount()))
-		}
-		return tuiDoctorDoneMsg{Lines: lines}
+		return tuiDoctorDoneMsg{Report: report}
 	}
 }
 
 func (m tuiDoctorModel) Update(msg tea.Msg) (tuiDoctorModel, tea.Cmd) {
 	switch typed := msg.(type) {
 	case tuiDoctorDoneMsg:
-		m.done = true
-		m.lines = typed.Lines
-		m.runErr = typed.Err
+		m.phase = tuiDoctorPhaseComplete
+		m.setupErr = typed.Err
+		m.report = typed.Report
+		m.checks = tuiSortedDoctorChecks(typed.Report.Checks)
+		m.summary = tuiDoctorSummary(typed.Report.Checks)
 	}
 	return m, nil
 }
 
 func (m tuiDoctorModel) View() string {
-	lines := []string{}
-	if !m.done {
-		lines = append(lines, "Running checks...")
-		return strings.Join(lines, "\n")
+	if m.phase != tuiDoctorPhaseComplete {
+		return "Running checks..."
 	}
-	if m.runErr != nil {
-		lines = append(lines, "Doctor failed: "+m.runErr.Error())
-		return strings.Join(lines, "\n")
+	if m.setupErr != nil {
+		return "Doctor failed: " + m.setupErr.Error()
 	}
-	lines = append(lines, m.lines...)
+	lines := []string{
+		fmt.Sprintf("Doctor complete: %d checks", m.summary.Total),
+		fmt.Sprintf("errors=%d warnings=%d infos=%d", m.summary.ErrorCount, m.summary.WarnCount, m.summary.InfoCount),
+	}
+	for _, check := range m.checks {
+		lines = append(lines, fmt.Sprintf("[%s] %s: %s", strings.ToUpper(string(check.Severity)), check.Name, check.Message))
+	}
 	return strings.Join(lines, "\n")
+}
+
+type tuiValidatePhase string
+
+const (
+	tuiValidatePhaseRunning  tuiValidatePhase = "running"
+	tuiValidatePhaseComplete tuiValidatePhase = "complete"
+)
+
+type tuiValidateFailureKind string
+
+const (
+	tuiValidateFailureNone     tuiValidateFailureKind = ""
+	tuiValidateFailureLoad     tuiValidateFailureKind = "load"
+	tuiValidateFailureValidate tuiValidateFailureKind = "validate"
+)
+
+type tuiValidateResultState struct {
+	Valid              bool
+	ConfigContextLabel string
+	ConfigLoaded       bool
+	SourceCount        int
+	EnabledSourceCount int
+	FailureKind        tuiValidateFailureKind
+	DetailLines        []string
 }
 
 type tuiValidateModel struct {
 	app    *AppContext
-	done   bool
-	result string
+	phase  tuiValidatePhase
+	result tuiValidateResultState
 }
 
 func newTUIValidateModel(app *AppContext) tuiValidateModel {
-	return tuiValidateModel{app: app}
+	return tuiValidateModel{
+		app:   app,
+		phase: tuiValidatePhaseRunning,
+	}
 }
 
 type tuiValidateDoneMsg struct {
-	Result string
+	Result tuiValidateResultState
 }
 
 func (m tuiValidateModel) Init() tea.Cmd {
 	return func() tea.Msg {
+		result := tuiValidateResultState{
+			ConfigContextLabel: tuiValidateConfigContextLabel(m.app),
+		}
 		cfg, err := loadConfig(m.app)
 		if err != nil {
-			return tuiValidateDoneMsg{Result: "Validate failed: " + err.Error()}
+			result.FailureKind = tuiValidateFailureLoad
+			result.DetailLines = tuiSplitDetailLines(err.Error())
+			return tuiValidateDoneMsg{Result: result}
 		}
+		result.ConfigLoaded = true
+		result.SourceCount = len(cfg.Sources)
+		result.EnabledSourceCount = tuiEnabledSourceCount(cfg)
 		if err := (workflows.ValidateUseCase{}).Run(cfg); err != nil {
-			return tuiValidateDoneMsg{Result: "Validate failed: " + err.Error()}
+			result.FailureKind = tuiValidateFailureValidate
+			result.DetailLines = tuiSplitDetailLines(err.Error())
+			return tuiValidateDoneMsg{Result: result}
 		}
-		return tuiValidateDoneMsg{Result: "Config is valid."}
+		result.Valid = true
+		result.DetailLines = []string{"Config schema and source definitions passed validation."}
+		return tuiValidateDoneMsg{Result: result}
 	}
 }
 
 func (m tuiValidateModel) Update(msg tea.Msg) (tuiValidateModel, tea.Cmd) {
 	switch typed := msg.(type) {
 	case tuiValidateDoneMsg:
-		m.done = true
+		m.phase = tuiValidatePhaseComplete
 		m.result = typed.Result
 	}
 	return m, nil
 }
 
 func (m tuiValidateModel) View() string {
-	lines := []string{}
-	if !m.done {
-		lines = append(lines, "Validating...")
-		return strings.Join(lines, "\n")
+	if m.phase != tuiValidatePhaseComplete {
+		return "Validating..."
 	}
-	lines = append(lines, m.result)
-	return strings.Join(lines, "\n")
+	if m.result.Valid {
+		return "Config is valid."
+	}
+	if m.result.FailureKind == tuiValidateFailureLoad {
+		return "Config load failed."
+	}
+	return "Validation failed."
+}
+
+type tuiInitPhase string
+
+const (
+	tuiInitPhaseIntro    tuiInitPhase = "intro"
+	tuiInitPhaseRunning  tuiInitPhase = "running"
+	tuiInitPhaseDone     tuiInitPhase = "done"
+	tuiInitPhaseCanceled tuiInitPhase = "canceled"
+	tuiInitPhaseFailed   tuiInitPhase = "failed"
+)
+
+type tuiInitIntroState struct {
+	ConfigPath   string
+	StateDir     string
+	ConfigExists bool
+	PrepareErr   error
+}
+
+type tuiInitResultState struct {
+	ConfigPath   string
+	StateDir     string
+	DetailLines  []string
+	ConfigExists bool
 }
 
 type tuiInitModel struct {
 	app     *AppContext
-	running bool
-	done    bool
-	result  string
+	phase   tuiInitPhase
+	intro   tuiInitIntroState
+	result  tuiInitResultState
 	eventCh chan tea.Msg
 	prompt  *tuiInteractionPromptState
 }
 
 func newTUIInitModel(app *AppContext) tuiInitModel {
-	return tuiInitModel{app: app}
-}
-
-type tuiInitDoneMsg struct {
-	Result string
-}
-
-func (m tuiInitModel) Init() tea.Cmd {
-	return func() tea.Msg {
-		return tuiInitStartMsg{}
+	return tuiInitModel{
+		app:   app,
+		phase: tuiInitPhaseIntro,
+		intro: tuiBuildInitIntroState(app),
 	}
 }
 
-type tuiInitStartMsg struct{}
+type tuiInitDoneMsg struct {
+	ConfigPath string
+	StateDir   string
+	Canceled   bool
+	Err        error
+}
+
+func (m tuiInitModel) Init() tea.Cmd {
+	return nil
+}
 
 func (m tuiInitModel) waitRunMsgCmd() tea.Cmd {
 	ch := m.eventCh
@@ -175,16 +260,19 @@ func (m tuiInitModel) startRunCmd() tea.Cmd {
 			IsTTY:      true,
 		}, interaction)
 		if err != nil {
-			ch <- tuiInitDoneMsg{Result: "Init failed: " + err.Error()}
+			ch <- tuiInitDoneMsg{
+				ConfigPath: m.intro.ConfigPath,
+				StateDir:   m.intro.StateDir,
+				Err:        err,
+			}
 			close(ch)
 			return nil
 		}
-		if res.Canceled {
-			ch <- tuiInitDoneMsg{Result: "Initialization canceled."}
-			close(ch)
-			return nil
+		ch <- tuiInitDoneMsg{
+			ConfigPath: res.ConfigPath,
+			StateDir:   res.StateDir,
+			Canceled:   res.Canceled,
 		}
-		ch <- tuiInitDoneMsg{Result: fmt.Sprintf("Wrote config: %s\nEnsured state dir: %s", res.ConfigPath, res.StateDir)}
 		close(ch)
 		return nil
 	}
@@ -192,12 +280,6 @@ func (m tuiInitModel) startRunCmd() tea.Cmd {
 
 func (m tuiInitModel) Update(msg tea.Msg) (tuiInitModel, tea.Cmd) {
 	switch typed := msg.(type) {
-	case tuiInitStartMsg:
-		m.running = true
-		m.done = false
-		m.result = ""
-		m.eventCh = make(chan tea.Msg, 32)
-		return m, tea.Batch(m.startRunCmd(), m.waitRunMsgCmd())
 	case tuiPromptRequestMsg:
 		m.prompt = &tuiInteractionPromptState{
 			kind:       typed.Kind,
@@ -206,6 +288,25 @@ func (m tuiInitModel) Update(msg tea.Msg) (tuiInitModel, tea.Cmd) {
 			defaultYes: typed.DefaultYes,
 			maskInput:  typed.MaskInput,
 			reply:      typed.Reply,
+		}
+		return m, nil
+	case tuiInitDoneMsg:
+		m.eventCh = nil
+		m.result = tuiInitResultState{
+			ConfigPath:   firstNonEmpty(typed.ConfigPath, m.intro.ConfigPath),
+			StateDir:     firstNonEmpty(typed.StateDir, m.intro.StateDir),
+			ConfigExists: m.intro.ConfigExists,
+		}
+		switch {
+		case typed.Err != nil:
+			m.phase = tuiInitPhaseFailed
+			m.result.DetailLines = tuiSplitDetailLines(typed.Err.Error())
+		case typed.Canceled:
+			m.phase = tuiInitPhaseCanceled
+			m.result.DetailLines = []string{"Initialization canceled before writing a new config."}
+		default:
+			m.phase = tuiInitPhaseDone
+			m.result.DetailLines = []string{"Starter config written.", "State directory ensured."}
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -257,27 +358,36 @@ func (m tuiInitModel) Update(msg tea.Msg) (tuiInitModel, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if typed.String() == "enter" && m.phase == tuiInitPhaseIntro && m.intro.PrepareErr == nil {
+			m.phase = tuiInitPhaseRunning
+			m.result = tuiInitResultState{}
+			m.eventCh = make(chan tea.Msg, 32)
+			return m, tea.Batch(m.startRunCmd(), m.waitRunMsgCmd())
+		}
 		return m, nil
-	case tuiInitDoneMsg:
-		m.running = false
-		m.done = true
-		m.result = typed.Result
 	}
 	return m, nil
 }
 
 func (m tuiInitModel) View() string {
-	lines := []string{}
-	if m.running && !m.done {
-		lines = append(lines, "Running init...")
-		return strings.Join(lines, "\n")
+	switch m.phase {
+	case tuiInitPhaseRunning:
+		return "Running init..."
+	case tuiInitPhaseDone:
+		return fmt.Sprintf("Wrote config: %s\nEnsured state dir: %s", m.result.ConfigPath, m.result.StateDir)
+	case tuiInitPhaseCanceled:
+		return "Initialization canceled."
+	case tuiInitPhaseFailed:
+		if len(m.result.DetailLines) > 0 {
+			return "Init failed: " + strings.Join(m.result.DetailLines, "; ")
+		}
+		return "Init failed."
+	default:
+		if m.intro.PrepareErr != nil {
+			return "Preparing init failed: " + m.intro.PrepareErr.Error()
+		}
+		return fmt.Sprintf("Ready to create config at %s", m.intro.ConfigPath)
 	}
-	if !m.done {
-		lines = append(lines, "Preparing init...")
-		return strings.Join(lines, "\n")
-	}
-	lines = append(lines, m.result)
-	return strings.Join(lines, "\n")
 }
 
 func (m tuiInitModel) promptView() string {
@@ -314,4 +424,134 @@ func (m tuiInitModel) promptView() string {
 
 func (m tuiInitModel) hasActivePrompt() bool {
 	return m.prompt != nil
+}
+
+func (m tuiInitModel) allowBack() bool {
+	if m.hasActivePrompt() {
+		return false
+	}
+	return m.phase != tuiInitPhaseRunning
+}
+
+func tuiSortedDoctorChecks(checks []doctor.Check) []doctor.Check {
+	sorted := append([]doctor.Check{}, checks...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		left := sorted[i]
+		right := sorted[j]
+		if tuiDoctorSeverityRank(left.Severity) != tuiDoctorSeverityRank(right.Severity) {
+			return tuiDoctorSeverityRank(left.Severity) < tuiDoctorSeverityRank(right.Severity)
+		}
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		return left.Message < right.Message
+	})
+	return sorted
+}
+
+func tuiDoctorSeverityRank(severity doctor.Severity) int {
+	switch severity {
+	case doctor.SeverityError:
+		return 0
+	case doctor.SeverityWarn:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func tuiDoctorSummary(checks []doctor.Check) tuiDoctorSummaryState {
+	summary := tuiDoctorSummaryState{Total: len(checks)}
+	for _, check := range checks {
+		switch check.Severity {
+		case doctor.SeverityError:
+			summary.ErrorCount++
+		case doctor.SeverityWarn:
+			summary.WarnCount++
+		default:
+			summary.InfoCount++
+		}
+	}
+	return summary
+}
+
+func tuiEnabledSourceCount(cfg config.Config) int {
+	count := 0
+	for _, source := range cfg.Sources {
+		if source.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
+func tuiValidateConfigContextLabel(app *AppContext) string {
+	if app == nil {
+		return "default search path"
+	}
+	if explicit := strings.TrimSpace(app.Opts.ConfigPath); explicit != "" {
+		if expanded, err := config.ExpandPath(explicit); err == nil && strings.TrimSpace(expanded) != "" {
+			return expanded
+		}
+		return explicit
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "user config + project udl.yaml"
+	}
+	userPath, userErr := config.UserConfigPath()
+	if userErr != nil {
+		return config.ProjectConfigPath(wd)
+	}
+	return fmt.Sprintf("%s + %s", userPath, config.ProjectConfigPath(wd))
+}
+
+func tuiSplitDetailLines(text string) []string {
+	lines := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func tuiBuildInitIntroState(app *AppContext) tuiInitIntroState {
+	state := tuiInitIntroState{}
+	configPath, err := tuiResolveInitConfigPath(app)
+	if err != nil {
+		state.PrepareErr = err
+		return state
+	}
+	state.ConfigPath = configPath
+	stateDir, err := config.ExpandPath(config.DefaultConfig().Defaults.StateDir)
+	if err != nil {
+		state.PrepareErr = fmt.Errorf("resolve default state directory: %w", err)
+		return state
+	}
+	state.StateDir = stateDir
+	if _, err := os.Stat(configPath); err == nil {
+		state.ConfigExists = true
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		state.PrepareErr = fmt.Errorf("inspect config path %s: %w", configPath, err)
+	}
+	return state
+}
+
+func tuiResolveInitConfigPath(app *AppContext) (string, error) {
+	if app != nil && strings.TrimSpace(app.Opts.ConfigPath) != "" {
+		return config.ExpandPath(strings.TrimSpace(app.Opts.ConfigPath))
+	}
+	return config.UserConfigPath()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -158,7 +158,7 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 			!m.syncModel.hasActivePlanLimitInput() &&
 			!m.syncModel.hasActiveTimeoutInput()
 	case tuiScreenInit:
-		return !m.initModel.running && !m.initModel.hasActivePrompt()
+		return m.initModel.allowBack()
 	case tuiScreenMenu:
 		return false
 	default:

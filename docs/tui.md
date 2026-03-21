@@ -31,7 +31,7 @@ udl tui --debug-messages
 ## Navigation
 
 - Landing screen: `j/k` or up/down to move, `enter` to open workflow
-- Global: `esc` returns to the landing screen when no active in-workflow prompt is open
+- Global: `esc` returns to the landing screen when the active workflow allows back navigation and no in-workflow prompt is open
 - Landing screen only: `q` or `ctrl+c` quits
 - Shell layout:
   - width `>= 110`: left sidebar + main panel shell
@@ -130,25 +130,55 @@ Cancellation also works while waiting in plan selection or prompt dialogs.
 
 ## Doctor / Validate Workflows
 
-- `doctor` runs checks and shows sorted check output
-- `validate` runs config validation and shows result
+### Doctor
 
-These remain lightweight result views in the current TUI pass.
+- `doctor` auto-runs when opened
+- the shell renders:
+  - `Summary` with total checks and error/warn/info counts
+  - `Checks` with severity-ordered checklist rows
+  - `Next Step` guidance when warnings or errors are present
+- `esc` can be used to return to the landing screen immediately
+
+### Validate
+
+- `validate` auto-runs when opened
+- the shell renders:
+  - `Status` with valid/invalid outcome
+  - `Context` with config path/search-path information and source counts when config loaded
+  - `Details` with wrapped load or validation errors
+- `esc` can be used to return to the landing screen immediately
 
 ## Init Workflow
 
-`init` runs through the TUI and now supports overwrite confirmation in-app when config already exists.
+`init` is now a guided workflow rather than auto-running on open.
 
-Prompt controls:
-- `y` / `n`: answer confirm prompts
-- `enter`: accept default
-- `esc` / `q`: cancel prompt
+### Init intro
 
-Init prompts also render as shell modals.
+- opening `init` shows:
+  - `Plan` summary of what `udl init` will create
+  - `Paths` for config and state directory targets
+  - `Actions` with `enter` to start and `esc` to go back
+- if the target config already exists, the intro screen calls that out before the run starts
+
+### Init run and result states
+
+- `enter`: start init
+- while init is running, back navigation is disabled
+- after completion, the shell renders result panels for success, cancel, or failure
+- success includes a next-step reminder to review the config and run `udl validate`
+
+### Init prompts
+
+- overwrite confirmation still renders as an in-app modal
+- prompt controls:
+  - `y` / `n`: answer confirm prompts
+  - `enter`: accept default
+  - `esc` / `q`: cancel prompt
+
+Init prompts render as shell modals.
 
 ## Current Limitations
 
 - `promote-freedl` and `version` are not exposed as TUI workflows.
 - `sync` output style controls (`progress`, `preflight-summary`, `track-status`) are not currently configurable from TUI.
-- `doctor` and `validate` are non-guided views (run + output).
 - Workflow sidebar/top-nav switching is not active yet; use `esc` to return to the landing screen first.
