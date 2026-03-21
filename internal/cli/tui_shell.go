@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 )
 
@@ -869,33 +870,7 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 
 func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 	if m.isInteractiveSyncWorkflow() {
-		if state := m.currentInteractiveSelection(); state != nil && len(state.rows) > 0 {
-			return nil
-		}
-		if m.running {
-			return []tuiShortcut{
-				{Key: "p", Label: "activity"},
-				{Key: "x", Label: "cancel active run"},
-			}
-		}
-		if m.done {
-			return []tuiShortcut{
-				{Key: "p", Label: "activity"},
-			}
-		}
-		shortcuts := []tuiShortcut{
-			{Key: "j/k", Label: "move"},
-			{Key: "space", Label: "toggle"},
-			{Key: "d", Label: "dry-run"},
-			{Key: "t", Label: "timeout"},
-			{Key: "[/]", Label: "plan limit"},
-			{Key: "l", Label: "type limit"},
-			{Key: "u", Label: "unlimited"},
-			{Key: "p", Label: "activity"},
-			{Key: "enter", Label: "run"},
-			{Key: "x", Label: "cancel active run", Disabled: !m.running},
-		}
-		return shortcuts
+		return nil
 	}
 	shortcuts := []tuiShortcut{
 		{Key: "j/k", Label: "move"},
@@ -925,7 +900,7 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 	if m.isInteractiveSyncWorkflow() {
 		state := m.currentInteractiveSelection()
 		stats := []tuiFooterStat{{Label: "state", Value: m.runStateLabel(), Tone: m.runStateTone()}}
-		if !m.running && !m.done {
+		if !m.interactiveRuntimeActive() && m.interactivePhase != tuiInteractivePhaseDone {
 			selected := 0
 			pending := 0
 			skipped := 0
@@ -942,32 +917,33 @@ func (m tuiSyncModel) shellFooterStats() []tuiFooterStat {
 			)
 			return stats
 		}
-		total := 0
-		current := 0
-		doneCount := m.result.Succeeded
-		skippedCount := m.result.Skipped
-		failedCount := m.result.Failed
-		if m.progress != nil {
-			total = m.progress.EffectiveTotal()
-			current = m.progress.CurrentIndex()
-			if m.running {
-				doneCount = m.progress.Snapshot().Progress.Global.Completed
-			}
+		completedCount := 0
+		skippedCount := 0
+		failedCount := 0
+		if state != nil {
+			completedCount = state.completedCount()
+			skippedCount = state.skippedTrackCount()
+			failedCount = state.failedCount()
 		}
 		progressPercent := 0.0
 		if m.progress != nil {
 			progressPercent = m.progress.GlobalProgressPercent()
-		} else if total > 0 {
-			progressPercent = float64(current) * 100 / float64(total)
+			if m.interactivePhase == tuiInteractivePhaseDone && m.runErr == nil {
+				progressPercent = 100
+			}
+		} else if m.interactivePhase == tuiInteractivePhaseDone && m.runErr == nil {
+			progressPercent = 100
 		}
 		progressLabel := tuiRenderProgressBar(progressPercent, 10)
 		stats = append(stats,
-			tuiFooterStat{Label: "done", Value: fmt.Sprintf("%d", doneCount), Tone: "success"},
+			tuiFooterStat{Label: "completed", Value: fmt.Sprintf("%d", completedCount), Tone: "success"},
 			tuiFooterStat{Label: "skipped", Value: fmt.Sprintf("%d", skippedCount), Tone: "muted"},
 			tuiFooterStat{Label: "failed", Value: fmt.Sprintf("%d", failedCount), Tone: failureCountTone(failedCount)},
 			tuiFooterStat{Label: "progress", Value: progressLabel, Tone: "info"},
-			tuiFooterStat{Label: "elapsed", Value: m.elapsedLabel(), Tone: "muted"},
 		)
+		if !m.runStartedAt.IsZero() {
+			stats = append(stats, tuiFooterStat{Label: "elapsed", Value: m.elapsedLabel(), Tone: "muted"})
+		}
 		return stats
 	}
 	stats := []tuiFooterStat{
@@ -1052,23 +1028,23 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 
 func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
 	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel)
-	controls := renderPlanPromptControls(state)
+	controls := renderPlanPromptControls(state, layout)
 	if layout.Height < 24 {
-		return []string{
+		lines := []string{
 			infoBar,
 			renderPlanPromptPathLine(
 				fmt.Sprintf("target %s", filepath.Base(state.details.TargetDir)),
 				fmt.Sprintf("state %s", filepath.Base(state.details.StateFile)),
 			),
-			controls,
 		}
+		return append(lines, controls...)
 	}
-	return []string{
+	lines := []string{
 		infoBar,
 		renderPlanPromptPathLine("target "+state.details.TargetDir, "state "+state.details.StateFile),
 		renderPlanPromptPathLine("url "+state.details.URL, ""),
-		controls,
 	}
+	return append(lines, controls...)
 }
 
 func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string) string {
@@ -1098,7 +1074,7 @@ func renderPlanPromptPathLine(left, right string) string {
 		Render(strings.Join(parts, "  "))
 }
 
-func renderPlanPromptControls(state *tuiInteractiveSelectionState) string {
+func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
 	focusTone := "warning"
 	if !state.focusFilters {
 		focusTone = "info"
@@ -1114,10 +1090,7 @@ func renderPlanPromptControls(state *tuiInteractiveSelectionState) string {
 		renderPlanPromptKey("enter", "confirm"),
 		renderPlanPromptKey("esc", "cancel"),
 	}
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color("236")).
-		Padding(0, 1).
-		Render(strings.Join(parts, "  "))
+	return renderPlanPromptControlLines(parts, layout)
 }
 
 func renderPlanPromptKey(keyLabel, label string) string {
@@ -1330,16 +1303,9 @@ func (m tuiSyncModel) interactiveSyncBody(layout tuiShellLayout) string {
 
 func (m tuiSyncModel) interactiveSelectionSummaryLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
 	lines := []string{}
-	if state != nil && len(state.rows) > 0 {
-		lines = append(lines, m.interactiveSelectionContextLines(state, layout)...)
-		lines = append(lines, fmt.Sprintf("selected=%d  pending=%d  skipped=%d", state.selectedCount(), state.toggleableCount(), state.skippedCount()))
-	} else {
-		lines = append(lines,
-			fmt.Sprintf("selected_sources=%d/%d", m.selectedSourceCount(), len(m.sources)),
-			fmt.Sprintf("dry_run=%t  timeout=%s  plan_limit=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride), formatPlanLimit(m.planLimit)),
-			"Rows appear here after interactive preflight starts.",
-			"Press enter to run `udl sync --plan` for the selected sources.",
-		)
+	displayState := m.interactiveSelectionDisplayState(state)
+	if displayState != nil {
+		lines = append(lines, m.interactiveSelectionContextLines(displayState, layout)...)
 	}
 	if m.planLimitInputActive {
 		lines = append(lines, fmt.Sprintf("plan_limit_input=%q  enter apply  esc cancel", m.planLimitInput))
@@ -1356,20 +1322,52 @@ func (m tuiSyncModel) interactiveSelectionSummaryLines(state *tuiInteractiveSele
 	if m.validationErr != "" {
 		lines = append(lines, "validation_error: "+m.validationErr)
 	}
-	if m.running {
-		lines = append(lines, "Running sync... press x or ctrl+c to cancel.")
-		if m.cancelRequested {
-			lines = append(lines, "Cancellation requested, waiting for adapter shutdown...")
-		}
-	}
-	if m.done {
-		if m.runErr != nil {
-			lines = append(lines, "Run failed: "+m.runErr.Error())
-		} else {
-			lines = append(lines, fmt.Sprintf("Run finished: attempted=%d succeeded=%d failed=%d skipped=%d", m.result.Attempted, m.result.Succeeded, m.result.Failed, m.result.Skipped))
-		}
+	if len(lines) == 0 {
+		lines = append(lines, "No enabled sources available.")
 	}
 	return lines
+}
+
+func (m tuiSyncModel) interactiveSelectionDisplayState(state *tuiInteractiveSelectionState) *tuiInteractiveSelectionState {
+	if state != nil && len(state.rows) > 0 {
+		return state
+	}
+	source, ok := m.focusedInteractiveSource()
+	if !ok {
+		return nil
+	}
+	base := state
+	if base == nil {
+		base = newEmptyTUIInteractiveSelectionState()
+	}
+	display := *base
+	display.sourceID = source.ID
+	display.details = m.planSourceDetailsForSource(source)
+	return &display
+}
+
+func (m tuiSyncModel) focusedInteractiveSource() (config.Source, bool) {
+	if len(m.sources) == 0 {
+		return config.Source{}, false
+	}
+	cursor := m.cursor
+	if cursor < 0 || cursor >= len(m.sources) {
+		cursor = 0
+	}
+	return m.sources[cursor], true
+}
+
+func (m tuiSyncModel) planSourceDetailsForSource(source config.Source) planSourceDetails {
+	return planSourceDetails{
+		SourceID:   source.ID,
+		SourceType: string(source.Type),
+		Adapter:    source.Adapter.Kind,
+		URL:        source.URL,
+		TargetDir:  source.TargetDir,
+		StateFile:  source.StateFile,
+		PlanLimit:  m.planLimit,
+		DryRun:     m.dryRun,
+	}
 }
 
 func (m tuiSyncModel) interactiveSelectionContextLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
@@ -1391,13 +1389,16 @@ func (m tuiSyncModel) interactiveSelectionContextLines(state *tuiInteractiveSele
 		lines = append(lines, renderPlanPromptPathLine("target "+state.details.TargetDir, "state "+state.details.StateFile))
 		lines = append(lines, renderPlanPromptPathLine("url "+state.details.URL, ""))
 	}
-	lines = append(lines, m.renderInteractiveSelectionControls(state))
+	lines = append(lines, m.renderInteractiveSelectionControls(state, layout)...)
 	return lines
 }
 
-func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveSelectionState) string {
+func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
 	if m.planPrompt != nil {
-		return renderPlanPromptControls(state)
+		return renderPlanPromptControls(state, layout)
+	}
+	if state == nil || len(state.rows) == 0 {
+		return renderInteractiveIdleControls(layout)
 	}
 	focusTone := "warning"
 	if !state.focusFilters {
@@ -1414,21 +1415,78 @@ func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveSe
 	}
 	parts = append(parts, renderPlanPromptKey("p", "activity"))
 	if m.running {
+		if m.isInteractiveSyncWorkflow() && !m.interactiveRuntimeActive() {
+			return renderPlanPromptControlLines(parts, layout)
+		}
 		parts = append(parts, renderPlanPromptKey("x", "cancel run"))
 	}
-	return lipgloss.NewStyle().
+	return renderPlanPromptControlLines(parts, layout)
+}
+
+func renderInteractiveIdleControls(layout tuiShellLayout) []string {
+	parts := []string{
+		planPromptChip("source controls", "info"),
+		renderPlanPromptKey("j/k", "move"),
+		renderPlanPromptKey("space", "toggle source"),
+		renderPlanPromptKey("d", "dry-run"),
+		renderPlanPromptKey("t", "timeout"),
+		renderPlanPromptKey("[/]", "plan limit"),
+		renderPlanPromptKey("l", "type limit"),
+		renderPlanPromptKey("u", "unlimited"),
+		renderPlanPromptKey("p", "activity"),
+		renderPlanPromptKey("enter", "run"),
+	}
+	return renderPlanPromptControlLines(parts, layout)
+}
+
+func renderPlanPromptControlLines(parts []string, layout tuiShellLayout) []string {
+	style := lipgloss.NewStyle().
 		Background(lipgloss.Color("236")).
-		Padding(0, 1).
-		Render(strings.Join(parts, "  "))
+		Padding(0, 1)
+	maxWidth := shellMainSectionWidth(layout, newTUIShellTheme()) - 10
+	if maxWidth < 40 {
+		maxWidth = 40
+	}
+	lines := []string{}
+	current := ""
+	for _, part := range parts {
+		candidate := part
+		if current != "" {
+			candidate = current + "  " + part
+		}
+		if current != "" && lipgloss.Width(candidate) > maxWidth {
+			lines = append(lines, style.Render(current))
+			current = part
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		lines = append(lines, style.Render(current))
+	}
+	return lines
 }
 
 func (m tuiSyncModel) interactiveTrackLines(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
 	if state == nil || len(state.rows) == 0 {
-		return []string{
+		lines := []string{
 			"SEL  #  STATUS  TRACK  ID",
-			"no tracks yet",
-			"Press enter to start preflight and populate the inline selector.",
 		}
+		switch {
+		case m.interactivePhase == tuiInteractivePhasePreflight:
+			lines = append(lines, "Preflight running... loading tracks for selection.")
+		case m.interactivePhase == tuiInteractivePhaseReview:
+			lines = append(lines, "Preflight complete. Review the plan to continue.")
+		case m.done:
+			if m.runErr != nil {
+				lines = append(lines, "Preflight failed before track rows were loaded.")
+			} else {
+				lines = append(lines, "No track rows were returned. Source is up to date or no downloads were planned.")
+			}
+		default:
+			lines = append(lines, renderInteractiveTrackLaunchHint())
+		}
+		return lines
 	}
 	state.ensureCursorVisible()
 	filteredRows := state.filteredRows()
@@ -1473,6 +1531,13 @@ func formatInteractiveActivityEntry(entry tuiActivityEntry) string {
 		ts = entry.Timestamp.Format("15:04:05")
 	}
 	return fmt.Sprintf("%s  %s", ts, entry.Message)
+}
+
+func renderInteractiveTrackLaunchHint() string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Padding(0, 1).
+		Render(planPromptChip("press", "info") + "  " + renderPlanPromptKey("enter", "to start preflight"))
 }
 
 func renderPlanSection(title string, lines []string, width int) string {
@@ -1789,10 +1854,12 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 		}
 		label := marker + " " + source.ID
 		meta := string(source.Type) + "/" + source.Adapter.Kind
+		tone := m.sourceSidebarTone(source.ID)
 		sourceItems = append(sourceItems, tuiSidebarItem{
 			Label:  label,
 			Meta:   meta,
 			Active: idx == m.cursor,
+			Tone:   tone,
 		})
 	}
 	if len(sourceItems) == 0 {
@@ -1805,7 +1872,7 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 			count := state.filterCount(filter)
 			item := tuiSidebarItem{
 				Label:  fmt.Sprintf("%s (%d)", state.filterDisplayLabel(filter), count),
-				Active: m.planPrompt != nil && state.focusFilters && idx == state.filterCursor,
+				Active: state.focusFilters && idx == state.filterCursor,
 			}
 			if state.filter == filter {
 				item.Tone = "info"
@@ -1832,7 +1899,37 @@ func (m tuiSyncModel) sidebarWorkflowLabel() string {
 	return "sync"
 }
 
+func (m tuiSyncModel) sourceSidebarTone(sourceID string) string {
+	switch m.sourceLifecycle[sourceID] {
+	case tuiSourceLifecycleFinished:
+		return "success"
+	case tuiSourceLifecycleFailed:
+		return "danger"
+	case tuiSourceLifecyclePreflight, tuiSourceLifecycleRunning:
+		return "warning"
+	default:
+		return ""
+	}
+}
+
 func (m tuiSyncModel) runStateLabel() string {
+	if m.isInteractiveSyncWorkflow() {
+		switch m.interactivePhase {
+		case tuiInteractivePhasePreflight:
+			return "preflight"
+		case tuiInteractivePhaseReview:
+			return "review"
+		case tuiInteractivePhaseSyncing:
+			return "running"
+		case tuiInteractivePhaseDone:
+			if m.runErr != nil || m.result.Failed > 0 {
+				return "done-with-errors"
+			}
+			return "complete"
+		default:
+			return "ready"
+		}
+	}
 	switch {
 	case m.running:
 		return "running"
@@ -1847,6 +1944,10 @@ func (m tuiSyncModel) runStateLabel() string {
 
 func (m tuiSyncModel) runStateTone() string {
 	switch m.runStateLabel() {
+	case "review":
+		return "info"
+	case "preflight":
+		return "warning"
 	case "running":
 		return "warning"
 	case "done-with-errors":
@@ -1856,6 +1957,10 @@ func (m tuiSyncModel) runStateTone() string {
 	default:
 		return "info"
 	}
+}
+
+func (m tuiSyncModel) interactiveRuntimeActive() bool {
+	return m.isInteractiveSyncWorkflow() && m.interactivePhase == tuiInteractivePhaseSyncing
 }
 
 func boolLabel(v bool) string {

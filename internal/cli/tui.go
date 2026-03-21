@@ -255,6 +255,8 @@ type tuiSyncModel struct {
 	progress             *output.StructuredProgressTracker
 	lastFailure          *tuiSyncFailureState
 	eventCh              chan tea.Msg
+	interactivePhase     tuiInteractiveSyncPhase
+	sourceLifecycle      map[string]tuiInteractiveSourceLifecycle
 	interactiveSelection *tuiInteractiveSelectionState
 	planPrompt           *tuiPlanPromptState
 	interactionPrompt    *tuiInteractionPromptState
@@ -308,6 +310,26 @@ type tuiPromptKind string
 const (
 	tuiPromptKindConfirm tuiPromptKind = "confirm"
 	tuiPromptKindInput   tuiPromptKind = "input"
+)
+
+type tuiInteractiveSyncPhase string
+
+const (
+	tuiInteractivePhaseIdle      tuiInteractiveSyncPhase = "idle"
+	tuiInteractivePhasePreflight tuiInteractiveSyncPhase = "preflight"
+	tuiInteractivePhaseReview    tuiInteractiveSyncPhase = "review"
+	tuiInteractivePhaseSyncing   tuiInteractiveSyncPhase = "syncing"
+	tuiInteractivePhaseDone      tuiInteractiveSyncPhase = "done"
+)
+
+type tuiInteractiveSourceLifecycle string
+
+const (
+	tuiSourceLifecycleIdle      tuiInteractiveSourceLifecycle = "idle"
+	tuiSourceLifecyclePreflight tuiInteractiveSourceLifecycle = "preflight"
+	tuiSourceLifecycleRunning   tuiInteractiveSourceLifecycle = "running"
+	tuiSourceLifecycleFinished  tuiInteractiveSourceLifecycle = "finished"
+	tuiSourceLifecycleFailed    tuiInteractiveSourceLifecycle = "failed"
 )
 
 type tuiPromptRequestMsg struct {
@@ -408,6 +430,7 @@ func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 		dryRun = app.Opts.DryRun
 	}
 	var interactiveSelection *tuiInteractiveSelectionState
+	interactivePhase := tuiInteractivePhaseIdle
 	if mode == tuiSyncWorkflowInteractive {
 		interactiveSelection = newEmptyTUIInteractiveSelectionState()
 	}
@@ -419,6 +442,8 @@ func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 		dryRun:               dryRun,
 		planLimit:            tuiDefaultPlanLimit,
 		progress:             output.NewStructuredProgressTracker(nil),
+		interactivePhase:     interactivePhase,
+		sourceLifecycle:      map[string]tuiInteractiveSourceLifecycle{},
 		interactiveSelection: interactiveSelection,
 	}
 }
@@ -455,6 +480,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 	case tuiPlanSelectRequestMsg:
 		state := newTUIInteractiveSelectionState(typed)
 		m.interactiveSelection = state
+		if m.isInteractiveSyncWorkflow() {
+			m.interactivePhase = tuiInteractivePhaseReview
+		}
 		m.planPrompt = &tuiPlanPromptState{
 			tuiInteractiveSelectionState: state,
 			reply:                        typed.Reply,
@@ -621,6 +649,11 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			case "enter":
 				m.interactiveSelection = m.planPrompt.tuiInteractiveSelectionState
+				if m.isInteractiveSyncWorkflow() {
+					m.interactivePhase = tuiInteractivePhaseSyncing
+					m.runStartedAt = time.Now()
+					m.runFinishedAt = time.Time{}
+				}
 				m.planPrompt.reply <- tuiPlanSelectResult{SelectedIndices: m.planPrompt.selectedIndices()}
 				m.planPrompt = nil
 				return m, m.waitRunMsgCmd()
@@ -804,13 +837,17 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			}
 			m.running = true
+			if m.isInteractiveSyncWorkflow() {
+				m.interactivePhase = tuiInteractivePhasePreflight
+			}
 			m.cancelRequested = false
 			m.done = false
 			m.runErr = nil
 			m.validationErr = ""
 			m.events = []string{}
 			m.lastFailure = nil
-			m.runStartedAt = time.Now()
+			m.resetInteractiveSourceLifecycle()
+			m.runStartedAt = time.Time{}
 			m.runFinishedAt = time.Time{}
 			if m.progress == nil {
 				m.progress = output.NewStructuredProgressTracker(nil)
@@ -826,6 +863,29 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 	case tuiSyncEventMsg:
 		if m.progress == nil {
 			m.progress = output.NewStructuredProgressTracker(nil)
+		}
+		if m.isInteractiveSyncWorkflow() {
+			switch typed.Event.Event {
+			case output.EventSourcePreflight:
+				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecyclePreflight)
+			case output.EventSourceStarted:
+				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecycleRunning)
+			case output.EventSourceFinished:
+				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecycleFinished)
+			case output.EventSourceFailed:
+				m.setInteractiveSourceLifecycle(typed.Event.SourceID, tuiSourceLifecycleFailed)
+			}
+			switch typed.Event.Event {
+			case output.EventSourceStarted:
+				m.interactivePhase = tuiInteractivePhaseSyncing
+				if m.runStartedAt.IsZero() {
+					m.runStartedAt = time.Now()
+				}
+			case output.EventSourcePreflight:
+				if m.interactivePhase == tuiInteractivePhaseIdle {
+					m.interactivePhase = tuiInteractivePhasePreflight
+				}
+			}
 		}
 		m.progress.ObserveEvent(typed.Event)
 		m.observeInteractiveTrackEvent(typed.Event)
@@ -852,6 +912,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 		m.planPrompt = nil
 		m.interactionPrompt = nil
 		m.done = true
+		if m.isInteractiveSyncWorkflow() {
+			m.interactivePhase = tuiInteractivePhaseDone
+		}
 		m.result = typed.Result
 		m.runErr = typed.Err
 		m.runFinishedAt = time.Now()
@@ -1535,6 +1598,26 @@ func newEmptyTUIInteractiveSelectionState() *tuiInteractiveSelectionState {
 	}
 }
 
+func (m *tuiSyncModel) resetInteractiveSourceLifecycle() {
+	if m == nil {
+		return
+	}
+	m.sourceLifecycle = map[string]tuiInteractiveSourceLifecycle{}
+	for _, source := range m.sources {
+		m.sourceLifecycle[source.ID] = tuiSourceLifecycleIdle
+	}
+}
+
+func (m *tuiSyncModel) setInteractiveSourceLifecycle(sourceID string, lifecycle tuiInteractiveSourceLifecycle) {
+	if m == nil || strings.TrimSpace(sourceID) == "" {
+		return
+	}
+	if m.sourceLifecycle == nil {
+		m.sourceLifecycle = map[string]tuiInteractiveSourceLifecycle{}
+	}
+	m.sourceLifecycle[sourceID] = lifecycle
+}
+
 func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiveSelectionState {
 	selected := map[int]bool{}
 	rows := make([]tuiTrackRowState, 0, len(req.Rows))
@@ -1775,6 +1858,45 @@ func (s *tuiInteractiveSelectionState) skippedCount() int {
 	count := 0
 	for _, row := range s.rows {
 		if row.RuntimeStatus == tuiTrackStatusExisting || row.RuntimeStatus == tuiTrackStatusSkipped {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *tuiInteractiveSelectionState) completedCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range s.rows {
+		if row.RuntimeStatus == tuiTrackStatusDownloaded {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *tuiInteractiveSelectionState) failedCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range s.rows {
+		if row.RuntimeStatus == tuiTrackStatusFailed {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *tuiInteractiveSelectionState) skippedTrackCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range s.rows {
+		if row.RuntimeStatus == tuiTrackStatusSkipped {
 			count++
 		}
 	}
