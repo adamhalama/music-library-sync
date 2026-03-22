@@ -517,6 +517,104 @@ func TestTUIConfigEditorReviewSelectorSwitchesPreviewScope(t *testing.T) {
 	}
 }
 
+func TestTUIConfigEditorPreservesInvalidSpotifyAdapterKindFromDisk(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: /tmp/udl-state",
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"sources:",
+		"  - id: spotify-list",
+		"    type: spotify",
+		"    enabled: true",
+		"    target_dir: /tmp/music",
+		"    state_file: spotify-list.sync.spotify",
+		"    url: https://open.spotify.com/playlist/abc123",
+		"    adapter:",
+		"      kind: future-backend",
+		"    sync:",
+		"      break_on_existing: true",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if len(model.sources) != 1 {
+		t.Fatalf("expected one source, got %d", len(model.sources))
+	}
+	if got := model.sources[0].Source.Adapter.Kind; got != "future-backend" {
+		t.Fatalf("expected invalid adapter kind to be preserved, got %q", got)
+	}
+	if model.sources[0].Source.Sync.BreakOnExisting == nil || !*model.sources[0].Source.Sync.BreakOnExisting {
+		t.Fatalf("expected unsupported sync policy to remain visible for validation")
+	}
+
+	cfg := model.buildConfig()
+	if got := cfg.Sources[0].Adapter.Kind; got != "future-backend" {
+		t.Fatalf("expected buildConfig to preserve adapter kind, got %q", got)
+	}
+	if cfg.Sources[0].Sync.BreakOnExisting == nil || !*cfg.Sources[0].Sync.BreakOnExisting {
+		t.Fatalf("expected buildConfig to preserve unsupported sync policy")
+	}
+
+	problems := strings.Join(model.validationProblems, "\n")
+	for _, needle := range []string{
+		`source "spotify-list" has unsupported adapter.kind "future-backend"`,
+		`source "spotify-list" spotify type requires spotdl or deemix adapter`,
+		`source "spotify-list" sync.break_on_existing is only supported for soundcloud or spotify+deemix`,
+	} {
+		if !strings.Contains(problems, needle) {
+			t.Fatalf("expected validation to include %q, got: %s", needle, problems)
+		}
+	}
+}
+
+func TestTUIConfigEditorInteractiveAdapterChangeClearsUnsupportedSpotifySyncPolicy(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.sources = []tuiConfigEditorSourceState{
+		newTUIConfigEditorSourceState(config.Source{
+			ID:        "spotify-list",
+			Type:      config.SourceTypeSpotify,
+			Enabled:   true,
+			TargetDir: "/tmp/music",
+			StateFile: "spotify-list.sync.spotify",
+			URL:       "https://open.spotify.com/playlist/abc123",
+			Adapter: config.AdapterSpec{
+				Kind: "deemix",
+			},
+			Sync: config.SyncPolicy{
+				BreakOnExisting: tuiBoolPtr(true),
+				AskOnExisting:   tuiBoolPtr(true),
+			},
+		}),
+	}
+	model.sourcePane = tuiConfigEditorPaneForm
+	model.sourceFieldCursor = 6
+
+	nextModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := nextModel
+	state := next.currentSourceState()
+	if state == nil {
+		t.Fatalf("expected current source state")
+	}
+	if got := state.Source.Adapter.Kind; got != "spotdl" {
+		t.Fatalf("expected adapter toggle to switch to spotdl, got %q", got)
+	}
+	if state.Source.Sync.BreakOnExisting != nil {
+		t.Fatalf("expected break_on_existing to be cleared for spotdl")
+	}
+	if state.Source.Sync.AskOnExisting != nil {
+		t.Fatalf("expected ask_on_existing to be cleared for spotdl")
+	}
+}
+
 func TestTUIRootConfigEditorEscFromReviewReturnsToEditing(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenConfigEditor

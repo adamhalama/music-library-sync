@@ -248,14 +248,11 @@ func (s *tuiConfigEditorSourceState) applyCompatibilityDefaults() {
 	}
 	switch s.Source.Type {
 	case config.SourceTypeSpotify:
-		if s.Source.Adapter.Kind != "deemix" && s.Source.Adapter.Kind != "spotdl" {
-			s.Source.Adapter.Kind = "deemix"
-		}
 	default:
 		s.Source.Type = config.SourceTypeSoundCloud
-		if s.Source.Adapter.Kind != "scdl" && s.Source.Adapter.Kind != "scdl-freedl" {
-			s.Source.Adapter.Kind = "scdl"
-		}
+	}
+	if strings.TrimSpace(s.Source.Adapter.Kind) == "" {
+		s.Source.Adapter.Kind = tuiConfigEditorDefaultAdapterKind(s.Source.Type)
 	}
 	if !s.ManualTargetDir || strings.TrimSpace(s.Source.TargetDir) == "" {
 		s.Source.TargetDir = tuiConfigEditorSuggestedTargetDir(s.Source.ID)
@@ -271,18 +268,28 @@ func (s *tuiConfigEditorSourceState) applyCompatibilityDefaults() {
 		if s.Source.Sync.AskOnExisting == nil {
 			s.Source.Sync.AskOnExisting = tuiBoolPtr(false)
 		}
-	} else {
-		s.Source.Sync.BreakOnExisting = nil
-		s.Source.Sync.AskOnExisting = nil
 	}
 	if supportsLocalIndex {
 		if s.Source.Sync.LocalIndexCache == nil {
 			s.Source.Sync.LocalIndexCache = tuiBoolPtr(false)
 		}
-	} else {
-		s.Source.Sync.LocalIndexCache = nil
 	}
 	s.syncAdapterEditorState()
+}
+
+func (s *tuiConfigEditorSourceState) normalizeInteractiveCompatibility() {
+	if !tuiConfigEditorAdapterSupportedByType(s.Source.Type, s.Source.Adapter.Kind) {
+		s.Source.Adapter.Kind = tuiConfigEditorDefaultAdapterKind(s.Source.Type)
+	}
+	supportsBreakAsk, supportsLocalIndex := tuiConfigEditorSyncSupport(s.Source)
+	if !supportsBreakAsk {
+		s.Source.Sync.BreakOnExisting = nil
+		s.Source.Sync.AskOnExisting = nil
+	}
+	if !supportsLocalIndex {
+		s.Source.Sync.LocalIndexCache = nil
+	}
+	s.applyCompatibilityDefaults()
 }
 
 func (s *tuiConfigEditorSourceState) syncAdapterEditorState() {
@@ -736,7 +743,7 @@ func (m *tuiConfigEditorModel) applySourceFieldAction(fields []tuiConfigEditorFo
 		} else {
 			state.Source.Type = config.SourceTypeSoundCloud
 		}
-		state.applyCompatibilityDefaults()
+		state.normalizeInteractiveCompatibility()
 	case "source.url":
 		if !fromSpace {
 			m.startEdit(field.Key, "Edit Source URL", state.Source.URL)
@@ -754,7 +761,7 @@ func (m *tuiConfigEditorModel) applySourceFieldAction(fields []tuiConfigEditorFo
 		}
 	case "source.adapter.kind":
 		state.Source.Adapter.Kind = tuiConfigEditorNextAdapter(state.Source)
-		state.applyCompatibilityDefaults()
+		state.normalizeInteractiveCompatibility()
 	case "source.adapter.extra_args":
 		if !fromSpace {
 			m.startEdit(field.Key, "Edit Adapter Extra Args", strings.Join(state.Source.Adapter.ExtraArgs, ", "))
@@ -1088,6 +1095,24 @@ func tuiConfigEditorSuggestedStateFile(sourceID string, sourceType config.Source
 		return cleanID + ".sync.spotify"
 	}
 	return cleanID + ".sync.scdl"
+}
+
+func tuiConfigEditorDefaultAdapterKind(sourceType config.SourceType) string {
+	if sourceType == config.SourceTypeSpotify {
+		return "deemix"
+	}
+	return "scdl"
+}
+
+func tuiConfigEditorAdapterSupportedByType(sourceType config.SourceType, adapterKind string) bool {
+	switch sourceType {
+	case config.SourceTypeSpotify:
+		return adapterKind == "deemix" || adapterKind == "spotdl"
+	case config.SourceTypeSoundCloud:
+		return adapterKind == "scdl" || adapterKind == "scdl-freedl"
+	default:
+		return false
+	}
 }
 
 func tuiConfigEditorSyncSupport(source config.Source) (bool, bool) {
