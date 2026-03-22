@@ -1271,8 +1271,8 @@ func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
 	root.syncModel.interactiveTracker.ConfirmSelection(selection)
 	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 1}}, nil, "", false)
 	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 2}}, nil, "", false)
-	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 4, "reason": "ignored"}}, nil, "", false)
-	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 5, "reason": "failed"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 3, "reason": "ignored"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 4, "reason": "failed"}}, nil, "", false)
 
 	view := root.View()
 	if !strings.Contains(view, "completed: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
@@ -1603,6 +1603,69 @@ func TestTUIInteractiveAggregateExcludesDeselectedRows(t *testing.T) {
 	}
 	if !strings.Contains(view, "100%") {
 		t.Fatalf("expected progress to be based only on selected rows, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveSparseSelectionShowsLaterRowsCompleting(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "source-a", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["source-a"] = true
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	rows := make([]engine.PlanRow, 0, 10)
+	for i := 1; i <= 10; i++ {
+		rows = append(rows, engine.PlanRow{
+			Index:             i,
+			Title:             fmt.Sprintf("Track %d", i),
+			RemoteID:          fmt.Sprintf("track-%d", i),
+			Status:            engine.PlanRowMissingNew,
+			Toggleable:        true,
+			SelectedByDefault: true,
+		})
+	}
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     rows,
+		Details:  planSourceDetails{SourceID: "source-a"},
+		Reply:    reply,
+	})
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	for _, idx := range []int{5, 6, 7, 8} {
+		selection.setSelected(idx, false)
+	}
+	selection.cursor = 8
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+
+	for executionIndex := 1; executionIndex <= 6; executionIndex++ {
+		root.syncModel.interactiveTracker.ObserveEvent(output.Event{
+			Event:    output.EventTrackDone,
+			SourceID: "source-a",
+			Details:  map[string]any{"index": executionIndex},
+		}, nil, "", false)
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "completed: 6") {
+		t.Fatalf("expected footer to count all selected later rows, got: %s", view)
+	}
+	if !strings.Contains(view, "Track 9") || !strings.Contains(view, "Track 10") || !strings.Contains(view, "downloaded") {
+		t.Fatalf("expected later selected rows to render as downloaded, got: %s", view)
+	}
+	if !strings.Contains(view, "Track 5") || !strings.Contains(view, "Track 6") || !strings.Contains(view, "not-run") {
+		t.Fatalf("expected deselected middle rows to remain visible as not-run, got: %s", view)
 	}
 }
 
