@@ -179,3 +179,41 @@ func TestSaveSingleFileRestoresOriginalOnReplaceFailure(t *testing.T) {
 		t.Fatalf("expected original config to remain untouched, got:\n%s", string(payload))
 	}
 }
+
+func TestSaveSingleFileRejectsDirectoryTarget(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "udl")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Defaults.StateDir = filepath.Join(tmp, "state")
+	cfg.Sources = []Source{
+		{
+			ID:        "soundcloud-likes",
+			Type:      SourceTypeSoundCloud,
+			Enabled:   true,
+			TargetDir: "/tmp/music",
+			URL:       "https://soundcloud.com/user",
+			Adapter:   AdapterSpec{Kind: "scdl"},
+		},
+	}
+
+	if _, err := SaveSingleFile(target, cfg); err == nil {
+		t.Fatalf("expected directory target rejection")
+	} else if !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("expected directory error, got %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat target: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected target to remain a directory")
+	}
+	if _, err := os.Stat(target + ".udl.bak"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no backup to be created, stat err: %v", err)
+	}
+}

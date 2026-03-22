@@ -88,29 +88,29 @@ type tuiConfigEditorSCDLArgSpec struct {
 }
 
 type tuiConfigEditorModel struct {
-	app                 *AppContext
-	phase               tuiConfigEditorPhase
-	reviewReturnPhase   tuiConfigEditorPhase
-	reviewSourceCursor  int
-	targetPath          string
-	targetKind          tuiConfigEditorTargetKind
-	fileExists          bool
-	prepareErr          error
-	parseErr            error
-	defaults            config.Defaults
-	sources             []tuiConfigEditorSourceState
-	dirty               bool
-	previewVisible      bool
-	defaultsCursor      int
-	sourceListCursor    int
-	sourceFieldCursor   int
-	sourcePane          tuiConfigEditorPane
-	validationProblems  []string
-	validationErr       string
-	saveErr             error
-	saveResult          *tuiConfigEditorSaveState
-	modal               *tuiConfigEditorModalState
-	edit                *tuiConfigEditorInlineEditState
+	app                *AppContext
+	phase              tuiConfigEditorPhase
+	reviewReturnPhase  tuiConfigEditorPhase
+	reviewSourceCursor int
+	targetPath         string
+	targetKind         tuiConfigEditorTargetKind
+	fileExists         bool
+	prepareErr         error
+	parseErr           error
+	defaults           config.Defaults
+	sources            []tuiConfigEditorSourceState
+	dirty              bool
+	previewVisible     bool
+	defaultsCursor     int
+	sourceListCursor   int
+	sourceFieldCursor  int
+	sourcePane         tuiConfigEditorPane
+	validationProblems []string
+	validationErr      string
+	saveErr            error
+	saveResult         *tuiConfigEditorSaveState
+	modal              *tuiConfigEditorModalState
+	edit               *tuiConfigEditorInlineEditState
 }
 
 type tuiConfigEditorFormField struct {
@@ -191,7 +191,13 @@ func (m *tuiConfigEditorModel) loadTarget() {
 	info, statErr := os.Stat(path)
 	switch {
 	case statErr == nil:
-		m.fileExists = !info.IsDir()
+		if info.IsDir() {
+			m.fileExists = false
+			m.prepareErr = fmt.Errorf("config path %s is a directory; expected a file", path)
+			m.revalidate()
+			return
+		}
+		m.fileExists = true
 		cfg, loadErr := config.LoadSingleFile(path)
 		if loadErr != nil {
 			m.parseErr = loadErr

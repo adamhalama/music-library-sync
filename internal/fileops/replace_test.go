@@ -77,3 +77,32 @@ func TestReplaceFileSafelyRollbackRestoresOriginalTarget(t *testing.T) {
 		t.Fatalf("expected backup to be restored, stat err: %v", statErr)
 	}
 }
+
+func TestReplaceFileSafelyRejectsDirectoryTarget(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "config")
+	replacement := filepath.Join(tmp, ".tmp-config")
+
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(replacement, []byte("new"), 0o644); err != nil {
+		t.Fatalf("write replacement: %v", err)
+	}
+
+	err := ReplaceFileSafely(replacement, target)
+	if err == nil {
+		t.Fatalf("expected directory target rejection")
+	}
+
+	info, statErr := os.Stat(target)
+	if statErr != nil {
+		t.Fatalf("stat target: %v", statErr)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected target to remain a directory")
+	}
+	if _, statErr := os.Stat(target + ".udl.bak"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected no backup to be created, stat err: %v", statErr)
+	}
+}

@@ -228,6 +228,36 @@ func TestTUIConfigEditorParseErrorRecoveryResetsToDefaults(t *testing.T) {
 	}
 }
 
+func TestTUIConfigEditorRejectsDirectoryConfigPath(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config-dir")
+	if err := os.Mkdir(configPath, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if model.prepareErr == nil {
+		t.Fatalf("expected prepare error for directory target")
+	}
+	if !strings.Contains(model.prepareErr.Error(), "directory") {
+		t.Fatalf("expected directory prepare error, got %v", model.prepareErr)
+	}
+	if model.parseErr != nil {
+		t.Fatalf("expected parse error to remain nil, got %v", model.parseErr)
+	}
+	if model.phase != tuiConfigEditorPhaseTarget {
+		t.Fatalf("expected target phase, got %v", model.phase)
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if next.modal != nil {
+		t.Fatalf("expected no reset modal, got %+v", next.modal)
+	}
+	if next.phase != tuiConfigEditorPhaseTarget {
+		t.Fatalf("expected to remain in target phase, got %v", next.phase)
+	}
+}
+
 func TestTUIConfigEditorSourceIDUpdatesLinkedDefaults(t *testing.T) {
 	model := newTUIConfigEditorModel(&AppContext{})
 	model.phase = tuiConfigEditorPhaseSources

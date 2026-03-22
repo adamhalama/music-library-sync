@@ -12,11 +12,11 @@ import (
 )
 
 var (
-	createTempFile      = os.CreateTemp
-	writeTempFile       = os.WriteFile
-	removeTempFile      = os.Remove
-	replaceTempFile     = fileops.ReplaceFileSafely
-	createEditorDirAll  = os.MkdirAll
+	createTempFile     = os.CreateTemp
+	writeTempFile      = os.WriteFile
+	removeTempFile     = os.Remove
+	replaceTempFile    = fileops.ReplaceFileSafely
+	createEditorDirAll = os.MkdirAll
 )
 
 func LoadSingleFile(path string) (Config, error) {
@@ -62,6 +62,13 @@ func SaveSingleFile(path string, cfg Config) (string, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
 		return "", fmt.Errorf("config file path must be set")
+	}
+	if info, err := os.Stat(trimmed); err == nil {
+		if info.IsDir() {
+			return "", fmt.Errorf("config file path is a directory: %s", trimmed)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("inspect config file path %s: %w", trimmed, err)
 	}
 	payload, err := MarshalCanonical(cfg)
 	if err != nil {
