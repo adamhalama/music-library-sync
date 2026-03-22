@@ -50,12 +50,16 @@ type tuiConfigEditorSourceState struct {
 	Source          config.Source
 	ManualTargetDir bool
 	ManualStateFile bool
+	SCDLArgs        tuiConfigEditorSCDLArgsState
 }
 
 type tuiConfigEditorInlineEditState struct {
-	Key    string
-	Title  string
-	Buffer string
+	Key         string
+	Title       string
+	Buffer      string
+	Cursor      int
+	Placeholder string
+	Help        []string
 }
 
 type tuiConfigEditorModalState struct {
@@ -70,9 +74,24 @@ type tuiConfigEditorSaveState struct {
 	StateDir string
 }
 
+type tuiConfigEditorSCDLArgsState struct {
+	Recommended map[string]bool
+	AdvancedRaw string
+	DirectRaw   string
+}
+
+type tuiConfigEditorSCDLArgSpec struct {
+	Key         string
+	Flag        string
+	Label       string
+	Description string
+}
+
 type tuiConfigEditorModel struct {
 	app                 *AppContext
 	phase               tuiConfigEditorPhase
+	reviewReturnPhase   tuiConfigEditorPhase
+	reviewSourceCursor  int
 	targetPath          string
 	targetKind          tuiConfigEditorTargetKind
 	fileExists          bool
@@ -102,6 +121,39 @@ type tuiConfigEditorFormField struct {
 	Options  []string
 	ReadOnly bool
 	Action   bool
+}
+
+var tuiConfigEditorSCDLRecommendedArgSpecs = []tuiConfigEditorSCDLArgSpec{
+	{
+		Key:         "no_overwrites",
+		Flag:        "--no-overwrites",
+		Label:       "yt-dlp · no-overwrites",
+		Description: "Skip writing over existing files on disk.",
+	},
+	{
+		Key:         "ignore_errors",
+		Flag:        "--ignore-errors",
+		Label:       "yt-dlp · ignore-errors",
+		Description: "Keep going when yt-dlp hits a per-track failure.",
+	},
+	{
+		Key:         "write_info_json",
+		Flag:        "--write-info-json",
+		Label:       "yt-dlp · write-info-json",
+		Description: "Write per-track metadata JSON next to the downloaded files.",
+	},
+	{
+		Key:         "write_thumbnail",
+		Flag:        "--write-thumbnail",
+		Label:       "yt-dlp · write-thumbnail",
+		Description: "Save thumbnail files alongside the media files.",
+	},
+	{
+		Key:         "write_description",
+		Flag:        "--write-description",
+		Label:       "yt-dlp · write-description",
+		Description: "Write descriptions to sidecar text files.",
+	},
 }
 
 func newTUIConfigEditorModel(app *AppContext) tuiConfigEditorModel {
@@ -224,6 +276,22 @@ func (s *tuiConfigEditorSourceState) applyCompatibilityDefaults() {
 	} else {
 		s.Source.Sync.LocalIndexCache = nil
 	}
+	s.syncAdapterEditorState()
+}
+
+func (s *tuiConfigEditorSourceState) syncAdapterEditorState() {
+	if s.Source.Adapter.Kind != "scdl" {
+		s.SCDLArgs = tuiConfigEditorSCDLArgsState{}
+		return
+	}
+	s.SCDLArgs = tuiConfigEditorParseSCDLArgs(s.Source.Adapter.ExtraArgs)
+}
+
+func (s *tuiConfigEditorSourceState) syncAdapterExtraArgs() {
+	if s.Source.Adapter.Kind != "scdl" {
+		return
+	}
+	s.Source.Adapter.ExtraArgs = s.SCDLArgs.Build()
 }
 
 func tuiResolveConfigEditorTargetPath(app *AppContext) (string, tuiConfigEditorTargetKind, error) {
@@ -257,6 +325,7 @@ func (m tuiConfigEditorModel) buildConfig() config.Config {
 	}
 	for _, source := range m.sources {
 		item := source
+		item.syncAdapterExtraArgs()
 		item.applyCompatibilityDefaults()
 		cfg.Sources = append(cfg.Sources, item.Source)
 	}
@@ -264,7 +333,13 @@ func (m tuiConfigEditorModel) buildConfig() config.Config {
 }
 
 func (m tuiConfigEditorModel) allowBack() bool {
-	return m.modal == nil && m.edit == nil && !m.dirty
+	if m.modal != nil || m.edit != nil {
+		return false
+	}
+	if m.phase == tuiConfigEditorPhaseReview || m.phase == tuiConfigEditorPhaseSave {
+		return false
+	}
+	return !m.dirty
 }
 
 func (m tuiConfigEditorModel) Update(msg tea.Msg) (tuiConfigEditorModel, tea.Cmd) {
@@ -278,6 +353,9 @@ func (m tuiConfigEditorModel) Update(msg tea.Msg) (tuiConfigEditorModel, tea.Cmd
 		}
 		switch typed.String() {
 		case "esc":
+			if m.phase == tuiConfigEditorPhaseReview || m.phase == tuiConfigEditorPhaseSave {
+				return m.returnFromReview(), nil
+			}
 			if m.dirty {
 				m.modal = &tuiConfigEditorModalState{
 					Kind:  tuiConfigEditorModalDiscard,
@@ -355,14 +433,37 @@ func (m tuiConfigEditorModel) updateEdit(msg tea.KeyMsg) (tuiConfigEditorModel, 
 	case "esc", "q":
 		m.edit = nil
 		return m, nil
+	case "left", "ctrl+b":
+		if m.edit.Cursor > 0 {
+			m.edit.Cursor--
+		}
+		return m, nil
+	case "right", "ctrl+f":
+		if m.edit.Cursor < utf8RuneCount(m.edit.Buffer) {
+			m.edit.Cursor++
+		}
+		return m, nil
+	case "home", "ctrl+a":
+		m.edit.Cursor = 0
+		return m, nil
+	case "end", "ctrl+e":
+		m.edit.Cursor = utf8RuneCount(m.edit.Buffer)
+		return m, nil
 	case "backspace", "ctrl+h":
-		if len(m.edit.Buffer) > 0 {
-			m.edit.Buffer = m.edit.Buffer[:len(m.edit.Buffer)-1]
+		if m.edit.Cursor > 0 {
+			m.edit.Buffer = deleteRuneAt(m.edit.Buffer, m.edit.Cursor-1)
+			m.edit.Cursor--
+		}
+		return m, nil
+	case "delete", "ctrl+d":
+		if m.edit.Cursor < utf8RuneCount(m.edit.Buffer) {
+			m.edit.Buffer = deleteRuneAt(m.edit.Buffer, m.edit.Cursor)
 		}
 		return m, nil
 	default:
 		if len(msg.Runes) > 0 {
-			m.edit.Buffer += string(msg.Runes)
+			m.edit.Buffer = insertRunesAt(m.edit.Buffer, m.edit.Cursor, msg.Runes)
+			m.edit.Cursor += len(msg.Runes)
 		}
 		return m, nil
 	}
@@ -414,6 +515,17 @@ func (m *tuiConfigEditorModel) applyEdit() error {
 	case "source.adapter.extra_args":
 		if state := m.currentSourceState(); state != nil {
 			state.Source.Adapter.ExtraArgs = tuiConfigEditorParseList(raw)
+			state.syncAdapterEditorState()
+		}
+	case "source.adapter.scdl.advanced_raw":
+		if state := m.currentSourceState(); state != nil {
+			state.SCDLArgs.AdvancedRaw = raw
+			state.syncAdapterExtraArgs()
+		}
+	case "source.adapter.scdl.direct_raw":
+		if state := m.currentSourceState(); state != nil {
+			state.SCDLArgs.DirectRaw = raw
+			state.syncAdapterExtraArgs()
 		}
 	case "source.adapter.min_version":
 		if state := m.currentSourceState(); state != nil {
@@ -484,6 +596,11 @@ func (m tuiConfigEditorModel) updateDefaultsPhase(msg tea.KeyMsg) (tuiConfigEdit
 			m.dirty = true
 			m.revalidate()
 		}
+	case "r":
+		m.openReview(tuiConfigEditorPhaseDefaults)
+		return m, nil
+	case "s":
+		return m.performSave()
 	case "enter":
 		switch m.defaultsCursor {
 		case 1:
@@ -512,6 +629,13 @@ func (m tuiConfigEditorModel) updateDefaultsPhase(msg tea.KeyMsg) (tuiConfigEdit
 }
 
 func (m tuiConfigEditorModel) updateSourcesPhase(msg tea.KeyMsg) (tuiConfigEditorModel, tea.Cmd) {
+	switch msg.String() {
+	case "r":
+		m.openReview(tuiConfigEditorPhaseSources)
+		return m, nil
+	case "s":
+		return m.performSave()
+	}
 	if m.sourcePane == tuiConfigEditorPaneList {
 		switch msg.String() {
 		case "up", "k":
@@ -630,6 +754,31 @@ func (m *tuiConfigEditorModel) applySourceFieldAction(fields []tuiConfigEditorFo
 			m.startEdit(field.Key, "Edit Adapter Extra Args", strings.Join(state.Source.Adapter.ExtraArgs, ", "))
 			return true
 		}
+	case "source.adapter.scdl.toggle.no_overwrites":
+		state.SCDLArgs.ToggleRecommended("no_overwrites")
+		state.syncAdapterExtraArgs()
+	case "source.adapter.scdl.toggle.ignore_errors":
+		state.SCDLArgs.ToggleRecommended("ignore_errors")
+		state.syncAdapterExtraArgs()
+	case "source.adapter.scdl.toggle.write_info_json":
+		state.SCDLArgs.ToggleRecommended("write_info_json")
+		state.syncAdapterExtraArgs()
+	case "source.adapter.scdl.toggle.write_thumbnail":
+		state.SCDLArgs.ToggleRecommended("write_thumbnail")
+		state.syncAdapterExtraArgs()
+	case "source.adapter.scdl.toggle.write_description":
+		state.SCDLArgs.ToggleRecommended("write_description")
+		state.syncAdapterExtraArgs()
+	case "source.adapter.scdl.advanced_raw":
+		if !fromSpace {
+			m.startEdit(field.Key, "Edit Advanced yt-dlp Args", state.SCDLArgs.AdvancedRaw)
+			return true
+		}
+	case "source.adapter.scdl.direct_raw":
+		if !fromSpace {
+			m.startEdit(field.Key, "Edit Additional scdl Args", state.SCDLArgs.DirectRaw)
+			return true
+		}
 	case "source.adapter.min_version":
 		if !fromSpace {
 			m.startEdit(field.Key, "Edit Adapter Min Version", state.Source.Adapter.MinVersion)
@@ -654,12 +803,7 @@ func (m *tuiConfigEditorModel) applySourceFieldAction(fields []tuiConfigEditorFo
 			state.Source.Sync.LocalIndexCache = tuiBoolPtr(false)
 		}
 	case "action.review":
-		if len(m.sourceValidationProblems()) > 0 {
-			m.validationErr = "fix source errors before continuing"
-			return true
-		}
-		m.phase = tuiConfigEditorPhaseReview
-		m.validationErr = ""
+		m.openReview(tuiConfigEditorPhaseSources)
 		return true
 	}
 	m.dirty = true
@@ -671,20 +815,23 @@ func (m *tuiConfigEditorModel) applySourceFieldAction(fields []tuiConfigEditorFo
 
 func (m tuiConfigEditorModel) updateReviewPhase(msg tea.KeyMsg) (tuiConfigEditorModel, tea.Cmd) {
 	switch msg.String() {
+	case "up", "k":
+		if m.reviewSourceCursor > 0 {
+			m.reviewSourceCursor--
+		}
+	case "down", "j":
+		if m.reviewSourceCursor < len(m.sources) {
+			m.reviewSourceCursor++
+		}
 	case "p":
 		m.previewVisible = !m.previewVisible
 	case "enter":
 		if len(m.validationProblems) > 0 {
-			m.validationErr = "fix validation errors before continuing"
+			m.validationErr = "fix validation issues before opening the save step"
 			return m, nil
 		}
 		m.phase = tuiConfigEditorPhaseSave
 	case "s":
-		if len(m.validationProblems) > 0 {
-			m.validationErr = "fix validation errors before saving"
-			return m, nil
-		}
-		m.phase = tuiConfigEditorPhaseSave
 		return m.performSave()
 	}
 	return m, nil
@@ -692,6 +839,14 @@ func (m tuiConfigEditorModel) updateReviewPhase(msg tea.KeyMsg) (tuiConfigEditor
 
 func (m tuiConfigEditorModel) updateSavePhase(msg tea.KeyMsg) (tuiConfigEditorModel, tea.Cmd) {
 	switch msg.String() {
+	case "up", "k":
+		if m.reviewSourceCursor > 0 {
+			m.reviewSourceCursor--
+		}
+	case "down", "j":
+		if m.reviewSourceCursor < len(m.sources) {
+			m.reviewSourceCursor++
+		}
 	case "p":
 		m.previewVisible = !m.previewVisible
 	case "s", "enter":
@@ -704,7 +859,7 @@ func (m tuiConfigEditorModel) performSave() (tuiConfigEditorModel, tea.Cmd) {
 	m.saveErr = nil
 	m.validationErr = ""
 	if len(m.validationProblems) > 0 {
-		m.validationErr = "config is invalid and cannot be saved"
+		m.validationErr = "fix validation issues before saving"
 		return m, nil
 	}
 	stateDir, err := config.SaveSingleFile(m.targetPath, m.buildConfig())
@@ -724,10 +879,35 @@ func (m tuiConfigEditorModel) performSave() (tuiConfigEditorModel, tea.Cmd) {
 
 func (m *tuiConfigEditorModel) startEdit(key, title, value string) {
 	m.edit = &tuiConfigEditorInlineEditState{
-		Key:    key,
-		Title:  title,
-		Buffer: value,
+		Key:         key,
+		Title:       title,
+		Buffer:      value,
+		Cursor:      utf8RuneCount(value),
+		Placeholder: tuiConfigEditorEditPlaceholder(key),
+		Help:        tuiConfigEditorEditHelp(key),
 	}
+}
+
+func (m *tuiConfigEditorModel) openReview(from tuiConfigEditorPhase) {
+	m.reviewReturnPhase = from
+	m.phase = tuiConfigEditorPhaseReview
+	m.validationErr = ""
+	if m.reviewSourceCursor > len(m.sources) {
+		m.reviewSourceCursor = len(m.sources)
+	}
+}
+
+func (m tuiConfigEditorModel) returnFromReview() tuiConfigEditorModel {
+	switch m.reviewReturnPhase {
+	case tuiConfigEditorPhaseDefaults, tuiConfigEditorPhaseSources:
+		m.phase = m.reviewReturnPhase
+	default:
+		m.phase = tuiConfigEditorPhaseSources
+		if len(m.sources) == 0 {
+			m.phase = tuiConfigEditorPhaseDefaults
+		}
+	}
+	return m
 }
 
 func (m *tuiConfigEditorModel) ensureSourceCursor() {
@@ -777,9 +957,16 @@ func (m *tuiConfigEditorModel) duplicateSource() {
 		return
 	}
 	copyState := *state
+	if state.SCDLArgs.Recommended != nil {
+		copyState.SCDLArgs.Recommended = map[string]bool{}
+		for key, enabled := range state.SCDLArgs.Recommended {
+			copyState.SCDLArgs.Recommended[key] = enabled
+		}
+	}
 	copyState.Source.ID = tuiConfigEditorUniqueSourceID(m.sources, state.Source.ID+"-copy")
 	copyState.ManualTargetDir = false
 	copyState.ManualStateFile = false
+	copyState.syncAdapterExtraArgs()
 	copyState.applyCompatibilityDefaults()
 	insertAt := m.sourceListCursor + 1
 	m.sources = append(m.sources[:insertAt], append([]tuiConfigEditorSourceState{copyState}, m.sources[insertAt:]...)...)
@@ -813,7 +1000,7 @@ func (m *tuiConfigEditorModel) currentSourceState() *tuiConfigEditorSourceState 
 func (m tuiConfigEditorModel) currentSourceFields() []tuiConfigEditorFormField {
 	state := m.currentSourceState()
 	if state == nil {
-		return []tuiConfigEditorFormField{{Key: "action.review", Label: "Continue to Review", Kind: "action", Action: true}}
+		return []tuiConfigEditorFormField{{Key: "action.review", Label: "Open Review", Kind: "action", Action: true}}
 	}
 	fields := []tuiConfigEditorFormField{
 		{Key: "source.id", Label: "Identity · id", Value: state.Source.ID, Kind: "text"},
@@ -823,9 +1010,27 @@ func (m tuiConfigEditorModel) currentSourceFields() []tuiConfigEditorFormField {
 		{Key: "source.target_dir", Label: "Location · target_dir", Value: state.Source.TargetDir, Kind: "text"},
 		{Key: "source.state_file", Label: "Location · state_file", Value: state.Source.StateFile, Kind: "text"},
 		{Key: "source.adapter.kind", Label: "Adapter · kind", Value: state.Source.Adapter.Kind, Kind: "select"},
-		{Key: "source.adapter.extra_args", Label: "Adapter · extra_args", Value: strings.Join(state.Source.Adapter.ExtraArgs, ", "), Kind: "text"},
-		{Key: "source.adapter.min_version", Label: "Adapter · min_version", Value: state.Source.Adapter.MinVersion, Kind: "text"},
 	}
+	if state.Source.Adapter.Kind == "scdl" {
+		fields = append(fields,
+			tuiConfigEditorFormField{Key: "source.adapter.scdl.managed", Label: "Adapter · managed defaults", Value: "UDL-managed yt-dlp/scdl flags", Kind: "info", ReadOnly: true},
+		)
+		for _, spec := range tuiConfigEditorSCDLRecommendedArgSpecs {
+			fields = append(fields, tuiConfigEditorFormField{
+				Key:   "source.adapter.scdl.toggle." + spec.Key,
+				Label: "Adapter · " + spec.Label,
+				Value: tuiBoolLabel(state.SCDLArgs.RecommendedEnabled(spec.Key)),
+				Kind:  "bool",
+			})
+		}
+		fields = append(fields,
+			tuiConfigEditorFormField{Key: "source.adapter.scdl.advanced_raw", Label: "Adapter · yt-dlp advanced", Value: state.SCDLArgs.AdvancedRaw, Kind: "text"},
+			tuiConfigEditorFormField{Key: "source.adapter.scdl.direct_raw", Label: "Adapter · scdl extra args", Value: state.SCDLArgs.DirectRaw, Kind: "text"},
+		)
+	} else {
+		fields = append(fields, tuiConfigEditorFormField{Key: "source.adapter.extra_args", Label: "Adapter · extra_args", Value: strings.Join(state.Source.Adapter.ExtraArgs, ", "), Kind: "text"})
+	}
+	fields = append(fields, tuiConfigEditorFormField{Key: "source.adapter.min_version", Label: "Adapter · min_version (doctor)", Value: state.Source.Adapter.MinVersion, Kind: "text"})
 	supportsBreakAsk, supportsLocalIndex := tuiConfigEditorSyncSupport(state.Source)
 	if supportsBreakAsk {
 		fields = append(fields,
@@ -836,7 +1041,7 @@ func (m tuiConfigEditorModel) currentSourceFields() []tuiConfigEditorFormField {
 	if supportsLocalIndex {
 		fields = append(fields, tuiConfigEditorFormField{Key: "source.sync.local_index_cache", Label: "Sync · local_index_cache", Value: tuiBoolPtrLabel(state.Source.Sync.LocalIndexCache), Kind: "bool"})
 	}
-	fields = append(fields, tuiConfigEditorFormField{Key: "action.review", Label: "Continue to Review", Value: "enter", Kind: "action", Action: true})
+	fields = append(fields, tuiConfigEditorFormField{Key: "action.review", Label: "Open Review", Value: "enter", Kind: "action", Action: true})
 	return fields
 }
 
@@ -923,6 +1128,17 @@ func tuiBoolPtr(v bool) *bool {
 	return &v
 }
 
+func (s tuiConfigEditorSCDLArgsState) RecommendedEnabled(key string) bool {
+	return s.Recommended[key]
+}
+
+func (s *tuiConfigEditorSCDLArgsState) ToggleRecommended(key string) {
+	if s.Recommended == nil {
+		s.Recommended = map[string]bool{}
+	}
+	s.Recommended[key] = !s.Recommended[key]
+}
+
 func tuiBoolLabel(v bool) string {
 	if v {
 		return "true"
@@ -935,6 +1151,159 @@ func tuiBoolPtrLabel(v *bool) string {
 		return "unset"
 	}
 	return tuiBoolLabel(*v)
+}
+
+func tuiConfigEditorParseSCDLArgs(extraArgs []string) tuiConfigEditorSCDLArgsState {
+	state := tuiConfigEditorSCDLArgsState{Recommended: map[string]bool{}}
+	directArgs := make([]string, 0, len(extraArgs))
+	ytdlpRaw, foundYTDLP := extractInlineArg(extraArgs, "--yt-dlp-args")
+	for i := 0; i < len(extraArgs); i++ {
+		token := strings.TrimSpace(extraArgs[i])
+		if token == "" || token == "-f" {
+			continue
+		}
+		if token == "--yt-dlp-args" || token == "--sync" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(token, "--yt-dlp-args=") || strings.HasPrefix(token, "--sync=") {
+			continue
+		}
+		directArgs = append(directArgs, extraArgs[i])
+	}
+	state.DirectRaw = strings.TrimSpace(strings.Join(directArgs, " "))
+	if !foundYTDLP {
+		return state
+	}
+
+	tokens := strings.Fields(ytdlpRaw)
+	filtered := make([]string, 0, len(tokens))
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		switch token {
+		case "--embed-thumbnail", "--embed-metadata", "--break-on-existing", "--no-break-on-existing":
+			continue
+		case "--download-archive", "--playlist-items":
+			i++
+			continue
+		}
+		if strings.HasPrefix(token, "--download-archive=") || strings.HasPrefix(token, "--playlist-items=") {
+			continue
+		}
+		if spec, ok := tuiConfigEditorSCDLRecommendedArgSpecByFlag(token); ok {
+			state.Recommended[spec.Key] = true
+			continue
+		}
+		filtered = append(filtered, token)
+	}
+	state.AdvancedRaw = strings.TrimSpace(strings.Join(filtered, " "))
+	return state
+}
+
+func (s tuiConfigEditorSCDLArgsState) Build() []string {
+	args := []string{}
+	if strings.TrimSpace(s.DirectRaw) != "" {
+		args = append(args, strings.Fields(s.DirectRaw)...)
+	}
+	ytdlpTokens := []string{}
+	for _, spec := range tuiConfigEditorSCDLRecommendedArgSpecs {
+		if s.RecommendedEnabled(spec.Key) {
+			ytdlpTokens = append(ytdlpTokens, spec.Flag)
+		}
+	}
+	if strings.TrimSpace(s.AdvancedRaw) != "" {
+		ytdlpTokens = append(ytdlpTokens, strings.Fields(s.AdvancedRaw)...)
+	}
+	if len(ytdlpTokens) > 0 {
+		args = append(args, "--yt-dlp-args", strings.Join(ytdlpTokens, " "))
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return args
+}
+
+func extractInlineArg(args []string, flag string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		token := strings.TrimSpace(args[i])
+		if token == flag {
+			if i+1 >= len(args) {
+				return "", false
+			}
+			return strings.TrimSpace(args[i+1]), true
+		}
+		prefix := flag + "="
+		if strings.HasPrefix(token, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(token, prefix)), true
+		}
+	}
+	return "", false
+}
+
+func tuiConfigEditorSCDLRecommendedArgSpecByFlag(flag string) (tuiConfigEditorSCDLArgSpec, bool) {
+	for _, spec := range tuiConfigEditorSCDLRecommendedArgSpecs {
+		if spec.Flag == flag {
+			return spec, true
+		}
+	}
+	return tuiConfigEditorSCDLArgSpec{}, false
+}
+
+func tuiConfigEditorEditPlaceholder(key string) string {
+	switch key {
+	case "source.adapter.scdl.advanced_raw", "source.adapter.scdl.direct_raw", "source.adapter.extra_args", "source.adapter.min_version":
+		return "(empty)"
+	default:
+		return ""
+	}
+}
+
+func tuiConfigEditorEditHelp(key string) []string {
+	switch key {
+	case "source.adapter.scdl.advanced_raw":
+		return []string{
+			"Pass additional yt-dlp flags here. UDL still manages embed metadata, archives, and break behavior.",
+			"Examples: --concurrent-fragments 4 --write-subs",
+		}
+	case "source.adapter.scdl.direct_raw":
+		return []string{
+			"Pass extra direct scdl flags here. Keep yt-dlp flags in the advanced yt-dlp field instead.",
+			"Examples: --hide-progress --error",
+		}
+	case "source.adapter.min_version":
+		return []string{
+			"Doctor compatibility hint. For scdl, UDL expects scdl >= 3.0.0.",
+			"scdl v3 is a yt-dlp wrapper and exposes --yt-dlp-args. Run `udl doctor` to verify compatibility.",
+		}
+	default:
+		return []string{"type to edit  left/right move cursor  backspace/delete remove  enter apply  esc cancel"}
+	}
+}
+
+func utf8RuneCount(value string) int {
+	return len([]rune(value))
+}
+
+func deleteRuneAt(value string, idx int) string {
+	runes := []rune(value)
+	if idx < 0 || idx >= len(runes) {
+		return value
+	}
+	return string(append(runes[:idx], runes[idx+1:]...))
+}
+
+func insertRunesAt(value string, idx int, extra []rune) string {
+	runes := []rune(value)
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > len(runes) {
+		idx = len(runes)
+	}
+	out := append([]rune{}, runes[:idx]...)
+	out = append(out, extra...)
+	out = append(out, runes[idx:]...)
+	return string(out)
 }
 
 func (m tuiConfigEditorModel) defaultsValidationProblems() []string {
