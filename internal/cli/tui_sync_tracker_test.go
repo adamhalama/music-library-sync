@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -45,6 +46,140 @@ func TestTUISyncRunTrackerObserveEventMapsRowsByIndexTrackIDAndTrackName(t *test
 	}
 	if source.rows[2].RuntimeStatus != tuiTrackStatusFailed || source.rows[2].FailureDetail != "network" {
 		t.Fatalf("expected track-name-matched row to be failed with reason, got %+v", source.rows[2])
+	}
+}
+
+func TestTUISyncRunTrackerMapsSparseSelectionIndicesBySelectedRunOrder(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	rows := make([]engine.PlanRow, 0, 10)
+	for i := 1; i <= 10; i++ {
+		rows = append(rows, engine.PlanRow{
+			Index:             i,
+			Title:             fmt.Sprintf("Track %d", i),
+			RemoteID:          fmt.Sprintf("track-%d", i),
+			Status:            engine.PlanRowMissingNew,
+			Toggleable:        true,
+			SelectedByDefault: true,
+		})
+	}
+
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{SourceID: "source-a", Rows: rows})
+	for _, idx := range []int{5, 6, 7, 8} {
+		state.setSelected(idx, false)
+	}
+	tracker.ConfirmSelection(state)
+
+	for executionIndex := 1; executionIndex <= 6; executionIndex++ {
+		tracker.ObserveEvent(output.Event{
+			Event:    output.EventTrackDone,
+			SourceID: "source-a",
+			Details:  map[string]any{"index": executionIndex},
+		}, nil, "", false)
+	}
+
+	source := tracker.SourceSnapshot("source-a")
+	for _, idx := range []int{1, 2, 3, 4, 9, 10} {
+		if source.rows[idx-1].RuntimeStatus != tuiTrackStatusDownloaded {
+			t.Fatalf("expected selected row %d to be downloaded, got %+v", idx, source.rows[idx-1])
+		}
+	}
+	for _, idx := range []int{5, 6, 7, 8} {
+		if source.rows[idx-1].RunScope != tuiTrackRunScopeExcluded {
+			t.Fatalf("expected row %d to remain excluded, got %+v", idx, source.rows[idx-1])
+		}
+		if source.rows[idx-1].RuntimeStatus != tuiTrackStatusQueued {
+			t.Fatalf("expected excluded row %d to stay queued, got %+v", idx, source.rows[idx-1])
+		}
+	}
+}
+
+func TestTUISyncRunTrackerMapsLeadingOmissionsBySelectedRunOrder(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "First", RemoteID: "track-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Second", RemoteID: "track-2", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 3, Title: "Third", RemoteID: "track-3", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+	})
+	state.setSelected(1, false)
+	tracker.ConfirmSelection(state)
+
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details:  map[string]any{"index": 1},
+	}, nil, "", false)
+
+	source := tracker.SourceSnapshot("source-a")
+	if source.rows[0].RuntimeStatus == tuiTrackStatusDownloaded {
+		t.Fatalf("expected deselected first row to remain untouched, got %+v", source.rows[0])
+	}
+	if source.rows[1].RuntimeStatus != tuiTrackStatusDownloaded {
+		t.Fatalf("expected first selected row to consume execution index 1, got %+v", source.rows[1])
+	}
+}
+
+func TestTUISyncRunTrackerNormalizesSanitizedTrackNames(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Premiere: Bengalo - All About [SELECTED031]", RemoteID: "track-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+	})
+	tracker.ConfirmSelection(state)
+
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details: map[string]any{
+			"track_name": "Premiere： Bengalo - All About [SELECTED031]",
+		},
+	}, nil, "", false)
+
+	source := tracker.SourceSnapshot("source-a")
+	if source.rows[0].RuntimeStatus != tuiTrackStatusDownloaded {
+		t.Fatalf("expected normalized title fallback to resolve row, got %+v", source.rows[0])
+	}
+}
+
+func TestTUISyncRunTrackerFallsBackToOutcomeNameWhenEventDetailsMiss(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 5, Title: "BCCO Premiere: future.666 - XTRA LOOP [BCCOVA18 | Curated by future.666]", RemoteID: "2235615050", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 8, Title: "VCS1 - Mythos | VDFD 035", RemoteID: "2232613559", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+	})
+	tracker.ConfirmSelection(state)
+
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details:  map[string]any{},
+	}, []output.StructuredTrackOutcome{{
+		Kind: output.StructuredTrackOutcomeDone,
+		Name: "BCCO Premiere： future.666 - XTRA LOOP [BCCOVA18 ｜ Curated by future.666]",
+	}}, "", false)
+
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details:  map[string]any{},
+	}, []output.StructuredTrackOutcome{{
+		Kind: output.StructuredTrackOutcomeDone,
+		Name: "VCS1 - Mythos ｜ VDFD 035",
+	}}, "", false)
+
+	source := tracker.SourceSnapshot("source-a")
+	if source.rows[0].RuntimeStatus != tuiTrackStatusDownloaded {
+		t.Fatalf("expected first row to resolve from outcome name, got %+v", source.rows[0])
+	}
+	if source.rows[1].RuntimeStatus != tuiTrackStatusDownloaded {
+		t.Fatalf("expected second row to resolve from outcome name, got %+v", source.rows[1])
 	}
 }
 

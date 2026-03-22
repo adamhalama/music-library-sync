@@ -115,6 +115,523 @@ func TestTUIRootEnterOpensStandardSyncWorkflow(t *testing.T) {
 	}
 }
 
+func TestTUIRootMenuIncludesConfigEditorWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+
+	found := false
+	for _, item := range root.menuItems {
+		if item == "config editor" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected config editor workflow in menu, got %v", root.menuItems)
+	}
+}
+
+func TestTUIRootEnterOpensConfigEditorWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.menuCursor = 4
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenConfigEditor {
+		t.Fatalf("expected config editor screen, got %v", next.screen)
+	}
+	if next.configModel.phase != tuiConfigEditorPhaseTarget {
+		t.Fatalf("expected config editor target phase, got %v", next.configModel.phase)
+	}
+}
+
+func TestTUIConfigEditorUsesExplicitConfigPath(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "custom.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: /tmp/udl-state",
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"sources:",
+		"  - id: sc",
+		"    type: soundcloud",
+		"    enabled: true",
+		"    target_dir: /tmp/music",
+		"    url: https://soundcloud.com/user",
+		"    adapter:",
+		"      kind: scdl",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if model.targetKind != tuiConfigEditorTargetExplicit {
+		t.Fatalf("expected explicit target kind, got %q", model.targetKind)
+	}
+	if model.targetPath != configPath {
+		t.Fatalf("expected explicit target path %q, got %q", configPath, model.targetPath)
+	}
+	if !model.fileExists {
+		t.Fatalf("expected explicit config to exist")
+	}
+}
+
+func TestTUIConfigEditorDefaultsToUserConfigPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg"))
+
+	model := newTUIConfigEditorModel(&AppContext{})
+	userPath, err := config.UserConfigPath()
+	if err != nil {
+		t.Fatalf("user config path: %v", err)
+	}
+	if model.targetKind != tuiConfigEditorTargetNew {
+		t.Fatalf("expected missing default target to be marked new, got %q", model.targetKind)
+	}
+	if model.targetPath != userPath {
+		t.Fatalf("expected user config path %q, got %q", userPath, model.targetPath)
+	}
+}
+
+func TestTUIConfigEditorParseErrorRecoveryResetsToDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "broken.yaml")
+	if err := os.WriteFile(configPath, []byte("version: [oops\n"), 0o644); err != nil {
+		t.Fatalf("write broken config: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if model.parseErr == nil {
+		t.Fatalf("expected parse error")
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if next.modal == nil || next.modal.Kind != tuiConfigEditorModalReset {
+		t.Fatalf("expected reset modal, got %+v", next.modal)
+	}
+	next, cmd := next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd != nil {
+		t.Fatalf("expected reset confirmation not to trigger exit")
+	}
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected defaults phase after reset, got %v", next.phase)
+	}
+	if next.parseErr != nil {
+		t.Fatalf("expected parse error to clear after reset, got %v", next.parseErr)
+	}
+}
+
+func TestTUIConfigEditorRejectsDirectoryConfigPath(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config-dir")
+	if err := os.Mkdir(configPath, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if model.prepareErr == nil {
+		t.Fatalf("expected prepare error for directory target")
+	}
+	if !strings.Contains(model.prepareErr.Error(), "directory") {
+		t.Fatalf("expected directory prepare error, got %v", model.prepareErr)
+	}
+	if model.parseErr != nil {
+		t.Fatalf("expected parse error to remain nil, got %v", model.parseErr)
+	}
+	if model.phase != tuiConfigEditorPhaseTarget {
+		t.Fatalf("expected target phase, got %v", model.phase)
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if next.modal != nil {
+		t.Fatalf("expected no reset modal, got %+v", next.modal)
+	}
+	if next.phase != tuiConfigEditorPhaseTarget {
+		t.Fatalf("expected to remain in target phase, got %v", next.phase)
+	}
+}
+
+func TestTUIConfigEditorSourceIDUpdatesLinkedDefaults(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+
+	state := model.currentSourceState()
+	if state == nil {
+		t.Fatalf("expected source state")
+	}
+	originalTarget := state.Source.TargetDir
+	model.startEdit("source.id", "Edit Source ID", state.Source.ID)
+	model.edit.Buffer = "spotify-groove"
+	if err := model.applyEdit(); err != nil {
+		t.Fatalf("applyEdit: %v", err)
+	}
+
+	if state.Source.TargetDir == originalTarget {
+		t.Fatalf("expected linked target_dir to update after id change")
+	}
+	if state.Source.TargetDir != filepath.Join("~", "Music", "downloaded", "spotify-groove") {
+		t.Fatalf("unexpected linked target_dir: %q", state.Source.TargetDir)
+	}
+	if state.Source.StateFile != "spotify-groove.sync.scdl" {
+		t.Fatalf("unexpected linked state_file: %q", state.Source.StateFile)
+	}
+
+	state.ManualTargetDir = true
+	state.Source.TargetDir = "/custom/music"
+	model.startEdit("source.id", "Edit Source ID", state.Source.ID)
+	model.edit.Buffer = "spotify-groove-2"
+	if err := model.applyEdit(); err != nil {
+		t.Fatalf("applyEdit second id: %v", err)
+	}
+	if state.Source.TargetDir != "/custom/music" {
+		t.Fatalf("expected manual target_dir to remain unchanged, got %q", state.Source.TargetDir)
+	}
+}
+
+func TestTUIConfigEditorDefaultsPhaseROpensReviewAndEscReturns(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseDefaults
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if next.phase != tuiConfigEditorPhaseReview {
+		t.Fatalf("expected review phase, got %q", next.phase)
+	}
+	if next.reviewReturnPhase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected defaults review return phase, got %q", next.reviewReturnPhase)
+	}
+
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected esc to return to defaults, got %q", next.phase)
+	}
+}
+
+func TestTUIConfigEditorSourcesPhaseROpensReviewAndEscReturns(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if next.phase != tuiConfigEditorPhaseReview {
+		t.Fatalf("expected review phase, got %q", next.phase)
+	}
+	if next.reviewReturnPhase != tuiConfigEditorPhaseSources {
+		t.Fatalf("expected sources review return phase, got %q", next.reviewReturnPhase)
+	}
+
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.phase != tuiConfigEditorPhaseSources {
+		t.Fatalf("expected esc to return to sources, got %q", next.phase)
+	}
+}
+
+func TestTUIConfigEditorDirectSaveFromDefaultsWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	model.phase = tuiConfigEditorPhaseDefaults
+	model.addSource()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected direct save to stay on defaults, got %q", next.phase)
+	}
+	if next.saveResult == nil {
+		t.Fatalf("expected direct save result")
+	}
+	if next.saveResult.Path != filepath.Join(tmp, "config.yaml") {
+		t.Fatalf("unexpected save path: %+v", next.saveResult)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
+		t.Fatalf("expected saved config file: %v", err)
+	}
+}
+
+func TestTUIConfigEditorDirectSaveFromSourcesWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if next.phase != tuiConfigEditorPhaseSources {
+		t.Fatalf("expected direct save to stay on sources, got %q", next.phase)
+	}
+	if next.saveResult == nil {
+		t.Fatalf("expected direct save result from sources")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
+		t.Fatalf("expected saved config file from sources: %v", err)
+	}
+}
+
+func TestTUIConfigEditorDirectSaveFromInvalidStateStaysInPlace(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "invalid.yaml")}})
+	model.phase = tuiConfigEditorPhaseDefaults
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected invalid direct save to stay on defaults, got %q", next.phase)
+	}
+	if next.saveResult != nil {
+		t.Fatalf("expected no save result on invalid config")
+	}
+	if next.validationErr == "" {
+		t.Fatalf("expected validation error when saving invalid config")
+	}
+}
+
+func TestTUIConfigEditorModalEditRendersCursorAndHelp(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.width = 140
+	root.height = 50
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseSources
+	root.configModel.addSource()
+	root.configModel.startEdit("source.adapter.min_version", "Edit Adapter Min Version", "")
+
+	view := root.View()
+	if !strings.Contains(view, "Edit Field") {
+		t.Fatalf("expected edit modal title, got: %s", view)
+	}
+	if !strings.Contains(view, "▌") {
+		t.Fatalf("expected visible input cursor, got: %s", view)
+	}
+	if !strings.Contains(view, "left/right move") {
+		t.Fatalf("expected edit controls in modal help, got: %s", view)
+	}
+}
+
+func TestTUIConfigEditorModalEditSupportsCursorAndDeletionKeys(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+	model.startEdit("source.id", "Edit Source ID", "abcd")
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+
+	if model.edit == nil {
+		t.Fatalf("expected active edit state")
+	}
+	if model.edit.Buffer != "aXd!" {
+		t.Fatalf("unexpected edit buffer after cursor operations: %q", model.edit.Buffer)
+	}
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := model.currentSourceState()
+	if state == nil || state.Source.ID != "aXd!" {
+		t.Fatalf("expected applied edit to update source id, got %+v", state)
+	}
+}
+
+func TestTUIConfigEditorSCDLArgsStateParsesLegacyYTArgs(t *testing.T) {
+	state := newTUIConfigEditorSourceState(config.Source{
+		ID:      "soundcloud-likes",
+		Type:    config.SourceTypeSoundCloud,
+		Enabled: true,
+		URL:     "https://soundcloud.com/user",
+		Adapter: config.AdapterSpec{
+			Kind: "scdl",
+			ExtraArgs: []string{
+				"-f",
+				"--yt-dlp-args",
+				"--embed-thumbnail --embed-metadata --download-archive scdl-archive.txt --no-overwrites --break-on-existing",
+			},
+		},
+	})
+
+	if !state.SCDLArgs.RecommendedEnabled("no_overwrites") {
+		t.Fatalf("expected no-overwrites to be detected from legacy yt-dlp args")
+	}
+	if state.SCDLArgs.AdvancedRaw != "" {
+		t.Fatalf("expected managed legacy yt-dlp args to be stripped, got %q", state.SCDLArgs.AdvancedRaw)
+	}
+	if state.SCDLArgs.DirectRaw != "" {
+		t.Fatalf("expected managed direct args to be stripped, got %q", state.SCDLArgs.DirectRaw)
+	}
+
+	state.syncAdapterExtraArgs()
+	if !reflect.DeepEqual(state.Source.Adapter.ExtraArgs, []string{"--yt-dlp-args", "--no-overwrites"}) {
+		t.Fatalf("unexpected serialized extra args: %#v", state.Source.Adapter.ExtraArgs)
+	}
+}
+
+func TestTUIConfigEditorReviewRendersSeparatedSections(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.width = 150
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseReview
+	root.configModel.reviewReturnPhase = tuiConfigEditorPhaseSources
+	root.configModel.addSource()
+
+	view := root.View()
+	for _, needle := range []string{"Summary", "Validation", "Preview Scope", "Preview · All sources"} {
+		if !strings.Contains(view, needle) {
+			t.Fatalf("expected %q in review view, got: %s", needle, view)
+		}
+	}
+	if !strings.Contains(view, "No blocking issues.") || !strings.Contains(view, "save") || !strings.Contains(view, "return") {
+		t.Fatalf("expected action-oriented validation text, got: %s", view)
+	}
+}
+
+func TestTUIConfigEditorReviewSelectorSwitchesPreviewScope(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.width = 150
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseReview
+	root.configModel.reviewReturnPhase = tuiConfigEditorPhaseSources
+	root.configModel.addSource()
+	root.configModel.addSource()
+	root.configModel.sources[0].Source.ID = "source-a"
+	root.configModel.sources[1].Source.ID = "source-b"
+
+	view := root.View()
+	if !strings.Contains(view, "Preview · All sources") {
+		t.Fatalf("expected all-sources preview by default, got: %s", view)
+	}
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next := nextModel.(tuiRootModel)
+	view = next.View()
+	if !strings.Contains(view, "Preview · source-a") {
+		t.Fatalf("expected focused source preview after moving review scope, got: %s", view)
+	}
+}
+
+func TestTUIConfigEditorPreservesInvalidSpotifyAdapterKindFromDisk(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: /tmp/udl-state",
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"sources:",
+		"  - id: spotify-list",
+		"    type: spotify",
+		"    enabled: true",
+		"    target_dir: /tmp/music",
+		"    state_file: spotify-list.sync.spotify",
+		"    url: https://open.spotify.com/playlist/abc123",
+		"    adapter:",
+		"      kind: future-backend",
+		"    sync:",
+		"      break_on_existing: true",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}})
+	if len(model.sources) != 1 {
+		t.Fatalf("expected one source, got %d", len(model.sources))
+	}
+	if got := model.sources[0].Source.Adapter.Kind; got != "future-backend" {
+		t.Fatalf("expected invalid adapter kind to be preserved, got %q", got)
+	}
+	if model.sources[0].Source.Sync.BreakOnExisting == nil || !*model.sources[0].Source.Sync.BreakOnExisting {
+		t.Fatalf("expected unsupported sync policy to remain visible for validation")
+	}
+
+	cfg := model.buildConfig()
+	if got := cfg.Sources[0].Adapter.Kind; got != "future-backend" {
+		t.Fatalf("expected buildConfig to preserve adapter kind, got %q", got)
+	}
+	if cfg.Sources[0].Sync.BreakOnExisting == nil || !*cfg.Sources[0].Sync.BreakOnExisting {
+		t.Fatalf("expected buildConfig to preserve unsupported sync policy")
+	}
+
+	problems := strings.Join(model.validationProblems, "\n")
+	for _, needle := range []string{
+		`source "spotify-list" has unsupported adapter.kind "future-backend"`,
+		`source "spotify-list" spotify type requires spotdl or deemix adapter`,
+		`source "spotify-list" sync.break_on_existing is only supported for soundcloud or spotify+deemix`,
+	} {
+		if !strings.Contains(problems, needle) {
+			t.Fatalf("expected validation to include %q, got: %s", needle, problems)
+		}
+	}
+}
+
+func TestTUIConfigEditorInteractiveAdapterChangeClearsUnsupportedSpotifySyncPolicy(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.sources = []tuiConfigEditorSourceState{
+		newTUIConfigEditorSourceState(config.Source{
+			ID:        "spotify-list",
+			Type:      config.SourceTypeSpotify,
+			Enabled:   true,
+			TargetDir: "/tmp/music",
+			StateFile: "spotify-list.sync.spotify",
+			URL:       "https://open.spotify.com/playlist/abc123",
+			Adapter: config.AdapterSpec{
+				Kind: "deemix",
+			},
+			Sync: config.SyncPolicy{
+				BreakOnExisting: tuiBoolPtr(true),
+				AskOnExisting:   tuiBoolPtr(true),
+			},
+		}),
+	}
+	model.sourcePane = tuiConfigEditorPaneForm
+	model.sourceFieldCursor = 6
+
+	nextModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := nextModel
+	state := next.currentSourceState()
+	if state == nil {
+		t.Fatalf("expected current source state")
+	}
+	if got := state.Source.Adapter.Kind; got != "spotdl" {
+		t.Fatalf("expected adapter toggle to switch to spotdl, got %q", got)
+	}
+	if state.Source.Sync.BreakOnExisting != nil {
+		t.Fatalf("expected break_on_existing to be cleared for spotdl")
+	}
+	if state.Source.Sync.AskOnExisting != nil {
+		t.Fatalf("expected ask_on_existing to be cleared for spotdl")
+	}
+}
+
+func TestTUIRootConfigEditorEscFromReviewReturnsToEditing(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseReview
+	root.configModel.reviewReturnPhase = tuiConfigEditorPhaseDefaults
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := nextModel.(tuiRootModel)
+	if next.screen != tuiScreenConfigEditor {
+		t.Fatalf("expected esc from review to stay in config editor, got screen %v", next.screen)
+	}
+	if next.configModel.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected esc from review to return to defaults, got %q", next.configModel.phase)
+	}
+}
+
 func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.planLimit = 25
@@ -181,7 +698,7 @@ func TestTUIRootStandardSyncShellShowsSectionedBodyAndShortcuts(t *testing.T) {
 	if !strings.Contains(view, "Selection") || !strings.Contains(view, "Run") || !strings.Contains(view, "Activity") {
 		t.Fatalf("expected sectioned standard sync shell body, got: %s", view)
 	}
-	if !strings.Contains(view, "[p] activity") {
+	if !strings.Contains(view, "p") || !strings.Contains(view, "activity") {
 		t.Fatalf("expected standard sync shortcut bar to include activity toggle, got: %s", view)
 	}
 	if !strings.Contains(view, "ask_on_existing=") || !strings.Contains(view, "scan_gaps=") || !strings.Contains(view, "no_preflight=") {
@@ -882,8 +1399,8 @@ func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
 	root.syncModel.interactiveTracker.ConfirmSelection(selection)
 	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 1}}, nil, "", false)
 	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackDone, SourceID: "soundcloud-likes", Details: map[string]any{"index": 2}}, nil, "", false)
-	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 4, "reason": "ignored"}}, nil, "", false)
-	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 5, "reason": "failed"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackSkip, SourceID: "soundcloud-likes", Details: map[string]any{"index": 3, "reason": "ignored"}}, nil, "", false)
+	root.syncModel.interactiveTracker.ObserveEvent(output.Event{Event: output.EventTrackFail, SourceID: "soundcloud-likes", Details: map[string]any{"index": 4, "reason": "failed"}}, nil, "", false)
 
 	view := root.View()
 	if !strings.Contains(view, "completed: 2") || !strings.Contains(view, "skipped: 1") || !strings.Contains(view, "failed: 1") {
@@ -1214,6 +1731,69 @@ func TestTUIInteractiveAggregateExcludesDeselectedRows(t *testing.T) {
 	}
 	if !strings.Contains(view, "100%") {
 		t.Fatalf("expected progress to be based only on selected rows, got: %s", view)
+	}
+}
+
+func TestTUIInteractiveSparseSelectionShowsLaterRowsCompleting(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenInteractiveSync
+	root.width = 160
+	root.height = 30
+	root.syncModel = newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	root.syncModel.cfgLoaded = true
+	root.syncModel.sources = []config.Source{
+		{ID: "source-a", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	root.syncModel.selected["source-a"] = true
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	rows := make([]engine.PlanRow, 0, 10)
+	for i := 1; i <= 10; i++ {
+		rows = append(rows, engine.PlanRow{
+			Index:             i,
+			Title:             fmt.Sprintf("Track %d", i),
+			RemoteID:          fmt.Sprintf("track-%d", i),
+			Status:            engine.PlanRowMissingNew,
+			Toggleable:        true,
+			SelectedByDefault: true,
+		})
+	}
+	root.syncModel, _ = root.syncModel.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows:     rows,
+		Details:  planSourceDetails{SourceID: "source-a"},
+		Reply:    reply,
+	})
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	for _, idx := range []int{5, 6, 7, 8} {
+		selection.setSelected(idx, false)
+	}
+	selection.cursor = 8
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+	root.syncModel.planPrompt = nil
+	root.syncModel.running = true
+	root.syncModel.interactivePhase = tuiInteractivePhaseSyncing
+
+	for executionIndex := 1; executionIndex <= 6; executionIndex++ {
+		root.syncModel.interactiveTracker.ObserveEvent(output.Event{
+			Event:    output.EventTrackDone,
+			SourceID: "source-a",
+			Details:  map[string]any{"index": executionIndex},
+		}, nil, "", false)
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "completed: 6") {
+		t.Fatalf("expected footer to count all selected later rows, got: %s", view)
+	}
+	if !strings.Contains(view, "Track 9") || !strings.Contains(view, "Track 10") || !strings.Contains(view, "downloaded") {
+		t.Fatalf("expected later selected rows to render as downloaded, got: %s", view)
+	}
+	if !strings.Contains(view, "Track 5") || !strings.Contains(view, "Track 6") || !strings.Contains(view, "not-run") {
+		t.Fatalf("expected deselected middle rows to remain visible as not-run, got: %s", view)
 	}
 }
 

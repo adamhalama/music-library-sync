@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -228,12 +227,18 @@ func renderTUIShortcuts(state tuiShellState, theme tuiShellTheme, layout tuiShel
 	}
 	rendered := make([]string, 0, len(state.Shortcuts))
 	for _, shortcut := range state.Shortcuts {
-		chunk := fmt.Sprintf("[%s] %s", shortcut.Key, shortcut.Label)
-		style := theme.muted
+		keyStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("81")).
+			Background(lipgloss.Color("236")).
+			Bold(true).
+			Padding(0, 1)
+		labelStyle := theme.muted
 		if shortcut.Disabled {
-			style = theme.disabled
+			keyStyle = keyStyle.Foreground(lipgloss.Color("240")).Background(lipgloss.Color("235"))
+			labelStyle = theme.disabled
 		}
-		rendered = append(rendered, style.Render(chunk))
+		chunk := keyStyle.Render(shortcut.Key) + " " + labelStyle.Render(shortcut.Label)
+		rendered = append(rendered, chunk)
 	}
 	return theme.shortcuts.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.shortcuts)).Render(strings.Join(rendered, "  "))
 }
@@ -319,6 +324,8 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 		return buildDoctorShellState(m, layout)
 	case tuiScreenValidate:
 		return buildValidateShellState(m, layout)
+	case tuiScreenConfigEditor:
+		return buildConfigEditorShellState(m, layout)
 	case tuiScreenInit:
 		return buildInitShellState(m, layout)
 	default:
@@ -429,6 +436,8 @@ func workflowNavigationItems(screen tuiScreen, menuCursor int, menuItems []strin
 			active = item == "doctor"
 		case tuiScreenValidate:
 			active = item == "validate"
+		case tuiScreenConfigEditor:
+			active = item == "config editor"
 		case tuiScreenInit:
 			active = item == "init"
 		}
@@ -453,6 +462,8 @@ func landingWorkflowMeta(item string) string {
 		return "config"
 	case "init":
 		return "setup"
+	case "config editor":
+		return "editor"
 	case "quit":
 		return "exit"
 	default:
@@ -491,6 +502,8 @@ func landingWorkflowSummary(item string) string {
 		return "Validate the current configuration file."
 	case "init":
 		return "Create or update the starter configuration."
+	case "config editor":
+		return "Edit a single config file through the shell-native guided editor."
 	case "quit":
 		return "Exit the TUI shell."
 	default:

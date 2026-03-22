@@ -14,6 +14,7 @@ const (
 	tuiScreenSync
 	tuiScreenDoctor
 	tuiScreenValidate
+	tuiScreenConfigEditor
 	tuiScreenInit
 )
 
@@ -31,6 +32,7 @@ type tuiRootModel struct {
 	syncModel     tuiSyncModel
 	doctorModel   tuiDoctorModel
 	validateModel tuiValidateModel
+	configModel   tuiConfigEditorModel
 	initModel     tuiInitModel
 }
 
@@ -38,7 +40,7 @@ func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
 	return tuiRootModel{
 		app:           app,
 		debugMessages: debugMessages,
-		menuItems:     []string{"interactive sync", "sync", "doctor", "validate", "init", "quit"},
+		menuItems:     []string{"interactive sync", "sync", "doctor", "validate", "config editor", "init", "quit"},
 		screen:        tuiScreenMenu,
 	}
 }
@@ -70,6 +72,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			next, cmd := m.validateModel.Update(msg)
 			m.validateModel = next
 			return m, cmd
+		case tuiScreenConfigEditor:
+			next, cmd := m.configModel.Update(msg)
+			m.configModel = next
+			return m, cmd
 		case tuiScreenInit:
 			next, cmd := m.initModel.Update(msg)
 			m.initModel = next
@@ -77,6 +83,11 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			return m, nil
 		}
+	case tuiConfigEditorExitAcceptedMsg:
+		if m.screen == tuiScreenConfigEditor {
+			m.screen = tuiScreenMenu
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if m.screen == tuiScreenMenu {
 			switch typed.String() {
@@ -110,6 +121,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.screen = tuiScreenValidate
 					m.validateModel = newTUIValidateModel(m.app)
 					return m, m.validateModel.Init()
+				case "config editor":
+					m.screen = tuiScreenConfigEditor
+					m.configModel = newTUIConfigEditorModel(m.app)
+					return m, m.configModel.Init()
 				case "init":
 					m.screen = tuiScreenInit
 					m.initModel = newTUIInitModel(m.app)
@@ -140,6 +155,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.validateModel.Update(msg)
 		m.validateModel = next
 		return m, cmd
+	case tuiScreenConfigEditor:
+		next, cmd := m.configModel.Update(msg)
+		m.configModel = next
+		return m, cmd
 	case tuiScreenInit:
 		next, cmd := m.initModel.Update(msg)
 		m.initModel = next
@@ -159,6 +178,8 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 			!m.syncModel.hasActiveTimeoutInput()
 	case tuiScreenInit:
 		return m.initModel.allowBack()
+	case tuiScreenConfigEditor:
+		return m.configModel.allowBack()
 	case tuiScreenMenu:
 		return false
 	default:

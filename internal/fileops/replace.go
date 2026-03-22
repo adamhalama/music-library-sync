@@ -37,7 +37,10 @@ func ReplaceFileSafely(tempPath string, targetPath string) error {
 	}
 
 	backup := target + ".udl.bak"
-	if _, err := statFile(backup); err == nil {
+	if backupInfo, err := statFile(backup); err == nil {
+		if backupInfo.IsDir() {
+			return fmt.Errorf("replacement backup path is a directory: %s", backup)
+		}
 		if removeErr := removeFile(backup); removeErr != nil {
 			return fmt.Errorf("remove stale replacement backup %q: %w", backup, removeErr)
 		}
@@ -46,7 +49,10 @@ func ReplaceFileSafely(tempPath string, targetPath string) error {
 	}
 
 	hadTarget := false
-	if _, err := statFile(target); err == nil {
+	if targetInfo, err := statFile(target); err == nil {
+		if targetInfo.IsDir() {
+			return fmt.Errorf("replacement target path is a directory: %s", target)
+		}
 		hadTarget = true
 		if err := renameFile(target, backup); err != nil {
 			return fmt.Errorf("move existing target to backup: %w", err)
