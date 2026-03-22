@@ -230,21 +230,22 @@ type tuiPlanTrackRow struct {
 }
 
 type tuiTrackRowState struct {
-	SourceID        string
-	SourceLabel     string
-	RemoteID        string
-	Title           string
-	Index           int
-	Toggleable      bool
-	PlanStatus      engine.PlanRowStatus
-	PlanClass       tuiTrackPlanClass
-	Selected        bool
-	RunScope        tuiTrackRunScope
-	RuntimeStatus   tuiTrackRuntimeStatus
-	StatusLabel     string
-	FailureDetail   string
-	ProgressKnown   bool
-	ProgressPercent float64
+	SourceID         string
+	SourceLabel      string
+	RemoteID         string
+	Title            string
+	Index            int
+	SelectedRunIndex int
+	Toggleable       bool
+	PlanStatus       engine.PlanRowStatus
+	PlanClass        tuiTrackPlanClass
+	Selected         bool
+	RunScope         tuiTrackRunScope
+	RuntimeStatus    tuiTrackRuntimeStatus
+	StatusLabel      string
+	FailureDetail    string
+	ProgressKnown    bool
+	ProgressPercent  float64
 }
 
 type tuiTrackRuntimeStatus string

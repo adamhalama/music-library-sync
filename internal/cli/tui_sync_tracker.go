@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/output"
@@ -149,7 +150,11 @@ func (t *tuiSyncRunTracker) ObserveEvent(event output.Event, outcomes []output.S
 	case output.EventSourceFailed:
 		source.lifecycle = tuiSourceLifecycleFailed
 	}
-	if row := source.resolveRowForEvent(event); row != nil {
+	row := source.resolveRowForEvent(event)
+	if row == nil {
+		row = source.resolveRowForOutcomes(outcomes)
+	}
+	if row != nil {
 		observeTrackedRowEvent(row, event)
 	}
 	for _, outcome := range outcomes {
@@ -263,8 +268,14 @@ func buildTrackedRowsForSelection(state *tuiInteractiveSelectionState) []tuiTrac
 		return nil
 	}
 	rows := make([]tuiTrackRowState, 0, len(state.rows))
+	selectedRunIndex := 0
 	for _, row := range state.rows {
-		rows = append(rows, tuiDisplayRowFromPlanRow(row, state.isSelected(row.Index)))
+		displayRow := tuiDisplayRowFromPlanRow(row, state.isSelected(row.Index))
+		if displayRow.RunScope == tuiTrackRunScopeIncluded {
+			selectedRunIndex++
+			displayRow.SelectedRunIndex = selectedRunIndex
+		}
+		rows = append(rows, displayRow)
 	}
 	return rows
 }
@@ -302,13 +313,6 @@ func (s *tuiTrackedSourceState) resolveRowForEvent(event output.Event) *tuiTrack
 	if s == nil {
 		return nil
 	}
-	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
-		for i := range s.rows {
-			if s.rows[i].Index == idx {
-				return &s.rows[i]
-			}
-		}
-	}
 	trackID := strings.TrimSpace(tuiDetailString(event.Details, "track_id"))
 	if trackID != "" {
 		for i := range s.rows {
@@ -317,15 +321,92 @@ func (s *tuiTrackedSourceState) resolveRowForEvent(event output.Event) *tuiTrack
 			}
 		}
 	}
+	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
+		for i := range s.rows {
+			if s.rows[i].RunScope == tuiTrackRunScopeIncluded && s.rows[i].SelectedRunIndex == idx {
+				return &s.rows[i]
+			}
+		}
+	}
 	trackName := strings.TrimSpace(tuiDetailString(event.Details, "track_name"))
 	if trackName != "" {
+		normalizedTrackName := tuiNormalizeTrackMatchKey(trackName)
 		for i := range s.rows {
 			if strings.TrimSpace(s.rows[i].Title) == trackName {
 				return &s.rows[i]
 			}
 		}
+		if normalizedTrackName != "" {
+			for i := range s.rows {
+				if tuiNormalizeTrackMatchKey(s.rows[i].Title) == normalizedTrackName {
+					return &s.rows[i]
+				}
+			}
+		}
+	}
+	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
+		for i := range s.rows {
+			if s.rows[i].Index == idx {
+				return &s.rows[i]
+			}
+		}
 	}
 	return nil
+}
+
+func (s *tuiTrackedSourceState) resolveRowForOutcomes(outcomes []output.StructuredTrackOutcome) *tuiTrackRowState {
+	if s == nil || len(outcomes) == 0 {
+		return nil
+	}
+	for _, outcome := range outcomes {
+		name := strings.TrimSpace(outcome.Name)
+		if name == "" {
+			continue
+		}
+		for i := range s.rows {
+			if strings.TrimSpace(s.rows[i].Title) == name {
+				return &s.rows[i]
+			}
+		}
+		normalizedName := tuiNormalizeTrackMatchKey(name)
+		if normalizedName == "" {
+			continue
+		}
+		for i := range s.rows {
+			if tuiNormalizeTrackMatchKey(s.rows[i].Title) == normalizedName {
+				return &s.rows[i]
+			}
+		}
+	}
+	return nil
+}
+
+func tuiNormalizeTrackMatchKey(raw string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range trimmed {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			prevSpace = false
+		case unicode.IsSpace(r):
+			if !prevSpace {
+				b.WriteRune(' ')
+				prevSpace = true
+			}
+		default:
+			if !prevSpace {
+				b.WriteRune(' ')
+				prevSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func observeTrackedRowEvent(row *tuiTrackRowState, event output.Event) {
