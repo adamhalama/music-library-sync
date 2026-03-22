@@ -266,6 +266,244 @@ func TestTUIConfigEditorSourceIDUpdatesLinkedDefaults(t *testing.T) {
 	}
 }
 
+func TestTUIConfigEditorDefaultsPhaseROpensReviewAndEscReturns(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseDefaults
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if next.phase != tuiConfigEditorPhaseReview {
+		t.Fatalf("expected review phase, got %q", next.phase)
+	}
+	if next.reviewReturnPhase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected defaults review return phase, got %q", next.reviewReturnPhase)
+	}
+
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected esc to return to defaults, got %q", next.phase)
+	}
+}
+
+func TestTUIConfigEditorSourcesPhaseROpensReviewAndEscReturns(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if next.phase != tuiConfigEditorPhaseReview {
+		t.Fatalf("expected review phase, got %q", next.phase)
+	}
+	if next.reviewReturnPhase != tuiConfigEditorPhaseSources {
+		t.Fatalf("expected sources review return phase, got %q", next.reviewReturnPhase)
+	}
+
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.phase != tuiConfigEditorPhaseSources {
+		t.Fatalf("expected esc to return to sources, got %q", next.phase)
+	}
+}
+
+func TestTUIConfigEditorDirectSaveFromDefaultsWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	model.phase = tuiConfigEditorPhaseDefaults
+	model.addSource()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected direct save to stay on defaults, got %q", next.phase)
+	}
+	if next.saveResult == nil {
+		t.Fatalf("expected direct save result")
+	}
+	if next.saveResult.Path != filepath.Join(tmp, "config.yaml") {
+		t.Fatalf("unexpected save path: %+v", next.saveResult)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
+		t.Fatalf("expected saved config file: %v", err)
+	}
+}
+
+func TestTUIConfigEditorDirectSaveFromSourcesWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if next.phase != tuiConfigEditorPhaseSources {
+		t.Fatalf("expected direct save to stay on sources, got %q", next.phase)
+	}
+	if next.saveResult == nil {
+		t.Fatalf("expected direct save result from sources")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
+		t.Fatalf("expected saved config file from sources: %v", err)
+	}
+}
+
+func TestTUIConfigEditorDirectSaveFromInvalidStateStaysInPlace(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "invalid.yaml")}})
+	model.phase = tuiConfigEditorPhaseDefaults
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if next.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected invalid direct save to stay on defaults, got %q", next.phase)
+	}
+	if next.saveResult != nil {
+		t.Fatalf("expected no save result on invalid config")
+	}
+	if next.validationErr == "" {
+		t.Fatalf("expected validation error when saving invalid config")
+	}
+}
+
+func TestTUIConfigEditorModalEditRendersCursorAndHelp(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.width = 140
+	root.height = 50
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseSources
+	root.configModel.addSource()
+	root.configModel.startEdit("source.adapter.min_version", "Edit Adapter Min Version", "")
+
+	view := root.View()
+	if !strings.Contains(view, "Edit Field") {
+		t.Fatalf("expected edit modal title, got: %s", view)
+	}
+	if !strings.Contains(view, "▌") {
+		t.Fatalf("expected visible input cursor, got: %s", view)
+	}
+	if !strings.Contains(view, "left/right move") {
+		t.Fatalf("expected edit controls in modal help, got: %s", view)
+	}
+}
+
+func TestTUIConfigEditorModalEditSupportsCursorAndDeletionKeys(t *testing.T) {
+	model := newTUIConfigEditorModel(&AppContext{})
+	model.phase = tuiConfigEditorPhaseSources
+	model.addSource()
+	model.startEdit("source.id", "Edit Source ID", "abcd")
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+
+	if model.edit == nil {
+		t.Fatalf("expected active edit state")
+	}
+	if model.edit.Buffer != "aXd!" {
+		t.Fatalf("unexpected edit buffer after cursor operations: %q", model.edit.Buffer)
+	}
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := model.currentSourceState()
+	if state == nil || state.Source.ID != "aXd!" {
+		t.Fatalf("expected applied edit to update source id, got %+v", state)
+	}
+}
+
+func TestTUIConfigEditorSCDLArgsStateParsesLegacyYTArgs(t *testing.T) {
+	state := newTUIConfigEditorSourceState(config.Source{
+		ID:      "soundcloud-likes",
+		Type:    config.SourceTypeSoundCloud,
+		Enabled: true,
+		URL:     "https://soundcloud.com/user",
+		Adapter: config.AdapterSpec{
+			Kind: "scdl",
+			ExtraArgs: []string{
+				"-f",
+				"--yt-dlp-args",
+				"--embed-thumbnail --embed-metadata --download-archive scdl-archive.txt --no-overwrites --break-on-existing",
+			},
+		},
+	})
+
+	if !state.SCDLArgs.RecommendedEnabled("no_overwrites") {
+		t.Fatalf("expected no-overwrites to be detected from legacy yt-dlp args")
+	}
+	if state.SCDLArgs.AdvancedRaw != "" {
+		t.Fatalf("expected managed legacy yt-dlp args to be stripped, got %q", state.SCDLArgs.AdvancedRaw)
+	}
+	if state.SCDLArgs.DirectRaw != "" {
+		t.Fatalf("expected managed direct args to be stripped, got %q", state.SCDLArgs.DirectRaw)
+	}
+
+	state.syncAdapterExtraArgs()
+	if !reflect.DeepEqual(state.Source.Adapter.ExtraArgs, []string{"--yt-dlp-args", "--no-overwrites"}) {
+		t.Fatalf("unexpected serialized extra args: %#v", state.Source.Adapter.ExtraArgs)
+	}
+}
+
+func TestTUIConfigEditorReviewRendersSeparatedSections(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.width = 150
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseReview
+	root.configModel.reviewReturnPhase = tuiConfigEditorPhaseSources
+	root.configModel.addSource()
+
+	view := root.View()
+	for _, needle := range []string{"Summary", "Validation", "Preview Scope", "Preview · All sources"} {
+		if !strings.Contains(view, needle) {
+			t.Fatalf("expected %q in review view, got: %s", needle, view)
+		}
+	}
+	if !strings.Contains(view, "No blocking issues.") || !strings.Contains(view, "save") || !strings.Contains(view, "return") {
+		t.Fatalf("expected action-oriented validation text, got: %s", view)
+	}
+}
+
+func TestTUIConfigEditorReviewSelectorSwitchesPreviewScope(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.width = 150
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseReview
+	root.configModel.reviewReturnPhase = tuiConfigEditorPhaseSources
+	root.configModel.addSource()
+	root.configModel.addSource()
+	root.configModel.sources[0].Source.ID = "source-a"
+	root.configModel.sources[1].Source.ID = "source-b"
+
+	view := root.View()
+	if !strings.Contains(view, "Preview · All sources") {
+		t.Fatalf("expected all-sources preview by default, got: %s", view)
+	}
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next := nextModel.(tuiRootModel)
+	view = next.View()
+	if !strings.Contains(view, "Preview · source-a") {
+		t.Fatalf("expected focused source preview after moving review scope, got: %s", view)
+	}
+}
+
+func TestTUIRootConfigEditorEscFromReviewReturnsToEditing(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenConfigEditor
+	root.configModel = newTUIConfigEditorModel(&AppContext{})
+	root.configModel.phase = tuiConfigEditorPhaseReview
+	root.configModel.reviewReturnPhase = tuiConfigEditorPhaseDefaults
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := nextModel.(tuiRootModel)
+	if next.screen != tuiScreenConfigEditor {
+		t.Fatalf("expected esc from review to stay in config editor, got screen %v", next.screen)
+	}
+	if next.configModel.phase != tuiConfigEditorPhaseDefaults {
+		t.Fatalf("expected esc from review to return to defaults, got %q", next.configModel.phase)
+	}
+}
+
 func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.planLimit = 25
@@ -332,7 +570,7 @@ func TestTUIRootStandardSyncShellShowsSectionedBodyAndShortcuts(t *testing.T) {
 	if !strings.Contains(view, "Selection") || !strings.Contains(view, "Run") || !strings.Contains(view, "Activity") {
 		t.Fatalf("expected sectioned standard sync shell body, got: %s", view)
 	}
-	if !strings.Contains(view, "[p] activity") {
+	if !strings.Contains(view, "p") || !strings.Contains(view, "activity") {
 		t.Fatalf("expected standard sync shortcut bar to include activity toggle, got: %s", view)
 	}
 	if !strings.Contains(view, "ask_on_existing=") || !strings.Contains(view, "scan_gaps=") || !strings.Contains(view, "no_preflight=") {

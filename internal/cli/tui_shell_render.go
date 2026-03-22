@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -228,12 +227,18 @@ func renderTUIShortcuts(state tuiShellState, theme tuiShellTheme, layout tuiShel
 	}
 	rendered := make([]string, 0, len(state.Shortcuts))
 	for _, shortcut := range state.Shortcuts {
-		chunk := fmt.Sprintf("[%s] %s", shortcut.Key, shortcut.Label)
-		style := theme.muted
+		keyStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("81")).
+			Background(lipgloss.Color("236")).
+			Bold(true).
+			Padding(0, 1)
+		labelStyle := theme.muted
 		if shortcut.Disabled {
-			style = theme.disabled
+			keyStyle = keyStyle.Foreground(lipgloss.Color("240")).Background(lipgloss.Color("235"))
+			labelStyle = theme.disabled
 		}
-		rendered = append(rendered, style.Render(chunk))
+		chunk := keyStyle.Render(shortcut.Key) + " " + labelStyle.Render(shortcut.Label)
+		rendered = append(rendered, chunk)
 	}
 	return theme.shortcuts.Width(styleContentWidth(shellMainSectionWidth(layout, theme), theme.shortcuts)).Render(strings.Join(rendered, "  "))
 }
