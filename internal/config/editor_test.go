@@ -217,3 +217,47 @@ func TestSaveSingleFileRejectsDirectoryTarget(t *testing.T) {
 		t.Fatalf("expected no backup to be created, stat err: %v", err)
 	}
 }
+
+func TestSaveSingleFileLeavesConfigUntouchedWhenStateDirCreationFails(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "udl.yaml")
+	original := "version: 1\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write original config: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Defaults.StateDir = filepath.Join(tmp, "state")
+	cfg.Sources = []Source{
+		{
+			ID:        "spotify-list",
+			Type:      SourceTypeSpotify,
+			Enabled:   true,
+			TargetDir: "/tmp/music",
+			URL:       "https://open.spotify.com/playlist/abc",
+			Adapter:   AdapterSpec{Kind: "deemix"},
+		},
+	}
+
+	origMkdirAll := createEditorDirAll
+	createEditorDirAll = func(path string, perm os.FileMode) error {
+		return errors.New("mkdir boom")
+	}
+	t.Cleanup(func() {
+		createEditorDirAll = origMkdirAll
+	})
+
+	if _, err := SaveSingleFile(target, cfg); err == nil {
+		t.Fatalf("expected state directory creation failure")
+	} else if !strings.Contains(err.Error(), "create state directory") {
+		t.Fatalf("expected state directory error, got %v", err)
+	}
+
+	payload, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read original config: %v", err)
+	}
+	if string(payload) != original {
+		t.Fatalf("expected original config to remain untouched, got:\n%s", string(payload))
+	}
+}

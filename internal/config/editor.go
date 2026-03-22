@@ -77,6 +77,16 @@ func SaveSingleFile(path string, cfg Config) (string, error) {
 	if err := EnsureConfigDir(trimmed); err != nil {
 		return "", err
 	}
+	stateDir, err := ExpandPath(cfg.Defaults.StateDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve state directory: %w", err)
+	}
+	if strings.TrimSpace(stateDir) == "" {
+		return "", fmt.Errorf("resolve state directory: defaults.state_dir must be set")
+	}
+	if err := createEditorDirAll(stateDir, 0o755); err != nil {
+		return "", fmt.Errorf("create state directory %s: %w", stateDir, err)
+	}
 
 	dir := filepath.Dir(trimmed)
 	tempFile, err := createTempFile(dir, ".udl-config-*")
@@ -97,17 +107,6 @@ func SaveSingleFile(path string, cfg Config) (string, error) {
 	}
 	if err := replaceTempFile(tempPath, trimmed); err != nil {
 		return "", fmt.Errorf("replace config file: %w", err)
-	}
-
-	stateDir, err := ExpandPath(cfg.Defaults.StateDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve state directory: %w", err)
-	}
-	if strings.TrimSpace(stateDir) == "" {
-		return "", fmt.Errorf("resolve state directory: defaults.state_dir must be set")
-	}
-	if err := createEditorDirAll(stateDir, 0o755); err != nil {
-		return "", fmt.Errorf("create state directory %s: %w", stateDir, err)
 	}
 	return stateDir, nil
 }
