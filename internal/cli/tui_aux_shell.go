@@ -54,6 +54,12 @@ func (m tuiDoctorModel) shellCheckLines(width int) []string {
 }
 
 func (m tuiDoctorModel) shellNextStepLines() []string {
+	if hasDoctorCheckContaining(m.checks, "no sources configured yet") {
+		return []string{"Choose `Get Started` in the TUI to create your first source before syncing."}
+	}
+	if kind := m.recommendedCredentialKind(); kind != "" {
+		return []string{"Press `c` to open Credentials and repair the missing or stale auth entry, then rerun Check System."}
+	}
 	switch {
 	case m.summary.ErrorCount > 0:
 		return []string{"Fix blocking dependency, auth, or filesystem issues before running sync."}
@@ -62,6 +68,19 @@ func (m tuiDoctorModel) shellNextStepLines() []string {
 	default:
 		return nil
 	}
+}
+
+func hasDoctorCheckContaining(checks []doctor.Check, fragment string) bool {
+	needle := strings.ToLower(strings.TrimSpace(fragment))
+	if needle == "" {
+		return false
+	}
+	for _, check := range checks {
+		if strings.Contains(strings.ToLower(check.Message), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m tuiDoctorModel) overallLabel() string {

@@ -33,31 +33,34 @@ func TestTUICommandHelp(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("tui --help failed: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Launch the full-screen TUI shell") {
+	if !strings.Contains(stdout.String(), "Launch the main TUI setup and sync flow") {
 		t.Fatalf("expected tui help output, got: %s", stdout.String())
 	}
 }
 
-func TestTUIRootMenuShowsInteractiveSyncFirst(t *testing.T) {
+func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 
 	if len(root.menuItems) < 2 {
 		t.Fatalf("expected at least two menu items, got %v", root.menuItems)
 	}
-	if root.menuItems[0] != "interactive sync" {
-		t.Fatalf("expected interactive sync first, got %v", root.menuItems)
+	if root.menuItems[0] != "Get Started" {
+		t.Fatalf("expected Get Started first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "sync" {
-		t.Fatalf("expected sync second, got %v", root.menuItems)
+	if root.menuItems[1] != "Credentials" {
+		t.Fatalf("expected Credentials second, got %v", root.menuItems)
+	}
+	if root.menuItems[2] != "Check System" {
+		t.Fatalf("expected Check System third, got %v", root.menuItems)
 	}
 	view := root.View()
-	if !strings.Contains(view, "WORKFLOW LAUNCHER") {
-		t.Fatalf("expected landing shell title, got: %s", view)
+	if !strings.Contains(view, "UDL · HOME") {
+		t.Fatalf("expected home shell title, got: %s", view)
 	}
-	if !strings.Contains(view, "interactive sync") {
-		t.Fatalf("expected interactive sync in landing navigation, got: %s", view)
+	if !strings.Contains(view, "Get Started") {
+		t.Fatalf("expected Get Started in landing navigation, got: %s", view)
 	}
-	if !strings.Contains(view, "Review enabled sources, set plan options") {
+	if !strings.Contains(view, "Create a starter setup") {
 		t.Fatalf("expected landing body summary, got: %s", view)
 	}
 }
@@ -82,7 +85,7 @@ func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
 	}
 }
 
-func TestTUIRootEnterOpensInteractiveSyncWorkflow(t *testing.T) {
+func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -90,47 +93,47 @@ func TestTUIRootEnterOpensInteractiveSyncWorkflow(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected model type %T", nextModel)
 	}
-	if next.screen != tuiScreenInteractiveSync {
-		t.Fatalf("expected interactive sync screen, got %v", next.screen)
+	if next.screen != tuiScreenGetStarted {
+		t.Fatalf("expected get started screen, got %v", next.screen)
 	}
-	if next.syncModel.mode != tuiSyncWorkflowInteractive {
-		t.Fatalf("expected interactive sync mode, got %q", next.syncModel.mode)
+	if next.onboardingModel.phase != tuiOnboardingPhaseIntro {
+		t.Fatalf("expected onboarding intro phase, got %q", next.onboardingModel.phase)
 	}
 }
 
-func TestTUIRootEnterOpensStandardSyncWorkflow(t *testing.T) {
+func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
-	root.menuCursor = 1
+	root.menuCursor = 2
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
 	if !ok {
 		t.Fatalf("unexpected model type %T", nextModel)
 	}
-	if next.screen != tuiScreenSync {
-		t.Fatalf("expected sync screen, got %v", next.screen)
+	if next.screen != tuiScreenDoctor {
+		t.Fatalf("expected doctor screen, got %v", next.screen)
 	}
-	if next.syncModel.mode != tuiSyncWorkflowStandard {
-		t.Fatalf("expected standard sync mode, got %q", next.syncModel.mode)
+	if next.doctorModel.phase != tuiDoctorPhaseRunning {
+		t.Fatalf("expected running doctor phase, got %q", next.doctorModel.phase)
 	}
 }
 
-func TestTUIRootMenuIncludesConfigEditorWorkflow(t *testing.T) {
+func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 
 	found := false
 	for _, item := range root.menuItems {
-		if item == "config editor" {
+		if item == "Advanced Config" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected config editor workflow in menu, got %v", root.menuItems)
+		t.Fatalf("expected advanced config workflow in menu, got %v", root.menuItems)
 	}
 }
 
-func TestTUIRootEnterOpensConfigEditorWorkflow(t *testing.T) {
+func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.menuCursor = 4
 
@@ -144,6 +147,73 @@ func TestTUIRootEnterOpensConfigEditorWorkflow(t *testing.T) {
 	}
 	if next.configModel.phase != tuiConfigEditorPhaseTarget {
 		t.Fatalf("expected config editor target phase, got %v", next.configModel.phase)
+	}
+}
+
+func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.menuCursor = 1
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenCredentials {
+		t.Fatalf("expected credentials screen, got %v", next.screen)
+	}
+}
+
+func TestTUIRootAutoStartsGetStartedWhenNoSourcesConfigured(t *testing.T) {
+	tmp := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir tmp: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg-config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "xdg-state"))
+
+	root := newTUIRootModel(&AppContext{}, false)
+	if root.screen != tuiScreenGetStarted {
+		t.Fatalf("expected get started auto-start screen, got %v", root.screen)
+	}
+	if root.onboardingModel.startup.Reason != tuiOnboardingReasonNoSources {
+		t.Fatalf("expected no-sources onboarding reason, got %q", root.onboardingModel.startup.Reason)
+	}
+}
+
+func TestTUIOnboardingSaveKeepsSecretsOutOfConfig(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	model := newTUIOnboardingModel(&AppContext{}, tuiOnboardingStartupState{
+		Reason:             tuiOnboardingReasonFirstRun,
+		ConfigPath:         configPath,
+		ConfigContextLabel: configPath,
+		Defaults:           config.DefaultConfig().Defaults,
+	})
+	model.libraryRoot = "~/Music/downloaded"
+	model.stateDir = "~/Library/Application Support/udl-state"
+	model.sourceType = config.SourceTypeSpotify
+	model.sourceID = "spotify-playlist"
+	model.sourceURL = "https://open.spotify.com/playlist/replace-me"
+
+	cfg := model.buildConfig()
+	payload, err := config.MarshalCanonical(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	text := string(payload)
+	if strings.Contains(text, "DeezerARL") || strings.Contains(text, "deezer") || strings.Contains(text, "spotify_client_secret") {
+		t.Fatalf("expected secrets to stay out of config payload, got: %s", text)
+	}
+	if !strings.Contains(text, "spotify-playlist") {
+		t.Fatalf("expected source data in config payload, got: %s", text)
 	}
 }
 

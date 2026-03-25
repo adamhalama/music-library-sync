@@ -78,6 +78,9 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 
 func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 	if m.isInteractiveSyncWorkflow() {
+		if m.recommendedCredentialKind() != "" && !m.running {
+			return []tuiShortcut{{Key: "c", Label: "credentials"}}
+		}
 		return nil
 	}
 	shortcuts := []tuiShortcut{
@@ -102,6 +105,9 @@ func (m tuiSyncModel) shellShortcuts() []tuiShortcut {
 		)
 	}
 	shortcuts = append(shortcuts, tuiShortcut{Key: "x", Label: "cancel active run", Disabled: !m.running})
+	if m.recommendedCredentialKind() != "" && !m.running {
+		shortcuts = append(shortcuts, tuiShortcut{Key: "c", Label: "credentials"})
+	}
 	return shortcuts
 }
 

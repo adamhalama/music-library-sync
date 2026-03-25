@@ -41,7 +41,7 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 Run enabled sources in deterministic order.
 
 Operational notes:
-- SoundCloud sync requires SCDL_CLIENT_ID for adapter.kind=scdl.
+- SoundCloud sync for adapter.kind=scdl uses SCDL_CLIENT_ID when set, otherwise falls back to the managed macOS Keychain entry.
 - For Spotify, adapter.kind=deemix is recommended when available.
 - Legacy spotdl can be throttled when using shared/default Spotify app credentials; use user-owned credentials.
 - If spotdl auth retry happens and --headless is enabled, rerun without --headless for browser-led OAuth.

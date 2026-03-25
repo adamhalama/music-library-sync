@@ -318,6 +318,10 @@ func renderTUIModal(base string, state tuiShellState, theme tuiShellTheme, layou
 
 func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 	switch m.screen {
+	case tuiScreenGetStarted:
+		return buildOnboardingShellState(m, layout)
+	case tuiScreenCredentials:
+		return buildCredentialsShellState(m, layout)
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		return buildSyncShellState(m, layout)
 	case tuiScreenDoctor:
@@ -337,7 +341,7 @@ func buildLandingShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState
 	selected := m.selectedMenuItem()
 	return tuiShellState{
 		AppLabel:        "UDL",
-		ScreenTitle:     "Workflow Launcher",
+		ScreenTitle:     "Home",
 		SidebarSections: workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
 		Badges: []tuiBadge{
 			{Label: "READY", Tone: "success"},
@@ -362,13 +366,17 @@ func buildLandingShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState
 
 func buildDoctorShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 	model := m.doctorModel
+	shortcuts := []tuiShortcut{{Key: "esc", Label: "back", Disabled: !m.canReturnToMenuOnEsc()}}
+	if model.recommendedCredentialKind() != "" {
+		shortcuts = append(shortcuts, tuiShortcut{Key: "c", Label: "credentials"})
+	}
 	return tuiShellState{
 		AppLabel:         "UDL",
 		ScreenTitle:      "Doctor",
 		SidebarSections:  workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
 		Badges:           model.shellBadges(),
 		CommandSummary:   []string{"udl doctor"},
-		Shortcuts:        []tuiShortcut{{Key: "esc", Label: "back", Disabled: !m.canReturnToMenuOnEsc()}},
+		Shortcuts:        shortcuts,
 		BodyTitle:        "Doctor",
 		Body:             model.shellBody(layout),
 		DenseBody:        true,
@@ -428,18 +436,22 @@ func workflowNavigationItems(screen tuiScreen, menuCursor int, menuItems []strin
 		switch screen {
 		case tuiScreenMenu:
 			active = idx == menuCursor
+		case tuiScreenGetStarted:
+			active = item == "Get Started"
+		case tuiScreenCredentials:
+			active = item == "Credentials"
 		case tuiScreenInteractiveSync:
-			active = item == "interactive sync"
+			active = item == "Run Sync"
 		case tuiScreenSync:
-			active = item == "sync"
+			active = item == "Run Sync"
 		case tuiScreenDoctor:
-			active = item == "doctor"
+			active = item == "Check System"
 		case tuiScreenValidate:
-			active = item == "validate"
+			active = item == "Check System"
 		case tuiScreenConfigEditor:
-			active = item == "config editor"
+			active = item == "Advanced Config"
 		case tuiScreenInit:
-			active = item == "init"
+			active = item == "Get Started"
 		}
 		items = append(items, tuiSidebarItem{
 			Label:  item,
@@ -452,19 +464,17 @@ func workflowNavigationItems(screen tuiScreen, menuCursor int, menuItems []strin
 
 func landingWorkflowMeta(item string) string {
 	switch item {
-	case "interactive sync":
-		return "interactive"
-	case "sync":
-		return "runtime"
-	case "doctor":
-		return "checks"
-	case "validate":
-		return "config"
-	case "init":
+	case "Get Started":
 		return "setup"
-	case "config editor":
+	case "Credentials":
+		return "keychain"
+	case "Check System":
+		return "checks"
+	case "Run Sync":
+		return "interactive"
+	case "Advanced Config":
 		return "editor"
-	case "quit":
+	case "Quit":
 		return "exit"
 	default:
 		return ""
@@ -473,10 +483,6 @@ func landingWorkflowMeta(item string) string {
 
 func buildLandingBody(selected string) string {
 	summary := landingWorkflowSummary(selected)
-	mode := "lightweight"
-	if selected == "interactive sync" || selected == "sync" {
-		mode = "interactive"
-	}
 	lines := []string{
 		summary,
 		"",
@@ -484,27 +490,23 @@ func buildLandingBody(selected string) string {
 		"  enter: open selected workflow",
 		"  j/k or up/down: move selection",
 		"  q or ctrl+c: quit the TUI",
-		"",
-		"Profile: " + mode,
 	}
 	return strings.Join(lines, "\n")
 }
 
 func landingWorkflowSummary(item string) string {
 	switch item {
-	case "interactive sync":
-		return "Review enabled sources, set plan options, and launch the sync --plan flow."
-	case "sync":
-		return "Run the standard sync workflow with runtime-focused flags."
-	case "doctor":
-		return "Run environment and configuration checks."
-	case "validate":
-		return "Validate the current configuration file."
-	case "init":
-		return "Create or update the starter configuration."
-	case "config editor":
-		return "Edit a single config file through the shell-native guided editor."
-	case "quit":
+	case "Get Started":
+		return "Create a starter setup, choose folders, and add your first source."
+	case "Credentials":
+		return "Manage SoundCloud, Deezer, and Spotify secrets in macOS Keychain."
+	case "Check System":
+		return "Verify tools, credentials, and folder access before syncing."
+	case "Run Sync":
+		return "Review enabled sources, preview the plan, and run a sync."
+	case "Advanced Config":
+		return "Open the full config editor for raw source and adapter settings."
+	case "Quit":
 		return "Exit the TUI shell."
 	default:
 		return ""

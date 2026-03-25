@@ -35,15 +35,25 @@ type SpotifyCredentialsResolver struct {
 }
 
 func ResolveSpotifyCredentials() (SpotifyCredentials, error) {
+	creds, _, err := ResolveSpotifyCredentialsWithSource()
+	return creds, err
+}
+
+func ResolveSpotifyCredentialsWithSource() (SpotifyCredentials, CredentialStorageSource, error) {
 	return SpotifyCredentialsResolver{
 		Getenv:   os.Getenv,
 		ReadFile: os.ReadFile,
 		HomeDir:  os.UserHomeDir,
 		Command:  runCommandOutput,
-	}.Resolve()
+	}.ResolveWithSource()
 }
 
 func (r SpotifyCredentialsResolver) Resolve() (SpotifyCredentials, error) {
+	creds, _, err := r.ResolveWithSource()
+	return creds, err
+}
+
+func (r SpotifyCredentialsResolver) ResolveWithSource() (SpotifyCredentials, CredentialStorageSource, error) {
 	getenv := r.Getenv
 	if getenv == nil {
 		getenv = os.Getenv
@@ -51,10 +61,10 @@ func (r SpotifyCredentialsResolver) Resolve() (SpotifyCredentials, error) {
 	clientID := strings.TrimSpace(getenv("UDL_SPOTIFY_CLIENT_ID"))
 	clientSecret := strings.TrimSpace(getenv("UDL_SPOTIFY_CLIENT_SECRET"))
 	if clientID != "" && clientSecret != "" {
-		return SpotifyCredentials{ClientID: clientID, ClientSecret: clientSecret}, nil
+		return SpotifyCredentials{ClientID: clientID, ClientSecret: clientSecret}, CredentialStorageSourceEnv, nil
 	}
 	if clientID != "" || clientSecret != "" {
-		return SpotifyCredentials{}, fmt.Errorf("both UDL_SPOTIFY_CLIENT_ID and UDL_SPOTIFY_CLIENT_SECRET are required")
+		return SpotifyCredentials{}, CredentialStorageSourceEnv, fmt.Errorf("both UDL_SPOTIFY_CLIENT_ID and UDL_SPOTIFY_CLIENT_SECRET are required")
 	}
 
 	command := r.Command
@@ -67,7 +77,7 @@ func (r SpotifyCredentialsResolver) Resolve() (SpotifyCredentials, error) {
 		return SpotifyCredentials{
 			ClientID:     keychainClientID,
 			ClientSecret: keychainClientSecret,
-		}, nil
+		}, CredentialStorageSourceKeychain, nil
 	}
 
 	readFile := r.ReadFile
@@ -80,39 +90,48 @@ func (r SpotifyCredentialsResolver) Resolve() (SpotifyCredentials, error) {
 	}
 	home, err := homeDir()
 	if err != nil {
-		return SpotifyCredentials{}, ErrSpotifyCredentialsNotFound
+		return SpotifyCredentials{}, CredentialStorageSourceNone, ErrSpotifyCredentialsNotFound
 	}
 	configPath := filepath.Join(home, ".spotdl", "config.json")
 	payload, err := readFile(configPath)
 	if err != nil {
-		return SpotifyCredentials{}, ErrSpotifyCredentialsNotFound
+		return SpotifyCredentials{}, CredentialStorageSourceNone, ErrSpotifyCredentialsNotFound
 	}
 
 	var cfg spotifySpotDLConfig
 	if err := json.Unmarshal(payload, &cfg); err != nil {
-		return SpotifyCredentials{}, fmt.Errorf("parse spotdl config %s: %w", configPath, err)
+		return SpotifyCredentials{}, CredentialStorageSourceSpotDL, fmt.Errorf("parse spotdl config %s: %w", configPath, err)
 	}
 	cfg.ClientID = strings.TrimSpace(cfg.ClientID)
 	cfg.ClientSecret = strings.TrimSpace(cfg.ClientSecret)
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
-		return SpotifyCredentials{}, ErrSpotifyCredentialsNotFound
+		return SpotifyCredentials{}, CredentialStorageSourceSpotDL, ErrSpotifyCredentialsNotFound
 	}
 	return SpotifyCredentials{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
-	}, nil
+	}, CredentialStorageSourceSpotDL, nil
 }
 
-func keychainCredential(command commandRunner, service string, account string) string {
-	raw, err := command(
-		"security",
-		"find-generic-password",
-		"-s", service,
-		"-a", account,
-		"-w",
-	)
-	if err != nil {
-		return ""
+func SaveSpotifyCredentials(creds SpotifyCredentials) error {
+	if strings.TrimSpace(creds.ClientID) == "" || strings.TrimSpace(creds.ClientSecret) == "" {
+		return fmt.Errorf("spotify client id and client secret must not be empty")
 	}
-	return strings.TrimSpace(string(raw))
+	if err := saveKeychainCredential(runCommandOutput, spotifyKeychainService, spotifyKeychainAccountID, creds.ClientID); err != nil {
+		return fmt.Errorf("save spotify client id to keychain: %w", err)
+	}
+	if err := saveKeychainCredential(runCommandOutput, spotifyKeychainService, spotifyKeychainAccountSecret, creds.ClientSecret); err != nil {
+		return fmt.Errorf("save spotify client secret to keychain: %w", err)
+	}
+	return nil
+}
+
+func RemoveSpotifyCredentials() error {
+	if err := deleteKeychainCredential(runCommandOutput, spotifyKeychainService, spotifyKeychainAccountID); err != nil {
+		return fmt.Errorf("remove spotify client id from keychain: %w", err)
+	}
+	if err := deleteKeychainCredential(runCommandOutput, spotifyKeychainService, spotifyKeychainAccountSecret); err != nil {
+		return fmt.Errorf("remove spotify client secret from keychain: %w", err)
+	}
+	return nil
 }

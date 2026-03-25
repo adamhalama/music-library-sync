@@ -57,11 +57,21 @@ type Checker struct {
 	ReadVersion               func(context.Context, string) (string, error)
 	Getenv                    func(string) string
 	CheckWritable             func(string) error
+	CheckDirAccess            func(string) dirAccessResult
 	ReadFile                  func(string) ([]byte, error)
 	HomeDir                   func() (string, error)
 	ResolveSpotifyCredentials func() (auth.SpotifyCredentials, error)
+	ResolveSpotifyWithSource  func() (auth.SpotifyCredentials, auth.CredentialStorageSource, error)
 	ResolveDeemixARL          func() (string, error)
+	ResolveDeemixWithSource   func() (string, auth.CredentialStorageSource, error)
+	ResolveSoundCloudClientID func() (string, auth.CredentialStorageSource, error)
+	LoadCredentialMetadata    func(string) (auth.CredentialMetadataStore, error)
 	Matrix                    map[string]dependencyMatrixRule
+}
+
+type dirAccessResult struct {
+	Creatable bool
+	Err       error
 }
 
 func NewChecker() *Checker {
@@ -72,16 +82,37 @@ func NewChecker() *Checker {
 		CheckWritable: func(path string) error {
 			return checkDirWritable(path)
 		},
+		CheckDirAccess:            inspectDirAccess,
 		ReadFile:                  os.ReadFile,
 		HomeDir:                   os.UserHomeDir,
 		ResolveSpotifyCredentials: auth.ResolveSpotifyCredentials,
+		ResolveSpotifyWithSource:  auth.ResolveSpotifyCredentialsWithSource,
 		ResolveDeemixARL:          auth.ResolveDeemixARL,
+		ResolveDeemixWithSource:   auth.ResolveDeemixARLWithSource,
+		ResolveSoundCloudClientID: auth.ResolveSoundCloudClientIDWithSource,
+		LoadCredentialMetadata:    auth.LoadCredentialMetadata,
 		Matrix:                    defaultDependencyMatrix(),
 	}
 }
 
 func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 	report := Report{Checks: []Check{}}
+
+	if len(cfg.Sources) == 0 {
+		report.Checks = append(report.Checks,
+			Check{
+				Severity: SeverityWarn,
+				Name:     "config",
+				Message:  "no sources configured yet; open `udl tui` and choose Get Started to set up your first library",
+			},
+			Check{
+				Severity: SeverityInfo,
+				Name:     "config",
+				Message:  "doctor will start dependency and auth checks after at least one source is configured",
+			},
+		)
+		return report
+	}
 
 	requiredBinaries := requiredBinaries(cfg, c.matrix())
 	for _, dep := range requiredBinaries {
@@ -198,18 +229,9 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 		}
 
 		if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" {
-			if strings.TrimSpace(c.Getenv("SCDL_CLIENT_ID")) == "" {
-				report.Checks = append(report.Checks, Check{
-					Severity: SeverityError,
-					Name:     "auth",
-					Message:  "SCDL_CLIENT_ID is required for soundcloud sources",
-				})
-			} else {
-				report.Checks = append(report.Checks, Check{
-					Severity: SeverityInfo,
-					Name:     "auth",
-					Message:  "SCDL_CLIENT_ID is present",
-				})
+			check := c.soundCloudClientIDCheck(cfg.Defaults.StateDir)
+			if check.Name != "" {
+				report.Checks = append(report.Checks, check)
 			}
 		}
 
@@ -218,8 +240,11 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s target_dir is invalid: %v", source.ID, err)})
 			continue
 		}
-		if err := c.CheckWritable(targetDir); err != nil {
-			report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s target_dir is not writable: %v", source.ID, err)})
+		targetAccess := c.inspectDir(targetDir)
+		if targetAccess.Err != nil {
+			report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s target_dir is not writable: %v", source.ID, targetAccess.Err)})
+		} else if targetAccess.Creatable {
+			report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s target directory will be created on first sync", source.ID)})
 		} else {
 			report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s target_dir is writable", source.ID)})
 		}
@@ -231,48 +256,18 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 				continue
 			}
 			stateDir := filepath.Dir(stateFile)
-			if err := c.CheckWritable(stateDir); err != nil {
-				report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is not writable: %v", source.ID, err)})
+			stateAccess := c.inspectDir(stateDir)
+			if stateAccess.Err != nil {
+				report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is not writable: %v", source.ID, stateAccess.Err)})
+			} else if stateAccess.Creatable {
+				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory will be created on first sync", source.ID)})
 			} else {
 				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is writable", source.ID)})
 			}
 
 			if source.Adapter.Kind == "deemix" {
-				resolveARL := c.ResolveDeemixARL
-				if resolveARL == nil {
-					resolveARL = auth.ResolveDeemixARL
-				}
-				if _, arlErr := resolveARL(); arlErr != nil {
-					report.Checks = append(report.Checks, Check{
-						Severity: SeverityError,
-						Name:     "auth",
-						Message:  "deemix Spotify sources require Deezer ARL (set UDL_DEEMIX_ARL or save keychain item service=udl.deemix account=default)",
-					})
-				} else {
-					report.Checks = append(report.Checks, Check{
-						Severity: SeverityInfo,
-						Name:     "auth",
-						Message:  "deemix Deezer ARL is available",
-					})
-				}
-
-				resolveSpotifyCreds := c.ResolveSpotifyCredentials
-				if resolveSpotifyCreds == nil {
-					resolveSpotifyCreds = auth.ResolveSpotifyCredentials
-				}
-				if _, credsErr := resolveSpotifyCreds(); credsErr != nil {
-					report.Checks = append(report.Checks, Check{
-						Severity: SeverityError,
-						Name:     "auth",
-						Message:  "deemix Spotify sources require Spotify app credentials (set UDL_SPOTIFY_CLIENT_ID/UDL_SPOTIFY_CLIENT_SECRET, save keychain service=udl.spotify accounts=client_id/client_secret, or use ~/.spotdl/config.json)",
-					})
-				} else {
-					report.Checks = append(report.Checks, Check{
-						Severity: SeverityInfo,
-						Name:     "auth",
-						Message:  "Spotify app credentials are available for deemix conversion",
-					})
-				}
+				report.Checks = append(report.Checks, c.deemixARLCheck()...)
+				report.Checks = append(report.Checks, c.spotifyCredentialsCheck()...)
 			}
 		}
 		if source.Type == config.SourceTypeSoundCloud {
@@ -282,19 +277,200 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 				continue
 			}
 			stateDir := filepath.Dir(stateFile)
-			if err := c.CheckWritable(stateDir); err != nil {
-				report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is not writable: %v", source.ID, err)})
+			stateAccess := c.inspectDir(stateDir)
+			if stateAccess.Err != nil {
+				report.Checks = append(report.Checks, Check{Severity: SeverityError, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is not writable: %v", source.ID, stateAccess.Err)})
+			} else if stateAccess.Creatable {
+				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory will be created on first sync", source.ID)})
 			} else {
 				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is writable", source.ID)})
 			}
 		}
 	}
-
-	if len(cfg.Sources) == 0 {
-		report.Checks = append(report.Checks, Check{Severity: SeverityWarn, Name: "config", Message: "no sources configured"})
-	}
-
 	return report
+}
+
+func (c *Checker) soundCloudClientIDCheck(stateDir string) Check {
+	resolve := c.ResolveSoundCloudClientID
+	if resolve == nil {
+		resolve = auth.ResolveSoundCloudClientIDWithSource
+	}
+	value, source, err := resolve()
+	if err == nil && strings.TrimSpace(value) != "" {
+		if stale, message := c.soundCloudCredentialFailure(stateDir, source); stale {
+			return Check{
+				Severity: SeverityError,
+				Name:     "auth",
+				Message:  message,
+			}
+		}
+		switch source {
+		case auth.CredentialStorageSourceEnv:
+			return Check{
+				Severity: SeverityInfo,
+				Name:     "auth",
+				Message:  "SoundCloud client ID is available via environment override",
+			}
+		case auth.CredentialStorageSourceKeychain:
+			return Check{
+				Severity: SeverityInfo,
+				Name:     "auth",
+				Message:  "SoundCloud client ID is available in macOS Keychain",
+			}
+		default:
+			return Check{
+				Severity: SeverityInfo,
+				Name:     "auth",
+				Message:  "SoundCloud client ID is available",
+			}
+		}
+	}
+	if stale, message := c.soundCloudCredentialFailure(stateDir, source); stale {
+		return Check{
+			Severity: SeverityError,
+			Name:     "auth",
+			Message:  message,
+		}
+	}
+	return Check{
+		Severity: SeverityError,
+		Name:     "auth",
+		Message:  "SoundCloud client ID is missing; open `udl tui`, choose Credentials, and save it to Keychain or set SCDL_CLIENT_ID",
+	}
+}
+
+func (c *Checker) soundCloudCredentialFailure(stateDir string, source auth.CredentialStorageSource) (bool, string) {
+	load := c.LoadCredentialMetadata
+	if load == nil {
+		load = auth.LoadCredentialMetadata
+	}
+	store, err := load(stateDir)
+	if err != nil {
+		return false, ""
+	}
+	meta, ok := store.Credentials[auth.CredentialKindSoundCloudClientID]
+	if !ok || strings.TrimSpace(meta.LastFailureKind) == "" {
+		return false, ""
+	}
+	if meta.StorageSource != auth.CredentialStorageSourceNone && source != auth.CredentialStorageSourceNone && meta.StorageSource != source {
+		return false, ""
+	}
+	message := strings.TrimSpace(meta.LastFailureMessage)
+	if message == "" {
+		message = "SoundCloud client ID needs refresh; open `udl tui`, choose Credentials, and update it"
+	}
+	return true, message
+}
+
+func (c *Checker) deemixARLCheck() []Check {
+	resolveWithSource := c.ResolveDeemixWithSource
+	if resolveWithSource == nil && c.ResolveDeemixARL != nil {
+		resolve := c.ResolveDeemixARL
+		resolveWithSource = func() (string, auth.CredentialStorageSource, error) {
+			value, err := resolve()
+			return value, auth.CredentialStorageSourceKeychain, err
+		}
+	}
+	if resolveWithSource == nil {
+		resolveWithSource = auth.ResolveDeemixARLWithSource
+	}
+	value, source, err := resolveWithSource()
+	if err != nil || strings.TrimSpace(value) == "" {
+		return []Check{{
+			Severity: SeverityError,
+			Name:     "auth",
+			Message:  "deemix Spotify sources require Deezer ARL; open `udl tui`, choose Credentials, and save it to Keychain or set UDL_DEEMIX_ARL",
+		}}
+	}
+	switch source {
+	case auth.CredentialStorageSourceEnv:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Deezer ARL is available via environment override"}}
+	case auth.CredentialStorageSourceKeychain:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Deezer ARL is available in macOS Keychain"}}
+	default:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Deezer ARL is available"}}
+	}
+}
+
+func (c *Checker) spotifyCredentialsCheck() []Check {
+	resolveWithSource := c.ResolveSpotifyWithSource
+	if resolveWithSource == nil && c.ResolveSpotifyCredentials != nil {
+		resolve := c.ResolveSpotifyCredentials
+		resolveWithSource = func() (auth.SpotifyCredentials, auth.CredentialStorageSource, error) {
+			creds, err := resolve()
+			return creds, auth.CredentialStorageSourceKeychain, err
+		}
+	}
+	if resolveWithSource == nil {
+		resolveWithSource = auth.ResolveSpotifyCredentialsWithSource
+	}
+	_, source, err := resolveWithSource()
+	if err != nil {
+		return []Check{{
+			Severity: SeverityError,
+			Name:     "auth",
+			Message:  "deemix Spotify sources require Spotify app credentials; open `udl tui`, choose Credentials, and save them to Keychain or set UDL_SPOTIFY_CLIENT_ID and UDL_SPOTIFY_CLIENT_SECRET",
+		}}
+	}
+	switch source {
+	case auth.CredentialStorageSourceEnv:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Spotify app credentials are available via environment override"}}
+	case auth.CredentialStorageSourceKeychain:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Spotify app credentials are available in macOS Keychain"}}
+	case auth.CredentialStorageSourceSpotDL:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Spotify app credentials are available via ~/.spotdl/config.json compatibility fallback"}}
+	default:
+		return []Check{{Severity: SeverityInfo, Name: "auth", Message: "Spotify app credentials are available"}}
+	}
+}
+
+func (c *Checker) inspectDir(path string) dirAccessResult {
+	if c.CheckDirAccess != nil {
+		return c.CheckDirAccess(path)
+	}
+	if c.CheckWritable != nil {
+		return dirAccessResult{Err: c.CheckWritable(path)}
+	}
+	return inspectDirAccess(path)
+}
+
+func inspectDirAccess(path string) dirAccessResult {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return dirAccessResult{Err: fmt.Errorf("%s is not a directory", path)}
+		}
+		file, createErr := os.CreateTemp(path, ".udl-write-check-*")
+		if createErr != nil {
+			return dirAccessResult{Err: createErr}
+		}
+		name := file.Name()
+		_ = file.Close()
+		_ = os.Remove(name)
+		return dirAccessResult{}
+	}
+	if !os.IsNotExist(err) {
+		return dirAccessResult{Err: err}
+	}
+	parent := filepath.Dir(path)
+	if strings.TrimSpace(parent) == "" || parent == "." {
+		parent = path
+	}
+	parentInfo, parentErr := os.Stat(parent)
+	if parentErr != nil {
+		return dirAccessResult{Err: parentErr}
+	}
+	if !parentInfo.IsDir() {
+		return dirAccessResult{Err: fmt.Errorf("%s is not a directory", parent)}
+	}
+	file, createErr := os.CreateTemp(parent, ".udl-write-check-*")
+	if createErr != nil {
+		return dirAccessResult{Err: createErr}
+	}
+	name := file.Name()
+	_ = file.Close()
+	_ = os.Remove(name)
+	return dirAccessResult{Creatable: true}
 }
 
 type spotDLConfig struct {
@@ -481,20 +657,6 @@ func requiredBinaries(cfg config.Config, matrix map[string]dependencyMatrixRule)
 				MinVersion: ytdlpMin,
 				Matrix:     matrixRulePointer(matrix, "yt-dlp"),
 			}
-		}
-	}
-
-	if len(seen) == 0 {
-		scdlMin := "3.0.0"
-		if rule := matrixRulePointer(matrix, "scdl"); rule != nil && strings.TrimSpace(rule.MinVersion) != "" {
-			scdlMin = rule.MinVersion
-		}
-		seen["spotdl"] = dependency{Key: "spotdl", Binary: resolveSpotDLBinaryForDoctor(), MinVersion: "4.0.0"}
-		seen["scdl"] = dependency{
-			Key:        "scdl",
-			Binary:     "scdl",
-			MinVersion: scdlMin,
-			Matrix:     matrixRulePointer(matrix, "scdl"),
 		}
 	}
 

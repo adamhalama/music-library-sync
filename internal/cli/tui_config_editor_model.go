@@ -373,7 +373,7 @@ func (m tuiConfigEditorModel) Update(msg tea.Msg) (tuiConfigEditorModel, tea.Cmd
 				m.modal = &tuiConfigEditorModalState{
 					Kind:  tuiConfigEditorModalDiscard,
 					Title: "Discard Changes",
-					Lines: []string{"Discard unsaved config editor changes and return to the workflow launcher?", "y: discard  n/esc: stay"},
+					Lines: []string{"Discard unsaved config editor changes and return to the home screen?", "y: discard  n/esc: stay"},
 				}
 				return m, nil
 			}
