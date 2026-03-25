@@ -37,6 +37,7 @@ func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 		standardSummaries:     map[string]*tuiStandardSyncSourceSummary{},
 		interactivePhase:      interactivePhase,
 		interactiveSelections: map[string]*tuiInteractiveSelectionState{},
+		interactiveOrders:     map[string]engine.DownloadOrder{},
 		interactiveTracker:    newTUISyncRunTracker(),
 	}
 }
@@ -66,6 +67,9 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				if source.Enabled {
 					m.sources = append(m.sources, source)
 					m.selected[source.ID] = true
+					if m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
+						m.interactiveOrders[source.ID] = engine.DownloadOrderOldestFirst
+					}
 				}
 			}
 		}
@@ -195,6 +199,10 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				}
 				return m, nil
 			}
+			if typed.String() == "o" {
+				m.toggleInteractiveDownloadOrder(m.planPrompt.sourceID)
+				return m, nil
+			}
 			if m.planPrompt.focusFilters {
 				filters := m.planPrompt.filtersForPhase(filterPhase)
 				switch typed.String() {
@@ -263,7 +271,10 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				}
 				m.planPrompt.syncFilterForPhase(tuiInteractivePhaseSyncing)
 				m.setInteractiveDisplaySource(m.planPrompt.sourceID)
-				m.planPrompt.reply <- tuiPlanSelectResult{SelectedIndices: m.planPrompt.selectedIndices()}
+				m.planPrompt.reply <- tuiPlanSelectResult{
+					SelectedIndices: m.planPrompt.selectedIndices(),
+					DownloadOrder:   m.downloadOrderForSourceID(m.planPrompt.sourceID),
+				}
 				m.planPrompt = nil
 				m.syncDisplayedInteractiveSelection()
 				return m, m.waitRunMsgCmd()
@@ -366,6 +377,13 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, nil
 		case "d":
 			m.dryRun = !m.dryRun
+			m.validationErr = ""
+			return m, nil
+		case "o":
+			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
+			m.toggleInteractiveDownloadOrder(m.currentInteractiveDisplaySourceID())
 			m.validationErr = ""
 			return m, nil
 		case "a":
@@ -591,13 +609,16 @@ func (m tuiSyncModel) startRunCmd(runCtx context.Context) tea.Cmd {
 		}
 		req := m.buildSyncRequest(selectedIDs)
 		sourceByID := map[string]config.Source{}
+		orderByID := map[string]engine.DownloadOrder{}
 		for _, source := range m.sources {
 			sourceByID[source.ID] = source
+			orderByID[source.ID] = m.downloadOrderForSourceID(source.ID)
 		}
 		interaction := &tuiSyncInteraction{
 			ch:         ch,
 			defaults:   cfg.Defaults,
 			sourceByID: sourceByID,
+			orderByID:  orderByID,
 			planLimit:  req.PlanLimit,
 			dryRun:     req.DryRun,
 		}
@@ -823,6 +844,60 @@ func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncReque
 	req.ScanGaps = m.scanGaps
 	req.NoPreflight = m.noPreflight
 	return req
+}
+
+func (m tuiSyncModel) interactiveDownloadOrder() engine.DownloadOrder {
+	sourceID := m.currentInteractiveDisplaySourceID()
+	return m.downloadOrderForSourceID(sourceID)
+}
+
+func (m *tuiSyncModel) toggleInteractiveDownloadOrder(sourceID string) {
+	if m == nil || !m.isInteractiveSyncWorkflow() {
+		return
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return
+	}
+	source, ok := m.interactiveSourceByID(sourceID)
+	if !ok || !engine.SupportsDownloadOrder(source) {
+		return
+	}
+	current := m.downloadOrderForSourceID(sourceID)
+	if current == engine.DownloadOrderOldestFirst {
+		m.interactiveOrders[sourceID] = engine.DownloadOrderNewestFirst
+	} else {
+		m.interactiveOrders[sourceID] = engine.DownloadOrderOldestFirst
+	}
+	if m.planPrompt != nil && strings.TrimSpace(m.planPrompt.sourceID) == sourceID {
+		m.planPrompt.details.DownloadOrder = string(m.downloadOrderForSourceID(sourceID))
+	}
+	if state := m.interactiveSelectionForSource(sourceID); state != nil {
+		state.details.DownloadOrder = string(m.downloadOrderForSourceID(sourceID))
+	}
+}
+
+func (m tuiSyncModel) downloadOrderForSourceID(sourceID string) engine.DownloadOrder {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return engine.DownloadOrderNewestFirst
+	}
+	if order, ok := m.interactiveOrders[sourceID]; ok {
+		return engine.NormalizeDownloadOrder(order)
+	}
+	source, ok := m.interactiveSourceByID(sourceID)
+	if ok && m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
+		return engine.DownloadOrderOldestFirst
+	}
+	return engine.DownloadOrderNewestFirst
+}
+
+func (m tuiSyncModel) currentInteractiveSourceSupportsDownloadOrder() bool {
+	if !m.isInteractiveSyncWorkflow() {
+		return false
+	}
+	source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
+	return ok && engine.SupportsDownloadOrder(source)
 }
 
 func formatTimeoutOverride(timeout time.Duration) string {

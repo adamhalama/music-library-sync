@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,6 +25,7 @@ type tuiSyncInteraction struct {
 	ch         chan tea.Msg
 	defaults   config.Defaults
 	sourceByID map[string]config.Source
+	orderByID  map[string]engine.DownloadOrder
 	planLimit  int
 	dryRun     bool
 }
@@ -74,7 +74,7 @@ func (i *tuiSyncInteraction) Input(prompt string) (string, error) {
 	return result.Input, nil
 }
 
-func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 	if i == nil || i.ch == nil {
 		selected := make([]int, 0, len(rows))
 		for _, row := range rows {
@@ -82,22 +82,35 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 				selected = append(selected, row.Index)
 			}
 		}
-		sort.Ints(selected)
-		return selected, false, nil
+		return engine.PlanSelectionResult{
+			SelectedIndices: selected,
+			DownloadOrder:   engine.DownloadOrderNewestFirst,
+		}, nil
 	}
 	source, ok := i.sourceByID[sourceID]
 	if !ok {
 		source.ID = sourceID
 	}
+	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun)
+	if order, ok := i.orderByID[sourceID]; ok && engine.SupportsDownloadOrder(source) {
+		details.DownloadOrder = string(engine.NormalizeDownloadOrder(order))
+	}
 	reply := make(chan tuiPlanSelectResult, 1)
 	i.ch <- tuiPlanSelectRequestMsg{
 		SourceID: sourceID,
 		Rows:     append([]engine.PlanRow{}, rows...),
-		Details:  buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun),
+		Details:  details,
 		Reply:    reply,
 	}
 	result := <-reply
-	return result.SelectedIndices, result.Canceled, result.Err
+	if result.Err != nil {
+		return engine.PlanSelectionResult{}, result.Err
+	}
+	return engine.PlanSelectionResult{
+		SelectedIndices: result.SelectedIndices,
+		DownloadOrder:   engine.NormalizeDownloadOrder(result.DownloadOrder),
+		Canceled:        result.Canceled,
+	}, nil
 }
 
 func sourceIDFromPrompt(prompt string) string {
@@ -166,13 +179,15 @@ func (i *tuiInitInteraction) Input(prompt string) (string, error) {
 	return result.Input, nil
 }
 
-func (i *tuiInitInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+func (i *tuiInitInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 	selected := make([]int, 0, len(rows))
 	for _, row := range rows {
 		if row.Toggleable && row.SelectedByDefault {
 			selected = append(selected, row.Index)
 		}
 	}
-	sort.Ints(selected)
-	return selected, false, nil
+	return engine.PlanSelectionResult{
+		SelectedIndices: selected,
+		DownloadOrder:   engine.DownloadOrderNewestFirst,
+	}, nil
 }

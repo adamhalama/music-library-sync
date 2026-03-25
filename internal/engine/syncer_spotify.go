@@ -21,6 +21,7 @@ type spotifyDeemixExecutionPlan struct {
 	ExistingTrackIDs []string
 	TrackMetadata    map[string]spotifyTrackMetadata
 	State            spotifySyncState
+	DownloadOrder    DownloadOrder
 }
 
 func (s *Syncer) runSpotifyDeemix(
@@ -56,32 +57,7 @@ func (s *Syncer) runSpotifyDeemix(
 	sourceForExec = plan.Source
 	sourcePreflight = plan.Preflight
 	if plan.Preflight != nil {
-		_ = s.Emitter.Emit(output.Event{
-			Timestamp: s.Now(),
-			Level:     output.LevelInfo,
-			Event:     output.EventSourcePreflight,
-			SourceID:  source.ID,
-			Message: fmt.Sprintf(
-				"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
-				source.ID,
-				plan.Preflight.RemoteTotal,
-				plan.Preflight.KnownCount,
-				plan.Preflight.ArchiveGapCount,
-				plan.Preflight.KnownGapCount,
-				plan.Preflight.FirstExistingIndex,
-				plan.Preflight.PlannedDownloadCount,
-				plan.Preflight.Mode,
-			),
-			Details: map[string]any{
-				"remote_total":           plan.Preflight.RemoteTotal,
-				"known_count":            plan.Preflight.KnownCount,
-				"archive_gap_count":      plan.Preflight.ArchiveGapCount,
-				"known_gap_count":        plan.Preflight.KnownGapCount,
-				"first_existing_index":   plan.Preflight.FirstExistingIndex,
-				"planned_download_count": plan.Preflight.PlannedDownloadCount,
-				"mode":                   plan.Preflight.Mode,
-			},
-		})
+		s.emitSourcePreflightSummary(source, plan.Preflight, plan.DownloadOrder)
 	}
 	emitSpotifyDeemixExistingTrackStatus(s, source.ID, plan, opts.TrackStatus)
 
@@ -162,7 +138,11 @@ func (s *Syncer) runSpotifyDeemix(
 		Level:     output.LevelInfo,
 		Event:     output.EventSourceStarted,
 		SourceID:  source.ID,
-		Message:   fmt.Sprintf("[%s] running deemix for %d track(s)", source.ID, len(plannedTrackIDs)),
+		Message:   fmt.Sprintf("[%s] running deemix for %d track(s) (download_order=%s)", source.ID, len(plannedTrackIDs), plan.DownloadOrder),
+		Details: map[string]any{
+			"planned_download_count": len(plannedTrackIDs),
+			"download_order":         string(plan.DownloadOrder),
+		},
 	})
 
 	runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
@@ -504,7 +484,8 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 	}
 
 	plan.Preflight = &preflight
-	plan.PlannedTrackIDs = plannedTrackIDs
+	plan.DownloadOrder = DownloadOrderNewestFirst
+	plan.PlannedTrackIDs = orderForExecution(plannedTrackIDs, plan.DownloadOrder)
 	plan.ExistingTrackIDs = existingTrackIDs
 	breakOnExisting = mode == SoundCloudModeBreak
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting

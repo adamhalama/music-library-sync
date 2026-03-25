@@ -225,6 +225,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		stateSwap := soundCloudStateSwap{}
 		var sourcePreflight *SoundCloudPreflight
 		plannedSoundCloudTracks := []soundCloudRemoteTrack{}
+		downloadOrder := DownloadOrderNewestFirst
 		if opts.Plan {
 			sourcePlan, planErr := s.prepareSourcePlan(ctx, cfg, source, opts)
 			if planErr != nil {
@@ -253,6 +254,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			stateSwap = sourcePlan.StateSwap
 			sourcePreflight = sourcePlan.SourcePreflight
 			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, sourcePlan.PlannedSoundCloudTracks...)
+			downloadOrder = sourcePlan.DownloadOrder
 		} else if source.Type == config.SourceTypeSoundCloud {
 			plan, planErr := s.prepareSoundCloudExecutionPlan(ctx, cfg, source, opts)
 			if planErr != nil {
@@ -277,10 +279,11 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			stateSwap = plan.StateSwap
 			sourcePreflight = plan.Preflight
 			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, plan.PlannedTracks...)
+			downloadOrder = plan.DownloadOrder
 		}
 
 		if sourcePreflight != nil {
-			s.emitSourcePreflightSummary(source.ID, sourcePreflight)
+			s.emitSourcePreflightSummary(source, sourcePreflight, downloadOrder)
 		}
 
 		flowOutcome := s.runSource(
@@ -292,6 +295,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			sourcePreflight,
 			plannedSoundCloudTracks,
 			stateSwap,
+			downloadOrder,
 			opts,
 		)
 		applySourceOutcome(&result, flowOutcome)
@@ -376,17 +380,20 @@ func (s *Syncer) prepareSourcePlan(
 	if err != nil {
 		return sourcePlanExecution{}, err
 	}
-	selectedIndices, canceled, err := opts.SelectPlanRows(source.ID, sourcePlan.Rows())
+	selection, err := opts.SelectPlanRows(source.ID, sourcePlan.Rows())
 	if err != nil {
 		return sourcePlanExecution{}, err
 	}
-	if canceled {
+	if selection.Canceled {
 		return sourcePlanExecution{}, ErrInterrupted
 	}
-	return sourcePlan.ApplySelection(selectedIndices, opts.DryRun)
+	return sourcePlan.ApplySelection(selection.SelectedIndices, PlanApplyOptions{
+		DryRun:        opts.DryRun,
+		DownloadOrder: NormalizeDownloadOrder(selection.DownloadOrder),
+	})
 }
 
-func (s *Syncer) emitSourcePreflightSummary(sourceID string, preflight *SoundCloudPreflight) {
+func (s *Syncer) emitSourcePreflightSummary(source config.Source, preflight *SoundCloudPreflight, downloadOrder DownloadOrder) {
 	if preflight == nil {
 		return
 	}
@@ -394,10 +401,10 @@ func (s *Syncer) emitSourcePreflightSummary(sourceID string, preflight *SoundClo
 		Timestamp: s.Now(),
 		Level:     output.LevelInfo,
 		Event:     output.EventSourcePreflight,
-		SourceID:  sourceID,
+		SourceID:  source.ID,
 		Message: fmt.Sprintf(
-			"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s",
-			sourceID,
+			"[%s] preflight: remote=%d known=%d gaps=%d known_gaps=%d first_existing=%d planned=%d mode=%s download_order=%s",
+			source.ID,
 			preflight.RemoteTotal,
 			preflight.KnownCount,
 			preflight.ArchiveGapCount,
@@ -405,6 +412,7 @@ func (s *Syncer) emitSourcePreflightSummary(sourceID string, preflight *SoundClo
 			preflight.FirstExistingIndex,
 			preflight.PlannedDownloadCount,
 			preflight.Mode,
+			downloadOrder,
 		),
 		Details: map[string]any{
 			"remote_total":           preflight.RemoteTotal,
@@ -414,6 +422,7 @@ func (s *Syncer) emitSourcePreflightSummary(sourceID string, preflight *SoundClo
 			"first_existing_index":   preflight.FirstExistingIndex,
 			"planned_download_count": preflight.PlannedDownloadCount,
 			"mode":                   preflight.Mode,
+			"download_order":         string(downloadOrder),
 		},
 	})
 }
@@ -539,6 +548,7 @@ func (s *Syncer) runSource(
 	sourcePreflight *SoundCloudPreflight,
 	plannedSoundCloudTracks []soundCloudRemoteTrack,
 	stateSwap soundCloudStateSwap,
+	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) sourceRunOutcome {
 	if source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
@@ -553,13 +563,14 @@ func (s *Syncer) runSource(
 			sourcePreflight,
 			plannedSoundCloudTracks,
 			stateSwap,
+			downloadOrder,
 			opts,
 		)
 	}
 	if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" {
-		return s.runSoundCloudSCDL(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, opts)
+		return s.runSoundCloudSCDL(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, downloadOrder, opts)
 	}
-	return s.runGenericAdapter(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, opts)
+	return s.runGenericAdapter(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, downloadOrder, opts)
 }
 
 func (s *Syncer) runSoundCloudSCDL(
@@ -570,9 +581,10 @@ func (s *Syncer) runSoundCloudSCDL(
 	sourceForExec config.Source,
 	sourcePreflight *SoundCloudPreflight,
 	stateSwap soundCloudStateSwap,
+	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) sourceRunOutcome {
-	return s.runGenericAdapter(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, opts)
+	return s.runGenericAdapter(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, stateSwap, downloadOrder, opts)
 }
 
 func (s *Syncer) runGenericAdapter(
@@ -583,6 +595,7 @@ func (s *Syncer) runGenericAdapter(
 	sourceForExec config.Source,
 	sourcePreflight *SoundCloudPreflight,
 	stateSwap soundCloudStateSwap,
+	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) sourceRunOutcome {
 	outcome := sourceRunOutcome{}
@@ -664,10 +677,11 @@ func (s *Syncer) runGenericAdapter(
 		Level:     output.LevelInfo,
 		Event:     output.EventSourceStarted,
 		SourceID:  source.ID,
-		Message:   fmt.Sprintf("[%s] running %s", source.ID, spec.DisplayCommand),
+		Message:   fmt.Sprintf("[%s] running %s (download_order=%s)", source.ID, spec.DisplayCommand, downloadOrder),
 		Details: map[string]any{
-			"command": spec.DisplayCommand,
-			"dir":     spec.Dir,
+			"command":        spec.DisplayCommand,
+			"dir":            spec.Dir,
+			"download_order": string(downloadOrder),
 		},
 	})
 

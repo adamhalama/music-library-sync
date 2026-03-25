@@ -21,6 +21,7 @@ type soundCloudExecutionPlan struct {
 	Preflight     *SoundCloudPreflight
 	StateSwap     soundCloudStateSwap
 	PlannedTracks []soundCloudRemoteTrack
+	DownloadOrder DownloadOrder
 }
 
 type soundCloudFreeDownloadOutcome struct {
@@ -38,6 +39,7 @@ func (s *Syncer) runSoundCloudFreeDL(
 	sourcePreflight *SoundCloudPreflight,
 	plannedSoundCloudTracks []soundCloudRemoteTrack,
 	stateSwap soundCloudStateSwap,
+	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) sourceRunOutcome {
 	outcome := sourceRunOutcome{}
@@ -49,6 +51,7 @@ func (s *Syncer) runSoundCloudFreeDL(
 		sourcePreflight,
 		plannedSoundCloudTracks,
 		stateSwap,
+		downloadOrder,
 		opts,
 	)
 	if flowResult.Attempted {
@@ -169,7 +172,8 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	preflight := planStage.Preflight
 	knownGapIDs := planStage.KnownGapID
 	plannedIDs := planStage.PlannedID
-	plan.PlannedTracks = orderPlannedSoundCloudTracks(tracks, plannedIDs)
+	plan.DownloadOrder = DownloadOrderNewestFirst
+	plan.PlannedTracks = orderForExecution(orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&
 		preflight.FirstExistingIndex > 0 &&
@@ -192,7 +196,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 			preflight = planStage.Preflight
 			knownGapIDs = planStage.KnownGapID
 			plannedIDs = planStage.PlannedID
-			plan.PlannedTracks = orderPlannedSoundCloudTracks(tracks, plannedIDs)
+			plan.PlannedTracks = orderForExecution(orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
 		}
 	}
 

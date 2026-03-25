@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -119,8 +120,16 @@ func mergeFile(cfg *Config, path string, required bool) error {
 }
 
 func parseFileConfig(payload []byte, path string) (fileConfig, error) {
+	var root yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(&root); err != nil {
+		return fileConfig{}, fmt.Errorf("parse config file %s: %w", path, err)
+	}
+	if err := rejectDeprecatedDownloadOrder(root, path); err != nil {
+		return fileConfig{}, err
+	}
 	var fc fileConfig
-	if err := yaml.Unmarshal(payload, &fc); err != nil {
+	if err := root.Decode(&fc); err != nil {
 		return fileConfig{}, fmt.Errorf("parse config file %s: %w", path, err)
 	}
 	return fc, nil
@@ -231,6 +240,51 @@ func normalize(cfg *Config) {
 			}
 		}
 	}
+}
+
+func rejectDeprecatedDownloadOrder(root yaml.Node, path string) error {
+	if len(root.Content) == 0 {
+		return nil
+	}
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if strings.TrimSpace(doc.Content[i].Value) != "sources" {
+			continue
+		}
+		sourcesNode := doc.Content[i+1]
+		if sourcesNode.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, sourceNode := range sourcesNode.Content {
+			if sourceNode.Kind != yaml.MappingNode {
+				continue
+			}
+			sourceID := "source"
+			for j := 0; j+1 < len(sourceNode.Content); j += 2 {
+				key := strings.TrimSpace(sourceNode.Content[j].Value)
+				value := sourceNode.Content[j+1]
+				if key == "id" {
+					if trimmed := strings.TrimSpace(value.Value); trimmed != "" {
+						sourceID = trimmed
+					}
+					continue
+				}
+				if key != "sync" || value.Kind != yaml.MappingNode {
+					continue
+				}
+				for k := 0; k+1 < len(value.Content); k += 2 {
+					if strings.TrimSpace(value.Content[k].Value) != "download_order" {
+						continue
+					}
+					return fmt.Errorf("parse config file %s: source %q sync.download_order is no longer supported; choose the order from the interactive sync screen", path, sourceID)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func defaultAdapterKind(sourceType SourceType) string {

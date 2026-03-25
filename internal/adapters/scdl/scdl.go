@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +114,7 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 	}
 	ytdlpArgs = normalizeYTDLPBreakArgs(ytdlpArgs, breakOnExisting)
 	ytdlpArgs = normalizeYTDLPPlaylistItems(ytdlpArgs, source.SelectedPlaylistIDs)
+	ytdlpArgs = normalizeYTDLPPlaylistOrder(ytdlpArgs, source)
 	if !runtimeInfo.SupportsYTDLPArgs {
 		return engine.ExecSpec{}, fmt.Errorf(
 			"scdl binary %q does not support --yt-dlp-args (requires scdl >= 3.0.0); set PATH or UDL_SCDL_BIN to a compatible binary",
@@ -247,7 +247,6 @@ func normalizeYTDLPPlaylistItems(raw string, selected []int) string {
 		unique[idx] = struct{}{}
 		ordered = append(ordered, idx)
 	}
-	slices.Sort(ordered)
 	if len(ordered) == 0 {
 		return strings.Join(filtered, " ")
 	}
@@ -257,6 +256,18 @@ func normalizeYTDLPPlaylistItems(raw string, selected []int) string {
 		partsOut = append(partsOut, strconv.Itoa(idx))
 	}
 	filtered = append(filtered, "--playlist-items", strings.Join(partsOut, ","))
+	return strings.Join(filtered, " ")
+}
+
+func normalizeYTDLPPlaylistOrder(raw string, source config.Source) string {
+	parts := strings.Fields(strings.TrimSpace(raw))
+	filtered := make([]string, 0, len(parts))
+	for _, token := range parts {
+		if token == "--playlist-reverse" {
+			continue
+		}
+		filtered = append(filtered, token)
+	}
 	return strings.Join(filtered, " ")
 }
 

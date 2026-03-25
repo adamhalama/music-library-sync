@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -157,5 +158,39 @@ sources:
 	}
 	if cfg.Sources[0].Adapter.Kind != "" {
 		t.Fatalf("expected spotify adapter kind to remain explicit-only, got %q", cfg.Sources[0].Adapter.Kind)
+	}
+}
+
+func TestLoadRejectsDeprecatedDownloadOrder(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	payload := `version: 1
+defaults:
+  state_dir: "` + filepath.Join(tmp, "state") + `"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+sources:
+  - id: "soundcloud-likes"
+    type: "soundcloud"
+    enabled: true
+    target_dir: "/tmp/music"
+    url: "https://soundcloud.com/user"
+    adapter:
+      kind: "scdl"
+    sync:
+      download_order: "oldest_first"
+`
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(LoadOptions{ExplicitPath: configPath})
+	if err == nil {
+		t.Fatalf("expected deprecated download_order error")
+	}
+	if !strings.Contains(err.Error(), `sync.download_order is no longer supported`) {
+		t.Fatalf("expected interactive-only download_order message, got %v", err)
 	}
 }

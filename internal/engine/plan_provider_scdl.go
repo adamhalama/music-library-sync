@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/jaa/update-downloads/internal/config"
 )
@@ -133,7 +132,7 @@ func (p *scdlSourcePlan) Rows() []PlanRow {
 	return append([]PlanRow{}, p.rows...)
 }
 
-func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, dryRun bool) (sourcePlanExecution, error) {
+func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, opts PlanApplyOptions) (sourcePlanExecution, error) {
 	indexSet := map[int]struct{}{}
 	for _, idx := range selectedIndices {
 		if idx <= 0 {
@@ -163,7 +162,15 @@ func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, dryRun bool) (sou
 		}
 	}
 
-	sort.Ints(selectedPlaylistIDs)
+	orderedSelectedPlaylistIDs := make([]int, 0, len(selectedPlaylistIDs))
+	for _, row := range p.rows {
+		if _, ok := indexSet[row.Index]; !ok {
+			continue
+		}
+		orderedSelectedPlaylistIDs = append(orderedSelectedPlaylistIDs, row.Index)
+	}
+	downloadOrder := NormalizeDownloadOrder(opts.DownloadOrder)
+	orderedSelectedPlaylistIDs = orderForExecution(orderedSelectedPlaylistIDs, downloadOrder)
 
 	plannedTracks := make([]soundCloudRemoteTrack, 0, len(selectedTrackIDs))
 	selectedKnownGapIDs := map[string]struct{}{}
@@ -176,19 +183,21 @@ func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, dryRun bool) (sou
 			selectedKnownGapIDs[track.ID] = struct{}{}
 		}
 	}
+	plannedTracks = orderForExecution(plannedTracks, downloadOrder)
 
 	preflight := p.preflight
-	preflight.PlannedDownloadCount = len(selectedPlaylistIDs)
+	preflight.PlannedDownloadCount = len(orderedSelectedPlaylistIDs)
 
 	sourceForExec := p.sourceForExec
-	sourceForExec.SelectedPlaylistIDs = selectedPlaylistIDs
+	sourceForExec.SelectedPlaylistIDs = orderedSelectedPlaylistIDs
 	out := sourcePlanExecution{
 		SourceForExec:           sourceForExec,
 		SourcePreflight:         &preflight,
 		PlannedSoundCloudTracks: plannedTracks,
+		DownloadOrder:           downloadOrder,
 	}
 
-	if dryRun || len(selectedPlaylistIDs) == 0 {
+	if opts.DryRun || len(selectedPlaylistIDs) == 0 {
 		return out, nil
 	}
 

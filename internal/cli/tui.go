@@ -58,6 +58,7 @@ type tuiSyncModel struct {
 	standardActivityState tuiStandardSyncActivityState
 	interactivePhase      tuiInteractiveSyncPhase
 	interactiveSelections map[string]*tuiInteractiveSelectionState
+	interactiveOrders     map[string]engine.DownloadOrder
 	interactiveDisplayID  string
 	interactiveTracker    *tuiSyncRunTracker
 	planPrompt            *tuiPlanPromptState
@@ -129,6 +130,7 @@ type tuiPlanSelectRequestMsg struct {
 
 type tuiPlanSelectResult struct {
 	SelectedIndices []int
+	DownloadOrder   engine.DownloadOrder
 	Canceled        bool
 	Err             error
 }
@@ -230,22 +232,22 @@ type tuiPlanTrackRow struct {
 }
 
 type tuiTrackRowState struct {
-	SourceID         string
-	SourceLabel      string
-	RemoteID         string
-	Title            string
-	Index            int
-	SelectedRunIndex int
-	Toggleable       bool
-	PlanStatus       engine.PlanRowStatus
-	PlanClass        tuiTrackPlanClass
-	Selected         bool
-	RunScope         tuiTrackRunScope
-	RuntimeStatus    tuiTrackRuntimeStatus
-	StatusLabel      string
-	FailureDetail    string
-	ProgressKnown    bool
-	ProgressPercent  float64
+	SourceID        string
+	SourceLabel     string
+	RemoteID        string
+	Title           string
+	Index           int
+	ExecutionSlot   int
+	Toggleable      bool
+	PlanStatus      engine.PlanRowStatus
+	PlanClass       tuiTrackPlanClass
+	Selected        bool
+	RunScope        tuiTrackRunScope
+	RuntimeStatus   tuiTrackRuntimeStatus
+	StatusLabel     string
+	FailureDetail   string
+	ProgressKnown   bool
+	ProgressPercent float64
 }
 
 type tuiTrackRuntimeStatus string

@@ -7,4 +7,5 @@ type sourcePlanExecution struct {
 	SourcePreflight         *SoundCloudPreflight
 	PlannedSoundCloudTracks []soundCloudRemoteTrack
 	StateSwap               soundCloudStateSwap
+	DownloadOrder           DownloadOrder
 }

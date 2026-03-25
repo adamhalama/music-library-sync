@@ -84,9 +84,9 @@ func TestSyncPlanModeRunsSelectorPerSupportedSourceInOrderAndSkipsUnsupported(t 
 		Plan:      true,
 		PlanLimit: 10,
 		DryRun:    true,
-		SelectPlanRows: func(sourceID string, rows []PlanRow) ([]int, bool, error) {
+		SelectPlanRows: func(sourceID string, rows []PlanRow) (PlanSelectionResult, error) {
 			selectorOrder = append(selectorOrder, sourceID)
-			return []int{1}, false, nil
+			return PlanSelectionResult{SelectedIndices: []int{1}, DownloadOrder: DownloadOrderNewestFirst}, nil
 		},
 	})
 	if err != nil {
@@ -143,8 +143,8 @@ func TestSyncPlanModeCancelReturnsInterrupted(t *testing.T) {
 	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
 		Plan:      true,
 		PlanLimit: 10,
-		SelectPlanRows: func(sourceID string, rows []PlanRow) ([]int, bool, error) {
-			return nil, true, nil
+		SelectPlanRows: func(sourceID string, rows []PlanRow) (PlanSelectionResult, error) {
+			return PlanSelectionResult{Canceled: true}, nil
 		},
 	})
 	if !errors.Is(err, ErrInterrupted) {
@@ -209,8 +209,8 @@ func TestSyncPlanModeDoesNotDeleteSelectedKnownGapIfAdapterDoesNotRewriteState(t
 	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
 		Plan:      true,
 		PlanLimit: 10,
-		SelectPlanRows: func(sourceID string, rows []PlanRow) ([]int, bool, error) {
-			return []int{1}, false, nil
+		SelectPlanRows: func(sourceID string, rows []PlanRow) (PlanSelectionResult, error) {
+			return PlanSelectionResult{SelectedIndices: []int{1}, DownloadOrder: DownloadOrderNewestFirst}, nil
 		},
 	})
 	if err != nil {

@@ -22,13 +22,21 @@ func (i cliInteraction) Input(prompt string) (string, error) {
 	return promptLine(i.app, prompt)
 }
 
-func (i cliInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+func (i cliInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 	source, ok := i.sourceByID[sourceID]
 	if !ok {
 		source.ID = sourceID
 	}
 	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun)
-	return runPlanSelector(i.app, details, rows)
+	selected, canceled, err := runPlanSelector(i.app, details, rows)
+	if err != nil {
+		return engine.PlanSelectionResult{}, err
+	}
+	return engine.PlanSelectionResult{
+		SelectedIndices: selected,
+		DownloadOrder:   engine.DownloadOrderNewestFirst,
+		Canceled:        canceled,
+	}, nil
 }
 
 func buildCLIInteraction(appCtx *AppContext, cfg config.Config, planLimit int, dryRun bool) app.Interaction {

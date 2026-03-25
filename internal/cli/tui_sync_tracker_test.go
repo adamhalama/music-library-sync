@@ -49,7 +49,74 @@ func TestTUISyncRunTrackerObserveEventMapsRowsByIndexTrackIDAndTrackName(t *test
 	}
 }
 
-func TestTUISyncRunTrackerMapsSparseSelectionIndicesBySelectedRunOrder(t *testing.T) {
+func TestTUISyncRunTrackerMapsOldestFirstExecutionSlots(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "First", RemoteID: "track-1", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Second", RemoteID: "track-2", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 3, Title: "Third", RemoteID: "track-3", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 4, Title: "Fourth", RemoteID: "track-4", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a", DownloadOrder: string(engine.DownloadOrderOldestFirst)},
+	})
+	tracker.ConfirmSelection(state)
+
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details:  map[string]any{"index": 1},
+	}, nil, "", false)
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "source-a",
+		Details:  map[string]any{"index": 2, "percent": 14.0},
+	}, nil, "", false)
+
+	source := tracker.SourceSnapshot("source-a")
+	if source.rows[0].ExecutionSlot != 4 || source.rows[1].ExecutionSlot != 3 || source.rows[2].ExecutionSlot != 2 || source.rows[3].ExecutionSlot != 1 {
+		t.Fatalf("expected oldest_first execution slots [4 3 2 1], got [%d %d %d %d]", source.rows[0].ExecutionSlot, source.rows[1].ExecutionSlot, source.rows[2].ExecutionSlot, source.rows[3].ExecutionSlot)
+	}
+	if source.rows[3].RuntimeStatus != tuiTrackStatusDownloaded {
+		t.Fatalf("expected fourth row to consume execution slot 1, got %+v", source.rows[3])
+	}
+	if source.rows[2].RuntimeStatus != tuiTrackStatusDownloading || !source.rows[2].ProgressKnown || source.rows[2].ProgressPercent != 14 {
+		t.Fatalf("expected third row to consume execution slot 2, got %+v", source.rows[2])
+	}
+	if source.rows[0].RuntimeStatus != tuiTrackStatusQueued || source.rows[1].RuntimeStatus != tuiTrackStatusQueued {
+		t.Fatalf("expected earlier source-order rows to remain queued, got %+v %+v", source.rows[0], source.rows[1])
+	}
+}
+
+func TestTUISyncRunTrackerTrackNameWinsOverConflictingExecutionSlot(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "First", RemoteID: "track-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Second", RemoteID: "track-2", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a", DownloadOrder: string(engine.DownloadOrderOldestFirst)},
+	})
+	tracker.ConfirmSelection(state)
+
+	tracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "source-a",
+		Details:  map[string]any{"index": 1, "track_name": "First"},
+	}, nil, "", false)
+
+	source := tracker.SourceSnapshot("source-a")
+	if source.rows[0].RuntimeStatus != tuiTrackStatusDownloaded {
+		t.Fatalf("expected track name to win over conflicting execution slot, got %+v", source.rows[0])
+	}
+	if source.rows[1].RuntimeStatus == tuiTrackStatusDownloaded {
+		t.Fatalf("did not expect conflicting execution slot to mark second row, got %+v", source.rows[1])
+	}
+}
+
+func TestTUISyncRunTrackerMapsSparseSelectionIndicesByExecutionSlot(t *testing.T) {
 	tracker := newTUISyncRunTracker()
 	rows := make([]engine.PlanRow, 0, 10)
 	for i := 1; i <= 10; i++ {
@@ -93,7 +160,7 @@ func TestTUISyncRunTrackerMapsSparseSelectionIndicesBySelectedRunOrder(t *testin
 	}
 }
 
-func TestTUISyncRunTrackerMapsLeadingOmissionsBySelectedRunOrder(t *testing.T) {
+func TestTUISyncRunTrackerMapsLeadingOmissionsByExecutionSlot(t *testing.T) {
 	tracker := newTUISyncRunTracker()
 	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
 		SourceID: "source-a",
