@@ -12,7 +12,7 @@ func buildOnboardingShellState(m tuiRootModel, layout tuiShellLayout) tuiShellSt
 	state := tuiShellState{
 		AppLabel:         "UDL",
 		ScreenTitle:      "Get Started",
-		SidebarSections:  workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
+		SidebarSections:  workflowNavigationItems(m),
 		Badges:           model.shellBadges(),
 		CommandSummary:   model.shellCommandSummary(),
 		Shortcuts:        model.shellShortcuts(),

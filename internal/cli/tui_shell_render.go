@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -339,26 +340,37 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 
 func buildLandingShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 	selected := m.selectedMenuItem()
+	badgeLabel := "READY"
+	badgeTone := "success"
+	shortcuts := []tuiShortcut{
+		{Key: "j/k", Label: "move"},
+		{Key: "enter", Label: "open"},
+	}
+	if m.startupAttention != nil {
+		badgeLabel = m.startupAttention.badgeLabel()
+		badgeTone = m.startupAttention.tone()
+		shortcuts = append(shortcuts, tuiShortcut{Key: "c", Label: "credentials"})
+	}
+	shortcuts = append(shortcuts,
+		tuiShortcut{Key: "q", Label: "quit"},
+		tuiShortcut{Key: "ctrl+c", Label: "force quit"},
+	)
 	return tuiShellState{
 		AppLabel:        "UDL",
 		ScreenTitle:     "Home",
-		SidebarSections: workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
+		SidebarSections: workflowNavigationItems(m),
 		Badges: []tuiBadge{
-			{Label: "READY", Tone: "success"},
+			{Label: badgeLabel, Tone: badgeTone},
 		},
 		CommandSummary: []string{
 			"udl tui",
 			"selected=" + selected,
 		},
-		Shortcuts: []tuiShortcut{
-			{Key: "j/k", Label: "move"},
-			{Key: "enter", Label: "open"},
-			{Key: "q", Label: "quit"},
-			{Key: "ctrl+c", Label: "force quit"},
-		},
-		BodyTitle:        shellTitle(selected),
-		Body:             buildLandingBody(selected),
-		FooterStats:      landingFooterStats(selected),
+		Shortcuts:        shortcuts,
+		BodyTitle:        "Home",
+		Body:             buildLandingBody(selected, m.startupAttention, layout),
+		FooterStats:      landingFooterStats(selected, m.startupAttention),
+		Banner:           m.startupAttention.banner(),
 		AllowBack:        false,
 		DebugMessageType: m.lastMsgTypeIfEnabled(),
 	}
@@ -373,7 +385,7 @@ func buildDoctorShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState 
 	return tuiShellState{
 		AppLabel:         "UDL",
 		ScreenTitle:      "Doctor",
-		SidebarSections:  workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
+		SidebarSections:  workflowNavigationItems(m),
 		Badges:           model.shellBadges(),
 		CommandSummary:   []string{"udl doctor"},
 		Shortcuts:        shortcuts,
@@ -392,7 +404,7 @@ func buildValidateShellState(m tuiRootModel, layout tuiShellLayout) tuiShellStat
 	return tuiShellState{
 		AppLabel:         "UDL",
 		ScreenTitle:      "Validate",
-		SidebarSections:  workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
+		SidebarSections:  workflowNavigationItems(m),
 		Badges:           model.shellBadges(),
 		CommandSummary:   []string{"udl validate"},
 		Shortcuts:        []tuiShortcut{{Key: "esc", Label: "back", Disabled: !m.canReturnToMenuOnEsc()}},
@@ -411,7 +423,7 @@ func buildInitShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 	state := tuiShellState{
 		AppLabel:         "UDL",
 		ScreenTitle:      "Init",
-		SidebarSections:  workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
+		SidebarSections:  workflowNavigationItems(m),
 		Badges:           model.shellBadges(),
 		CommandSummary:   []string{"udl init"},
 		Shortcuts:        model.shellShortcuts(),
@@ -429,13 +441,13 @@ func buildInitShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
 	return state
 }
 
-func workflowNavigationItems(screen tuiScreen, menuCursor int, menuItems []string) []tuiSidebarSection {
-	items := make([]tuiSidebarItem, 0, len(menuItems))
-	for idx, item := range menuItems {
+func workflowNavigationItems(m tuiRootModel) []tuiSidebarSection {
+	items := make([]tuiSidebarItem, 0, len(m.menuItems))
+	for idx, item := range m.menuItems {
 		active := false
-		switch screen {
+		switch m.screen {
 		case tuiScreenMenu:
-			active = idx == menuCursor
+			active = idx == m.menuCursor
 		case tuiScreenGetStarted:
 			active = item == "Get Started"
 		case tuiScreenCredentials:
@@ -453,11 +465,20 @@ func workflowNavigationItems(screen tuiScreen, menuCursor int, menuItems []strin
 		case tuiScreenInit:
 			active = item == "Get Started"
 		}
-		items = append(items, tuiSidebarItem{
+		sidebarItem := tuiSidebarItem{
 			Label:  item,
 			Meta:   landingWorkflowMeta(item),
 			Active: active,
-		})
+		}
+		if m.startupAttention != nil {
+			switch item {
+			case "Credentials":
+				sidebarItem.Tone = m.startupAttention.tone()
+			case "Check System":
+				sidebarItem.Tone = "warning"
+			}
+		}
+		items = append(items, sidebarItem)
 	}
 	return []tuiSidebarSection{{Title: "workflows", Items: items}}
 }
@@ -481,17 +502,22 @@ func landingWorkflowMeta(item string) string {
 	}
 }
 
-func buildLandingBody(selected string) string {
-	summary := landingWorkflowSummary(selected)
-	lines := []string{
-		summary,
-		"",
-		"Actions:",
-		"  enter: open selected workflow",
-		"  j/k or up/down: move selection",
-		"  q or ctrl+c: quit the TUI",
+func buildLandingBody(selected string, attention *tuiStartupAttentionState, layout tuiShellLayout) string {
+	width := shellMainSectionWidth(layout, newTUIShellTheme()) - 4
+	if width < 36 {
+		width = shellMainSectionWidth(layout, newTUIShellTheme())
 	}
-	return strings.Join(lines, "\n")
+	sections := []string{}
+	if attention != nil {
+		sections = append(sections, renderPlanSection("Startup Attention", attention.panelLines(), width))
+	}
+	sections = append(sections, renderPlanSection("Selected Workflow", []string{
+		landingWorkflowSummary(selected),
+		"enter: open selected workflow",
+		"j/k or up/down: move selection",
+		landingShortcutLine(attention),
+	}, width))
+	return strings.Join(sections, "\n")
 }
 
 func landingWorkflowSummary(item string) string {
@@ -513,11 +539,25 @@ func landingWorkflowSummary(item string) string {
 	}
 }
 
-func landingFooterStats(selected string) []tuiFooterStat {
-	return []tuiFooterStat{
-		{Label: "state", Value: "ready", Tone: "success"},
+func landingFooterStats(selected string, attention *tuiStartupAttentionState) []tuiFooterStat {
+	stateLabel := "ready"
+	stateTone := "success"
+	stats := []tuiFooterStat{
+		{Label: "state", Value: stateLabel, Tone: stateTone},
 		{Label: "selected", Value: selected, Tone: "info"},
 	}
+	if attention != nil {
+		stats[0] = tuiFooterStat{Label: "state", Value: attention.footerStateLabel(), Tone: attention.tone()}
+		stats = append(stats, tuiFooterStat{Label: "issues", Value: fmt.Sprintf("%d", attention.IssueCount), Tone: attention.tone()})
+	}
+	return stats
+}
+
+func landingShortcutLine(attention *tuiStartupAttentionState) string {
+	if attention != nil {
+		return "c: open Credentials  q or ctrl+c: quit the TUI"
+	}
+	return "q or ctrl+c: quit the TUI"
 }
 
 func (m tuiRootModel) selectedMenuItem() string {

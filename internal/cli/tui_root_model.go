@@ -31,6 +31,7 @@ type tuiRootModel struct {
 	screen     tuiScreen
 	menuCursor int
 	menuItems  []string
+	startupAttention *tuiStartupAttentionState
 
 	onboardingModel tuiOnboardingModel
 	credentialsModel tuiCredentialsModel
@@ -51,6 +52,8 @@ func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
 	if startup, needsOnboarding := tuiDetectOnboardingState(app); needsOnboarding {
 		model.screen = tuiScreenGetStarted
 		model.onboardingModel = newTUIOnboardingModel(app, startup)
+	} else {
+		model.refreshStartupAttention()
 	}
 	return model
 }
@@ -104,6 +107,7 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tuiConfigEditorExitAcceptedMsg:
 		if m.screen == tuiScreenConfigEditor {
 			m.screen = tuiScreenMenu
+			m.refreshStartupAttention()
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -132,7 +136,7 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.onboardingModel = newTUIOnboardingModel(m.app, startup)
 					return m, m.onboardingModel.Init()
 				case "Credentials":
-					return m.openCredentials("")
+					return m.openCredentials(m.recommendedCredentialFocus())
 				case "Run Sync":
 					m.screen = tuiScreenInteractiveSync
 					m.syncModel = newTUISyncModel(m.app, tuiSyncWorkflowInteractive)
@@ -152,6 +156,7 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if typed.String() == "esc" && m.canReturnToMenuOnEsc() {
 			m.screen = tuiScreenMenu
+			m.refreshStartupAttention()
 			return m, nil
 		}
 	}
@@ -217,6 +222,8 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 
 func (m tuiRootModel) canOpenCredentialsShortcut() bool {
 	switch m.screen {
+	case tuiScreenMenu:
+		return m.startupAttention != nil
 	case tuiScreenDoctor:
 		return true
 	case tuiScreenInteractiveSync, tuiScreenSync:
@@ -232,6 +239,11 @@ func (m tuiRootModel) canOpenCredentialsShortcut() bool {
 
 func (m tuiRootModel) recommendedCredentialFocus() auth.CredentialKind {
 	switch m.screen {
+	case tuiScreenMenu:
+		if m.startupAttention != nil {
+			return m.startupAttention.PrimaryKind
+		}
+		return ""
 	case tuiScreenDoctor:
 		return m.doctorModel.recommendedCredentialKind()
 	case tuiScreenInteractiveSync, tuiScreenSync:
@@ -243,8 +255,15 @@ func (m tuiRootModel) recommendedCredentialFocus() auth.CredentialKind {
 
 func (m tuiRootModel) openCredentials(focus auth.CredentialKind) (tuiRootModel, tea.Cmd) {
 	m.screen = tuiScreenCredentials
+	if focus == "" && m.startupAttention != nil {
+		focus = m.startupAttention.PrimaryKind
+	}
 	m.credentialsModel = newTUICredentialsModel(m.app, focus)
 	return m, m.credentialsModel.Init()
+}
+
+func (m *tuiRootModel) refreshStartupAttention() {
+	m.startupAttention = tuiDetectStartupAttentionFn(m.app)
 }
 
 func (m tuiRootModel) View() string {

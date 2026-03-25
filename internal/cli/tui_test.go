@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
@@ -40,6 +41,7 @@ func TestTUICommandHelp(t *testing.T) {
 
 func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 
 	if len(root.menuItems) < 2 {
 		t.Fatalf("expected at least two menu items, got %v", root.menuItems)
@@ -67,6 +69,7 @@ func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
 
 func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 	root.width = 110
 
 	view := root.View()
@@ -77,6 +80,7 @@ func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
 
 func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 	root.width = 109
 
 	view := root.View()
@@ -87,6 +91,7 @@ func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
 
 func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -103,6 +108,7 @@ func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 	root.menuCursor = 2
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -120,6 +126,7 @@ func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
 
 func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 
 	found := false
 	for _, item := range root.menuItems {
@@ -135,6 +142,7 @@ func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 	root.menuCursor = 4
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -152,6 +160,7 @@ func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = nil
 	root.menuCursor = 1
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -161,6 +170,131 @@ func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
 	}
 	if next.screen != tuiScreenCredentials {
 		t.Fatalf("expected credentials screen, got %v", next.screen)
+	}
+}
+
+func TestTUIRootHomeShowsStartupAttention(t *testing.T) {
+	root := newTUIRootModel(&AppContext{}, false)
+	root.startupAttention = &tuiStartupAttentionState{
+		Severity:           tuiStartupAttentionSeverityBlocked,
+		PrimaryKind:        auth.CredentialKindSoundCloudClientID,
+		PrimarySourceID:    "soundcloud-likes",
+		AffectedSourceIDs:  []string{"soundcloud-likes"},
+		IssueCount:         1,
+		PrimaryActionLabel: "Press `c` to open Credentials",
+		Headline:           "Startup Blocked",
+		SummaryText:        "soundcloud-likes is blocked by a stale soundcloud client id.",
+	}
+
+	view := root.View()
+	if !strings.Contains(view, "BLOCKED") {
+		t.Fatalf("expected blocked badge, got: %s", view)
+	}
+	if !strings.Contains(view, "Startup Attention") {
+		t.Fatalf("expected startup attention section, got: %s", view)
+	}
+	if !strings.Contains(view, "Press `c` to open Credentials") {
+		t.Fatalf("expected credential repair action, got: %s", view)
+	}
+	if !root.canOpenCredentialsShortcut() {
+		t.Fatalf("expected home credential shortcut to be active")
+	}
+	if root.recommendedCredentialFocus() != auth.CredentialKindSoundCloudClientID {
+		t.Fatalf("unexpected recommended credential focus: %q", root.recommendedCredentialFocus())
+	}
+}
+
+func TestTUIStartupAttentionScopesToEnabledSourceCredentialBlockers(t *testing.T) {
+	origSoundCloud := tuiInspectSoundCloudClientIDStatusFn
+	origDeemix := tuiInspectDeemixARLStatusFn
+	origSpotify := tuiInspectSpotifyCredentialsStatusFn
+	defer func() {
+		tuiInspectSoundCloudClientIDStatusFn = origSoundCloud
+		tuiInspectDeemixARLStatusFn = origDeemix
+		tuiInspectSpotifyCredentialsStatusFn = origSpotify
+	}()
+
+	tuiInspectSoundCloudClientIDStatusFn = func(stateDir string) auth.CredentialStatus {
+		return auth.CredentialStatus{
+			Kind:    auth.CredentialKindSoundCloudClientID,
+			Title:   "SoundCloud client ID",
+			Health:  auth.CredentialHealthNeedsRefresh,
+			Summary: "needs refresh",
+		}
+	}
+	tuiInspectDeemixARLStatusFn = func(stateDir string) auth.CredentialStatus {
+		return auth.CredentialStatus{
+			Kind:   auth.CredentialKindDeemixARL,
+			Title:  "Deezer ARL",
+			Health: auth.CredentialHealthAvailable,
+		}
+	}
+	tuiInspectSpotifyCredentialsStatusFn = func(stateDir string) auth.CredentialStatus {
+		return auth.CredentialStatus{
+			Kind:   auth.CredentialKindSpotifyApp,
+			Title:  "Spotify app credentials",
+			Health: auth.CredentialHealthMissing,
+		}
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir: "/tmp/state",
+		},
+		Sources: []config.Source{
+			{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Enabled: true, Adapter: config.AdapterSpec{Kind: "scdl"}},
+			{ID: "spotify-disabled", Type: config.SourceTypeSpotify, Enabled: false, Adapter: config.AdapterSpec{Kind: "deemix"}},
+			{ID: "spotify-legacy", Type: config.SourceTypeSpotify, Enabled: true, Adapter: config.AdapterSpec{Kind: "spotdl"}},
+		},
+	}
+
+	attention := tuiDetectStartupAttentionForConfig(cfg)
+	if attention == nil {
+		t.Fatalf("expected startup attention")
+	}
+	if attention.PrimaryKind != auth.CredentialKindSoundCloudClientID {
+		t.Fatalf("unexpected primary kind: %q", attention.PrimaryKind)
+	}
+	if attention.IssueCount != 1 {
+		t.Fatalf("expected one issue, got %d", attention.IssueCount)
+	}
+	if len(attention.AffectedSourceIDs) != 1 || attention.AffectedSourceIDs[0] != "soundcloud-likes" {
+		t.Fatalf("unexpected affected sources: %+v", attention.AffectedSourceIDs)
+	}
+}
+
+func TestTUIRootRefreshesStartupAttentionWhenReturningHome(t *testing.T) {
+	origDetect := tuiDetectStartupAttentionFn
+	defer func() {
+		tuiDetectStartupAttentionFn = origDetect
+	}()
+
+	tuiDetectStartupAttentionFn = func(app *AppContext) *tuiStartupAttentionState {
+		return &tuiStartupAttentionState{
+			Severity:           tuiStartupAttentionSeverityBlocked,
+			PrimaryKind:        auth.CredentialKindSoundCloudClientID,
+			PrimarySourceID:    "soundcloud-likes",
+			AffectedSourceIDs:  []string{"soundcloud-likes"},
+			IssueCount:         1,
+			PrimaryActionLabel: "Press `c` to open Credentials",
+			Headline:           "Startup Blocked",
+			SummaryText:        "soundcloud-likes is blocked by a stale soundcloud client id.",
+		}
+	}
+
+	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenCredentials
+	root.startupAttention = nil
+	root.credentialsModel = newTUICredentialsModel(&AppContext{}, "")
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := nextModel.(tuiRootModel)
+	if next.screen != tuiScreenMenu {
+		t.Fatalf("expected return to menu, got %v", next.screen)
+	}
+	if next.startupAttention == nil {
+		t.Fatalf("expected startup attention to refresh on return home")
 	}
 }
 

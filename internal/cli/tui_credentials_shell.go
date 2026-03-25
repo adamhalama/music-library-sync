@@ -10,7 +10,7 @@ func buildCredentialsShellState(m tuiRootModel, layout tuiShellLayout) tuiShellS
 	state := tuiShellState{
 		AppLabel:         "UDL",
 		ScreenTitle:      "Credentials",
-		SidebarSections:  workflowNavigationItems(m.screen, m.menuCursor, m.menuItems),
+		SidebarSections:  workflowNavigationItems(m),
 		Badges:           model.shellBadges(),
 		CommandSummary:   []string{"udl", "tui", "credentials"},
 		Shortcuts:        model.shellShortcuts(),
