@@ -122,17 +122,17 @@ type tuiSyncDoneMsg struct {
 }
 
 type tuiPlanSelectRequestMsg struct {
-	SourceID string
-	Rows     []engine.PlanRow
-	Details  planSourceDetails
-	Reply    chan tuiPlanSelectResult
+	SourceID      string
+	Rows          []engine.PlanRow
+	Details       planSourceDetails
+	DownloadOrder engine.DownloadOrder
+	Reply         chan tuiPlanSelectResult
 }
 
 type tuiPlanSelectResult struct {
-	SelectedIndices []int
-	DownloadOrder   engine.DownloadOrder
-	Canceled        bool
-	Err             error
+	Manifest engine.ExecutionManifest
+	Canceled bool
+	Err      error
 }
 
 type tuiPromptKind string
@@ -269,18 +269,21 @@ type tuiActivityEntry struct {
 }
 
 type tuiInteractiveDisplayState struct {
-	sourceID  string
-	details   planSourceDetails
-	rows      []tuiTrackRowState
-	activity  []tuiActivityEntry
-	lifecycle tuiInteractiveSourceLifecycle
-	confirmed bool
+	sourceID      string
+	details       planSourceDetails
+	downloadOrder engine.DownloadOrder
+	rows          []tuiTrackRowState
+	activity      []tuiActivityEntry
+	lifecycle     tuiInteractiveSourceLifecycle
+	confirmed     bool
 }
 
 type tuiInteractiveSelectionState struct {
 	sourceID                   string
 	rows                       []tuiPlanTrackRow
 	details                    planSourceDetails
+	downloadOrder              engine.DownloadOrder
+	manifest                   engine.ExecutionManifest
 	cursor                     int
 	selected                   map[int]bool
 	filter                     tuiStatusFilter

@@ -13,15 +13,14 @@ import (
 )
 
 type planSourceDetails struct {
-	SourceID      string
-	SourceType    string
-	Adapter       string
-	URL           string
-	TargetDir     string
-	StateFile     string
-	PlanLimit     int
-	DryRun        bool
-	DownloadOrder string
+	SourceID   string
+	SourceType string
+	Adapter    string
+	URL        string
+	TargetDir  string
+	StateFile  string
+	PlanLimit  int
+	DryRun     bool
 }
 
 type planSelectorModel struct {

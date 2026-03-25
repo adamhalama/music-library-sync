@@ -32,10 +32,13 @@ func (i cliInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engi
 	if err != nil {
 		return engine.PlanSelectionResult{}, err
 	}
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, selected, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		return engine.PlanSelectionResult{}, err
+	}
 	return engine.PlanSelectionResult{
-		SelectedIndices: selected,
-		DownloadOrder:   engine.DownloadOrderNewestFirst,
-		Canceled:        canceled,
+		Manifest: manifest,
+		Canceled: canceled,
 	}, nil
 }
 

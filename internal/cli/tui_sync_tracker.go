@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -81,7 +80,7 @@ func (t *tuiSyncRunTracker) ConfirmSelection(state *tuiInteractiveSelectionState
 		return
 	}
 	source.confirmed = true
-	source.rows, source.rowIndexBySlot = buildTrackedRowsForSelection(state)
+	source.rows, source.rowIndexBySlot = buildTrackedRowsForSelection(state.rows, state.manifest, state.isSelected)
 }
 
 func (t *tuiSyncRunTracker) SetSourceLifecycle(sourceID string, lifecycle tuiInteractiveSourceLifecycle) {
@@ -266,30 +265,25 @@ func formatElapsedLabel(minutes, seconds int) string {
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
-func buildTrackedRowsForSelection(state *tuiInteractiveSelectionState) ([]tuiTrackRowState, map[int]int) {
-	if state == nil || len(state.rows) == 0 {
+func buildTrackedRowsForSelection(rowsIn []tuiPlanTrackRow, manifest engine.ExecutionManifest, isSelected func(int) bool) ([]tuiTrackRowState, map[int]int) {
+	if len(rowsIn) == 0 {
 		return nil, nil
 	}
-	rows := make([]tuiTrackRowState, 0, len(state.rows))
-	for _, row := range state.rows {
-		displayRow := tuiDisplayRowFromPlanRow(row, state.isSelected(row.Index))
+	rows := make([]tuiTrackRowState, 0, len(rowsIn))
+	for _, row := range rowsIn {
+		displayRow := tuiDisplayRowFromPlanRow(row, isSelected(row.Index))
 		rows = append(rows, displayRow)
 	}
-	includedPositions := make([]int, 0, len(rows))
-	for i := range rows {
-		if rows[i].RunScope == tuiTrackRunScopeIncluded {
-			includedPositions = append(includedPositions, i)
+	rowIndexBySlot := make(map[int]int, len(manifest.Execution))
+	for _, entry := range manifest.Execution {
+		for i := range rows {
+			if rows[i].Index != entry.Index {
+				continue
+			}
+			rows[i].ExecutionSlot = entry.ExecutionSlot
+			rowIndexBySlot[entry.ExecutionSlot] = i
+			break
 		}
-	}
-	order := engine.NormalizeDownloadOrder(engine.DownloadOrder(strings.TrimSpace(state.details.DownloadOrder)))
-	if order == engine.DownloadOrderOldestFirst {
-		slices.Reverse(includedPositions)
-	}
-	rowIndexBySlot := make(map[int]int, len(includedPositions))
-	for i, rowPos := range includedPositions {
-		slot := i + 1
-		rows[rowPos].ExecutionSlot = slot
-		rowIndexBySlot[slot] = rowPos
 	}
 	return rows, rowIndexBySlot
 }

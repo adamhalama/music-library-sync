@@ -132,45 +132,21 @@ func (p *scdlSourcePlan) Rows() []PlanRow {
 	return append([]PlanRow{}, p.rows...)
 }
 
-func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, opts PlanApplyOptions) (sourcePlanExecution, error) {
+func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApplyOptions) (sourcePlanExecution, error) {
 	indexSet := map[int]struct{}{}
-	for _, idx := range selectedIndices {
-		if idx <= 0 {
-			return sourcePlanExecution{}, fmt.Errorf("invalid selected index %d", idx)
-		}
+	selectedTrackIDs := map[string]struct{}{}
+	for _, idx := range manifest.SelectedIndices {
 		indexSet[idx] = struct{}{}
 	}
-
-	selectedPlaylistIDs := make([]int, 0, len(indexSet))
-	selectedTrackIDs := map[string]struct{}{}
-	validSelectionIndices := map[int]struct{}{}
-	for _, row := range p.rows {
-		if !row.Toggleable {
-			continue
-		}
-		validSelectionIndices[row.Index] = struct{}{}
-		if _, ok := indexSet[row.Index]; !ok {
-			continue
-		}
-		selectedPlaylistIDs = append(selectedPlaylistIDs, row.Index)
-		selectedTrackIDs[row.RemoteID] = struct{}{}
+	for _, entry := range manifest.Execution {
+		selectedTrackIDs[entry.RemoteID] = struct{}{}
 	}
 
-	for idx := range indexSet {
-		if _, ok := validSelectionIndices[idx]; !ok {
-			return sourcePlanExecution{}, fmt.Errorf("selected index %d is not toggleable for this source", idx)
-		}
+	orderedSelectedPlaylistIDs := make([]int, 0, len(manifest.Execution))
+	for _, entry := range manifest.Execution {
+		orderedSelectedPlaylistIDs = append(orderedSelectedPlaylistIDs, entry.Index)
 	}
-
-	orderedSelectedPlaylistIDs := make([]int, 0, len(selectedPlaylistIDs))
-	for _, row := range p.rows {
-		if _, ok := indexSet[row.Index]; !ok {
-			continue
-		}
-		orderedSelectedPlaylistIDs = append(orderedSelectedPlaylistIDs, row.Index)
-	}
-	downloadOrder := NormalizeDownloadOrder(opts.DownloadOrder)
-	orderedSelectedPlaylistIDs = orderForExecution(orderedSelectedPlaylistIDs, downloadOrder)
+	downloadOrder := NormalizeDownloadOrder(manifest.DownloadOrder)
 
 	plannedTracks := make([]soundCloudRemoteTrack, 0, len(selectedTrackIDs))
 	selectedKnownGapIDs := map[string]struct{}{}
@@ -197,7 +173,7 @@ func (p *scdlSourcePlan) ApplySelection(selectedIndices []int, opts PlanApplyOpt
 		DownloadOrder:           downloadOrder,
 	}
 
-	if opts.DryRun || len(selectedPlaylistIDs) == 0 {
+	if opts.DryRun || len(orderedSelectedPlaylistIDs) == 0 {
 		return out, nil
 	}
 

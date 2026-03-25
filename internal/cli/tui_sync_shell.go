@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jaa/update-downloads/internal/config"
-	"github.com/jaa/update-downloads/internal/engine"
 )
 
 func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
@@ -42,9 +41,6 @@ func (m tuiSyncModel) shellBadges() []tuiBadge {
 	}
 	if m.isInteractiveSyncWorkflow() {
 		badges = append(badges, tuiBadge{Label: "LIMIT: " + formatPlanLimit(m.planLimit), Tone: "info"})
-		if m.currentInteractiveSourceSupportsDownloadOrder() {
-			badges = append(badges, tuiBadge{Label: "ORDER: " + string(m.interactiveDownloadOrder()), Tone: "info"})
-		}
 		badges = append(badges, tuiBadge{Label: "TIMEOUT: " + formatTimeoutOverride(m.timeoutOverride), Tone: "muted"})
 		return badges
 	}
@@ -61,9 +57,6 @@ func (m tuiSyncModel) shellCommandSummary() []string {
 	parts := []string{"udl", "sync"}
 	if m.isInteractiveSyncWorkflow() {
 		parts = append(parts, "--plan", "plan_limit="+formatPlanLimit(m.planLimit))
-		if m.currentInteractiveSourceSupportsDownloadOrder() {
-			parts = append(parts, "download_order="+string(m.interactiveDownloadOrder()))
-		}
 	} else {
 		parts = append(parts,
 			"ask_on_existing="+formatAskOnExisting(m.askOnExistingSet),
@@ -252,8 +245,9 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 }
 
 func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
-	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel)
-	controls := renderPlanPromptControls(state, layout)
+	showOrder := state != nil && state.downloadOrder != ""
+	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel, showOrder)
+	controls := renderPlanPromptControls(state, layout, showOrder)
 	if layout.Height < 24 {
 		lines := []string{
 			infoBar,
@@ -272,15 +266,15 @@ func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limit
 	return append(lines, controls...)
 }
 
-func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string) string {
+func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, showOrder bool) string {
 	parts := []string{
 		planPromptChip("Plan Selection", "info"),
 		planPromptField("source", state.sourceID),
 		planPromptField("mode", modeLabel),
 		planPromptField("limit", limitLabel),
 	}
-	if strings.TrimSpace(state.details.DownloadOrder) != "" {
-		parts = append(parts, planPromptField("order", state.details.DownloadOrder))
+	if showOrder {
+		parts = append(parts, planPromptField("order", string(state.downloadOrder)))
 	}
 	parts = append(parts,
 		planPromptField("type", fmt.Sprintf("%s/%s", state.details.SourceType, state.details.Adapter)),
@@ -304,7 +298,7 @@ func renderPlanPromptPathLine(left, right string) string {
 		Render(strings.Join(parts, "  "))
 }
 
-func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout, showOrder bool) []string {
 	state.syncFilterForPhase(tuiInteractivePhaseReview)
 	focusTone := "warning"
 	if !state.focusFilters {
@@ -321,7 +315,7 @@ func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShe
 		renderPlanPromptKey("enter", "confirm"),
 		renderPlanPromptKey("esc", "cancel"),
 	}
-	if strings.TrimSpace(state.details.DownloadOrder) != "" {
+	if showOrder {
 		parts = append(parts[0:5], append([]string{renderPlanPromptKey("o", "order")}, parts[5:]...)...)
 	}
 	return renderPlanPromptControlLines(parts, layout)
@@ -727,7 +721,7 @@ func (m tuiSyncModel) focusedInteractiveSource() (config.Source, bool) {
 }
 
 func (m tuiSyncModel) planSourceDetailsForSource(source config.Source) planSourceDetails {
-	details := planSourceDetails{
+	return planSourceDetails{
 		SourceID:   source.ID,
 		SourceType: string(source.Type),
 		Adapter:    source.Adapter.Kind,
@@ -737,10 +731,6 @@ func (m tuiSyncModel) planSourceDetailsForSource(source config.Source) planSourc
 		PlanLimit:  m.planLimit,
 		DryRun:     m.dryRun,
 	}
-	if engine.SupportsDownloadOrder(source) {
-		details.DownloadOrder = string(m.downloadOrderForSourceID(source.ID))
-	}
-	return details
 }
 
 func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiInteractiveSelectionState, state *tuiInteractiveDisplayState, layout tuiShellLayout) []string {
@@ -757,8 +747,9 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 		infoState = newEmptyTUIInteractiveSelectionState()
 		infoState.sourceID = state.sourceID
 		infoState.details = state.details
+		infoState.downloadOrder = state.downloadOrder
 	}
-	lines := []string{renderPlanPromptInfoBar(infoState, modeLabel, limitLabel)}
+	lines := []string{renderPlanPromptInfoBar(infoState, modeLabel, limitLabel, m.currentInteractiveSourceSupportsDownloadOrder())}
 	if layout.Height < 24 {
 		lines = append(lines, renderPlanPromptPathLine(
 			fmt.Sprintf("target %s", filepath.Base(state.details.TargetDir)),
@@ -774,7 +765,7 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 
 func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDisplayState, layout tuiShellLayout) []string {
 	if m.planPrompt != nil {
-		return renderPlanPromptControls(m.planPrompt.tuiInteractiveSelectionState, layout)
+		return renderPlanPromptControls(m.planPrompt.tuiInteractiveSelectionState, layout, m.currentInteractiveSourceSupportsDownloadOrder())
 	}
 	if state == nil || len(state.rows) == 0 {
 		return renderInteractiveIdleControls(layout, m.currentInteractiveSourceSupportsDownloadOrder())
@@ -796,7 +787,7 @@ func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDi
 	if selectionState.focusFilters {
 		parts = append(parts, renderPlanPromptKey("space/enter", "apply filter"))
 	}
-	if strings.TrimSpace(selectionState.details.DownloadOrder) != "" {
+	if m.currentInteractiveSourceSupportsDownloadOrder() {
 		parts = append(parts, renderPlanPromptKey("o", "order"))
 	}
 	parts = append(parts, renderPlanPromptKey("p", "activity"))
@@ -1209,11 +1200,7 @@ func (m tuiSyncModel) bodyView(includeSources bool) string {
 		fmt.Sprintf("dry_run=%t  timeout=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride)),
 	}
 	if m.isInteractiveSyncWorkflow() {
-		line := fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit))
-		if m.currentInteractiveSourceSupportsDownloadOrder() {
-			line += "  download_order=" + string(m.interactiveDownloadOrder())
-		}
-		lines = append(lines, line)
+		lines = append(lines, fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit)))
 	} else {
 		lines = append(lines, fmt.Sprintf("ask_on_existing=%s  scan_gaps=%t  no_preflight=%t", formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight))
 	}

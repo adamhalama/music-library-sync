@@ -387,10 +387,7 @@ func (s *Syncer) prepareSourcePlan(
 	if selection.Canceled {
 		return sourcePlanExecution{}, ErrInterrupted
 	}
-	return sourcePlan.ApplySelection(selection.SelectedIndices, PlanApplyOptions{
-		DryRun:        opts.DryRun,
-		DownloadOrder: NormalizeDownloadOrder(selection.DownloadOrder),
-	})
+	return sourcePlan.ApplySelection(selection.Manifest, PlanApplyOptions{DryRun: opts.DryRun})
 }
 
 func (s *Syncer) emitSourcePreflightSummary(source config.Source, preflight *SoundCloudPreflight, downloadOrder DownloadOrder) {

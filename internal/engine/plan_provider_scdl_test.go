@@ -11,6 +11,15 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 )
 
+func testExecutionManifest(t *testing.T, sourceID string, rows []PlanRow, selected []int, order DownloadOrder) ExecutionManifest {
+	t.Helper()
+	manifest, err := BuildExecutionManifest(sourceID, rows, selected, order)
+	if err != nil {
+		t.Fatalf("build execution manifest: %v", err)
+	}
+	return manifest
+}
+
 func TestSCDLPlanProviderBuildClassifiesRowsAndDefaultSelection(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
@@ -155,9 +164,7 @@ func TestSCDLPlanProviderAppliesSelectionUsesTempSyncAndFiltersSelectedKnownGap(
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection([]int{1}, PlanApplyOptions{
-		DownloadOrder: DownloadOrderNewestFirst,
-	})
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), []int{1}, DownloadOrderNewestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply selection: %v", err)
 	}
@@ -251,9 +258,7 @@ func TestSCDLPlanProviderAppliesSelectionOrdersExecutionByDownloadOrder(t *testi
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection([]int{1, 3}, PlanApplyOptions{
-		DownloadOrder: DownloadOrderOldestFirst,
-	})
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), []int{1, 3}, DownloadOrderOldestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply selection: %v", err)
 	}
@@ -317,9 +322,7 @@ func TestSCDLPlanProviderEmptySelectionNoOp(t *testing.T) {
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection(nil, PlanApplyOptions{
-		DownloadOrder: DownloadOrderNewestFirst,
-	})
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), nil, DownloadOrderNewestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply empty selection: %v", err)
 	}
@@ -388,9 +391,7 @@ func TestSCDLPlanProviderAppliesSelectionKeepsSyncForNewTracks(t *testing.T) {
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection([]int{2}, PlanApplyOptions{
-		DownloadOrder: DownloadOrderNewestFirst,
-	})
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), []int{2}, DownloadOrderNewestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply selection: %v", err)
 	}

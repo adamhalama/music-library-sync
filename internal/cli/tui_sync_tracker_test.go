@@ -59,7 +59,8 @@ func TestTUISyncRunTrackerMapsOldestFirstExecutionSlots(t *testing.T) {
 			{Index: 3, Title: "Third", RemoteID: "track-3", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
 			{Index: 4, Title: "Fourth", RemoteID: "track-4", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
 		},
-		Details: planSourceDetails{SourceID: "source-a", DownloadOrder: string(engine.DownloadOrderOldestFirst)},
+		Details:       planSourceDetails{SourceID: "source-a"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
 	})
 	tracker.ConfirmSelection(state)
 
@@ -97,7 +98,8 @@ func TestTUISyncRunTrackerTrackNameWinsOverConflictingExecutionSlot(t *testing.T
 			{Index: 1, Title: "First", RemoteID: "track-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
 			{Index: 2, Title: "Second", RemoteID: "track-2", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
 		},
-		Details: planSourceDetails{SourceID: "source-a", DownloadOrder: string(engine.DownloadOrderOldestFirst)},
+		Details:       planSourceDetails{SourceID: "source-a"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
 	})
 	tracker.ConfirmSelection(state)
 

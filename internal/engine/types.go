@@ -54,14 +54,12 @@ type SyncOptions struct {
 }
 
 type PlanSelectionResult struct {
-	SelectedIndices []int
-	DownloadOrder   DownloadOrder
-	Canceled        bool
+	Manifest ExecutionManifest
+	Canceled bool
 }
 
 type PlanApplyOptions struct {
-	DryRun        bool
-	DownloadOrder DownloadOrder
+	DryRun bool
 }
 
 type SyncResult struct {

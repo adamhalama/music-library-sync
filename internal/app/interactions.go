@@ -19,14 +19,11 @@ func (NoopInteraction) Input(prompt string) (string, error) {
 }
 
 func (NoopInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
-	selected := make([]int, 0, len(rows))
-	for _, row := range rows {
-		if row.Toggleable && row.SelectedByDefault {
-			selected = append(selected, row.Index)
-		}
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+	if err != nil {
+		return engine.PlanSelectionResult{}, err
 	}
 	return engine.PlanSelectionResult{
-		SelectedIndices: selected,
-		DownloadOrder:   engine.DownloadOrderNewestFirst,
+		Manifest: manifest,
 	}, nil
 }

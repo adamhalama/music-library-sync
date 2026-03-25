@@ -680,8 +680,8 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	if !strings.Contains(interactiveView, "plan_limit=") {
 		t.Fatalf("expected interactive sync plan limit controls, got: %s", interactiveView)
 	}
-	if !strings.Contains(interactiveView, "download_order=") {
-		t.Fatalf("expected interactive sync to show download order, got: %s", interactiveView)
+	if strings.Contains(interactiveView, "download_order=") || strings.Contains(interactiveView, "ORDER:") {
+		t.Fatalf("expected interactive sync to hide global download order summary, got: %s", interactiveView)
 	}
 	if strings.Contains(interactiveView, "ask_on_existing=") || strings.Contains(interactiveView, "scan_gaps=") || strings.Contains(interactiveView, "no_preflight=") {
 		t.Fatalf("expected interactive sync to hide standard-only options, got: %s", interactiveView)
@@ -1824,8 +1824,9 @@ func TestTUIInteractiveDisplayStateTracksOldestFirstRuntimeRows(t *testing.T) {
 			{Index: 3, Title: "Carte Blanche (DREY Schranz Edit) - Veracocha [FREE DOWNLOAD]", RemoteID: "1935964850", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
 			{Index: 4, Title: "Showtek - Colours Of The Harder Styles (L4ZARUS Remix)", RemoteID: "2102155746", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
 		},
-		Details: planSourceDetails{SourceID: "soundcloud-likes", DownloadOrder: string(engine.DownloadOrderOldestFirst)},
-		Reply:   reply,
+		Details:       planSourceDetails{SourceID: "soundcloud-likes"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
 	})
 	m.confirmInteractiveSelection(m.planPrompt.sourceID)
 	m.planPrompt = nil
@@ -2173,8 +2174,8 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 			t.Fatalf("expected confirmed selection, got canceled")
 		}
 		want := []int{1, 3}
-		if !reflect.DeepEqual(got.SelectedIndices, want) {
-			t.Fatalf("selected indices mismatch: got=%v want=%v", got.SelectedIndices, want)
+		if !reflect.DeepEqual(got.Manifest.SelectedIndices, want) {
+			t.Fatalf("selected indices mismatch: got=%v want=%v", got.Manifest.SelectedIndices, want)
 		}
 	default:
 		t.Fatalf("expected selection reply")
@@ -2298,7 +2299,11 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tuiPlanSelectRequestMsg, got %T", raw)
 	}
-	req.Reply <- tuiPlanSelectResult{SelectedIndices: []int{1}}
+	manifest, err := engine.BuildExecutionManifest("s1", rows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build manifest: %v", err)
+	}
+	req.Reply <- tuiPlanSelectResult{Manifest: manifest}
 	<-done
 
 	if gotErr != nil {
@@ -2307,11 +2312,11 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	if result.Canceled {
 		t.Fatalf("expected canceled=false")
 	}
-	if !reflect.DeepEqual(result.SelectedIndices, []int{1}) {
-		t.Fatalf("selected indices mismatch: got=%v", result.SelectedIndices)
+	if !reflect.DeepEqual(result.Manifest.SelectedIndices, []int{1}) {
+		t.Fatalf("selected indices mismatch: got=%v", result.Manifest.SelectedIndices)
 	}
-	if result.DownloadOrder != engine.DownloadOrderNewestFirst {
-		t.Fatalf("expected default handshake order newest_first, got %q", result.DownloadOrder)
+	if result.Manifest.DownloadOrder != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected default handshake order newest_first, got %q", result.Manifest.DownloadOrder)
 	}
 }
 
@@ -2371,7 +2376,7 @@ func TestTUISyncModelInteractiveDownloadOrderToggle(t *testing.T) {
 	}
 }
 
-func TestTUISyncModelPlanPromptDownloadOrderToggleUpdatesPromptDetails(t *testing.T) {
+func TestTUISyncModelPlanPromptDownloadOrderToggleRebuildsManifest(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
 	source := config.Source{
@@ -2387,10 +2392,11 @@ func TestTUISyncModelPlanPromptDownloadOrderToggleUpdatesPromptDetails(t *testin
 	m.interactiveOrders["soundcloud-likes"] = engine.DownloadOrderOldestFirst
 	reply := make(chan tuiPlanSelectResult, 1)
 	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
-		SourceID: source.ID,
-		Rows:     []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
-		Details:  m.planSourceDetailsForSource(source),
-		Reply:    reply,
+		SourceID:      source.ID,
+		Rows:          []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
+		Details:       m.planSourceDetailsForSource(source),
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
 	})
 	m.planPrompt = &tuiPlanPromptState{
 		tuiInteractiveSelectionState: state,
@@ -2401,8 +2407,8 @@ func TestTUISyncModelPlanPromptDownloadOrderToggleUpdatesPromptDetails(t *testin
 	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderNewestFirst {
 		t.Fatalf("expected source order to toggle to newest_first, got %q", got)
 	}
-	if got := m.planPrompt.details.DownloadOrder; got != string(engine.DownloadOrderNewestFirst) {
-		t.Fatalf("expected prompt details order to update, got %q", got)
+	if got := m.planPrompt.manifest.DownloadOrder; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected prompt manifest order to update, got %q", got)
 	}
 }
 

@@ -12,7 +12,7 @@ type PlanProvider interface {
 
 type SourcePlan interface {
 	Rows() []PlanRow
-	ApplySelection(selectedIndices []int, opts PlanApplyOptions) (sourcePlanExecution, error)
+	ApplySelection(manifest ExecutionManifest, opts PlanApplyOptions) (sourcePlanExecution, error)
 }
 
 type PlanRegistry struct {

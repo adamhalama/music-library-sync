@@ -86,7 +86,9 @@ func TestSyncPlanModeRunsSelectorPerSupportedSourceInOrderAndSkipsUnsupported(t 
 		DryRun:    true,
 		SelectPlanRows: func(sourceID string, rows []PlanRow) (PlanSelectionResult, error) {
 			selectorOrder = append(selectorOrder, sourceID)
-			return PlanSelectionResult{SelectedIndices: []int{1}, DownloadOrder: DownloadOrderNewestFirst}, nil
+			return PlanSelectionResult{
+				Manifest: testExecutionManifest(t, sourceID, rows, []int{1}, DownloadOrderNewestFirst),
+			}, nil
 		},
 	})
 	if err != nil {
@@ -210,7 +212,9 @@ func TestSyncPlanModeDoesNotDeleteSelectedKnownGapIfAdapterDoesNotRewriteState(t
 		Plan:      true,
 		PlanLimit: 10,
 		SelectPlanRows: func(sourceID string, rows []PlanRow) (PlanSelectionResult, error) {
-			return PlanSelectionResult{SelectedIndices: []int{1}, DownloadOrder: DownloadOrderNewestFirst}, nil
+			return PlanSelectionResult{
+				Manifest: testExecutionManifest(t, sourceID, rows, []int{1}, DownloadOrderNewestFirst),
+			}, nil
 		},
 	})
 	if err != nil {

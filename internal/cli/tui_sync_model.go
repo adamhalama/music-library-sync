@@ -271,10 +271,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				}
 				m.planPrompt.syncFilterForPhase(tuiInteractivePhaseSyncing)
 				m.setInteractiveDisplaySource(m.planPrompt.sourceID)
-				m.planPrompt.reply <- tuiPlanSelectResult{
-					SelectedIndices: m.planPrompt.selectedIndices(),
-					DownloadOrder:   m.downloadOrderForSourceID(m.planPrompt.sourceID),
-				}
+				m.planPrompt.reply <- tuiPlanSelectResult{Manifest: m.planPrompt.manifest}
 				m.planPrompt = nil
 				m.syncDisplayedInteractiveSelection()
 				return m, m.waitRunMsgCmd()
@@ -699,6 +696,11 @@ func (m tuiSyncModel) interactiveDisplayStateForSelection(state *tuiInteractiveS
 	if state != nil && display.details.SourceID == "" {
 		display.details = state.details
 	}
+	if state != nil {
+		display.downloadOrder = state.downloadOrder
+	} else {
+		display.downloadOrder = m.downloadOrderForSourceID(sourceID)
+	}
 
 	snapshot := tuiTrackedSourceSnapshot{lifecycle: tuiSourceLifecycleIdle}
 	if m.interactiveTracker != nil {
@@ -718,6 +720,9 @@ func (m tuiSyncModel) interactiveDisplayStateForSelection(state *tuiInteractiveS
 		}
 		for _, planRow := range state.rows {
 			row := tuiDisplayRowFromPlanRow(planRow, state.isSelected(planRow.Index))
+			if slot, ok := executionSlotForIndex(state.manifest, planRow.Index); ok {
+				row.ExecutionSlot = slot
+			}
 			if tracked, ok := runtimeRows[planRow.Index]; ok {
 				row = tracked
 			}
@@ -728,6 +733,15 @@ func (m tuiSyncModel) interactiveDisplayStateForSelection(state *tuiInteractiveS
 
 	display.rows = snapshot.rows
 	return display
+}
+
+func executionSlotForIndex(manifest engine.ExecutionManifest, index int) (int, bool) {
+	for _, entry := range manifest.Execution {
+		if entry.Index == index {
+			return entry.ExecutionSlot, true
+		}
+	}
+	return 0, false
 }
 
 func (m tuiSyncModel) currentShellLayout() tuiShellLayout {
@@ -870,10 +884,10 @@ func (m *tuiSyncModel) toggleInteractiveDownloadOrder(sourceID string) {
 		m.interactiveOrders[sourceID] = engine.DownloadOrderOldestFirst
 	}
 	if m.planPrompt != nil && strings.TrimSpace(m.planPrompt.sourceID) == sourceID {
-		m.planPrompt.details.DownloadOrder = string(m.downloadOrderForSourceID(sourceID))
+		m.planPrompt.setDownloadOrder(m.downloadOrderForSourceID(sourceID))
 	}
 	if state := m.interactiveSelectionForSource(sourceID); state != nil {
-		state.details.DownloadOrder = string(m.downloadOrderForSourceID(sourceID))
+		state.setDownloadOrder(m.downloadOrderForSourceID(sourceID))
 	}
 }
 

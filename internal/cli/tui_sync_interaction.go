@@ -76,15 +76,12 @@ func (i *tuiSyncInteraction) Input(prompt string) (string, error) {
 
 func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 	if i == nil || i.ch == nil {
-		selected := make([]int, 0, len(rows))
-		for _, row := range rows {
-			if row.Toggleable && row.SelectedByDefault {
-				selected = append(selected, row.Index)
-			}
+		manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+		if err != nil {
+			return engine.PlanSelectionResult{}, err
 		}
 		return engine.PlanSelectionResult{
-			SelectedIndices: selected,
-			DownloadOrder:   engine.DownloadOrderNewestFirst,
+			Manifest: manifest,
 		}, nil
 	}
 	source, ok := i.sourceByID[sourceID]
@@ -92,24 +89,25 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 		source.ID = sourceID
 	}
 	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun)
+	downloadOrder := engine.DownloadOrderNewestFirst
 	if order, ok := i.orderByID[sourceID]; ok && engine.SupportsDownloadOrder(source) {
-		details.DownloadOrder = string(engine.NormalizeDownloadOrder(order))
+		downloadOrder = engine.NormalizeDownloadOrder(order)
 	}
 	reply := make(chan tuiPlanSelectResult, 1)
 	i.ch <- tuiPlanSelectRequestMsg{
-		SourceID: sourceID,
-		Rows:     append([]engine.PlanRow{}, rows...),
-		Details:  details,
-		Reply:    reply,
+		SourceID:      sourceID,
+		Rows:          append([]engine.PlanRow{}, rows...),
+		Details:       details,
+		DownloadOrder: downloadOrder,
+		Reply:         reply,
 	}
 	result := <-reply
 	if result.Err != nil {
 		return engine.PlanSelectionResult{}, result.Err
 	}
 	return engine.PlanSelectionResult{
-		SelectedIndices: result.SelectedIndices,
-		DownloadOrder:   engine.NormalizeDownloadOrder(result.DownloadOrder),
-		Canceled:        result.Canceled,
+		Manifest: result.Manifest,
+		Canceled: result.Canceled,
 	}, nil
 }
 
@@ -180,14 +178,11 @@ func (i *tuiInitInteraction) Input(prompt string) (string, error) {
 }
 
 func (i *tuiInitInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
-	selected := make([]int, 0, len(rows))
-	for _, row := range rows {
-		if row.Toggleable && row.SelectedByDefault {
-			selected = append(selected, row.Index)
-		}
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+	if err != nil {
+		return engine.PlanSelectionResult{}, err
 	}
 	return engine.PlanSelectionResult{
-		SelectedIndices: selected,
-		DownloadOrder:   engine.DownloadOrderNewestFirst,
+		Manifest: manifest,
 	}, nil
 }
