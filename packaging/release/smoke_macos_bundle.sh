@@ -23,5 +23,12 @@ if [[ ! -f "${bundle_dir}/NOTICES" ]]; then
 fi
 
 export PATH="${bundle_dir}/tools:${PATH}"
-"${bundle_dir}/udl" version
-"${bundle_dir}/udl" doctor
+export HOME="${tmpdir}/home"
+export XDG_CONFIG_HOME="${tmpdir}/xdg-config"
+export XDG_STATE_HOME="${tmpdir}/xdg-state"
+mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_STATE_HOME}"
+(
+  cd "$tmpdir"
+  "${bundle_dir}/udl" version
+  "${bundle_dir}/udl" doctor
+)
