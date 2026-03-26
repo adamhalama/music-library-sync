@@ -130,6 +130,11 @@ jobs:
           arm64_sha="$(awk '/darwin-arm64.tar.gz$/ {print $1}' dist/SHA256SUMS)"
           bash ./packaging/homebrew/render_formula.sh "$version_no_v" "${RELEASE_REPO}" "$amd64_sha" "$arm64_sha" "dist/udl.rb"
 
+      - name: Verify rendered Homebrew formula
+        run: |
+          ruby -c dist/udl.rb
+          grep -F '(bin/"udl").write_env_script' dist/udl.rb
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
