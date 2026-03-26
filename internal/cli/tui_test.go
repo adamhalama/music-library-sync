@@ -39,9 +39,15 @@ func TestTUICommandHelp(t *testing.T) {
 	}
 }
 
-func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
+func newMenuRootModelForTest() tuiRootModel {
 	root := newTUIRootModel(&AppContext{}, false)
+	root.screen = tuiScreenMenu
 	root.startupAttention = nil
+	return root
+}
+
+func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
+	root := newMenuRootModelForTest()
 
 	if len(root.menuItems) < 2 {
 		t.Fatalf("expected at least two menu items, got %v", root.menuItems)
@@ -68,8 +74,7 @@ func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
 }
 
 func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 	root.width = 110
 
 	view := root.View()
@@ -79,8 +84,7 @@ func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
 }
 
 func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 	root.width = 109
 
 	view := root.View()
@@ -90,8 +94,7 @@ func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
 }
 
 func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -107,8 +110,7 @@ func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 }
 
 func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 	root.menuCursor = 2
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -125,8 +127,7 @@ func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
 }
 
 func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 
 	found := false
 	for _, item := range root.menuItems {
@@ -141,8 +142,7 @@ func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
 }
 
 func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 	root.menuCursor = 4
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -159,8 +159,7 @@ func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 }
 
 func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
-	root.startupAttention = nil
+	root := newMenuRootModelForTest()
 	root.menuCursor = 1
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -174,7 +173,7 @@ func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
 }
 
 func TestTUIRootHomeShowsStartupAttention(t *testing.T) {
-	root := newTUIRootModel(&AppContext{}, false)
+	root := newMenuRootModelForTest()
 	root.startupAttention = &tuiStartupAttentionState{
 		Severity:           tuiStartupAttentionSeverityBlocked,
 		PrimaryKind:        auth.CredentialKindSoundCloudClientID,

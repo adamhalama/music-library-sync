@@ -270,9 +270,11 @@ func TestDoctorSoundCloudDependencyMatrixCompatible(t *testing.T) {
 				return "0.0.0", nil
 			}
 		},
-		Getenv:        func(key string) string { return "set" },
-		CheckWritable: func(path string) error { return nil },
-		Matrix:        defaultDependencyMatrix(),
+		Getenv:                    func(key string) string { return "" },
+		CheckWritable:             func(path string) error { return nil },
+		Matrix:                    defaultDependencyMatrix(),
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "set", auth.CredentialStorageSourceEnv, nil },
+		LoadCredentialMetadata:    func(string) (auth.CredentialMetadataStore, error) { return auth.CredentialMetadataStore{}, nil },
 	}
 
 	report := checker.Check(context.Background(), soundcloudConfig())
