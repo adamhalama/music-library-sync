@@ -33,10 +33,10 @@ jobs:
       ALLOW_BUNDLED_TOOL_REDISTRIBUTION: ${{ vars.ALLOW_BUNDLED_TOOL_REDISTRIBUTION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.22.x"
 
@@ -88,7 +88,7 @@ jobs:
           bash ./packaging/release/smoke_macos_bundle.sh "dist/udl-v${VERSION#v}-darwin-${GOARCH}.tar.gz"
 
       - name: Upload macOS release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-darwin-${{ matrix.goarch }}
           path: |
@@ -106,10 +106,10 @@ jobs:
       HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -136,13 +136,21 @@ jobs:
           grep -F '(bin/"udl").write_env_script' dist/udl.rb
 
       - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(
             dist/udl-v*-darwin-amd64.tar.gz
             dist/udl-v*-darwin-arm64.tar.gz
             dist/SHA256SUMS
             dist/udl.rb
+          )
+
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            gh release upload "${VERSION}" "${files[@]}" --clobber
+          else
+            gh release create "${VERSION}" "${files[@]}" --title "${VERSION}" --notes ""
+          fi
 
       - name: Update Homebrew tap formula
         if: ${{ env.HOMEBREW_TAP_REPO != '' }}
