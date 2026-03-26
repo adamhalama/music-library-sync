@@ -34,12 +34,12 @@ class Udl < Formula
     chmod "+x", libexec/"udl"
     chmod "+x", libexec/"tools/scdl"
     chmod "+x", libexec/"tools/yt-dlp"
-    bin.write_env_script libexec/"udl", PATH: "\#{libexec}/tools:\$PATH"
+    bin.write_env_script libexec/"udl", PATH: "#{libexec}/tools:\$PATH"
   end
 
   test do
-    assert_match "udl version", shell_output("\#{bin}/udl version")
-    output = shell_output("\#{bin}/udl doctor")
+    assert_match "udl version", shell_output("#{bin}/udl version")
+    output = shell_output("#{bin}/udl doctor")
     assert_match "no sources configured yet", output
   end
 end
