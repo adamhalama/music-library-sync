@@ -10,13 +10,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-13
+          - runner: macos-15-intel
             goarch: amd64
             scdl_url: ${{ vars.BUNDLED_SCDL_URL_DARWIN_AMD64 }}
             scdl_sha256: ${{ vars.BUNDLED_SCDL_SHA256_DARWIN_AMD64 }}
             ytdlp_url: ${{ vars.BUNDLED_YTDLP_URL_DARWIN_AMD64 }}
             ytdlp_sha256: ${{ vars.BUNDLED_YTDLP_SHA256_DARWIN_AMD64 }}
-          - runner: macos-14
+          - runner: macos-15
             goarch: arm64
             scdl_url: ${{ vars.BUNDLED_SCDL_URL_DARWIN_ARM64 }}
             scdl_sha256: ${{ vars.BUNDLED_SCDL_SHA256_DARWIN_ARM64 }}
@@ -53,6 +53,11 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+          bash ./packaging/release/verify_bundled_tool_usage.sh
+
+      - name: Generate third-party notices
+        run: |
+          bash ./packaging/release/generate_notices.sh NOTICES
 
       - name: Build udl
         run: |
@@ -75,6 +80,7 @@ jobs:
           UDL_BIN="dist/udl" \
           SCDL_BIN="dist/tools/scdl" \
           YTDLP_BIN="dist/tools/yt-dlp" \
+          NOTICES_FILE="NOTICES" \
           bash ./packaging/release/build_macos_bundle.sh
 
       - name: Smoke test macOS bundle

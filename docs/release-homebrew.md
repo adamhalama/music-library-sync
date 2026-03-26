@@ -9,6 +9,11 @@ This repo now treats the public macOS release as:
   - bundled `yt-dlp`
 - a rendered Homebrew formula that installs the bundle under `libexec` and wraps `udl` with `PATH` pointing at the bundled tools
 
+Current pinned bundled sources:
+
+- `scdl` `3.0.1` from `adamhalama/udl-bundled-tools` release assets
+- `yt-dlp` `2026.02.21` from the official upstream GitHub release asset `yt-dlp_macos`
+
 ## Security Gate
 
 Bundling third-party binaries is security-sensitive and license-sensitive.
@@ -48,6 +53,11 @@ On `v*` tags the workflow:
 6. Renders a Homebrew formula with exact artifact URLs and checksums
 7. Publishes release assets to GitHub Releases
 8. Updates the tap formula when the tap repo configuration is present
+
+Current macOS runner labels:
+
+- Intel: `macos-15-intel`
+- Apple Silicon: `macos-15`
 
 ## Manual Validation Before Announcement
 

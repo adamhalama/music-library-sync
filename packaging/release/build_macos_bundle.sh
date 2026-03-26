@@ -6,6 +6,7 @@ set -euo pipefail
 : "${UDL_BIN:?UDL_BIN is required}"
 : "${SCDL_BIN:?SCDL_BIN is required}"
 : "${YTDLP_BIN:?YTDLP_BIN is required}"
+: "${NOTICES_FILE:?NOTICES_FILE is required}"
 
 dist_dir="${DIST_DIR:-dist}"
 release_dir="${dist_dir}/bundle-root"
@@ -18,6 +19,7 @@ mkdir -p "${bundle_root}/tools"
 cp "$UDL_BIN" "${bundle_root}/udl"
 cp "$SCDL_BIN" "${bundle_root}/tools/scdl"
 cp "$YTDLP_BIN" "${bundle_root}/tools/yt-dlp"
+cp "$NOTICES_FILE" "${bundle_root}/NOTICES"
 chmod +x "${bundle_root}/udl" "${bundle_root}/tools/scdl" "${bundle_root}/tools/yt-dlp"
 
 archive_path="${dist_dir}/${bundle_name}.tar.gz"

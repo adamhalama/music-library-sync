@@ -17,6 +17,11 @@ if [[ -z "$bundle_dir" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${bundle_dir}/NOTICES" ]]; then
+  echo "bundle is missing NOTICES" >&2
+  exit 1
+fi
+
 export PATH="${bundle_dir}/tools:${PATH}"
 "${bundle_dir}/udl" version
 "${bundle_dir}/udl" doctor
