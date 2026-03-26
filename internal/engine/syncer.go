@@ -41,6 +41,9 @@ var (
 	resolveSpotifyCredentialsFn           = auth.ResolveSpotifyCredentials
 	resolveDeemixARLFn                    = auth.ResolveDeemixARL
 	saveDeemixARLFn                       = auth.SaveDeemixARL
+	resolveSoundCloudClientIDWithSourceFn = auth.ResolveSoundCloudClientIDWithSource
+	recordCredentialFailureFn             = auth.RecordCredentialFailure
+	clearCredentialFailureFn              = auth.ClearCredentialFailure
 	enumerateSpotifyTracksFn              = enumerateSpotifyPlaylistTracks
 	enumerateSpotifyViaPageFn             = enumerateSpotifyPlaylistTracksViaPage
 	fetchSpotifyTrackMetadataFn           = fetchSpotifyTrackMetadataFromPage
@@ -844,7 +847,16 @@ func (s *Syncer) runGenericAdapter(
 		})
 	}
 	if execResult.ExitCode != 0 {
-		if clientIDMessage, ok := scdlClientIDFailureMessage(sourceForExec, execResult); ok {
+		if failureKind, clientIDMessage, ok := scdlClientIDFailureDetails(sourceForExec, execResult); ok {
+			if _, storageSource, resolveErr := resolveSoundCloudClientIDWithSourceFn(); resolveErr == nil || storageSource != auth.CredentialStorageSourceNone {
+				_ = recordCredentialFailureFn(
+					cfg.Defaults.StateDir,
+					auth.CredentialKindSoundCloudClientID,
+					storageSource,
+					failureKind,
+					clientIDMessage,
+				)
+			}
 			_ = s.Emitter.Emit(output.Event{
 				Timestamp: s.Now(),
 				Level:     output.LevelWarn,
@@ -885,6 +897,9 @@ func (s *Syncer) runGenericAdapter(
 					"stopped_on_existing": true,
 				},
 			})
+			if sourceForExec.Type == config.SourceTypeSoundCloud && sourceForExec.Adapter.Kind == "scdl" {
+				_ = clearCredentialFailureFn(cfg.Defaults.StateDir, auth.CredentialKindSoundCloudClientID)
+			}
 			return outcome
 		}
 
@@ -925,6 +940,9 @@ func (s *Syncer) runGenericAdapter(
 	}
 
 	outcome.Succeeded++
+	if sourceForExec.Type == config.SourceTypeSoundCloud && sourceForExec.Adapter.Kind == "scdl" {
+		_ = clearCredentialFailureFn(cfg.Defaults.StateDir, auth.CredentialKindSoundCloudClientID)
+	}
 	_ = s.Emitter.Emit(output.Event{
 		Timestamp: s.Now(),
 		Level:     output.LevelInfo,
@@ -982,29 +1000,34 @@ func missingEnvVars(required []string) []string {
 }
 
 func scdlClientIDFailureMessage(source config.Source, execResult ExecResult) (string, bool) {
+	_, message, ok := scdlClientIDFailureDetails(source, execResult)
+	return message, ok
+}
+
+func scdlClientIDFailureDetails(source config.Source, execResult ExecResult) (string, string, bool) {
 	if source.Type != config.SourceTypeSoundCloud {
-		return "", false
+		return "", "", false
 	}
 	if source.Adapter.Kind != "scdl" {
-		return "", false
+		return "", "", false
 	}
 	if execResult.ExitCode == 0 || execResult.Interrupted {
-		return "", false
+		return "", "", false
 	}
 
 	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
 	if strings.Contains(combined, "invalid client_id specified by --client-id argument") &&
 		strings.Contains(combined, "clientidgenerationerror") {
-		return fmt.Sprintf(
+		return "invalid_client_id", fmt.Sprintf(
 			"[%s] scdl rejected the configured SCDL_CLIENT_ID, and automatic client_id generation also failed; refresh SCDL_CLIENT_ID and rerun",
 			source.ID,
 		), true
 	}
 	if strings.Contains(combined, "clientidgenerationerror") {
-		return fmt.Sprintf(
+		return "client_id_generation_failed", fmt.Sprintf(
 			"[%s] scdl could not generate a SoundCloud client_id automatically; set SCDL_CLIENT_ID to a current value and rerun",
 			source.ID,
 		), true
 	}
-	return "", false
+	return "", "", false
 }

@@ -3,20 +3,34 @@ name: release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-macos:
     strategy:
       matrix:
         include:
-          - goos: darwin
+          - runner: macos-15-intel
             goarch: amd64
-          - goos: darwin
+            scdl_url: ${{ vars.BUNDLED_SCDL_URL_DARWIN_AMD64 }}
+            scdl_sha256: ${{ vars.BUNDLED_SCDL_SHA256_DARWIN_AMD64 }}
+            ytdlp_url: ${{ vars.BUNDLED_YTDLP_URL_DARWIN_AMD64 }}
+            ytdlp_sha256: ${{ vars.BUNDLED_YTDLP_SHA256_DARWIN_AMD64 }}
+          - runner: macos-15
             goarch: arm64
-          - goos: linux
-            goarch: amd64
+            scdl_url: ${{ vars.BUNDLED_SCDL_URL_DARWIN_ARM64 }}
+            scdl_sha256: ${{ vars.BUNDLED_SCDL_SHA256_DARWIN_ARM64 }}
+            ytdlp_url: ${{ vars.BUNDLED_YTDLP_URL_DARWIN_ARM64 }}
+            ytdlp_sha256: ${{ vars.BUNDLED_YTDLP_SHA256_DARWIN_ARM64 }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ github.ref_name }}
+      GOOS: darwin
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 0
+      ALLOW_BUNDLED_TOOL_REDISTRIBUTION: ${{ vars.ALLOW_BUNDLED_TOOL_REDISTRIBUTION }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,33 +38,76 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: "1.22.x"
 
-      - name: Build
-        env:
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ github.ref_name }}
+      - name: Verify bundled tool redistribution gate
         run: |
+          test "${ALLOW_BUNDLED_TOOL_REDISTRIBUTION}" = "true" || {
+            echo "Bundled release is blocked until redistribution has been reviewed and ALLOW_BUNDLED_TOOL_REDISTRIBUTION=true is set."
+            exit 1
+          }
+          test -n "${{ matrix.scdl_url }}" && test -n "${{ matrix.scdl_sha256 }}"
+          test -n "${{ matrix.ytdlp_url }}" && test -n "${{ matrix.ytdlp_sha256 }}"
+
+      - name: Run verification
+        run: |
+          go test ./...
+          go vet ./...
+          bash ./packaging/release/verify_bundled_tool_usage.sh
+
+      - name: Generate third-party notices
+        run: |
+          bash ./packaging/release/generate_notices.sh NOTICES
+
+      - name: Build udl
+        run: |
+          version_no_v="${VERSION#v}"
           mkdir -p dist
           go build \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -o "dist/udl-${VERSION}-${GOOS}-${GOARCH}" \
+            -ldflags "-s -w -X main.version=${version_no_v} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "dist/udl" \
             ./cmd/udl
 
-      - name: Upload artifacts
+      - name: Fetch bundled SoundCloud tools
+        run: |
+          bash ./packaging/release/fetch_tool_binary.sh "${{ matrix.scdl_url }}" "${{ matrix.scdl_sha256 }}" "dist/tools/scdl"
+          bash ./packaging/release/fetch_tool_binary.sh "${{ matrix.ytdlp_url }}" "${{ matrix.ytdlp_sha256 }}" "dist/tools/yt-dlp"
+
+      - name: Build macOS bundle
+        run: |
+          VERSION="${VERSION#v}" \
+          GOARCH="${GOARCH}" \
+          UDL_BIN="dist/udl" \
+          SCDL_BIN="dist/tools/scdl" \
+          YTDLP_BIN="dist/tools/yt-dlp" \
+          NOTICES_FILE="NOTICES" \
+          bash ./packaging/release/build_macos_bundle.sh
+
+      - name: Smoke test macOS bundle
+        run: |
+          bash ./packaging/release/smoke_macos_bundle.sh "dist/udl-v${VERSION#v}-darwin-${GOARCH}.tar.gz"
+
+      - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: udl-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
+          name: release-darwin-${{ matrix.goarch }}
+          path: |
+            dist/udl-v*-darwin-${{ matrix.goarch }}.tar.gz
+            dist/udl-v*-darwin-${{ matrix.goarch }}.tar.gz.sha256
 
   publish:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-macos
     permissions:
       contents: write
+    env:
+      VERSION: ${{ github.ref_name }}
+      RELEASE_REPO: ${{ github.repository }}
+      HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -58,11 +115,42 @@ jobs:
 
       - name: Flatten artifact layout
         run: |
-          find dist -maxdepth 3 -type f -print0 | while IFS= read -r -d '' file; do
+          find dist -mindepth 2 -type f -print0 | while IFS= read -r -d '' file; do
             cp "$file" "dist/$(basename "$file")"
           done
+
+      - name: Build SHA256SUMS
+        run: |
+          cat dist/*.sha256 > dist/SHA256SUMS
+
+      - name: Render Homebrew formula
+        run: |
+          version_no_v="${VERSION#v}"
+          amd64_sha="$(awk '/darwin-amd64.tar.gz$/ {print $1}' dist/SHA256SUMS)"
+          arm64_sha="$(awk '/darwin-arm64.tar.gz$/ {print $1}' dist/SHA256SUMS)"
+          bash ./packaging/homebrew/render_formula.sh "$version_no_v" "${RELEASE_REPO}" "$amd64_sha" "$arm64_sha" "dist/udl.rb"
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/udl-*
+          files: |
+            dist/udl-v*-darwin-amd64.tar.gz
+            dist/udl-v*-darwin-arm64.tar.gz
+            dist/SHA256SUMS
+            dist/udl.rb
+
+      - name: Update Homebrew tap formula
+        if: ${{ env.HOMEBREW_TAP_REPO != '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          test -n "${HOMEBREW_TAP_TOKEN}"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp dist/udl.rb tap/Formula/udl.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/udl.rb
+          git commit -m "release: update udl ${VERSION}"
+          git push

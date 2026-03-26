@@ -4,12 +4,15 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jaa/update-downloads/internal/auth"
 )
 
 type tuiScreen int
 
 const (
 	tuiScreenMenu tuiScreen = iota
+	tuiScreenGetStarted
+	tuiScreenCredentials
 	tuiScreenInteractiveSync
 	tuiScreenSync
 	tuiScreenDoctor
@@ -28,7 +31,10 @@ type tuiRootModel struct {
 	screen     tuiScreen
 	menuCursor int
 	menuItems  []string
+	startupAttention *tuiStartupAttentionState
 
+	onboardingModel tuiOnboardingModel
+	credentialsModel tuiCredentialsModel
 	syncModel     tuiSyncModel
 	doctorModel   tuiDoctorModel
 	validateModel tuiValidateModel
@@ -37,12 +43,19 @@ type tuiRootModel struct {
 }
 
 func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
-	return tuiRootModel{
+	model := tuiRootModel{
 		app:           app,
 		debugMessages: debugMessages,
-		menuItems:     []string{"interactive sync", "sync", "doctor", "validate", "config editor", "init", "quit"},
+		menuItems:     []string{"Get Started", "Credentials", "Check System", "Run Sync", "Advanced Config", "Quit"},
 		screen:        tuiScreenMenu,
 	}
+	if startup, needsOnboarding := tuiDetectOnboardingState(app); needsOnboarding {
+		model.screen = tuiScreenGetStarted
+		model.onboardingModel = newTUIOnboardingModel(app, startup)
+	} else {
+		model.refreshStartupAttention()
+	}
+	return model
 }
 
 func (m tuiRootModel) Init() tea.Cmd {
@@ -63,6 +76,14 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncModel.height = typed.Height
 			next, cmd := m.syncModel.Update(msg)
 			m.syncModel = next
+			return m, cmd
+		case tuiScreenGetStarted:
+			next, cmd := m.onboardingModel.Update(msg)
+			m.onboardingModel = next
+			return m, cmd
+		case tuiScreenCredentials:
+			next, cmd := m.credentialsModel.Update(msg)
+			m.credentialsModel = next
 			return m, cmd
 		case tuiScreenDoctor:
 			next, cmd := m.doctorModel.Update(msg)
@@ -86,9 +107,13 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tuiConfigEditorExitAcceptedMsg:
 		if m.screen == tuiScreenConfigEditor {
 			m.screen = tuiScreenMenu
+			m.refreshStartupAttention()
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if typed.String() == "c" && m.canOpenCredentialsShortcut() {
+			return m.openCredentials(m.recommendedCredentialFocus())
+		}
 		if m.screen == tuiScreenMenu {
 			switch typed.String() {
 			case "ctrl+c", "q":
@@ -105,30 +130,25 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				switch m.menuItems[m.menuCursor] {
-				case "interactive sync":
+				case "Get Started":
+					startup, _ := tuiDetectOnboardingState(m.app)
+					m.screen = tuiScreenGetStarted
+					m.onboardingModel = newTUIOnboardingModel(m.app, startup)
+					return m, m.onboardingModel.Init()
+				case "Credentials":
+					return m.openCredentials(m.recommendedCredentialFocus())
+				case "Run Sync":
 					m.screen = tuiScreenInteractiveSync
 					m.syncModel = newTUISyncModel(m.app, tuiSyncWorkflowInteractive)
 					return m, m.syncModel.Init()
-				case "sync":
-					m.screen = tuiScreenSync
-					m.syncModel = newTUISyncModel(m.app, tuiSyncWorkflowStandard)
-					return m, m.syncModel.Init()
-				case "doctor":
+				case "Check System":
 					m.screen = tuiScreenDoctor
 					m.doctorModel = newTUIDoctorModel(m.app)
 					return m, m.doctorModel.Init()
-				case "validate":
-					m.screen = tuiScreenValidate
-					m.validateModel = newTUIValidateModel(m.app)
-					return m, m.validateModel.Init()
-				case "config editor":
+				case "Advanced Config":
 					m.screen = tuiScreenConfigEditor
 					m.configModel = newTUIConfigEditorModel(m.app)
 					return m, m.configModel.Init()
-				case "init":
-					m.screen = tuiScreenInit
-					m.initModel = newTUIInitModel(m.app)
-					return m, m.initModel.Init()
 				default:
 					return m, tea.Quit
 				}
@@ -136,11 +156,20 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if typed.String() == "esc" && m.canReturnToMenuOnEsc() {
 			m.screen = tuiScreenMenu
+			m.refreshStartupAttention()
 			return m, nil
 		}
 	}
 
 	switch m.screen {
+	case tuiScreenGetStarted:
+		next, cmd := m.onboardingModel.Update(msg)
+		m.onboardingModel = next
+		return m, cmd
+	case tuiScreenCredentials:
+		next, cmd := m.credentialsModel.Update(msg)
+		m.credentialsModel = next
+		return m, cmd
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		m.syncModel.width = m.width
 		m.syncModel.height = m.height
@@ -170,6 +199,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 	switch m.screen {
+	case tuiScreenGetStarted:
+		return m.onboardingModel.allowBack()
+	case tuiScreenCredentials:
+		return m.credentialsModel.allowBack()
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		return !m.syncModel.running &&
 			!m.syncModel.hasActivePlanPrompt() &&
@@ -185,6 +218,52 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 	default:
 		return true
 	}
+}
+
+func (m tuiRootModel) canOpenCredentialsShortcut() bool {
+	switch m.screen {
+	case tuiScreenMenu:
+		return m.startupAttention != nil
+	case tuiScreenDoctor:
+		return true
+	case tuiScreenInteractiveSync, tuiScreenSync:
+		return !m.syncModel.running &&
+			!m.syncModel.hasActivePlanPrompt() &&
+			!m.syncModel.hasActiveInteractionPrompt() &&
+			!m.syncModel.hasActivePlanLimitInput() &&
+			!m.syncModel.hasActiveTimeoutInput()
+	default:
+		return false
+	}
+}
+
+func (m tuiRootModel) recommendedCredentialFocus() auth.CredentialKind {
+	switch m.screen {
+	case tuiScreenMenu:
+		if m.startupAttention != nil {
+			return m.startupAttention.PrimaryKind
+		}
+		return ""
+	case tuiScreenDoctor:
+		return m.doctorModel.recommendedCredentialKind()
+	case tuiScreenInteractiveSync, tuiScreenSync:
+		return m.syncModel.recommendedCredentialKind()
+	default:
+		return ""
+	}
+}
+
+func (m tuiRootModel) openCredentials(focus auth.CredentialKind) (tuiRootModel, tea.Cmd) {
+	m.screen = tuiScreenCredentials
+	if focus == "" && m.startupAttention != nil {
+		focus = m.startupAttention.PrimaryKind
+	}
+	m.credentialsModel = newTUICredentialsModel(m.app, focus)
+	return m, m.credentialsModel.Init()
+}
+
+func (m *tuiRootModel) refreshStartupAttention() {
+	m.startupAttention = tuiDetectStartupAttentionFn(m.app)
 }
 
 func (m tuiRootModel) View() string {

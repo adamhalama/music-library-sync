@@ -35,6 +35,10 @@ func defaultStateDir() string {
 	return filepath.Join(home, ".local", "state", "udl")
 }
 
+func DefaultStateDir() string {
+	return defaultStateDir()
+}
+
 func ExpandPath(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil

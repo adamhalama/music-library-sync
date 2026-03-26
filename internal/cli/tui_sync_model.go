@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/adapters/deemix"
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
 	"github.com/jaa/update-downloads/internal/adapters/scdlfreedl"
@@ -1001,6 +1002,27 @@ func (m tuiSyncModel) lastFailureLines() []string {
 		lines = append(lines, "log: "+path)
 	}
 	return lines
+}
+
+func (m tuiSyncModel) recommendedCredentialKind() auth.CredentialKind {
+	failure := m.lastFailure
+	if m.isInteractiveSyncWorkflow() && m.interactiveTracker != nil {
+		failure = m.interactiveTracker.LastFailure()
+	}
+	if failure == nil {
+		return ""
+	}
+	lower := strings.ToLower(strings.TrimSpace(failure.Message + "\n" + failure.StdoutTail + "\n" + failure.StderrTail))
+	switch {
+	case strings.Contains(lower, "soundcloud client id"), strings.Contains(lower, "scdl_client_id"), strings.Contains(lower, "clientidgenerationerror"):
+		return auth.CredentialKindSoundCloudClientID
+	case strings.Contains(lower, "deezer arl"):
+		return auth.CredentialKindDeemixARL
+	case strings.Contains(lower, "spotify app credentials"), strings.Contains(lower, "spotify client credentials"), strings.Contains(lower, "spotify api rate limit"):
+		return auth.CredentialKindSpotifyApp
+	default:
+		return ""
+	}
 }
 
 func tuiIndentedTailLines(raw string) []string {

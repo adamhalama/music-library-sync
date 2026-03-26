@@ -13,18 +13,18 @@
 ## Track B: CLI v1 release readiness (current priority)
 
 ### Phase 4: Release integrity and publish gates (P1)
-- [ ] Add checksum generation and upload (`SHA256SUMS`) in `/Users/jaa/dev/utils/update-downloads/.github/workflows/release.yml`.
-- [ ] Gate release publish on verification steps in release workflow (`go test ./...`, `go vet ./...`).
-- [ ] Add a pre-publish smoke step for built artifacts (at least `udl version` per target binary).
+- [x] Add checksum generation and upload (`SHA256SUMS`) in `/Users/jaa/dev/utils/update-downloads/.github/workflows/release.yml`.
+- [x] Gate release publish on verification steps in release workflow (`go test ./...`, `go vet ./...`).
+- [x] Add a pre-publish smoke step for built artifacts (at least `udl version` per target binary).
 
 ### Phase 5: Packaging readiness (P1)
-- [ ] Replace placeholder SHA values in `/Users/jaa/dev/utils/update-downloads/packaging/homebrew/udl.rb`.
-- [ ] Define formula update flow per release tag (manual checklist or scripted step).
+- [x] Replace placeholder SHA values in `/Users/jaa/dev/utils/update-downloads/packaging/homebrew/udl.rb` through generated release formula output.
+- [x] Define formula update flow per release tag (manual checklist or scripted step).
 - [ ] Validate formula install/test end-to-end from release artifacts before announcing.
 
 ### Phase 6: CLI UX contract cleanup (P2)
-- [ ] Implement `--no-color` behavior or remove the flag from command surface.
-- [ ] Refine `doctor` behavior for zero configured sources to avoid misleading hard failures on initial setup.
+- [x] Implement `--no-color` behavior or remove the flag from command surface.
+- [x] Refine `doctor` behavior for zero configured sources to avoid misleading hard failures on initial setup.
 - [ ] Document doctor exit-code expectations for CI/automation consumers.
 
 ### Phase 7: Hardening and hygiene (P2/P3)
