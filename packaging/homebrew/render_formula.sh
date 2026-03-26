@@ -34,7 +34,7 @@ class Udl < Formula
     chmod "+x", libexec/"udl"
     chmod "+x", libexec/"tools/scdl"
     chmod "+x", libexec/"tools/yt-dlp"
-    bin.write_env_script libexec/"udl", PATH: "#{libexec}/tools:\$PATH"
+    (bin/"udl").write_env_script libexec/"udl", PATH: "#{libexec}/tools:\$PATH"
   end
 
   test do
