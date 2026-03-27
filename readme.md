@@ -16,19 +16,20 @@ The legacy script remains available during migration: `bin/update-downloads`.
 - App name: `udl`
 - Primary flow: `udl tui`
 - v1 public release target: macOS-first, Homebrew-first
-- Bundled SoundCloud toolchain in release assets: `scdl` + `yt-dlp`
+- SoundCloud runtime contract: external `scdl` + `yt-dlp`
 - Spotify remains available, but is treated as beta/advanced in the first public release
 
 ## Requirements
 
 Runtime tools:
-- Public macOS release bundles `scdl` + `yt-dlp` for the recommended SoundCloud path
+- SoundCloud sync requires external `scdl` + `yt-dlp`
 - Spotify still relies on external `deemix` or `spotdl` plus credentials
 
 Dependency policy:
-- SoundCloud release bundles prefer the bundled `scdl`/`yt-dlp` pair.
-- Local/dev installs may still use external tools, and `udl doctor` verifies compatibility.
-- See `docs/dependency-matrix.md` for the current matrix and `docs/release-homebrew.md` for the bundled macOS release flow.
+- Homebrew installs `udl` with `scdl` and `yt-dlp` as formula dependencies.
+- Tarball installs require `scdl` and `yt-dlp` to be installed separately.
+- `udl doctor` verifies compatibility for the active external tools.
+- See `docs/dependency-matrix.md` for the current matrix and `docs/release-homebrew.md` for the macOS release flow.
 
 Environment:
 - `SCDL_CLIENT_ID` remains supported as an override, but the public TUI now manages the SoundCloud client ID in macOS Keychain by default
@@ -43,11 +44,11 @@ Build tooling:
 Public macOS release:
 
 ```bash
-brew tap REPLACE_WITH_TAP_REPO
+brew tap adamhalama/udl
 brew install udl
 ```
 
-The Homebrew formula installs `udl` plus the bundled SoundCloud tools under `libexec` and wraps `udl` so that bundled `scdl` and `yt-dlp` are preferred automatically.
+The Homebrew formula installs `udl` and depends on external `scdl` and `yt-dlp` formulas for the recommended SoundCloud path.
 
 Local development install:
 

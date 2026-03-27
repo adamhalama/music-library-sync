@@ -201,16 +201,17 @@ func (m tuiOnboardingModel) shellBody(layout tuiShellLayout) string {
 				}, width),
 			}, "\n")
 		}
-		return strings.Join([]string{
-			renderPlanSection("Credentials", []string{
-				renderCursorLineWithValue(m.credentialsCursor == 0, "SoundCloud Client ID", tuiCredentialPreview(m.soundCloudClientID)),
-				renderCursorLineWithValue(m.credentialsCursor == 1, "Continue to review", "enter"),
-			}, width),
-			renderPlanSection("Notes", []string{
-				"UDL stores this value in macOS Keychain and keeps it out of udl.yaml.",
-				"If you skip it now, you can add it later from the Credentials screen.",
-			}, width),
-		}, "\n")
+			return strings.Join([]string{
+				renderPlanSection("Credentials", []string{
+					renderCursorLineWithValue(m.credentialsCursor == 0, "SoundCloud Client ID", tuiCredentialPreview(m.soundCloudClientID)),
+					renderCursorLineWithValue(m.credentialsCursor == 1, "Continue to review", "enter"),
+				}, width),
+				renderPlanSection("Notes", []string{
+					"UDL stores this value in macOS Keychain and keeps it out of udl.yaml.",
+					"SoundCloud sync also requires external scdl and yt-dlp tools.",
+					"If you skip it now, you can add it later from the Credentials screen.",
+				}, width),
+			}, "\n")
 	case tuiOnboardingPhaseReview:
 		validationLines := []string{"No blocking issues in the starter config."}
 		if len(m.validationProblems) > 0 {
