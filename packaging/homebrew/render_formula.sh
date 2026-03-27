@@ -18,6 +18,8 @@ class Udl < Formula
   desc "Set up and sync local music libraries from SoundCloud and Spotify sources"
   homepage "https://github.com/${release_repo}"
   version "${version}"
+  depends_on "scdl"
+  depends_on "yt-dlp"
 
   on_macos do
     if Hardware::CPU.arm?
@@ -30,11 +32,7 @@ class Udl < Formula
   end
 
   def install
-    libexec.install Dir["*"]
-    chmod "+x", libexec/"udl"
-    chmod "+x", libexec/"tools/scdl"
-    chmod "+x", libexec/"tools/yt-dlp"
-    (bin/"udl").write_env_script libexec/"udl", PATH: "#{libexec}/tools:\$PATH"
+    bin.install "udl"
   end
 
   test do

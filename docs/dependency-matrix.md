@@ -40,6 +40,9 @@ Known-bad versions can be blocked explicitly in doctor matrix rules as regressio
   - `yt-dlp`
 - `spotdl` is not required as a Homebrew formula dependency in this phase.
 
-## Future direction
+## Release direction
 
-The roadmap tracks a future "maximum shielding" mode: bundled per-platform adapter toolchains with pinned versions, release asset signing, and explicit rollback mechanics.
+The public macOS release path now uses the external dependency contract by default:
+
+- Homebrew installs `udl` with external `scdl` and `yt-dlp` formula dependencies
+- Tarball installs ship `udl` only and rely on `doctor` / TUI repair guidance when tools are missing

@@ -505,7 +505,7 @@ func (m tuiOnboardingModel) sourceURLHelp() []string {
 	}
 	return []string{
 		"Paste the SoundCloud profile, likes, or playlist URL you want to sync.",
-		"The Homebrew install prefers bundled SoundCloud tools when available.",
+		"UDL uses external scdl and yt-dlp tools for SoundCloud sync.",
 	}
 }
 
@@ -536,7 +536,7 @@ func (m tuiOnboardingModel) nextStepLines() []string {
 		return []string{"Fix the save problem above, then press esc to return and try again."}
 	}
 	if reportHasCheckContaining(m.doctorReport, "scdl not found") || reportHasCheckContaining(m.doctorReport, "yt-dlp not found") {
-		return []string{"UDL could not find its SoundCloud tools. Reinstall with Homebrew, then reopen `udl tui` and choose Check System."}
+		return []string{"UDL needs external scdl and yt-dlp tools for SoundCloud sync. Homebrew installs them as dependencies for `udl`; tarball installs need them set up separately before you rerun Check System."}
 	}
 	if reportHasCheckContaining(m.doctorReport, "SoundCloud client ID is missing") {
 		return []string{"Open `udl tui`, choose Credentials, and save the SoundCloud client ID to Keychain before your first sync."}
