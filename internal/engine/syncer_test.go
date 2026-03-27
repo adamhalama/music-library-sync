@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -832,6 +833,104 @@ func TestSyncerSpotifyDeemixScanGapsExecutesPlannedTracksDeterministically(t *te
 	lines := spotifyStateIDsFromPayload(string(payload))
 	if len(lines) < 3 || lines[len(lines)-2] != "1abc234def" || lines[len(lines)-1] != "3abc234def" {
 		t.Fatalf("expected appended spotify track ids in deterministic order, got %q", string(payload))
+	}
+}
+
+func TestSyncerSpotifyDeemixOldestFirstReversesPlannedTrackExecution(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-deemix",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-deemix.sync.spotify",
+				Adapter:   config.AdapterSpec{Kind: "deemix"},
+			},
+		},
+	}
+	statePath := filepath.Join(stateDir, "spotify-deemix.sync.spotify")
+	if err := os.WriteFile(statePath, []byte("2abc234def\n"), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "artist-2 - track-2.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local known file: %v", err)
+	}
+
+	origResolveCreds := resolveSpotifyCredentialsFn
+	origResolveARL := resolveDeemixARLFn
+	origSaveARL := saveDeemixARLFn
+	origEnumerate := enumerateSpotifyTracksFn
+	t.Cleanup(func() {
+		resolveSpotifyCredentialsFn = origResolveCreds
+		resolveDeemixARLFn = origResolveARL
+		saveDeemixARLFn = origSaveARL
+		enumerateSpotifyTracksFn = origEnumerate
+	})
+
+	resolveSpotifyCredentialsFn = func() (auth.SpotifyCredentials, error) {
+		return auth.SpotifyCredentials{ClientID: "id", ClientSecret: "secret"}, nil
+	}
+	resolveDeemixARLFn = func() (string, error) { return "arl", nil }
+	saveDeemixARLFn = func(string) error { return nil }
+	enumerateSpotifyTracksFn = func(ctx context.Context, source config.Source, creds auth.SpotifyCredentials) ([]spotifyRemoteTrack, error) {
+		return []spotifyRemoteTrack{
+			{ID: "1abc234def", Title: "track-1", Artist: "artist-1", Album: "album-1"},
+			{ID: "2abc234def", Title: "track-2", Artist: "artist-2", Album: "album-2"},
+			{ID: "3abc234def", Title: "track-3", Artist: "artist-3", Album: "album-3"},
+		}, nil
+	}
+
+	runner := &sequenceRunner{results: []ExecResult{{ExitCode: 0}, {ExitCode: 0}}}
+	syncer := NewSyncer(
+		map[string]Adapter{"deemix": fakeDeemixAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{ScanGaps: true})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful deemix source run, got %+v", result)
+	}
+	if len(runner.specs) != 2 {
+		t.Fatalf("expected two track executions, got %d", len(runner.specs))
+	}
+	if got := runner.specs[0].Args[0]; got != "https://open.spotify.com/track/1abc234def" {
+		t.Fatalf("expected first planned track URL in default newest_first order, got %q", got)
+	}
+	if got := runner.specs[1].Args[0]; got != "https://open.spotify.com/track/3abc234def" {
+		t.Fatalf("expected second planned track URL in default newest_first order, got %q", got)
+	}
+
+	payload, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	lines := spotifyStateIDsFromPayload(string(payload))
+	if len(lines) < 3 || lines[len(lines)-2] != "1abc234def" || lines[len(lines)-1] != "3abc234def" {
+		t.Fatalf("expected appended spotify track ids in newest_first order, got %q", string(payload))
 	}
 }
 
@@ -1752,6 +1851,121 @@ func TestSyncerSoundCloudFreeDLRunsSeparateFlowAndUpdatesStateArchive(t *testing
 	}
 }
 
+func TestSyncerSoundCloudFreeDLOldestFirstReversesBrowserHandoffOrder(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	downloadsDir := filepath.Join(tmp, "downloads")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "sc-free",
+				Type:      config.SourceTypeSoundCloud,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://soundcloud.com/user",
+				StateFile: "sc-free.sync.scdl",
+				Adapter:   config.AdapterSpec{Kind: "scdl-freedl"},
+			},
+		},
+	}
+
+	origEnumerate := enumerateSoundCloudTracksFn
+	origFetchFree := fetchSoundCloudFreeDownloadMetadataFn
+	origApplyMetadata := applySoundCloudTrackMetadataFn
+	origOpenBrowser := openURLInBrowserFn
+	origDetectBrowserDownload := detectBrowserDownloadedFileFn
+	origBrowserDownloadsDir := browserDownloadsDirFn
+	origMoveBrowserDownload := moveDownloadedMediaToTargetFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksFn = origEnumerate
+		fetchSoundCloudFreeDownloadMetadataFn = origFetchFree
+		applySoundCloudTrackMetadataFn = origApplyMetadata
+		openURLInBrowserFn = origOpenBrowser
+		detectBrowserDownloadedFileFn = origDetectBrowserDownload
+		browserDownloadsDirFn = origBrowserDownloadsDir
+		moveDownloadedMediaToTargetFn = origMoveBrowserDownload
+	})
+
+	tracks := []soundCloudRemoteTrack{
+		{ID: "111", Title: "Track One", URL: "https://soundcloud.com/a/one"},
+		{ID: "222", Title: "Track Two", URL: "https://soundcloud.com/a/two"},
+		{ID: "333", Title: "Track Three", URL: "https://soundcloud.com/a/three"},
+	}
+	enumerateSoundCloudTracksFn = func(ctx context.Context, source config.Source) ([]soundCloudRemoteTrack, error) {
+		return tracks, nil
+	}
+	fetchSoundCloudFreeDownloadMetadataFn = func(ctx context.Context, track soundCloudRemoteTrack) (soundCloudFreeDownloadMetadata, error) {
+		return soundCloudFreeDownloadMetadata{
+			ID:            track.ID,
+			Title:         track.Title,
+			Artist:        "Artist " + track.ID,
+			SoundCloudURL: track.URL,
+			PurchaseURL:   "https://hypeddit.com/pichi/" + track.ID,
+		}, nil
+	}
+	applySoundCloudTrackMetadataFn = func(ctx context.Context, filePath string, metadata soundCloudFreeDownloadMetadata) error {
+		return nil
+	}
+	browserDownloadsDirFn = func() (string, error) {
+		return downloadsDir, nil
+	}
+	openedURLs := make([]string, 0, len(tracks))
+	openURLInBrowserFn = func(ctx context.Context, rawURL string) error {
+		openedURLs = append(openedURLs, rawURL)
+		return nil
+	}
+	detectBrowserDownloadedFileFn = func(ctx context.Context, dir string, before map[string]mediaFileSnapshot, timeout time.Duration, metadata soundCloudFreeDownloadMetadata) (string, error) {
+		path := filepath.Join(dir, "track-"+metadata.ID+".wav")
+		if err := os.WriteFile(path, []byte("audio"), 0o644); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+	moveDownloadedMediaToTargetFn = moveDownloadedMediaToTarget
+
+	runner := &freeDownloadRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"scdl-freedl": fakeAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful source run, got %+v", result)
+	}
+	wantOpened := []string{
+		"https://hypeddit.com/pichi/111",
+		"https://hypeddit.com/pichi/222",
+		"https://hypeddit.com/pichi/333",
+	}
+	if !reflect.DeepEqual(openedURLs, wantOpened) {
+		t.Fatalf("expected newest_first browser handoff order %v, got %v", wantOpened, openedURLs)
+	}
+}
+
 func TestSyncerSoundCloudFreeDLSkipsUnsupportedFreeDownloadHost(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
@@ -2556,7 +2770,7 @@ func TestRunGenericAdapterBreakOnExistingEmitsStructuredStopDetails(t *testing.T
 	syncer := NewSyncer(map[string]Adapter{"fake": fakeAdapter{}}, runner, emitter)
 	syncer.Now = func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }
 
-	outcome := syncer.runGenericAdapter(context.Background(), cfg, source, fakeAdapter{}, source, nil, soundCloudStateSwap{}, SyncOptions{})
+	outcome := syncer.runGenericAdapter(context.Background(), cfg, source, fakeAdapter{}, source, nil, soundCloudStateSwap{}, DownloadOrderNewestFirst, SyncOptions{})
 	if outcome.Failed != 0 || outcome.Succeeded != 1 {
 		t.Fatalf("expected graceful break-on-existing success, got %+v", outcome)
 	}

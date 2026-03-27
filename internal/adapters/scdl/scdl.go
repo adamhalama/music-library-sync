@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,7 +248,6 @@ func normalizeYTDLPPlaylistItems(raw string, selected []int) string {
 		unique[idx] = struct{}{}
 		ordered = append(ordered, idx)
 	}
-	slices.Sort(ordered)
 	if len(ordered) == 0 {
 		return strings.Join(filtered, " ")
 	}

@@ -55,14 +55,14 @@ func (i initInteraction) Input(prompt string) (string, error) {
 	return promptLine(i.app, prompt)
 }
 
-func (i initInteraction) SelectRows(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
-	selected := make([]int, 0, len(rows))
-	for _, row := range rows {
-		if row.Toggleable && row.SelectedByDefault {
-			selected = append(selected, row.Index)
-		}
+func (i initInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+	if err != nil {
+		return engine.PlanSelectionResult{}, err
 	}
-	return selected, false, nil
+	return engine.PlanSelectionResult{
+		Manifest: manifest,
+	}, nil
 }
 
 func promptYesNo(app *AppContext, prompt string) (bool, error) {

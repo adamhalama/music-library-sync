@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -119,8 +120,13 @@ func mergeFile(cfg *Config, path string, required bool) error {
 }
 
 func parseFileConfig(payload []byte, path string) (fileConfig, error) {
+	var root yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(&root); err != nil {
+		return fileConfig{}, fmt.Errorf("parse config file %s: %w", path, err)
+	}
 	var fc fileConfig
-	if err := yaml.Unmarshal(payload, &fc); err != nil {
+	if err := root.Decode(&fc); err != nil {
 		return fileConfig{}, fmt.Errorf("parse config file %s: %w", path, err)
 	}
 	return fc, nil

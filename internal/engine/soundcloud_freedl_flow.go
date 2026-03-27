@@ -20,6 +20,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 	sourcePreflight *SoundCloudPreflight,
 	plannedTracks []soundCloudRemoteTrack,
 	stateSwap soundCloudStateSwap,
+	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) (soundCloudFreeDownloadOutcome, error) {
 	outcome := soundCloudFreeDownloadOutcome{Attempted: true}
@@ -175,9 +176,10 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 		Level:     output.LevelInfo,
 		Event:     output.EventSourceStarted,
 		SourceID:  source.ID,
-		Message:   fmt.Sprintf("[%s] running soundcloud free-download flow for %d track(s)", source.ID, len(plannedTracks)),
+		Message:   fmt.Sprintf("[%s] running soundcloud free-download flow for %d track(s) (download_order=%s)", source.ID, len(plannedTracks), downloadOrder),
 		Details: map[string]any{
 			"planned_download_count": len(plannedTracks),
+			"download_order":         string(downloadOrder),
 		},
 	})
 

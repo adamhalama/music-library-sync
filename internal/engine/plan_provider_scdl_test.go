@@ -4,11 +4,21 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jaa/update-downloads/internal/config"
 )
+
+func testExecutionManifest(t *testing.T, sourceID string, rows []PlanRow, selected []int, order DownloadOrder) ExecutionManifest {
+	t.Helper()
+	manifest, err := BuildExecutionManifest(sourceID, rows, selected, order)
+	if err != nil {
+		t.Fatalf("build execution manifest: %v", err)
+	}
+	return manifest
+}
 
 func TestSCDLPlanProviderBuildClassifiesRowsAndDefaultSelection(t *testing.T) {
 	tmp := t.TempDir()
@@ -154,7 +164,7 @@ func TestSCDLPlanProviderAppliesSelectionUsesTempSyncAndFiltersSelectedKnownGap(
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection([]int{1}, false)
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), []int{1}, DownloadOrderNewestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply selection: %v", err)
 	}
@@ -191,6 +201,72 @@ func TestSCDLPlanProviderAppliesSelectionUsesTempSyncAndFiltersSelectedKnownGap(
 	}
 	if !strings.Contains(string(filteredArchive), "gap-b") {
 		t.Fatalf("expected unselected known gap gap-b to remain in temp archive, got %q", string(filteredArchive))
+	}
+}
+
+func TestSCDLPlanProviderAppliesSelectionOrdersExecutionByDownloadOrder(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	source := config.Source{
+		ID:        "sc-plan",
+		Type:      config.SourceTypeSoundCloud,
+		Enabled:   true,
+		TargetDir: targetDir,
+		URL:       "https://soundcloud.com/user",
+		StateFile: "sc-plan.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "scdl"},
+	}
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:    stateDir,
+			ArchiveFile: "archive.txt",
+		},
+		Sources: []config.Source{source},
+	}
+
+	if err := os.WriteFile(filepath.Join(stateDir, source.StateFile), []byte(""), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, source.ID+".archive.txt"), []byte(""), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	origEnumerateLimited := enumerateSoundCloudTracksWithLimitFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksWithLimitFn = origEnumerateLimited
+	})
+	enumerateSoundCloudTracksWithLimitFn = func(ctx context.Context, source config.Source, limit int) ([]soundCloudRemoteTrack, error) {
+		return []soundCloudRemoteTrack{
+			{ID: "track-a", Title: "Track A"},
+			{ID: "track-b", Title: "Track B"},
+			{ID: "track-c", Title: "Track C"},
+		}, nil
+	}
+
+	provider := NewSCDLPlanProvider()
+	plan, err := provider.Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), []int{1, 3}, DownloadOrderOldestFirst), PlanApplyOptions{})
+	if err != nil {
+		t.Fatalf("apply selection: %v", err)
+	}
+	if got := execPlan.SourceForExec.SelectedPlaylistIDs; !reflect.DeepEqual(got, []int{3, 1}) {
+		t.Fatalf("expected oldest_first selection order [3 1], got %v", got)
+	}
+	if got := []string{execPlan.PlannedSoundCloudTracks[0].ID, execPlan.PlannedSoundCloudTracks[1].ID}; !reflect.DeepEqual(got, []string{"track-c", "track-a"}) {
+		t.Fatalf("expected planned track execution order [track-c track-a], got %v", got)
 	}
 }
 
@@ -246,7 +322,7 @@ func TestSCDLPlanProviderEmptySelectionNoOp(t *testing.T) {
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection(nil, false)
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), nil, DownloadOrderNewestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply empty selection: %v", err)
 	}
@@ -315,7 +391,7 @@ func TestSCDLPlanProviderAppliesSelectionKeepsSyncForNewTracks(t *testing.T) {
 		t.Fatalf("build plan: %v", err)
 	}
 
-	execPlan, err := plan.ApplySelection([]int{2}, false)
+	execPlan, err := plan.ApplySelection(testExecutionManifest(t, source.ID, plan.Rows(), []int{2}, DownloadOrderNewestFirst), PlanApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply selection: %v", err)
 	}

@@ -609,7 +609,7 @@ func TestTUIConfigEditorModalEditRendersCursorAndHelp(t *testing.T) {
 	if !strings.Contains(view, "▌") {
 		t.Fatalf("expected visible input cursor, got: %s", view)
 	}
-	if !strings.Contains(view, "left/right move") {
+	if !strings.Contains(view, "Doctor compatibility hint.") {
 		t.Fatalf("expected edit controls in modal help, got: %s", view)
 	}
 }
@@ -875,9 +875,16 @@ func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
 func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.cfgLoaded = true
+	interactive.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, TargetDir: "/tmp/music", URL: "https://soundcloud.com/janxadam", StateFile: "/tmp/soundcloud.sync.scdl", Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	interactive.selected["soundcloud-likes"] = true
 	interactiveView := interactive.View()
 	if !strings.Contains(interactiveView, "plan_limit=") {
 		t.Fatalf("expected interactive sync plan limit controls, got: %s", interactiveView)
+	}
+	if strings.Contains(interactiveView, "download_order=") || strings.Contains(interactiveView, "ORDER:") {
+		t.Fatalf("expected interactive sync to hide global download order summary, got: %s", interactiveView)
 	}
 	if strings.Contains(interactiveView, "ask_on_existing=") || strings.Contains(interactiveView, "scan_gaps=") || strings.Contains(interactiveView, "no_preflight=") {
 		t.Fatalf("expected interactive sync to hide standard-only options, got: %s", interactiveView)
@@ -1098,10 +1105,13 @@ func TestTUIRootInteractiveSyncIdleShowsStructuredPlaceholder(t *testing.T) {
 	if !strings.Contains(view, "Plan Selection") || !strings.Contains(view, "source=soundcloud-likes") {
 		t.Fatalf("expected idle selection to show focused source header, got: %s", view)
 	}
+	if !strings.Contains(view, "order=oldest_first") {
+		t.Fatalf("expected idle selection to show download order, got: %s", view)
+	}
 	if !strings.Contains(view, "target /tmp/music") || !strings.Contains(view, "url https://soundcloud.com/janxadam") {
 		t.Fatalf("expected idle selection to show focused source details, got: %s", view)
 	}
-	if !strings.Contains(view, "source controls") || !strings.Contains(view, "space  toggle source") || !strings.Contains(view, "enter  run") {
+	if !strings.Contains(view, "source controls") || !strings.Contains(view, "space  toggle source") || !strings.Contains(view, "o  order") || !strings.Contains(view, "enter  run") {
 		t.Fatalf("expected idle controls to render inside selection, got: %s", view)
 	}
 	if strings.Contains(view, "dry_run=false  timeout=default  plan_limit=10") || strings.Contains(view, "Rows appear here after interactive preflight starts.") || strings.Contains(view, "Press enter to run `udl sync --plan` for the selected sources.") {
@@ -1374,7 +1384,7 @@ func TestTUISyncInteractiveRowsTransitionToDownloadedAndFilterCountsUpdate(t *te
 	root.syncModel = m
 
 	view := root.View()
-	if !strings.Contains(view, "downloaded") || !strings.Contains(view, "· gap") {
+	if !strings.Contains(view, "downloaded") || !strings.Contains(view, "· gap") || !strings.Contains(view, "run #1") {
 		t.Fatalf("expected completed row to render downloaded status, got: %s", view)
 	}
 	if !strings.Contains(view, "Downloaded (1)") || !strings.Contains(view, "Already Have (1)") || !strings.Contains(view, "In Run (1)") {
@@ -2000,6 +2010,65 @@ func TestTUIInteractiveSparseSelectionShowsLaterRowsCompleting(t *testing.T) {
 	}
 }
 
+func TestTUIInteractiveDisplayStateTracksOldestFirstRuntimeRows(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	m.selected["soundcloud-likes"] = true
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Desert Overworld (LUKA EDIT)", RemoteID: "2157239994", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Premiere: KiNK & Raredub - Time To Change [MRS001]", RemoteID: "1939503326", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 3, Title: "Carte Blanche (DREY Schranz Edit) - Veracocha [FREE DOWNLOAD]", RemoteID: "1935964850", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 4, Title: "Showtek - Colours Of The Harder Styles (L4ZARUS Remix)", RemoteID: "2102155746", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		},
+		Details:       planSourceDetails{SourceID: "soundcloud-likes"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
+	})
+	m.confirmInteractiveSelection(m.planPrompt.sourceID)
+	m.planPrompt = nil
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseSyncing
+
+	m.interactiveTracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "soundcloud-likes",
+		Details:  map[string]any{"index": 1},
+	}, nil, "", false)
+	m.interactiveTracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "soundcloud-likes",
+		Details:  map[string]any{"index": 2, "percent": 14.0},
+	}, nil, "", false)
+
+	display := m.currentInteractiveDisplayState()
+	if display == nil || len(display.rows) != 4 {
+		t.Fatalf("expected interactive display rows, got %+v", display)
+	}
+	rowsByTitle := map[string]tuiTrackRowState{}
+	for _, row := range display.rows {
+		rowsByTitle[row.Title] = row
+	}
+	if got := rowsByTitle["Showtek - Colours Of The Harder Styles (L4ZARUS Remix)"]; got.RuntimeStatus != tuiTrackStatusDownloaded || got.ExecutionSlot != 1 {
+		t.Fatalf("expected Showtek row downloaded in execution slot 1, got %+v", got)
+	}
+	if got := rowsByTitle["Carte Blanche (DREY Schranz Edit) - Veracocha [FREE DOWNLOAD]"]; got.RuntimeStatus != tuiTrackStatusDownloading || got.ExecutionSlot != 2 || !got.ProgressKnown || got.ProgressPercent != 14 {
+		t.Fatalf("expected Carte Blanche row downloading in execution slot 2, got %+v", got)
+	}
+	if got := rowsByTitle["Desert Overworld (LUKA EDIT)"]; got.RuntimeStatus != tuiTrackStatusQueued || got.ExecutionSlot != 4 {
+		t.Fatalf("expected Desert row to remain queued in execution slot 4, got %+v", got)
+	}
+	if got := rowsByTitle["Premiere: KiNK & Raredub - Time To Change [MRS001]"]; got.RuntimeStatus != tuiTrackStatusQueued || got.ExecutionSlot != 3 {
+		t.Fatalf("expected KiNK row to remain queued in execution slot 3, got %+v", got)
+	}
+}
+
 func renderPlanPromptFixture(rows []engine.PlanRow) tuiRootModel {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenInteractiveSync
@@ -2308,8 +2377,8 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 			t.Fatalf("expected confirmed selection, got canceled")
 		}
 		want := []int{1, 3}
-		if !reflect.DeepEqual(got.SelectedIndices, want) {
-			t.Fatalf("selected indices mismatch: got=%v want=%v", got.SelectedIndices, want)
+		if !reflect.DeepEqual(got.Manifest.SelectedIndices, want) {
+			t.Fatalf("selected indices mismatch: got=%v want=%v", got.Manifest.SelectedIndices, want)
 		}
 	default:
 		t.Fatalf("expected selection reply")
@@ -2421,11 +2490,10 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	var gotSelected []int
-	var gotCanceled bool
+	var result engine.PlanSelectionResult
 	var gotErr error
 	go func() {
-		gotSelected, gotCanceled, gotErr = interaction.SelectRows("s1", rows)
+		result, gotErr = interaction.SelectRows("s1", rows)
 		close(done)
 	}()
 
@@ -2434,17 +2502,24 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tuiPlanSelectRequestMsg, got %T", raw)
 	}
-	req.Reply <- tuiPlanSelectResult{SelectedIndices: []int{1}}
+	manifest, err := engine.BuildExecutionManifest("s1", rows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build manifest: %v", err)
+	}
+	req.Reply <- tuiPlanSelectResult{Manifest: manifest}
 	<-done
 
 	if gotErr != nil {
 		t.Fatalf("unexpected select error: %v", gotErr)
 	}
-	if gotCanceled {
+	if result.Canceled {
 		t.Fatalf("expected canceled=false")
 	}
-	if !reflect.DeepEqual(gotSelected, []int{1}) {
-		t.Fatalf("selected indices mismatch: got=%v", gotSelected)
+	if !reflect.DeepEqual(result.Manifest.SelectedIndices, []int{1}) {
+		t.Fatalf("selected indices mismatch: got=%v", result.Manifest.SelectedIndices)
+	}
+	if result.Manifest.DownloadOrder != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected default handshake order newest_first, got %q", result.Manifest.DownloadOrder)
 	}
 }
 
@@ -2474,6 +2549,69 @@ func TestTUISyncModelPlanLimitControls(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
 	if m.planLimit != tuiDefaultPlanLimit {
 		t.Fatalf("expected reset to default when decreasing from unlimited, got %d", m.planLimit)
+	}
+}
+
+func TestTUISyncModelInteractiveDownloadOrderToggle(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{
+			ID:        "soundcloud-likes",
+			Type:      config.SourceTypeSoundCloud,
+			TargetDir: "/tmp/music",
+			URL:       "https://soundcloud.com/janxadam",
+			StateFile: "/tmp/soundcloud.sync.scdl",
+			Adapter:   config.AdapterSpec{Kind: "scdl"},
+		},
+	}
+	m.selected["soundcloud-likes"] = true
+	m.interactiveOrders["soundcloud-likes"] = engine.DownloadOrderOldestFirst
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected download order to toggle to newest_first, got %q", got)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderOldestFirst {
+		t.Fatalf("expected download order to toggle back to oldest_first, got %q", got)
+	}
+}
+
+func TestTUISyncModelPlanPromptDownloadOrderToggleRebuildsManifest(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	source := config.Source{
+		ID:        "soundcloud-likes",
+		Type:      config.SourceTypeSoundCloud,
+		TargetDir: "/tmp/music",
+		URL:       "https://soundcloud.com/janxadam",
+		StateFile: "/tmp/soundcloud.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "scdl"},
+	}
+	m.sources = []config.Source{source}
+	m.selected["soundcloud-likes"] = true
+	m.interactiveOrders["soundcloud-likes"] = engine.DownloadOrderOldestFirst
+	reply := make(chan tuiPlanSelectResult, 1)
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID:      source.ID,
+		Rows:          []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
+		Details:       m.planSourceDetailsForSource(source),
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
+	})
+	m.planPrompt = &tuiPlanPromptState{
+		tuiInteractiveSelectionState: state,
+		reply:                        reply,
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected source order to toggle to newest_first, got %q", got)
+	}
+	if got := m.planPrompt.manifest.DownloadOrder; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected prompt manifest order to update, got %q", got)
 	}
 }
 
