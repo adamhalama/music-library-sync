@@ -50,6 +50,7 @@ Inside active workflows, the sidebar/top navigation is informational in this sta
   - one starter source
 - If the source needs auth, the wizard can save SoundCloud, Deezer, and Spotify credentials into macOS Keychain before the first sync.
 - SoundCloud is the default and recommended path for v1.
+- SoundCloud uses external `scdl` and `yt-dlp`; Homebrew manages them as formula dependencies, while tarball installs must provide them separately.
 - Spotify is available but shown as beta/advanced and does not store secrets in YAML.
 - Saving the starter config immediately runs `doctor` and shows one clear next step.
 
@@ -144,6 +145,7 @@ Cancellation also works while waiting in plan selection or prompt dialogs.
   - `Summary` with total checks and error/warn/info counts
   - `Checks` with severity-ordered checklist rows
   - `Next Step` guidance when warnings or errors are present
+- missing `scdl` / `yt-dlp` checks now point users toward external tool installation or repair instead of bundled tool recovery
 - when auth is missing or stale, press `c` to jump straight into `Credentials`
 - `esc` can be used to return to the landing screen immediately
 
