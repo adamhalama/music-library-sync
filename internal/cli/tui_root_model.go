@@ -28,25 +28,25 @@ type tuiRootModel struct {
 	debugMessages bool
 	lastMsgType   string
 
-	screen     tuiScreen
-	menuCursor int
-	menuItems  []string
+	screen           tuiScreen
+	menuCursor       int
+	menuItems        []string
 	startupAttention *tuiStartupAttentionState
 
-	onboardingModel tuiOnboardingModel
+	onboardingModel  tuiOnboardingModel
 	credentialsModel tuiCredentialsModel
-	syncModel     tuiSyncModel
-	doctorModel   tuiDoctorModel
-	validateModel tuiValidateModel
-	configModel   tuiConfigEditorModel
-	initModel     tuiInitModel
+	syncModel        tuiSyncModel
+	doctorModel      tuiDoctorModel
+	validateModel    tuiValidateModel
+	configModel      tuiConfigEditorModel
+	initModel        tuiInitModel
 }
 
 func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
 	model := tuiRootModel{
 		app:           app,
 		debugMessages: debugMessages,
-		menuItems:     []string{"Get Started", "Credentials", "Check System", "Run Sync", "Advanced Config", "Quit"},
+		menuItems:     []string{"Run Sync", "Get Started", "Credentials", "Check System", "Advanced Config", "Quit"},
 		screen:        tuiScreenMenu,
 	}
 	if startup, needsOnboarding := tuiDetectOnboardingState(app); needsOnboarding {

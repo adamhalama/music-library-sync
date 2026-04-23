@@ -46,30 +46,54 @@ func newMenuRootModelForTest() tuiRootModel {
 	return root
 }
 
-func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
+func setMenuCursorForTest(t *testing.T, root *tuiRootModel, label string) {
+	t.Helper()
+	for idx, item := range root.menuItems {
+		if item == label {
+			root.menuCursor = idx
+			return
+		}
+	}
+	t.Fatalf("expected menu item %q in %v", label, root.menuItems)
+}
+
+func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	root := newMenuRootModelForTest()
 
 	if len(root.menuItems) < 2 {
 		t.Fatalf("expected at least two menu items, got %v", root.menuItems)
 	}
-	if root.menuItems[0] != "Get Started" {
-		t.Fatalf("expected Get Started first, got %v", root.menuItems)
+	if root.menuItems[0] != "Run Sync" {
+		t.Fatalf("expected Run Sync first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "Credentials" {
-		t.Fatalf("expected Credentials second, got %v", root.menuItems)
+	if root.menuItems[1] != "Get Started" {
+		t.Fatalf("expected Get Started second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Check System" {
-		t.Fatalf("expected Check System third, got %v", root.menuItems)
+	if root.menuItems[2] != "Credentials" {
+		t.Fatalf("expected Credentials third, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
 		t.Fatalf("expected home shell title, got: %s", view)
 	}
-	if !strings.Contains(view, "Get Started") {
-		t.Fatalf("expected Get Started in landing navigation, got: %s", view)
+	if !strings.Contains(view, "Run Sync") {
+		t.Fatalf("expected Run Sync in landing navigation, got: %s", view)
 	}
-	if !strings.Contains(view, "Create a starter setup") {
+	if !strings.Contains(view, "Review enabled sources") {
 		t.Fatalf("expected landing body summary, got: %s", view)
+	}
+}
+
+func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenInteractiveSync {
+		t.Fatalf("expected default enter to open interactive sync, got %v", next.screen)
 	}
 }
 
@@ -95,6 +119,7 @@ func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
 
 func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "Get Started")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -111,7 +136,7 @@ func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
-	root.menuCursor = 2
+	setMenuCursorForTest(t, &root, "Check System")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -143,7 +168,7 @@ func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
-	root.menuCursor = 4
+	setMenuCursorForTest(t, &root, "Advanced Config")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -160,7 +185,7 @@ func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
-	root.menuCursor = 1
+	setMenuCursorForTest(t, &root, "Credentials")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
