@@ -11,7 +11,7 @@ func newTUICommand(app *AppContext) *cobra.Command {
 	debugMessages := false
 	cmd := &cobra.Command{
 		Use:   "tui",
-		Short: "Launch the full-screen TUI shell",
+		Short: "Launch the main TUI setup and sync flow",
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 			defer func() {
 				if recovered := recover(); recovered != nil {

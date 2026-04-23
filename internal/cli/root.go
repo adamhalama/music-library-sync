@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/spf13/cobra"
@@ -27,11 +28,22 @@ func Execute(build BuildInfo, streams IOStreams) int {
 
 func newRootCommand(app *AppContext) *cobra.Command {
 	showVersion := false
+	cobra.EnableCommandSorting = false
 
 	root := &cobra.Command{
 		Use:   "udl",
-		Short: "Sync local downloads from configured music sources",
-		Long:  "udl is a config-driven CLI for syncing SoundCloud and Spotify sources through external adapters.",
+		Short: "Set up and sync local music libraries from SoundCloud and Spotify sources",
+		Long: strings.TrimSpace(`
+udl is a TUI-first app for setting up and syncing local music folders from SoundCloud and Spotify sources.
+
+Start here:
+  udl tui
+`),
+		Example: strings.TrimSpace(`
+  udl tui
+  udl doctor
+  udl sync --dry-run
+`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
 				printVersion(app)
@@ -49,7 +61,6 @@ func newRootCommand(app *AppContext) *cobra.Command {
 	root.PersistentFlags().BoolVar(&app.Opts.JSON, "json", false, "Emit newline-delimited JSON events")
 	root.PersistentFlags().BoolVarP(&app.Opts.Quiet, "quiet", "q", false, "Reduce output to errors and summary")
 	root.PersistentFlags().BoolVarP(&app.Opts.Verbose, "verbose", "v", false, "Increase diagnostic output")
-	root.PersistentFlags().BoolVar(&app.Opts.NoColor, "no-color", false, "Disable color output")
 	root.PersistentFlags().BoolVar(&app.Opts.NoInput, "no-input", false, "Disable interactive prompts")
 	root.PersistentFlags().BoolVarP(&app.Opts.DryRun, "dry-run", "n", false, "Validate and plan execution without running adapters")
 	root.Flags().BoolVar(&showVersion, "version", false, "Print version info")
@@ -58,11 +69,11 @@ func newRootCommand(app *AppContext) *cobra.Command {
 		return withExitCode(exitcode.InvalidUsage, err)
 	})
 
-	root.AddCommand(newInitCommand(app))
-	root.AddCommand(newValidateCommand(app))
+	root.AddCommand(newTUICommand(app))
 	root.AddCommand(newDoctorCommand(app))
 	root.AddCommand(newSyncCommand(app))
-	root.AddCommand(newTUICommand(app))
+	root.AddCommand(newValidateCommand(app))
+	root.AddCommand(newInitCommand(app))
 	root.AddCommand(newPromoteFreeDLCommand(app))
 	root.AddCommand(newVersionCommand(app))
 

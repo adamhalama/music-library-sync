@@ -169,8 +169,8 @@ func TestDoctorSoundCloudFreeDLDoesNotRequireSCDLClientID(t *testing.T) {
 	}
 
 	report := checker.Check(context.Background(), soundcloudFreeDLConfig())
-	if hasErrorContaining(report, "SCDL_CLIENT_ID is required") {
-		t.Fatalf("did not expect SCDL_CLIENT_ID requirement for scdl-freedl, got %+v", report.Checks)
+	if hasErrorContaining(report, "SoundCloud client ID") {
+		t.Fatalf("did not expect SoundCloud client ID requirement for scdl-freedl, got %+v", report.Checks)
 	}
 }
 
@@ -270,9 +270,11 @@ func TestDoctorSoundCloudDependencyMatrixCompatible(t *testing.T) {
 				return "0.0.0", nil
 			}
 		},
-		Getenv:        func(key string) string { return "set" },
-		CheckWritable: func(path string) error { return nil },
-		Matrix:        defaultDependencyMatrix(),
+		Getenv:                    func(key string) string { return "" },
+		CheckWritable:             func(path string) error { return nil },
+		Matrix:                    defaultDependencyMatrix(),
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "set", auth.CredentialStorageSourceEnv, nil },
+		LoadCredentialMetadata:    func(string) (auth.CredentialMetadataStore, error) { return auth.CredentialMetadataStore{}, nil },
 	}
 
 	report := checker.Check(context.Background(), soundcloudConfig())
@@ -511,13 +513,65 @@ func TestDoctorSpotifyDeemixAuthChecksPassWhenCredentialsPresent(t *testing.T) {
 	if hasErrorContaining(report, "require Deezer ARL") || hasErrorContaining(report, "require Spotify app credentials") {
 		t.Fatalf("did not expect deemix auth errors, got %+v", report.Checks)
 	}
-	if !hasInfoContaining(report, "deemix Deezer ARL is available") {
+	if !hasInfoContaining(report, "Deezer ARL is available") {
 		t.Fatalf("expected deemix ARL info check, got %+v", report.Checks)
 	}
-	if !hasInfoContaining(report, "Spotify app credentials are available for deemix conversion") {
+	if !hasInfoContaining(report, "Spotify app credentials are available") {
 		t.Fatalf("expected spotify credential info check, got %+v", report.Checks)
 	}
 	if !hasWarnContaining(report, "upstream transport may use insecure request paths") {
 		t.Fatalf("expected deemix transport risk warning, got %+v", report.Checks)
+	}
+}
+
+func TestDoctorSoundCloudTargetDirCreatableDoesNotFail(t *testing.T) {
+	checker := &Checker{
+		LookPath:                  func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion: func(ctx context.Context, binary string) (string, error) {
+			if binary == "yt-dlp" {
+				return "yt-dlp 2026.2.4", nil
+			}
+			return "scdl 3.0.0", nil
+		},
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "client-id", auth.CredentialStorageSourceKeychain, nil },
+		CheckDirAccess: func(path string) dirAccessResult {
+			if path == "/tmp/music" {
+				return dirAccessResult{Creatable: true}
+			}
+			return dirAccessResult{}
+		},
+	}
+
+	report := checker.Check(context.Background(), soundcloudConfig())
+	if report.HasErrors() {
+		t.Fatalf("did not expect creatable target dir to fail, got %+v", report.Checks)
+	}
+	if !hasInfoContaining(report, "target directory will be created on first sync") {
+		t.Fatalf("expected creatable target dir info message, got %+v", report.Checks)
+	}
+}
+
+func TestDoctorSoundCloudCredentialNeedsRefresh(t *testing.T) {
+	checker := &Checker{
+		LookPath:                  func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:               func(ctx context.Context, binary string) (string, error) { return "scdl 3.0.0", nil },
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "client-id", auth.CredentialStorageSourceKeychain, nil },
+		CheckDirAccess:            func(path string) dirAccessResult { return dirAccessResult{} },
+		LoadCredentialMetadata: func(stateDir string) (auth.CredentialMetadataStore, error) {
+			return auth.CredentialMetadataStore{
+				Credentials: map[auth.CredentialKind]auth.CredentialMetadata{
+					auth.CredentialKindSoundCloudClientID: {
+						LastFailureKind:    "invalid_client_id",
+						LastFailureMessage: "SoundCloud client ID needs refresh; open `udl tui`, choose Credentials, and update it",
+						StorageSource:      auth.CredentialStorageSourceKeychain,
+					},
+				},
+			}, nil
+		},
+	}
+
+	report := checker.Check(context.Background(), soundcloudConfig())
+	if !hasErrorContaining(report, "needs refresh") {
+		t.Fatalf("expected stale soundcloud credential error, got %+v", report.Checks)
 	}
 }

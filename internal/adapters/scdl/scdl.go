@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 )
@@ -27,6 +28,7 @@ type runtimeInfo struct {
 var (
 	detectRuntimeOnce sync.Once
 	detectedRuntime   runtimeInfo
+	resolveSoundCloudClientIDFn = auth.ResolveSoundCloudClientID
 )
 
 func New() *Adapter {
@@ -46,7 +48,7 @@ func (a *Adapter) MinVersion() string {
 }
 
 func (a *Adapter) RequiredEnv(source config.Source) []string {
-	return []string{"SCDL_CLIENT_ID"}
+	return nil
 }
 
 func (a *Adapter) Validate(source config.Source) error {
@@ -82,7 +84,7 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 		displayArgs = append(displayArgs, "--sync", syncFilePath)
 	}
 
-	if clientID := strings.TrimSpace(os.Getenv("SCDL_CLIENT_ID")); clientID != "" {
+	if clientID, err := resolveSoundCloudClientIDFn(); err == nil && strings.TrimSpace(clientID) != "" {
 		args = append(args, "--client-id", clientID)
 		displayArgs = append(displayArgs, "--client-id", "***")
 	}

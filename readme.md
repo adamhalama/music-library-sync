@@ -1,9 +1,10 @@
 # update-downloads (`udl`)
 
-`udl` is a production-style CLI for syncing local music folders from configured SoundCloud and Spotify sources.
+`udl` is a TUI-first app for setting up and syncing local music folders from configured SoundCloud and Spotify sources.
 
 It replaces hardcoded orchestration with:
 - YAML config (XDG user config + optional project override)
+- Guided first-run setup in `udl tui`
 - Validation and doctor checks
 - Deterministic sync execution
 - Human output by default and structured `--json` output for automation
@@ -12,40 +13,48 @@ The legacy script remains available during migration: `bin/update-downloads`.
 
 ## Current Status
 
-- CLI name: `udl`
-- v1 model: Go app orchestrating external adapters (`deemix`, `spotdl`, `scdl`)
-- Scope: `init`, `validate`, `doctor`, `sync`, `tui`, `version`
+- App name: `udl`
+- Primary flow: `udl tui`
+- v1 public release target: macOS-first, Homebrew-first
+- SoundCloud runtime contract: external `scdl` + `yt-dlp`
+- Spotify remains available, but is treated as beta/advanced in the first public release
 
 ## Requirements
 
 Runtime tools:
-- `scdl` (required for `adapter.kind: scdl`)
-- `deemix` (recommended for Spotify)
-- `spotdl` (legacy/fallback Spotify path)
-- `yt-dlp` (required for SoundCloud preflight/enumeration; `scdl-freedl` download execution itself is browser handoff for HypeEdit)
+- SoundCloud sync requires external `scdl` + `yt-dlp`
+- Spotify still relies on external `deemix` or `spotdl` plus credentials
 
 Dependency policy:
-- `scdl`/`yt-dlp` are managed as strict external dependencies with a supported compatibility matrix enforced by `udl doctor`.
-- See `docs/dependency-matrix.md` for supported ranges, upgrade flow, and rollback behavior.
-- `spotdl` remains supported but is transitional and outside the strict matrix scope for this phase.
+- Homebrew installs `udl` with `scdl` and `yt-dlp` as formula dependencies.
+- Tarball installs require `scdl` and `yt-dlp` to be installed separately.
+- `udl doctor` verifies compatibility for the active external tools.
+- See `docs/dependency-matrix.md` for the current matrix and `docs/release-homebrew.md` for the macOS release flow.
 
 Environment:
-- `SCDL_CLIENT_ID` (required for SoundCloud sources)
-- `UDL_DEEMIX_ARL` (or macOS Keychain item `service=udl.deemix account=default`) for Spotify+deemix
-- `UDL_SPOTIFY_CLIENT_ID` + `UDL_SPOTIFY_CLIENT_SECRET` for Spotify+deemix conversion (fallback: `~/.spotdl/config.json`)
+- `SCDL_CLIENT_ID` remains supported as an override, but the public TUI now manages the SoundCloud client ID in macOS Keychain by default
+- `UDL_DEEMIX_ARL` remains supported as an override; the public TUI manages Deezer ARL in macOS Keychain by default
+- `UDL_SPOTIFY_CLIENT_ID` + `UDL_SPOTIFY_CLIENT_SECRET` remain supported as overrides for Spotify+deemix conversion (fallback: `~/.spotdl/config.json`), but the public TUI manages user-owned Spotify app credentials in macOS Keychain by default
 
 Build tooling:
 - Go 1.22+
 
 ## Install
 
-Build and install the CLI:
+Public macOS release:
+
+```bash
+brew tap adamhalama/udl
+brew install udl
+```
+
+The Homebrew formula installs `udl` and depends on external `scdl` and `yt-dlp` formulas for the recommended SoundCloud path.
+
+Local development install:
 
 ```bash
 make install
 ```
-
-This installs `udl` into your local Homebrew prefix `bin` directory (for example `/opt/homebrew/bin/udl` or `/usr/local/bin/udl`).
 
 Legacy script install (optional during migration):
 
@@ -55,40 +64,27 @@ make legacy-install
 
 ## Quick Start
 
-Create starter config:
-
-```bash
-udl init
-```
-
-Validate config:
-
-```bash
-udl validate
-```
-
-Run environment and dependency diagnostics:
-
-```bash
-udl doctor
-```
-
-Dry-run execution plan:
-
-```bash
-udl sync --dry-run
-```
-
-Run sync:
-
-```bash
-udl sync
-```
-
-Launch interactive TUI shell:
+Start with the TUI:
 
 ```bash
 udl tui
+```
+
+Recommended first run:
+
+1. Choose `Get Started`
+2. Pick your music and state folders
+3. Add one source
+4. Review the doctor result
+5. Choose `Run Sync` and start with a dry-run
+
+Supporting CLI flows:
+
+```bash
+udl doctor
+udl sync --dry-run
+udl sync
+udl validate
 ```
 
 ## Command Surface
@@ -97,11 +93,11 @@ udl tui
 udl [global flags] <command>
 
 Commands:
-  init
-  validate
+  tui
   doctor
   sync
-  tui
+  validate
+  init
   promote-freedl
   version
   help
@@ -112,7 +108,6 @@ Global flags:
 - `--json`
 - `-q, --quiet`
 - `-v, --verbose`
-- `--no-color`
 - `--no-input`
 - `-n, --dry-run`
 - `--version`
@@ -131,8 +126,10 @@ Global flags:
 
 `tui`:
 - Launch with `udl tui`
-- Includes `interactive sync`, `sync`, `doctor`, `validate`, `config editor`, and `init` workflows
-- See `docs/tui.md` for keybindings, workflow-specific sync options, interactive plan flow, and known limitations
+- Public home screen actions are `Get Started`, `Check System`, `Run Sync`, and `Advanced Config`
+- First-run startup enters `Get Started` automatically when config is missing, invalid, or has zero sources
+- See `docs/tui.md` for keybindings, onboarding flow, sync options, and known limitations
+- Release packaging notes live in `docs/release-homebrew.md`
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)
@@ -259,14 +256,15 @@ Notes:
 - Use `--track-status` to control persistent per-track lines (`names`, `count`, `none`).
 - For Spotify playlists with `--no-preflight`, `udl` still enumerates public playlist tracks and executes deemix per track so metadata cache priming remains active.
 - `deemix` binary resolution prefers `UDL_DEEMIX_BIN`, then `deemix` from `PATH`.
-- Deezer ARL resolution order is `UDL_DEEMIX_ARL` then macOS Keychain (`service=udl.deemix account=default`). Interactive sync can prompt and store ARL in Keychain.
+- SoundCloud client ID resolution order is `SCDL_CLIENT_ID`, then macOS Keychain (`service=udl.soundcloud account=client_id`).
+- Deezer ARL resolution order is `UDL_DEEMIX_ARL`, then macOS Keychain (`service=udl.deemix account=default`). Interactive flows can save ARL in Keychain.
 - Spotify app credential resolution order for deemix conversion is `UDL_SPOTIFY_CLIENT_ID`/`UDL_SPOTIFY_CLIENT_SECRET`, then macOS Keychain (`service=udl.spotify` accounts `client_id` and `client_secret`), then `~/.spotdl/config.json` (`client_id`/`client_secret`).
 - For Spotify+`deemix`, `udl` primes deemix's Spotify cache per track (title/artist/album) before each run to avoid known upstream Spotify plugin crash paths.
 - For Spotify+`deemix`, `udl` now treats `GWAPIError: Track unavailable on Deezer` as a per-track skip (keeps source running, does not append skipped IDs to state).
 - Spotify state entries now persist optional metadata (`title`, `path`) for stronger local-existence detection when Spotify API metadata is unavailable.
 - If Spotify Web API playlist preflight is blocked (for example `403`), `udl` falls back to parsing public playlist HTML to enumerate track IDs and keep deterministic planning.
 - Upstream `deemix`/`deezer-sdk` transport behavior is security-sensitive (historically includes insecure request paths). Treat Deezer ARL and Spotify app credentials as secrets and run only on trusted networks.
-- Use `bin/setup-udl-secrets.sh` to store ARL and optional Spotify credentials in Keychain.
+- `udl tui` now includes a `Credentials` screen for saving, updating, and clearing managed Keychain entries.
 - Legacy Spotify path uses `spotdl` and prefers a managed binary at `~/.venvs/udl-spotdl/bin/spotdl` when present (or `UDL_SPOTDL_BIN` when set), falling back to `spotdl` from `PATH`.
 - For Spotify+`spotdl`, shared/default Spotify app credentials can be globally throttled (for example `Retry after: 86400`); prefer user-owned Spotify app credentials in `~/.spotdl/config.json` or env/keychain.
 - As of February 2026, upstream `spotdl 4.4.3` has known failures for some playlist metadata paths (`/playlists/{id}/tracks` 403) and missing artist fields (for example `genres`). Use a patched build or prefer `adapter.kind: deemix` where possible.
@@ -316,8 +314,8 @@ make test
 
 Run core UDL smoke suite (init/validate/doctor/sync with normal `adapter.kind: scdl`, isolated sandbox under `~/Music/downloaded`):
 
-Required environment for real SoundCloud smoke:
-- `SCDL_CLIENT_ID` must be set
+Required auth for real SoundCloud smoke:
+- `SCDL_CLIENT_ID` must be set or saved in macOS Keychain
 - network access must be available
 
 ```bash

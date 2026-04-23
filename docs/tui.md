@@ -1,17 +1,16 @@
 # UDL TUI Guide
 
 `udl tui` launches an interactive Bubble Tea interface for the main workflows:
-- `interactive sync`
-- `sync`
-- `doctor`
-- `validate`
-- `config editor`
-- `init`
+- `Get Started`
+- `Credentials`
+- `Check System`
+- `Run Sync`
+- `Advanced Config`
 
 The TUI is additive. Existing CLI commands (`udl sync`, `udl doctor`, etc.) remain unchanged.
 
 The current TUI uses a shared shell:
-- landing screen with workflow navigation
+- home screen with outcome-focused navigation
 - shared titlebar, badges, command summary, shortcuts, body panel, and footer
 - inline plan-selection screen for interactive sync
 - in-app modal prompts for confirmations/input
@@ -31,16 +30,44 @@ udl tui --debug-messages
 
 ## Navigation
 
-- Landing screen: `j/k` or up/down to move, `enter` to open workflow
+- Home screen: `j/k` or up/down to move, `enter` to open workflow
 - Global: `esc` returns to the landing screen when the active workflow allows back navigation and no in-workflow prompt is open
-- Landing screen only: `q` or `ctrl+c` quits
+- Home screen only: `q` or `ctrl+c` quits
 - Shell layout:
   - width `>= 110`: left sidebar + main panel shell
   - width `< 110`: compact top navigation strip + main panel shell
 
 Inside active workflows, the sidebar/top navigation is informational in this stage. Workflow switching still happens by returning to the landing screen with `esc`.
 
-## Interactive Sync Workflow
+## Get Started Workflow
+
+`Get Started` is the first-run path.
+
+- If runtime config is missing, invalid, or has zero sources, `udl tui` opens this workflow automatically.
+- The workflow asks for:
+  - music folder root
+  - state folder
+  - one starter source
+- If the source needs auth, the wizard can save SoundCloud, Deezer, and Spotify credentials into macOS Keychain before the first sync.
+- SoundCloud is the default and recommended path for v1.
+- SoundCloud uses external `scdl` and `yt-dlp`; Homebrew manages them as formula dependencies, while tarball installs must provide them separately.
+- Spotify is available but shown as beta/advanced and does not store secrets in YAML.
+- Saving the starter config immediately runs `doctor` and shows one clear next step.
+
+## Credentials Workflow
+
+- `Credentials` is the persistent auth/status board.
+- It shows SoundCloud client ID, Deezer ARL, and Spotify app credentials with:
+  - health state (`missing`, `available`, `external override`, `needs refresh`)
+  - storage source
+  - affected workflows
+  - one obvious action (`save`, `update`, `refresh`, or `clear`)
+- Managed values are stored in macOS Keychain, not in `udl.yaml`.
+- Environment variables and `~/.spotdl/config.json` still work as compatibility sources, but they are treated as external.
+
+## Run Sync Workflow
+
+`Run Sync` opens the interactive sync path.
 
 ### Source selection
 
@@ -85,26 +112,6 @@ Interactive sync now keeps the shell shortcuts/footer active during selection:
 - the footer shows selected, pending, skipped, and progress stub counts before the run
 - the activity panel is expanded by default on wide layouts and collapsed by default on compact layouts
 
-## Sync Workflow
-
-### Source selection
-
-- sources render in the shell sidebar once the workflow is opened
-- `j/k` or up/down: move between configured enabled sources
-- `space`: toggle source enabled for this run
-
-### Sync option panel
-
-- `d`: toggle dry-run
-- `a`: toggle `ask_on_existing` override (`inherit` / `on`)
-- `g`: toggle `scan_gaps`
-- `f`: toggle `no_preflight`
-- `t`: type timeout override (Go duration, for example `10m`, `90s`, `1h`)
-- `p`: collapse/expand the activity panel
-- `enter`: start run
-
-This workflow is the streamlined non-plan path and no longer exposes `--plan` controls.
-
 ### Runtime prompts (sync interaction parity)
 
 The TUI now handles sync prompts via in-app dialogs:
@@ -129,58 +136,22 @@ During an active sync run:
 
 Cancellation also works while waiting in plan selection or prompt dialogs.
 
-## Doctor / Validate Workflows
+## Check System Workflow
 
 ### Doctor
 
-- `doctor` auto-runs when opened
+- `Check System` runs `doctor` automatically when opened
 - the shell renders:
   - `Summary` with total checks and error/warn/info counts
   - `Checks` with severity-ordered checklist rows
   - `Next Step` guidance when warnings or errors are present
+- missing `scdl` / `yt-dlp` checks now point users toward external tool installation or repair instead of bundled tool recovery
+- when auth is missing or stale, press `c` to jump straight into `Credentials`
 - `esc` can be used to return to the landing screen immediately
 
-### Validate
+## Advanced Config Workflow
 
-- `validate` auto-runs when opened
-- the shell renders:
-  - `Status` with valid/invalid outcome
-  - `Context` with config path/search-path information and source counts when config loaded
-  - `Details` with wrapped load or validation errors
-- `esc` can be used to return to the landing screen immediately
-
-## Init Workflow
-
-`init` is now a guided workflow rather than auto-running on open.
-
-### Init intro
-
-- opening `init` shows:
-  - `Plan` summary of what `udl init` will create
-  - `Paths` for config and state directory targets
-  - `Actions` with `enter` to start and `esc` to go back
-- if the target config already exists, the intro screen calls that out before the run starts
-
-### Init run and result states
-
-- `enter`: start init
-- while init is running, back navigation is disabled
-- after completion, the shell renders result panels for success, cancel, or failure
-- success includes a next-step reminder to review the config and run `udl validate`
-
-### Init prompts
-
-- overwrite confirmation still renders as an in-app modal
-- prompt controls:
-  - `y` / `n`: answer confirm prompts
-  - `enter`: accept default
-  - `esc` / `q`: cancel prompt
-
-Init prompts render as shell modals.
-
-## Config Editor Workflow
-
-`config editor` is a shell-native guided editor for a single config file.
+`Advanced Config` opens the shell-native config editor for a single config file.
 
 ### Target behavior
 
@@ -212,7 +183,7 @@ Init prompts render as shell modals.
 
 ## Current Limitations
 
-- `promote-freedl` and `version` are not exposed as TUI workflows.
+- `promote-freedl`, `version`, `validate`, and low-level `init` are not exposed on the public TUI home screen.
 - `sync` output style controls (`progress`, `preflight-summary`, `track-status`) are not currently configurable from TUI.
 - Workflow sidebar/top-nav switching is not active yet; use `esc` to return to the landing screen first.
 - The config editor rewrites canonical YAML; it does not preserve hand-written comments or original layout.

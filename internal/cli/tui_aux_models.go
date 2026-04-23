@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jaa/update-downloads/internal/auth"
 	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
@@ -92,6 +93,21 @@ func (m tuiDoctorModel) View() string {
 		lines = append(lines, fmt.Sprintf("[%s] %s: %s", strings.ToUpper(string(check.Severity)), check.Name, check.Message))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m tuiDoctorModel) recommendedCredentialKind() auth.CredentialKind {
+	for _, check := range m.checks {
+		lower := strings.ToLower(check.Message)
+		switch {
+		case strings.Contains(lower, "soundcloud client id"):
+			return auth.CredentialKindSoundCloudClientID
+		case strings.Contains(lower, "deezer arl"):
+			return auth.CredentialKindDeemixARL
+		case strings.Contains(lower, "spotify app credentials"):
+			return auth.CredentialKindSpotifyApp
+		}
+	}
+	return ""
 }
 
 type tuiValidatePhase string
