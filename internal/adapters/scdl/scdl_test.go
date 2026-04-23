@@ -204,8 +204,45 @@ func TestBuildExecSpecInjectsManagedPlaylistItems(t *testing.T) {
 	}
 
 	joined := strings.Join(spec.Args, " ")
-	if !strings.Contains(joined, "--playlist-items 2,5,8") {
+	if !strings.Contains(joined, "--playlist-items 8,2,5") {
 		t.Fatalf("expected managed playlist items in ytdlp args, got %v", spec.Args)
+	}
+}
+
+func TestBuildExecSpecPreservesManagedPlaylistItemOrder(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	source.SelectedPlaylistIDs = []int{8, 2, 5, 2}
+
+	spec, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("build exec spec: %v", err)
+	}
+
+	joined := strings.Join(spec.Args, " ")
+	if !strings.Contains(joined, "--playlist-items 8,2,5") {
+		t.Fatalf("expected managed playlist items to preserve caller order, got %v", spec.Args)
+	}
+}
+
+func TestBuildExecSpecDoesNotInjectPlaylistReverseForManagedSubsetOrder(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	source.SelectedPlaylistIDs = []int{3, 2, 1}
+
+	spec, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("build exec spec: %v", err)
+	}
+
+	joined := strings.Join(spec.Args, " ")
+	if strings.Contains(joined, "--playlist-reverse") {
+		t.Fatalf("did not expect --playlist-reverse when explicit managed order is present, got %v", spec.Args)
+	}
+	if !strings.Contains(joined, "--playlist-items 3,2,1") {
+		t.Fatalf("expected explicit playlist order to be preserved, got %v", spec.Args)
 	}
 }
 

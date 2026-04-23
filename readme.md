@@ -212,6 +212,10 @@ sources:
   #   target_dir: "~/Music/downloaded/sc-likes-free"
   #   url: "https://soundcloud.com/your-user"
   #   state_file: "soundcloud-likes-free.sync.scdl"
+  #   sync:
+  #     break_on_existing: true
+  #     ask_on_existing: false
+  #     local_index_cache: false
   #   adapter:
   #     kind: "scdl-freedl"
 
@@ -221,6 +225,9 @@ sources:
     target_dir: "~/Music/downloaded/spotify-groove"
     url: "https://open.spotify.com/playlist/replace-me"
     state_file: "spotify-groove.sync.spotify"
+    sync:
+      break_on_existing: true
+      ask_on_existing: false
     adapter:
       kind: "deemix"
       extra_args: []

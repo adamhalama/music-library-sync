@@ -40,10 +40,8 @@ func (m tuiSyncModel) shellBadges() []tuiBadge {
 		{Label: "DRY-RUN: " + boolLabel(m.dryRun), Tone: boolTone(m.dryRun)},
 	}
 	if m.isInteractiveSyncWorkflow() {
-		badges = append(badges,
-			tuiBadge{Label: "LIMIT: " + formatPlanLimit(m.planLimit), Tone: "info"},
-			tuiBadge{Label: "TIMEOUT: " + formatTimeoutOverride(m.timeoutOverride), Tone: "muted"},
-		)
+		badges = append(badges, tuiBadge{Label: "LIMIT: " + formatPlanLimit(m.planLimit), Tone: "info"})
+		badges = append(badges, tuiBadge{Label: "TIMEOUT: " + formatTimeoutOverride(m.timeoutOverride), Tone: "muted"})
 		return badges
 	}
 	badges = append(badges,
@@ -253,8 +251,9 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 }
 
 func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
-	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel)
-	controls := renderPlanPromptControls(state, layout)
+	showOrder := state != nil && state.downloadOrder != ""
+	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel, showOrder)
+	controls := renderPlanPromptControls(state, layout, showOrder)
 	if layout.Height < 24 {
 		lines := []string{
 			infoBar,
@@ -273,14 +272,19 @@ func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limit
 	return append(lines, controls...)
 }
 
-func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string) string {
+func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, showOrder bool) string {
 	parts := []string{
 		planPromptChip("Plan Selection", "info"),
 		planPromptField("source", state.sourceID),
 		planPromptField("mode", modeLabel),
 		planPromptField("limit", limitLabel),
-		planPromptField("type", fmt.Sprintf("%s/%s", state.details.SourceType, state.details.Adapter)),
 	}
+	if showOrder {
+		parts = append(parts, planPromptField("order", string(state.downloadOrder)))
+	}
+	parts = append(parts,
+		planPromptField("type", fmt.Sprintf("%s/%s", state.details.SourceType, state.details.Adapter)),
+	)
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color("236")).
 		Padding(0, 1).
@@ -300,7 +304,7 @@ func renderPlanPromptPathLine(left, right string) string {
 		Render(strings.Join(parts, "  "))
 }
 
-func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout) []string {
+func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout, showOrder bool) []string {
 	state.syncFilterForPhase(tuiInteractivePhaseReview)
 	focusTone := "warning"
 	if !state.focusFilters {
@@ -316,6 +320,9 @@ func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShe
 		renderPlanPromptKey("n", "clear visible"),
 		renderPlanPromptKey("enter", "confirm"),
 		renderPlanPromptKey("esc", "cancel"),
+	}
+	if showOrder {
+		parts = append(parts[0:5], append([]string{renderPlanPromptKey("o", "order")}, parts[5:]...)...)
 	}
 	return renderPlanPromptControlLines(parts, layout)
 }
@@ -746,8 +753,9 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 		infoState = newEmptyTUIInteractiveSelectionState()
 		infoState.sourceID = state.sourceID
 		infoState.details = state.details
+		infoState.downloadOrder = state.downloadOrder
 	}
-	lines := []string{renderPlanPromptInfoBar(infoState, modeLabel, limitLabel)}
+	lines := []string{renderPlanPromptInfoBar(infoState, modeLabel, limitLabel, m.currentInteractiveSourceSupportsDownloadOrder())}
 	if layout.Height < 24 {
 		lines = append(lines, renderPlanPromptPathLine(
 			fmt.Sprintf("target %s", filepath.Base(state.details.TargetDir)),
@@ -763,14 +771,14 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 
 func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDisplayState, layout tuiShellLayout) []string {
 	if m.planPrompt != nil {
-		return renderPlanPromptControls(m.planPrompt.tuiInteractiveSelectionState, layout)
+		return renderPlanPromptControls(m.planPrompt.tuiInteractiveSelectionState, layout, m.currentInteractiveSourceSupportsDownloadOrder())
 	}
 	if state == nil || len(state.rows) == 0 {
-		return renderInteractiveIdleControls(layout)
+		return renderInteractiveIdleControls(layout, m.currentInteractiveSourceSupportsDownloadOrder())
 	}
 	selectionState := m.currentInteractiveSelection()
 	if selectionState == nil {
-		return renderInteractiveIdleControls(layout)
+		return renderInteractiveIdleControls(layout, m.currentInteractiveSourceSupportsDownloadOrder())
 	}
 	focusTone := "warning"
 	if !selectionState.focusFilters {
@@ -785,6 +793,9 @@ func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDi
 	if selectionState.focusFilters {
 		parts = append(parts, renderPlanPromptKey("space/enter", "apply filter"))
 	}
+	if m.currentInteractiveSourceSupportsDownloadOrder() {
+		parts = append(parts, renderPlanPromptKey("o", "order"))
+	}
 	parts = append(parts, renderPlanPromptKey("p", "activity"))
 	if m.running {
 		if m.isInteractiveSyncWorkflow() && !m.interactiveRuntimeActive() {
@@ -795,7 +806,7 @@ func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDi
 	return renderPlanPromptControlLines(parts, layout)
 }
 
-func renderInteractiveIdleControls(layout tuiShellLayout) []string {
+func renderInteractiveIdleControls(layout tuiShellLayout, showOrder bool) []string {
 	parts := []string{
 		planPromptChip("source controls", "info"),
 		renderPlanPromptKey("j/k", "move"),
@@ -807,6 +818,9 @@ func renderInteractiveIdleControls(layout tuiShellLayout) []string {
 		renderPlanPromptKey("u", "unlimited"),
 		renderPlanPromptKey("p", "activity"),
 		renderPlanPromptKey("enter", "run"),
+	}
+	if showOrder {
+		parts = append(parts[0:5], append([]string{renderPlanPromptKey("o", "order")}, parts[5:]...)...)
 	}
 	return renderPlanPromptControlLines(parts, layout)
 }
@@ -963,6 +977,9 @@ func renderPlanPromptTable(state *tuiInteractiveSelectionState, rows []tuiTrackR
 	}
 	idWidth := 12
 	statusWidth := 20
+	if tuiInteractiveRuntimePhase(phase) {
+		statusWidth = 28
+	}
 	indexWidth := 4
 	selectWidth := 4
 	gapWidth := 8
@@ -1099,14 +1116,20 @@ func trackStatusSecondaryLabel(row tuiTrackRowState, phase tuiInteractiveSyncPha
 	if !tuiInteractiveRuntimePhase(phase) {
 		return ""
 	}
+	parts := []string{}
 	switch row.PlanClass {
 	case tuiTrackPlanClassNew:
-		return " · new"
+		parts = append(parts, "new")
 	case tuiTrackPlanClassKnownGap:
-		return " · gap"
-	default:
+		parts = append(parts, "gap")
+	}
+	if row.RunScope == tuiTrackRunScopeIncluded && row.ExecutionSlot > 0 {
+		parts = append(parts, fmt.Sprintf("run #%d", row.ExecutionSlot))
+	}
+	if len(parts) == 0 {
 		return ""
 	}
+	return " · " + strings.Join(parts, " · ")
 }
 
 func shellPlanPromptRowWindow(total, cursor int, layout tuiShellLayout) (int, int) {

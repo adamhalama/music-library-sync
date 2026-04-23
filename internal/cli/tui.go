@@ -58,6 +58,7 @@ type tuiSyncModel struct {
 	standardActivityState tuiStandardSyncActivityState
 	interactivePhase      tuiInteractiveSyncPhase
 	interactiveSelections map[string]*tuiInteractiveSelectionState
+	interactiveOrders     map[string]engine.DownloadOrder
 	interactiveDisplayID  string
 	interactiveTracker    *tuiSyncRunTracker
 	planPrompt            *tuiPlanPromptState
@@ -121,16 +122,17 @@ type tuiSyncDoneMsg struct {
 }
 
 type tuiPlanSelectRequestMsg struct {
-	SourceID string
-	Rows     []engine.PlanRow
-	Details  planSourceDetails
-	Reply    chan tuiPlanSelectResult
+	SourceID      string
+	Rows          []engine.PlanRow
+	Details       planSourceDetails
+	DownloadOrder engine.DownloadOrder
+	Reply         chan tuiPlanSelectResult
 }
 
 type tuiPlanSelectResult struct {
-	SelectedIndices []int
-	Canceled        bool
-	Err             error
+	Manifest engine.ExecutionManifest
+	Canceled bool
+	Err      error
 }
 
 type tuiPromptKind string
@@ -230,22 +232,22 @@ type tuiPlanTrackRow struct {
 }
 
 type tuiTrackRowState struct {
-	SourceID         string
-	SourceLabel      string
-	RemoteID         string
-	Title            string
-	Index            int
-	SelectedRunIndex int
-	Toggleable       bool
-	PlanStatus       engine.PlanRowStatus
-	PlanClass        tuiTrackPlanClass
-	Selected         bool
-	RunScope         tuiTrackRunScope
-	RuntimeStatus    tuiTrackRuntimeStatus
-	StatusLabel      string
-	FailureDetail    string
-	ProgressKnown    bool
-	ProgressPercent  float64
+	SourceID        string
+	SourceLabel     string
+	RemoteID        string
+	Title           string
+	Index           int
+	ExecutionSlot   int
+	Toggleable      bool
+	PlanStatus      engine.PlanRowStatus
+	PlanClass       tuiTrackPlanClass
+	Selected        bool
+	RunScope        tuiTrackRunScope
+	RuntimeStatus   tuiTrackRuntimeStatus
+	StatusLabel     string
+	FailureDetail   string
+	ProgressKnown   bool
+	ProgressPercent float64
 }
 
 type tuiTrackRuntimeStatus string
@@ -267,18 +269,22 @@ type tuiActivityEntry struct {
 }
 
 type tuiInteractiveDisplayState struct {
-	sourceID  string
-	details   planSourceDetails
-	rows      []tuiTrackRowState
-	activity  []tuiActivityEntry
-	lifecycle tuiInteractiveSourceLifecycle
-	confirmed bool
+	sourceID      string
+	details       planSourceDetails
+	downloadOrder engine.DownloadOrder
+	rows          []tuiTrackRowState
+	activity      []tuiActivityEntry
+	lifecycle     tuiInteractiveSourceLifecycle
+	confirmed     bool
 }
 
 type tuiInteractiveSelectionState struct {
 	sourceID                   string
 	rows                       []tuiPlanTrackRow
 	details                    planSourceDetails
+	downloadOrder              engine.DownloadOrder
+	manifest                   engine.ExecutionManifest
+	hasManifest                bool
 	cursor                     int
 	selected                   map[int]bool
 	filter                     tuiStatusFilter

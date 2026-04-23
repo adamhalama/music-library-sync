@@ -46,30 +46,54 @@ func newMenuRootModelForTest() tuiRootModel {
 	return root
 }
 
-func TestTUIRootMenuShowsGetStartedFirst(t *testing.T) {
+func setMenuCursorForTest(t *testing.T, root *tuiRootModel, label string) {
+	t.Helper()
+	for idx, item := range root.menuItems {
+		if item == label {
+			root.menuCursor = idx
+			return
+		}
+	}
+	t.Fatalf("expected menu item %q in %v", label, root.menuItems)
+}
+
+func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	root := newMenuRootModelForTest()
 
 	if len(root.menuItems) < 2 {
 		t.Fatalf("expected at least two menu items, got %v", root.menuItems)
 	}
-	if root.menuItems[0] != "Get Started" {
-		t.Fatalf("expected Get Started first, got %v", root.menuItems)
+	if root.menuItems[0] != "Run Sync" {
+		t.Fatalf("expected Run Sync first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "Credentials" {
-		t.Fatalf("expected Credentials second, got %v", root.menuItems)
+	if root.menuItems[1] != "Get Started" {
+		t.Fatalf("expected Get Started second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Check System" {
-		t.Fatalf("expected Check System third, got %v", root.menuItems)
+	if root.menuItems[2] != "Credentials" {
+		t.Fatalf("expected Credentials third, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
 		t.Fatalf("expected home shell title, got: %s", view)
 	}
-	if !strings.Contains(view, "Get Started") {
-		t.Fatalf("expected Get Started in landing navigation, got: %s", view)
+	if !strings.Contains(view, "Run Sync") {
+		t.Fatalf("expected Run Sync in landing navigation, got: %s", view)
 	}
-	if !strings.Contains(view, "Create a starter setup") {
+	if !strings.Contains(view, "Review enabled sources") {
 		t.Fatalf("expected landing body summary, got: %s", view)
+	}
+}
+
+func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenInteractiveSync {
+		t.Fatalf("expected default enter to open interactive sync, got %v", next.screen)
 	}
 }
 
@@ -95,6 +119,7 @@ func TestTUIRootViewUsesCompactShellBelowBreakpoint(t *testing.T) {
 
 func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "Get Started")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -111,7 +136,7 @@ func TestTUIRootEnterOpensGetStartedWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensCheckSystemWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
-	root.menuCursor = 2
+	setMenuCursorForTest(t, &root, "Check System")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -143,7 +168,7 @@ func TestTUIRootMenuIncludesAdvancedConfigWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
-	root.menuCursor = 4
+	setMenuCursorForTest(t, &root, "Advanced Config")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -160,7 +185,7 @@ func TestTUIRootEnterOpensAdvancedConfigWorkflow(t *testing.T) {
 
 func TestTUIRootEnterOpensCredentialsWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
-	root.menuCursor = 1
+	setMenuCursorForTest(t, &root, "Credentials")
 
 	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, ok := nextModel.(tuiRootModel)
@@ -609,7 +634,7 @@ func TestTUIConfigEditorModalEditRendersCursorAndHelp(t *testing.T) {
 	if !strings.Contains(view, "▌") {
 		t.Fatalf("expected visible input cursor, got: %s", view)
 	}
-	if !strings.Contains(view, "left/right move") {
+	if !strings.Contains(view, "Doctor compatibility hint.") {
 		t.Fatalf("expected edit controls in modal help, got: %s", view)
 	}
 }
@@ -875,9 +900,16 @@ func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
 func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	interactive := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	interactive.cfgLoaded = true
+	interactive.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, TargetDir: "/tmp/music", URL: "https://soundcloud.com/janxadam", StateFile: "/tmp/soundcloud.sync.scdl", Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	interactive.selected["soundcloud-likes"] = true
 	interactiveView := interactive.View()
 	if !strings.Contains(interactiveView, "plan_limit=") {
 		t.Fatalf("expected interactive sync plan limit controls, got: %s", interactiveView)
+	}
+	if strings.Contains(interactiveView, "download_order=") || strings.Contains(interactiveView, "ORDER:") {
+		t.Fatalf("expected interactive sync to hide global download order summary, got: %s", interactiveView)
 	}
 	if strings.Contains(interactiveView, "ask_on_existing=") || strings.Contains(interactiveView, "scan_gaps=") || strings.Contains(interactiveView, "no_preflight=") {
 		t.Fatalf("expected interactive sync to hide standard-only options, got: %s", interactiveView)
@@ -1098,10 +1130,13 @@ func TestTUIRootInteractiveSyncIdleShowsStructuredPlaceholder(t *testing.T) {
 	if !strings.Contains(view, "Plan Selection") || !strings.Contains(view, "source=soundcloud-likes") {
 		t.Fatalf("expected idle selection to show focused source header, got: %s", view)
 	}
+	if !strings.Contains(view, "order=oldest_first") {
+		t.Fatalf("expected idle selection to show download order, got: %s", view)
+	}
 	if !strings.Contains(view, "target /tmp/music") || !strings.Contains(view, "url https://soundcloud.com/janxadam") {
 		t.Fatalf("expected idle selection to show focused source details, got: %s", view)
 	}
-	if !strings.Contains(view, "source controls") || !strings.Contains(view, "space  toggle source") || !strings.Contains(view, "enter  run") {
+	if !strings.Contains(view, "source controls") || !strings.Contains(view, "space  toggle source") || !strings.Contains(view, "o  order") || !strings.Contains(view, "enter  run") {
 		t.Fatalf("expected idle controls to render inside selection, got: %s", view)
 	}
 	if strings.Contains(view, "dry_run=false  timeout=default  plan_limit=10") || strings.Contains(view, "Rows appear here after interactive preflight starts.") || strings.Contains(view, "Press enter to run `udl sync --plan` for the selected sources.") {
@@ -1374,7 +1409,7 @@ func TestTUISyncInteractiveRowsTransitionToDownloadedAndFilterCountsUpdate(t *te
 	root.syncModel = m
 
 	view := root.View()
-	if !strings.Contains(view, "downloaded") || !strings.Contains(view, "· gap") {
+	if !strings.Contains(view, "downloaded") || !strings.Contains(view, "· gap") || !strings.Contains(view, "run #1") {
 		t.Fatalf("expected completed row to render downloaded status, got: %s", view)
 	}
 	if !strings.Contains(view, "Downloaded (1)") || !strings.Contains(view, "Already Have (1)") || !strings.Contains(view, "In Run (1)") {
@@ -2000,6 +2035,65 @@ func TestTUIInteractiveSparseSelectionShowsLaterRowsCompleting(t *testing.T) {
 	}
 }
 
+func TestTUIInteractiveDisplayStateTracksOldestFirstRuntimeRows(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{ID: "soundcloud-likes", Type: config.SourceTypeSoundCloud, Adapter: config.AdapterSpec{Kind: "scdl"}},
+	}
+	m.selected["soundcloud-likes"] = true
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: "soundcloud-likes",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "Desert Overworld (LUKA EDIT)", RemoteID: "2157239994", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "Premiere: KiNK & Raredub - Time To Change [MRS001]", RemoteID: "1939503326", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 3, Title: "Carte Blanche (DREY Schranz Edit) - Veracocha [FREE DOWNLOAD]", RemoteID: "1935964850", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+			{Index: 4, Title: "Showtek - Colours Of The Harder Styles (L4ZARUS Remix)", RemoteID: "2102155746", Status: engine.PlanRowMissingKnownGap, Toggleable: true, SelectedByDefault: true},
+		},
+		Details:       planSourceDetails{SourceID: "soundcloud-likes"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
+	})
+	m.confirmInteractiveSelection(m.planPrompt.sourceID)
+	m.planPrompt = nil
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseSyncing
+
+	m.interactiveTracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackDone,
+		SourceID: "soundcloud-likes",
+		Details:  map[string]any{"index": 1},
+	}, nil, "", false)
+	m.interactiveTracker.ObserveEvent(output.Event{
+		Event:    output.EventTrackProgress,
+		SourceID: "soundcloud-likes",
+		Details:  map[string]any{"index": 2, "percent": 14.0},
+	}, nil, "", false)
+
+	display := m.currentInteractiveDisplayState()
+	if display == nil || len(display.rows) != 4 {
+		t.Fatalf("expected interactive display rows, got %+v", display)
+	}
+	rowsByTitle := map[string]tuiTrackRowState{}
+	for _, row := range display.rows {
+		rowsByTitle[row.Title] = row
+	}
+	if got := rowsByTitle["Showtek - Colours Of The Harder Styles (L4ZARUS Remix)"]; got.RuntimeStatus != tuiTrackStatusDownloaded || got.ExecutionSlot != 1 {
+		t.Fatalf("expected Showtek row downloaded in execution slot 1, got %+v", got)
+	}
+	if got := rowsByTitle["Carte Blanche (DREY Schranz Edit) - Veracocha [FREE DOWNLOAD]"]; got.RuntimeStatus != tuiTrackStatusDownloading || got.ExecutionSlot != 2 || !got.ProgressKnown || got.ProgressPercent != 14 {
+		t.Fatalf("expected Carte Blanche row downloading in execution slot 2, got %+v", got)
+	}
+	if got := rowsByTitle["Desert Overworld (LUKA EDIT)"]; got.RuntimeStatus != tuiTrackStatusQueued || got.ExecutionSlot != 4 {
+		t.Fatalf("expected Desert row to remain queued in execution slot 4, got %+v", got)
+	}
+	if got := rowsByTitle["Premiere: KiNK & Raredub - Time To Change [MRS001]"]; got.RuntimeStatus != tuiTrackStatusQueued || got.ExecutionSlot != 3 {
+		t.Fatalf("expected KiNK row to remain queued in execution slot 3, got %+v", got)
+	}
+}
+
 func renderPlanPromptFixture(rows []engine.PlanRow) tuiRootModel {
 	root := newTUIRootModel(&AppContext{}, false)
 	root.screen = tuiScreenInteractiveSync
@@ -2308,8 +2402,144 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 			t.Fatalf("expected confirmed selection, got canceled")
 		}
 		want := []int{1, 3}
-		if !reflect.DeepEqual(got.SelectedIndices, want) {
-			t.Fatalf("selected indices mismatch: got=%v want=%v", got.SelectedIndices, want)
+		if !reflect.DeepEqual(got.Manifest.SelectedIndices, want) {
+			t.Fatalf("selected indices mismatch: got=%v want=%v", got.Manifest.SelectedIndices, want)
+		}
+	default:
+		t.Fatalf("expected selection reply")
+	}
+}
+
+func TestTUIInteractiveSelectionMergeKeepsValidEmptyManifest(t *testing.T) {
+	rows := []engine.PlanRow{
+		{Index: 1, Title: "first", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	}
+	previousManifest, err := engine.BuildExecutionManifest("source-a", rows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build previous manifest: %v", err)
+	}
+	emptyManifest, err := engine.BuildExecutionManifest("source-a", nil, nil, engine.DownloadOrderOldestFirst)
+	if err != nil {
+		t.Fatalf("build empty manifest: %v", err)
+	}
+	existing := &tuiInteractiveSelectionState{
+		sourceID:      "source-a",
+		manifest:      previousManifest,
+		hasManifest:   true,
+		selected:      map[int]bool{1: true},
+		filter:        tuiTrackFilterAll,
+		downloadOrder: engine.DownloadOrderNewestFirst,
+	}
+	next := &tuiInteractiveSelectionState{
+		sourceID:      "source-a",
+		manifest:      emptyManifest,
+		hasManifest:   true,
+		selected:      map[int]bool{},
+		filter:        tuiTrackFilterAll,
+		downloadOrder: engine.DownloadOrderOldestFirst,
+	}
+
+	merged := mergeInteractiveSelectionState(existing, next)
+	if !merged.hasManifest {
+		t.Fatalf("expected merged state to keep valid empty manifest")
+	}
+	if len(merged.manifest.SelectedIndices) != 0 || len(merged.manifest.Execution) != 0 {
+		t.Fatalf("expected empty manifest to replace previous selection, got %+v", merged.manifest)
+	}
+	if merged.manifest.DownloadOrder != engine.DownloadOrderOldestFirst {
+		t.Fatalf("expected incoming empty manifest order to be preserved, got %q", merged.manifest.DownloadOrder)
+	}
+}
+
+func TestTUIInteractiveSelectionPlaceholderDoesNotBecomeManifestReadyOnOrderChange(t *testing.T) {
+	state := newEmptyTUIInteractiveSelectionState()
+	state.sourceID = "source-a"
+	state.setDownloadOrder(engine.DownloadOrderOldestFirst)
+
+	if state.hasManifest {
+		t.Fatalf("expected placeholder selection state to remain without a manifest")
+	}
+}
+
+func TestTUISyncModelPlanPromptConfirmEmptySelectionDoesNotReusePriorManifest(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseReview
+	m.eventCh = make(chan tea.Msg, 1)
+	previousRows := []engine.PlanRow{
+		{Index: 1, Title: "old", RemoteID: "old-id", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	}
+	previousManifest, err := engine.BuildExecutionManifest("source-a", previousRows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build previous manifest: %v", err)
+	}
+	m.storeInteractiveSelection(&tuiInteractiveSelectionState{
+		sourceID:      "source-a",
+		rows:          []tuiPlanTrackRow{{Index: 1, Title: "old", RemoteID: "old-id", Toggleable: true, SelectedByDefault: true}},
+		manifest:      previousManifest,
+		hasManifest:   true,
+		selected:      map[int]bool{1: true},
+		filter:        tuiTrackFilterAll,
+		downloadOrder: engine.DownloadOrderNewestFirst,
+	})
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "already have", RemoteID: "have-id", Status: engine.PlanRowAlreadyDownloaded, Toggleable: false},
+		},
+		Details:       planSourceDetails{SourceID: "source-a"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
+	})
+	if m.planPrompt == nil {
+		t.Fatalf("expected plan prompt state")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	select {
+	case got := <-reply:
+		if got.Canceled {
+			t.Fatalf("expected confirmed empty selection, got canceled")
+		}
+		if len(got.Manifest.SelectedIndices) != 0 || len(got.Manifest.Execution) != 0 {
+			t.Fatalf("expected empty manifest, got %+v", got.Manifest)
+		}
+		if got.Manifest.DownloadOrder != engine.DownloadOrderOldestFirst {
+			t.Fatalf("expected current prompt order, got %q", got.Manifest.DownloadOrder)
+		}
+	default:
+		t.Fatalf("expected selection reply")
+	}
+}
+
+func TestTUISyncModelPlanPromptConfirmAfterDeselectAllReturnsEmptyManifest(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseReview
+	m.eventCh = make(chan tea.Msg, 1)
+	reply := make(chan tuiPlanSelectResult, 1)
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "first", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a"},
+		Reply:   reply,
+	})
+	if m.planPrompt == nil {
+		t.Fatalf("expected plan prompt state")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	select {
+	case got := <-reply:
+		if len(got.Manifest.SelectedIndices) != 0 || len(got.Manifest.Execution) != 0 {
+			t.Fatalf("expected empty manifest after deselecting all rows, got %+v", got.Manifest)
 		}
 	default:
 		t.Fatalf("expected selection reply")
@@ -2421,11 +2651,10 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	var gotSelected []int
-	var gotCanceled bool
+	var result engine.PlanSelectionResult
 	var gotErr error
 	go func() {
-		gotSelected, gotCanceled, gotErr = interaction.SelectRows("s1", rows)
+		result, gotErr = interaction.SelectRows("s1", rows)
 		close(done)
 	}()
 
@@ -2434,17 +2663,24 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tuiPlanSelectRequestMsg, got %T", raw)
 	}
-	req.Reply <- tuiPlanSelectResult{SelectedIndices: []int{1}}
+	manifest, err := engine.BuildExecutionManifest("s1", rows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build manifest: %v", err)
+	}
+	req.Reply <- tuiPlanSelectResult{Manifest: manifest}
 	<-done
 
 	if gotErr != nil {
 		t.Fatalf("unexpected select error: %v", gotErr)
 	}
-	if gotCanceled {
+	if result.Canceled {
 		t.Fatalf("expected canceled=false")
 	}
-	if !reflect.DeepEqual(gotSelected, []int{1}) {
-		t.Fatalf("selected indices mismatch: got=%v", gotSelected)
+	if !reflect.DeepEqual(result.Manifest.SelectedIndices, []int{1}) {
+		t.Fatalf("selected indices mismatch: got=%v", result.Manifest.SelectedIndices)
+	}
+	if result.Manifest.DownloadOrder != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected default handshake order newest_first, got %q", result.Manifest.DownloadOrder)
 	}
 }
 
@@ -2474,6 +2710,69 @@ func TestTUISyncModelPlanLimitControls(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
 	if m.planLimit != tuiDefaultPlanLimit {
 		t.Fatalf("expected reset to default when decreasing from unlimited, got %d", m.planLimit)
+	}
+}
+
+func TestTUISyncModelInteractiveDownloadOrderToggle(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{
+			ID:        "soundcloud-likes",
+			Type:      config.SourceTypeSoundCloud,
+			TargetDir: "/tmp/music",
+			URL:       "https://soundcloud.com/janxadam",
+			StateFile: "/tmp/soundcloud.sync.scdl",
+			Adapter:   config.AdapterSpec{Kind: "scdl"},
+		},
+	}
+	m.selected["soundcloud-likes"] = true
+	m.interactiveOrders["soundcloud-likes"] = engine.DownloadOrderOldestFirst
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected download order to toggle to newest_first, got %q", got)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderOldestFirst {
+		t.Fatalf("expected download order to toggle back to oldest_first, got %q", got)
+	}
+}
+
+func TestTUISyncModelPlanPromptDownloadOrderToggleRebuildsManifest(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	source := config.Source{
+		ID:        "soundcloud-likes",
+		Type:      config.SourceTypeSoundCloud,
+		TargetDir: "/tmp/music",
+		URL:       "https://soundcloud.com/janxadam",
+		StateFile: "/tmp/soundcloud.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "scdl"},
+	}
+	m.sources = []config.Source{source}
+	m.selected["soundcloud-likes"] = true
+	m.interactiveOrders["soundcloud-likes"] = engine.DownloadOrderOldestFirst
+	reply := make(chan tuiPlanSelectResult, 1)
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID:      source.ID,
+		Rows:          []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
+		Details:       m.planSourceDetailsForSource(source),
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
+	})
+	m.planPrompt = &tuiPlanPromptState{
+		tuiInteractiveSelectionState: state,
+		reply:                        reply,
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := m.interactiveOrders["soundcloud-likes"]; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected source order to toggle to newest_first, got %q", got)
+	}
+	if got := m.planPrompt.manifest.DownloadOrder; got != engine.DownloadOrderNewestFirst {
+		t.Fatalf("expected prompt manifest order to update, got %q", got)
 	}
 }
 

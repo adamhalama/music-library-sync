@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -18,10 +19,11 @@ type tuiSyncRunTracker struct {
 }
 
 type tuiTrackedSourceState struct {
-	lifecycle tuiInteractiveSourceLifecycle
-	confirmed bool
-	rows      []tuiTrackRowState
-	activity  []tuiActivityEntry
+	lifecycle      tuiInteractiveSourceLifecycle
+	confirmed      bool
+	rows           []tuiTrackRowState
+	rowIndexBySlot map[int]int
+	activity       []tuiActivityEntry
 }
 
 type tuiTrackedSourceSnapshot struct {
@@ -78,7 +80,7 @@ func (t *tuiSyncRunTracker) ConfirmSelection(state *tuiInteractiveSelectionState
 		return
 	}
 	source.confirmed = true
-	source.rows = buildTrackedRowsForSelection(state)
+	source.rows, source.rowIndexBySlot = buildTrackedRowsForSelection(state.rows, state.manifest, state.isSelected)
 }
 
 func (t *tuiSyncRunTracker) SetSourceLifecycle(sourceID string, lifecycle tuiInteractiveSourceLifecycle) {
@@ -263,21 +265,27 @@ func formatElapsedLabel(minutes, seconds int) string {
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
-func buildTrackedRowsForSelection(state *tuiInteractiveSelectionState) []tuiTrackRowState {
-	if state == nil || len(state.rows) == 0 {
-		return nil
+func buildTrackedRowsForSelection(rowsIn []tuiPlanTrackRow, manifest engine.ExecutionManifest, isSelected func(int) bool) ([]tuiTrackRowState, map[int]int) {
+	if len(rowsIn) == 0 {
+		return nil, nil
 	}
-	rows := make([]tuiTrackRowState, 0, len(state.rows))
-	selectedRunIndex := 0
-	for _, row := range state.rows {
-		displayRow := tuiDisplayRowFromPlanRow(row, state.isSelected(row.Index))
-		if displayRow.RunScope == tuiTrackRunScopeIncluded {
-			selectedRunIndex++
-			displayRow.SelectedRunIndex = selectedRunIndex
-		}
+	rows := make([]tuiTrackRowState, 0, len(rowsIn))
+	for _, row := range rowsIn {
+		displayRow := tuiDisplayRowFromPlanRow(row, isSelected(row.Index))
 		rows = append(rows, displayRow)
 	}
-	return rows
+	rowIndexBySlot := make(map[int]int, len(manifest.Execution))
+	for _, entry := range manifest.Execution {
+		for i := range rows {
+			if rows[i].Index != entry.Index {
+				continue
+			}
+			rows[i].ExecutionSlot = entry.ExecutionSlot
+			rowIndexBySlot[entry.ExecutionSlot] = i
+			break
+		}
+	}
+	return rows, rowIndexBySlot
 }
 
 func cloneTUITrackRows(rows []tuiTrackRowState) []tuiTrackRowState {
@@ -321,13 +329,6 @@ func (s *tuiTrackedSourceState) resolveRowForEvent(event output.Event) *tuiTrack
 			}
 		}
 	}
-	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
-		for i := range s.rows {
-			if s.rows[i].RunScope == tuiTrackRunScopeIncluded && s.rows[i].SelectedRunIndex == idx {
-				return &s.rows[i]
-			}
-		}
-	}
 	trackName := strings.TrimSpace(tuiDetailString(event.Details, "track_name"))
 	if trackName != "" {
 		normalizedTrackName := tuiNormalizeTrackMatchKey(trackName)
@@ -345,9 +346,14 @@ func (s *tuiTrackedSourceState) resolveRowForEvent(event output.Event) *tuiTrack
 		}
 	}
 	if idx, ok := tuiDetailInt(event.Details, "index"); ok {
-		for i := range s.rows {
-			if s.rows[i].Index == idx {
-				return &s.rows[i]
+		if rowPos, ok := s.rowIndexBySlot[idx]; ok && rowPos >= 0 && rowPos < len(s.rows) {
+			return &s.rows[rowPos]
+		}
+		if !s.confirmed {
+			for i := range s.rows {
+				if s.rows[i].Index == idx {
+					return &s.rows[i]
+				}
 			}
 		}
 	}

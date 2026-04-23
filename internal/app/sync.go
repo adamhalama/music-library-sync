@@ -46,7 +46,7 @@ func (u SyncUseCase) Run(ctx context.Context, cfg config.Config, req SyncRequest
 		ScanGaps:         req.ScanGaps,
 		NoPreflight:      req.NoPreflight,
 		AllowPrompt:      req.AllowPrompt,
-		SelectPlanRows: func(sourceID string, rows []engine.PlanRow) ([]int, bool, error) {
+		SelectPlanRows: func(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 			return interaction.SelectRows(sourceID, rows)
 		},
 		PromptOnExisting: func(sourceID string, preflight engine.SoundCloudPreflight) (bool, error) {

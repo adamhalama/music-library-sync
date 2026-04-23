@@ -34,6 +34,13 @@ func mergeInteractiveSelectionState(existing, next *tuiInteractiveSelectionState
 	if next.details.SourceID == "" {
 		next.details = existing.details
 	}
+	if next.downloadOrder == "" {
+		next.downloadOrder = existing.downloadOrder
+	}
+	if !next.hasManifest {
+		next.manifest = existing.manifest
+		next.hasManifest = existing.hasManifest
+	}
 	return next
 }
 
@@ -97,6 +104,9 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForSource(sourceID string) *tui
 				state.details = m.planSourceDetailsForSource(source)
 			}
 		}
+		if state.downloadOrder == "" {
+			state.setDownloadOrder(m.downloadOrderForSourceID(sourceID))
+		}
 		return state
 	}
 	state := newEmptyTUIInteractiveSelectionState()
@@ -104,6 +114,7 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForSource(sourceID string) *tui
 	if source, ok := m.interactiveSourceByID(sourceID); ok {
 		state.details = m.planSourceDetailsForSource(source)
 	}
+	state.setDownloadOrder(m.downloadOrderForSourceID(sourceID))
 	m.storeInteractiveSelection(state)
 	return state
 }
@@ -403,14 +414,17 @@ func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiv
 			SelectedByDefault: row.SelectedByDefault,
 		})
 	}
-	return &tuiInteractiveSelectionState{
-		sourceID:     req.SourceID,
-		rows:         rows,
-		details:      req.Details,
-		selected:     selected,
-		filter:       tuiTrackFilterAll,
-		filterCursor: 0,
+	state := &tuiInteractiveSelectionState{
+		sourceID:      req.SourceID,
+		rows:          rows,
+		details:       req.Details,
+		downloadOrder: engine.NormalizeDownloadOrder(req.DownloadOrder),
+		selected:      selected,
+		filter:        tuiTrackFilterAll,
+		filterCursor:  0,
 	}
+	state.rebuildManifest()
+	return state
 }
 
 func newTUIPlanPromptState(req tuiPlanSelectRequestMsg) *tuiPlanPromptState {
@@ -424,17 +438,7 @@ func (s *tuiInteractiveSelectionState) selectedIndices() []int {
 	if s == nil {
 		return nil
 	}
-	out := make([]int, 0, len(s.selected))
-	for _, row := range s.rows {
-		if !row.Toggleable {
-			continue
-		}
-		if s.isSelected(row.Index) {
-			out = append(out, row.Index)
-		}
-	}
-	sort.Ints(out)
-	return out
+	return append([]int(nil), s.manifest.SelectedIndices...)
 }
 
 func tuiInteractiveRuntimePhase(phase tuiInteractiveSyncPhase) bool {
@@ -731,6 +735,7 @@ func (s *tuiInteractiveSelectionState) setSelected(index int, selected bool) {
 		s.selected = map[int]bool{}
 	}
 	s.selected[index] = selected
+	s.rebuildManifest()
 }
 
 func (s *tuiInteractiveSelectionState) isSelected(index int) bool {
@@ -738,6 +743,50 @@ func (s *tuiInteractiveSelectionState) isSelected(index int) bool {
 		return false
 	}
 	return s.selected[index]
+}
+
+func (s *tuiInteractiveSelectionState) setDownloadOrder(order engine.DownloadOrder) {
+	if s == nil {
+		return
+	}
+	s.downloadOrder = engine.NormalizeDownloadOrder(order)
+	if len(s.rows) == 0 && !s.hasManifest {
+		return
+	}
+	s.rebuildManifest()
+}
+
+func (s *tuiInteractiveSelectionState) rebuildManifest() {
+	if s == nil {
+		return
+	}
+	rows := make([]engine.PlanRow, 0, len(s.rows))
+	selected := make([]int, 0, len(s.selected))
+	for _, row := range s.rows {
+		rows = append(rows, engine.PlanRow{
+			Index:             row.Index,
+			RemoteID:          row.RemoteID,
+			Title:             row.Title,
+			Status:            row.PlanStatus,
+			Toggleable:        row.Toggleable,
+			SelectedByDefault: row.SelectedByDefault,
+		})
+		if row.Toggleable && s.selected[row.Index] {
+			selected = append(selected, row.Index)
+		}
+	}
+	sort.Ints(selected)
+	manifest, err := engine.BuildExecutionManifest(s.sourceID, rows, selected, s.downloadOrder)
+	if err != nil {
+		s.manifest = engine.ExecutionManifest{
+			SourceID:      s.sourceID,
+			DownloadOrder: engine.NormalizeDownloadOrder(s.downloadOrder),
+		}
+		s.hasManifest = false
+		return
+	}
+	s.manifest = manifest
+	s.hasManifest = true
 }
 
 func (m tuiSyncModel) interactiveAggregateCounts() (selected, completed, skipped, failed int, progressPercent float64) {

@@ -46,11 +46,20 @@ type SyncOptions struct {
 	ScanGaps            bool
 	NoPreflight         bool
 	AllowPrompt         bool
-	SelectPlanRows      func(sourceID string, rows []PlanRow) (selectedIndices []int, canceled bool, err error)
+	SelectPlanRows      func(sourceID string, rows []PlanRow) (PlanSelectionResult, error)
 	PromptOnExisting    func(sourceID string, preflight SoundCloudPreflight) (bool, error)
 	PromptOnSpotifyAuth func(sourceID string) (bool, error)
 	PromptOnDeemixARL   func(sourceID string) (string, error)
 	TrackStatus         TrackStatusMode
+}
+
+type PlanSelectionResult struct {
+	Manifest ExecutionManifest
+	Canceled bool
+}
+
+type PlanApplyOptions struct {
+	DryRun bool
 }
 
 type SyncResult struct {
