@@ -20,6 +20,62 @@ func testExecutionManifest(t *testing.T, sourceID string, rows []PlanRow, select
 	return manifest
 }
 
+func testSCDLPlanWithTracks(t *testing.T, tracks []soundCloudRemoteTrack, statePayload string) (*scdlSourcePlan, config.Source) {
+	t.Helper()
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	source := config.Source{
+		ID:        "sc-plan",
+		Type:      config.SourceTypeSoundCloud,
+		Enabled:   true,
+		TargetDir: targetDir,
+		URL:       "https://soundcloud.com/user",
+		StateFile: "sc-plan.sync.scdl",
+		Adapter:   config.AdapterSpec{Kind: "scdl"},
+	}
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:    stateDir,
+			ArchiveFile: "archive.txt",
+		},
+		Sources: []config.Source{source},
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, source.StateFile), []byte(statePayload), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, source.ID+".archive.txt"), nil, 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	origEnumerateLimited := enumerateSoundCloudTracksWithLimitFn
+	t.Cleanup(func() {
+		enumerateSoundCloudTracksWithLimitFn = origEnumerateLimited
+	})
+	enumerateSoundCloudTracksWithLimitFn = func(ctx context.Context, source config.Source, limit int) ([]soundCloudRemoteTrack, error) {
+		return tracks, nil
+	}
+
+	provider := NewSCDLPlanProvider()
+	plan, err := provider.Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	scdlPlan, ok := plan.(*scdlSourcePlan)
+	if !ok {
+		t.Fatalf("expected *scdlSourcePlan, got %T", plan)
+	}
+	return scdlPlan, source
+}
+
 func TestSCDLPlanProviderBuildClassifiesRowsAndDefaultSelection(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
@@ -267,6 +323,57 @@ func TestSCDLPlanProviderAppliesSelectionOrdersExecutionByDownloadOrder(t *testi
 	}
 	if got := []string{execPlan.PlannedSoundCloudTracks[0].ID, execPlan.PlannedSoundCloudTracks[1].ID}; !reflect.DeepEqual(got, []string{"track-c", "track-a"}) {
 		t.Fatalf("expected planned track execution order [track-c track-a], got %v", got)
+	}
+}
+
+func TestSCDLPlanProviderApplySelectionRejectsManifestSourceMismatch(t *testing.T) {
+	plan, source := testSCDLPlanWithTracks(t, []soundCloudRemoteTrack{
+		{ID: "track-a", Title: "Track A"},
+	}, "")
+	manifest := testExecutionManifest(t, source.ID, plan.Rows(), []int{1}, DownloadOrderNewestFirst)
+	manifest.SourceID = "other-source"
+
+	if _, err := plan.ApplySelection(manifest, PlanApplyOptions{}); err == nil {
+		t.Fatalf("expected source mismatch to be rejected")
+	}
+}
+
+func TestSCDLPlanProviderApplySelectionRejectsMissingSelectedIndex(t *testing.T) {
+	plan, source := testSCDLPlanWithTracks(t, []soundCloudRemoteTrack{
+		{ID: "track-a", Title: "Track A"},
+	}, "")
+	manifest := testExecutionManifest(t, source.ID, plan.Rows(), []int{1}, DownloadOrderNewestFirst)
+	manifest.SelectedIndices = []int{99}
+
+	if _, err := plan.ApplySelection(manifest, PlanApplyOptions{}); err == nil {
+		t.Fatalf("expected missing selected index to be rejected")
+	}
+}
+
+func TestSCDLPlanProviderApplySelectionRejectsNonToggleableSelectedIndex(t *testing.T) {
+	plan, source := testSCDLPlanWithTracks(t, []soundCloudRemoteTrack{
+		{ID: "known-a", Title: "Known A"},
+		{ID: "track-b", Title: "Track B"},
+	}, "soundcloud known-a Known A.mp3\n")
+	manifest := testExecutionManifest(t, source.ID, plan.Rows(), []int{2}, DownloadOrderNewestFirst)
+	manifest.SelectedIndices = []int{1}
+
+	if _, err := plan.ApplySelection(manifest, PlanApplyOptions{}); err == nil {
+		t.Fatalf("expected non-toggleable selected index to be rejected")
+	}
+}
+
+func TestSCDLPlanProviderApplySelectionRejectsMalformedExecutionEntry(t *testing.T) {
+	plan, source := testSCDLPlanWithTracks(t, []soundCloudRemoteTrack{
+		{ID: "track-a", Title: "Track A"},
+		{ID: "track-b", Title: "Track B"},
+		{ID: "track-c", Title: "Track C"},
+	}, "")
+	manifest := testExecutionManifest(t, source.ID, plan.Rows(), []int{1, 3}, DownloadOrderOldestFirst)
+	manifest.Execution[0].RemoteID = "wrong-track"
+
+	if _, err := plan.ApplySelection(manifest, PlanApplyOptions{}); err == nil {
+		t.Fatalf("expected malformed execution entry to be rejected")
 	}
 }
 

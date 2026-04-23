@@ -284,6 +284,7 @@ type tuiInteractiveSelectionState struct {
 	details                    planSourceDetails
 	downloadOrder              engine.DownloadOrder
 	manifest                   engine.ExecutionManifest
+	hasManifest                bool
 	cursor                     int
 	selected                   map[int]bool
 	filter                     tuiStatusFilter

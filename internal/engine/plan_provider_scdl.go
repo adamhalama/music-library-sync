@@ -133,6 +133,11 @@ func (p *scdlSourcePlan) Rows() []PlanRow {
 }
 
 func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApplyOptions) (sourcePlanExecution, error) {
+	manifest, err := CanonicalizeExecutionManifest(p.sourceForExec.ID, p.rows, manifest)
+	if err != nil {
+		return sourcePlanExecution{}, err
+	}
+
 	indexSet := map[int]struct{}{}
 	selectedTrackIDs := map[string]struct{}{}
 	for _, idx := range manifest.SelectedIndices {

@@ -2385,6 +2385,142 @@ func TestTUISyncModelPlanPromptConfirmFlow(t *testing.T) {
 	}
 }
 
+func TestTUIInteractiveSelectionMergeKeepsValidEmptyManifest(t *testing.T) {
+	rows := []engine.PlanRow{
+		{Index: 1, Title: "first", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	}
+	previousManifest, err := engine.BuildExecutionManifest("source-a", rows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build previous manifest: %v", err)
+	}
+	emptyManifest, err := engine.BuildExecutionManifest("source-a", nil, nil, engine.DownloadOrderOldestFirst)
+	if err != nil {
+		t.Fatalf("build empty manifest: %v", err)
+	}
+	existing := &tuiInteractiveSelectionState{
+		sourceID:      "source-a",
+		manifest:      previousManifest,
+		hasManifest:   true,
+		selected:      map[int]bool{1: true},
+		filter:        tuiTrackFilterAll,
+		downloadOrder: engine.DownloadOrderNewestFirst,
+	}
+	next := &tuiInteractiveSelectionState{
+		sourceID:      "source-a",
+		manifest:      emptyManifest,
+		hasManifest:   true,
+		selected:      map[int]bool{},
+		filter:        tuiTrackFilterAll,
+		downloadOrder: engine.DownloadOrderOldestFirst,
+	}
+
+	merged := mergeInteractiveSelectionState(existing, next)
+	if !merged.hasManifest {
+		t.Fatalf("expected merged state to keep valid empty manifest")
+	}
+	if len(merged.manifest.SelectedIndices) != 0 || len(merged.manifest.Execution) != 0 {
+		t.Fatalf("expected empty manifest to replace previous selection, got %+v", merged.manifest)
+	}
+	if merged.manifest.DownloadOrder != engine.DownloadOrderOldestFirst {
+		t.Fatalf("expected incoming empty manifest order to be preserved, got %q", merged.manifest.DownloadOrder)
+	}
+}
+
+func TestTUIInteractiveSelectionPlaceholderDoesNotBecomeManifestReadyOnOrderChange(t *testing.T) {
+	state := newEmptyTUIInteractiveSelectionState()
+	state.sourceID = "source-a"
+	state.setDownloadOrder(engine.DownloadOrderOldestFirst)
+
+	if state.hasManifest {
+		t.Fatalf("expected placeholder selection state to remain without a manifest")
+	}
+}
+
+func TestTUISyncModelPlanPromptConfirmEmptySelectionDoesNotReusePriorManifest(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseReview
+	m.eventCh = make(chan tea.Msg, 1)
+	previousRows := []engine.PlanRow{
+		{Index: 1, Title: "old", RemoteID: "old-id", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	}
+	previousManifest, err := engine.BuildExecutionManifest("source-a", previousRows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build previous manifest: %v", err)
+	}
+	m.storeInteractiveSelection(&tuiInteractiveSelectionState{
+		sourceID:      "source-a",
+		rows:          []tuiPlanTrackRow{{Index: 1, Title: "old", RemoteID: "old-id", Toggleable: true, SelectedByDefault: true}},
+		manifest:      previousManifest,
+		hasManifest:   true,
+		selected:      map[int]bool{1: true},
+		filter:        tuiTrackFilterAll,
+		downloadOrder: engine.DownloadOrderNewestFirst,
+	})
+
+	reply := make(chan tuiPlanSelectResult, 1)
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "already have", RemoteID: "have-id", Status: engine.PlanRowAlreadyDownloaded, Toggleable: false},
+		},
+		Details:       planSourceDetails{SourceID: "source-a"},
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		Reply:         reply,
+	})
+	if m.planPrompt == nil {
+		t.Fatalf("expected plan prompt state")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	select {
+	case got := <-reply:
+		if got.Canceled {
+			t.Fatalf("expected confirmed empty selection, got canceled")
+		}
+		if len(got.Manifest.SelectedIndices) != 0 || len(got.Manifest.Execution) != 0 {
+			t.Fatalf("expected empty manifest, got %+v", got.Manifest)
+		}
+		if got.Manifest.DownloadOrder != engine.DownloadOrderOldestFirst {
+			t.Fatalf("expected current prompt order, got %q", got.Manifest.DownloadOrder)
+		}
+	default:
+		t.Fatalf("expected selection reply")
+	}
+}
+
+func TestTUISyncModelPlanPromptConfirmAfterDeselectAllReturnsEmptyManifest(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.running = true
+	m.interactivePhase = tuiInteractivePhaseReview
+	m.eventCh = make(chan tea.Msg, 1)
+	reply := make(chan tuiPlanSelectResult, 1)
+	m, _ = m.Update(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "first", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+		Details: planSourceDetails{SourceID: "source-a"},
+		Reply:   reply,
+	})
+	if m.planPrompt == nil {
+		t.Fatalf("expected plan prompt state")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	select {
+	case got := <-reply:
+		if len(got.Manifest.SelectedIndices) != 0 || len(got.Manifest.Execution) != 0 {
+			t.Fatalf("expected empty manifest after deselecting all rows, got %+v", got.Manifest)
+		}
+	default:
+		t.Fatalf("expected selection reply")
+	}
+}
+
 func TestTUISyncModelInitialEnterStartsPreflightWithoutRuntimeTimer(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true

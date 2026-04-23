@@ -37,8 +37,9 @@ func mergeInteractiveSelectionState(existing, next *tuiInteractiveSelectionState
 	if next.downloadOrder == "" {
 		next.downloadOrder = existing.downloadOrder
 	}
-	if len(next.manifest.Execution) == 0 && len(next.manifest.SelectedIndices) == 0 {
+	if !next.hasManifest {
 		next.manifest = existing.manifest
+		next.hasManifest = existing.hasManifest
 	}
 	return next
 }
@@ -749,6 +750,9 @@ func (s *tuiInteractiveSelectionState) setDownloadOrder(order engine.DownloadOrd
 		return
 	}
 	s.downloadOrder = engine.NormalizeDownloadOrder(order)
+	if len(s.rows) == 0 && !s.hasManifest {
+		return
+	}
 	s.rebuildManifest()
 }
 
@@ -778,9 +782,11 @@ func (s *tuiInteractiveSelectionState) rebuildManifest() {
 			SourceID:      s.sourceID,
 			DownloadOrder: engine.NormalizeDownloadOrder(s.downloadOrder),
 		}
+		s.hasManifest = false
 		return
 	}
 	s.manifest = manifest
+	s.hasManifest = true
 }
 
 func (m tuiSyncModel) interactiveAggregateCounts() (selected, completed, skipped, failed int, progressPercent float64) {

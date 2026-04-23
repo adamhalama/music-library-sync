@@ -75,3 +75,43 @@ func BuildExecutionManifest(sourceID string, rows []PlanRow, selectedIndices []i
 		Execution:       execution,
 	}, nil
 }
+
+func CanonicalizeExecutionManifest(sourceID string, rows []PlanRow, manifest ExecutionManifest) (ExecutionManifest, error) {
+	if manifest.SourceID != sourceID {
+		return ExecutionManifest{}, fmt.Errorf("execution manifest source %q does not match source %q", manifest.SourceID, sourceID)
+	}
+	if hasDuplicateIndices(manifest.SelectedIndices) {
+		return ExecutionManifest{}, fmt.Errorf("execution manifest contains duplicate selected indices")
+	}
+	canonical, err := BuildExecutionManifest(sourceID, rows, manifest.SelectedIndices, manifest.DownloadOrder)
+	if err != nil {
+		return ExecutionManifest{}, err
+	}
+	if len(manifest.Execution) != len(canonical.Execution) {
+		return ExecutionManifest{}, fmt.Errorf("execution manifest has %d execution entries, expected %d", len(manifest.Execution), len(canonical.Execution))
+	}
+	for i := range canonical.Execution {
+		if !sameExecutionEntry(manifest.Execution[i], canonical.Execution[i]) {
+			return ExecutionManifest{}, fmt.Errorf("execution manifest entry %d does not match current plan rows", i+1)
+		}
+	}
+	return canonical, nil
+}
+
+func hasDuplicateIndices(indices []int) bool {
+	seen := map[int]struct{}{}
+	for _, idx := range indices {
+		if _, ok := seen[idx]; ok {
+			return true
+		}
+		seen[idx] = struct{}{}
+	}
+	return false
+}
+
+func sameExecutionEntry(got, want ExecutionEntry) bool {
+	return got.Index == want.Index &&
+		got.RemoteID == want.RemoteID &&
+		got.Title == want.Title &&
+		got.ExecutionSlot == want.ExecutionSlot
+}
