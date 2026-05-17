@@ -24,6 +24,14 @@ func setupSCDLTest(t *testing.T) (config.Source, config.Defaults) {
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir state: %v", err)
 	}
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := writeFakeSCDL(filepath.Join(binDir, "scdl"), true); err != nil {
+		t.Fatalf("write fake scdl: %v", err)
+	}
+	t.Setenv("PATH", binDir)
 
 	source := config.Source{
 		ID:        "soundcloud-a",
@@ -344,17 +352,46 @@ func TestBuildExecSpecFailsWhenOnlyLegacyBinaryAvailable(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for legacy scdl without --yt-dlp-args")
 	}
-	if !strings.Contains(err.Error(), "does not support --yt-dlp-args") {
+	if !strings.Contains(err.Error(), "supports_yt_dlp_args=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildExecSpecFailsWhenSCDLVersionIsTooOld(t *testing.T) {
+	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
+
+	source, defaults := setupSCDLTest(t)
+	tmp := t.TempDir()
+	legacyDir := filepath.Join(tmp, "legacy")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy: %v", err)
+	}
+	legacyBin := filepath.Join(legacyDir, "scdl")
+	if err := writeFakeSCDLVersion(legacyBin, true, "2.12.4"); err != nil {
+		t.Fatalf("write legacy scdl: %v", err)
+	}
+	t.Setenv("PATH", legacyDir)
+	resetRuntimeDetectionForTests()
+
+	_, err := New().BuildExecSpec(source, defaults, 2*time.Minute)
+	if err == nil {
+		t.Fatalf("expected error for legacy scdl version")
+	}
+	if !strings.Contains(err.Error(), legacyBin) || !strings.Contains(err.Error(), "version=2.12.4") || !strings.Contains(err.Error(), "supports_yt_dlp_args=true") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func writeFakeSCDL(path string, includeYTDLP bool) error {
+	return writeFakeSCDLVersion(path, includeYTDLP, "3.0.1")
+}
+
+func writeFakeSCDLVersion(path string, includeYTDLP bool, version string) error {
 	help := "Usage:\\nscdl --version\\n"
 	if includeYTDLP {
 		help = help + "--yt-dlp-args <argstring>\\n"
 	}
-	content := "#!/bin/sh\nif [ \"$1\" = \"-h\" ] || [ \"$1\" = \"--help\" ]; then\n  printf \"" + help + "\"\n  exit 0\nfi\nif [ \"$1\" = \"--version\" ]; then\n  echo \"v3.0.1\"\n  exit 0\nfi\nexit 0\n"
+	content := "#!/bin/sh\nif [ \"$1\" = \"-h\" ] || [ \"$1\" = \"--help\" ]; then\n  printf \"" + help + "\"\n  exit 0\nfi\nif [ \"$1\" = \"--version\" ]; then\n  echo \"v" + version + "\"\n  exit 0\nfi\nexit 0\n"
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		return err
 	}

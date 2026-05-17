@@ -1615,6 +1615,31 @@ func TestTUIRootInteractiveSyncDoneWithoutRowsShowsTerminalTrackState(t *testing
 	}
 }
 
+func TestTUIInteractiveDoneWithPendingRowsIsNotCleanComplete(t *testing.T) {
+	root := renderPlanPromptFixture([]engine.PlanRow{
+		{Index: 1, Title: "pending-a", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		{Index: 2, Title: "pending-b", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+	})
+	root.syncModel.planPrompt = nil
+	root.syncModel.done = true
+	root.syncModel.running = false
+	root.syncModel.interactivePhase = tuiInteractivePhaseDone
+	root.syncModel.result = engine.SyncResult{Attempted: 1, Succeeded: 1, Failed: 0, Skipped: 0}
+	selection := root.syncModel.currentInteractiveSelection()
+	if selection == nil {
+		t.Fatalf("expected interactive selection state")
+	}
+	root.syncModel.interactiveTracker.ConfirmSelection(selection)
+
+	view := root.View()
+	if !strings.Contains(view, "STATE: done-with-errors") || !strings.Contains(view, "progress: ░░░░░░░░░░   0%") {
+		t.Fatalf("expected pending terminal rows to render as not clean complete, got: %s", view)
+	}
+	if strings.Contains(view, "STATE: complete") {
+		t.Fatalf("did not expect clean complete state, got: %s", view)
+	}
+}
+
 func TestTUIInteractiveFooterUsesTrackCountsAfterDone(t *testing.T) {
 	root := renderPlanPromptFixture([]engine.PlanRow{
 		{Index: 1, Title: "downloaded-a", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},

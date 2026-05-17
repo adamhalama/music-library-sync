@@ -22,12 +22,13 @@ var defaultYTDLPArgTokens = []string{"--embed-thumbnail", "--embed-metadata"}
 
 type runtimeInfo struct {
 	Bin               string
+	Version           string
 	SupportsYTDLPArgs bool
 }
 
 var (
-	detectRuntimeOnce sync.Once
-	detectedRuntime   runtimeInfo
+	detectRuntimeOnce           sync.Once
+	detectedRuntime             runtimeInfo
 	resolveSoundCloudClientIDFn = auth.ResolveSoundCloudClientID
 )
 
@@ -116,10 +117,12 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 	}
 	ytdlpArgs = normalizeYTDLPBreakArgs(ytdlpArgs, breakOnExisting)
 	ytdlpArgs = normalizeYTDLPPlaylistItems(ytdlpArgs, source.SelectedPlaylistIDs)
-	if !runtimeInfo.SupportsYTDLPArgs {
+	if !runtimeInfo.Compatible() {
 		return engine.ExecSpec{}, fmt.Errorf(
-			"scdl binary %q does not support --yt-dlp-args (requires scdl >= 3.0.0); set PATH or UDL_SCDL_BIN to a compatible binary",
+			"scdl binary %q is incompatible: version=%s supports_yt_dlp_args=%t (requires scdl >= 3.0.0 with --yt-dlp-args); set PATH or UDL_SCDL_BIN to a compatible binary",
 			runtimeInfo.Bin,
+			runtimeInfo.VersionLabel(),
+			runtimeInfo.SupportsYTDLPArgs,
 		)
 	}
 	args = append(args, "--yt-dlp-args", ytdlpArgs)
@@ -289,10 +292,7 @@ func resolveRuntimeInfo() runtimeInfo {
 
 func detectRuntimeInfo() runtimeInfo {
 	if override := strings.TrimSpace(os.Getenv("UDL_SCDL_BIN")); override != "" {
-		return runtimeInfo{
-			Bin:               override,
-			SupportsYTDLPArgs: supportsYTDLPArgs(override),
-		}
+		return inspectRuntimeInfo(override)
 	}
 
 	candidates := discoverSCDLCandidates()
@@ -304,19 +304,15 @@ func detectRuntimeInfo() runtimeInfo {
 	}
 
 	fallback := candidates[0]
+	fallbackInfo := inspectRuntimeInfo(fallback)
 	for _, candidate := range candidates {
-		if supportsYTDLPArgs(candidate) {
-			return runtimeInfo{
-				Bin:               candidate,
-				SupportsYTDLPArgs: true,
-			}
+		info := inspectRuntimeInfo(candidate)
+		if info.Compatible() {
+			return info
 		}
 	}
 
-	return runtimeInfo{
-		Bin:               fallback,
-		SupportsYTDLPArgs: false,
-	}
+	return fallbackInfo
 }
 
 func discoverSCDLCandidates() []string {
@@ -356,6 +352,89 @@ func supportsYTDLPArgs(binary string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(string(output)), "--yt-dlp-args")
+}
+
+func inspectRuntimeInfo(binary string) runtimeInfo {
+	return runtimeInfo{
+		Bin:               binary,
+		Version:           readSCDLVersion(binary),
+		SupportsYTDLPArgs: supportsYTDLPArgs(binary),
+	}
+}
+
+func readSCDLVersion(binary string) string {
+	cmd := exec.Command(binary, "--version")
+	output, err := cmd.CombinedOutput()
+	if err != nil && len(output) == 0 {
+		return ""
+	}
+	return extractSCDLVersion(string(output))
+}
+
+func extractSCDLVersion(raw string) string {
+	for _, token := range strings.Fields(raw) {
+		token = strings.TrimPrefix(strings.TrimSpace(token), "v")
+		if isSCDLSemver(token) {
+			return token
+		}
+	}
+	return ""
+}
+
+func isSCDLSemver(raw string) bool {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (r runtimeInfo) Compatible() bool {
+	return r.SupportsYTDLPArgs && compareSCDLVersions(r.Version, "3.0.0") >= 0
+}
+
+func (r runtimeInfo) VersionLabel() string {
+	if strings.TrimSpace(r.Version) == "" {
+		return "unknown"
+	}
+	return r.Version
+}
+
+func compareSCDLVersions(lhs string, rhs string) int {
+	left := parseSCDLVersion(lhs)
+	right := parseSCDLVersion(rhs)
+	for i := 0; i < len(left); i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func parseSCDLVersion(raw string) [3]int {
+	parts := strings.Split(raw, ".")
+	parsed := [3]int{}
+	for i := 0; i < len(parts) && i < len(parsed); i++ {
+		value, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return [3]int{}
+		}
+		parsed[i] = value
+	}
+	return parsed
 }
 
 func resetRuntimeDetectionForTests() {

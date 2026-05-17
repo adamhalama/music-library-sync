@@ -170,7 +170,7 @@ func (s *Syncer) runSpotifyDeemix(
 			sourceFailureMessage = fmt.Sprintf("[%s] cannot build command: %v", source.ID, buildErr)
 			break
 		}
-		spec = s.applyFlowObservers(spec, flow, source)
+		spec = s.applyFlowObservers(spec, &flow, source)
 		if runtimeDir == "" {
 			runtimeDir = spec.Dir
 			sourceForExec.DeemixRuntimeDir = spec.Dir
@@ -230,7 +230,7 @@ func (s *Syncer) runSpotifyDeemix(
 		}
 
 		execResult := s.Runner.Run(ctx, spec)
-		s.flushFlowParser(flow, source)
+		s.flushFlowParser(&flow, source)
 		if execResult.Interrupted {
 			_ = cleanupRuntimeDir(runtimeDir)
 			outcome.Interrupted = true

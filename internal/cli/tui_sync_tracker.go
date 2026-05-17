@@ -226,7 +226,7 @@ func (t *tuiSyncRunTracker) AggregateCounts(doneWithoutError bool) (selected, co
 	if progressPercent > 100 {
 		progressPercent = 100
 	}
-	if doneWithoutError {
+	if doneWithoutError && selected > 0 && completed+skipped+failed == selected {
 		progressPercent = 100
 	}
 	return selected, completed, skipped, failed, progressPercent
