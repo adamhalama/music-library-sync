@@ -11,6 +11,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/engine/progress"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -31,32 +32,39 @@ func (s *Syncer) runSpotifyDeemix(
 	adapter Adapter,
 	sourceForExec config.Source,
 	sourcePreflight *SoundCloudPreflight,
+	preparedPlan *spotifyDeemixExecutionPlan,
 	opts SyncOptions,
 ) sourceRunOutcome {
 	outcome := sourceRunOutcome{}
 	flow := s.buildSourceFlowContext(source)
 
-	plan, planErr := s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
-	if planErr != nil {
-		outcome.Failed++
-		outcome.Attempted++
-		if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
-			errors.Is(planErr, auth.ErrDeemixARLNotFound) {
-			outcome.DependencyFailures++
+	var plan spotifyDeemixExecutionPlan
+	if preparedPlan != nil {
+		plan = *preparedPlan
+	} else {
+		var planErr error
+		plan, planErr = s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
+		if planErr != nil {
+			outcome.Failed++
+			outcome.Attempted++
+			if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
+				errors.Is(planErr, auth.ErrDeemixARLNotFound) {
+				outcome.DependencyFailures++
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelError,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
+			})
+			outcome.Stop = !cfg.Defaults.ContinueOnError
+			return outcome
 		}
-		_ = s.Emitter.Emit(output.Event{
-			Timestamp: s.Now(),
-			Level:     output.LevelError,
-			Event:     output.EventSourceFailed,
-			SourceID:  source.ID,
-			Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
-		})
-		outcome.Stop = !cfg.Defaults.ContinueOnError
-		return outcome
 	}
 	sourceForExec = plan.Source
 	sourcePreflight = plan.Preflight
-	if plan.Preflight != nil {
+	if plan.Preflight != nil && preparedPlan == nil {
 		s.emitSourcePreflightSummary(source, plan.Preflight, plan.DownloadOrder)
 	}
 	emitSpotifyDeemixExistingTrackStatus(s, source.ID, plan, opts.TrackStatus)
@@ -211,6 +219,10 @@ func (s *Syncer) runSpotifyDeemix(
 				SourceID:  source.ID,
 				Message:   message,
 			})
+			if flow.Parser != nil {
+				flow.Parser.OnStdoutLine(message)
+				s.flushFlowParser(&flow, source)
+			}
 		}
 
 		var mediaBefore map[string]mediaFileSnapshot
@@ -262,6 +274,10 @@ func (s *Syncer) runSpotifyDeemix(
 				SourceID:  source.ID,
 				Message:   fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason),
 			})
+			if flow.Parser != nil {
+				flow.Parser.OnStdoutLine(fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason))
+				s.flushFlowParser(&flow, source)
+			}
 			continue
 		}
 
@@ -269,6 +285,7 @@ func (s *Syncer) runSpotifyDeemix(
 			sourceFailed = true
 			sourceFailureMessage = fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode)
 			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
+			s.emitSpotifyDeemixTrackFailure(flow, source, trackID, trackLabel, idx+1, len(plannedTrackIDs), fmt.Sprintf("exit-%d", execResult.ExitCode))
 			break
 		}
 		if failed, reason := deemixReportedFailure(execResult); failed {
@@ -279,6 +296,7 @@ func (s *Syncer) runSpotifyDeemix(
 				reason,
 			)
 			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
+			s.emitSpotifyDeemixTrackFailure(flow, source, trackID, trackLabel, idx+1, len(plannedTrackIDs), reason)
 			break
 		}
 
@@ -321,6 +339,10 @@ func (s *Syncer) runSpotifyDeemix(
 				SourceID:  source.ID,
 				Message:   doneMessage,
 			})
+			if flow.Parser != nil {
+				flow.Parser.OnStdoutLine(doneMessage)
+				s.flushFlowParser(&flow, source)
+			}
 		}
 	}
 
@@ -490,6 +512,39 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 	breakOnExisting = mode == SoundCloudModeBreak
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting
 	return plan, nil
+}
+
+func (s *Syncer) emitSpotifyDeemixTrackFailure(
+	flow sourceFlowContext,
+	source config.Source,
+	trackID string,
+	trackLabel string,
+	index int,
+	total int,
+	reason string,
+) {
+	trackID = strings.TrimSpace(trackID)
+	if trackID == "" {
+		return
+	}
+	trackName := strings.TrimSpace(trackLabel)
+	if trackName == "" {
+		trackName = trackID
+	}
+	event := progress.TrackEvent{
+		Kind:        progress.TrackFail,
+		TrackID:     trackID,
+		TrackName:   trackName,
+		Index:       index,
+		Total:       total,
+		Reason:      strings.TrimSpace(reason),
+		SourceID:    source.ID,
+		AdapterKind: source.Adapter.Kind,
+	}
+	if flow.Progress != nil {
+		flow.Progress.RecordTrackEvent(event)
+	}
+	s.emitTrackEvent(source, event)
 }
 
 func shouldRetrySpotifyWithUserAuth(source config.Source, execResult ExecResult, opts SyncOptions) bool {

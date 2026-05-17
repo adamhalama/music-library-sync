@@ -59,6 +59,7 @@ type tuiSyncModel struct {
 	interactivePhase      tuiInteractiveSyncPhase
 	interactiveSelections map[string]*tuiInteractiveSelectionState
 	interactiveOrders     map[string]engine.DownloadOrder
+	interactiveWindows    map[string]engine.PlanWindow
 	interactiveDisplayID  string
 	interactiveTracker    *tuiSyncRunTracker
 	planPrompt            *tuiPlanPromptState
@@ -126,12 +127,15 @@ type tuiPlanSelectRequestMsg struct {
 	Rows          []engine.PlanRow
 	Details       planSourceDetails
 	DownloadOrder engine.DownloadOrder
+	PlanWindow    engine.PlanWindow
 	Reply         chan tuiPlanSelectResult
 }
 
 type tuiPlanSelectResult struct {
 	Manifest engine.ExecutionManifest
 	Canceled bool
+	Rebuild  bool
+	Window   engine.PlanWindow
 	Err      error
 }
 
@@ -272,6 +276,7 @@ type tuiInteractiveDisplayState struct {
 	sourceID      string
 	details       planSourceDetails
 	downloadOrder engine.DownloadOrder
+	planWindow    engine.PlanWindow
 	rows          []tuiTrackRowState
 	activity      []tuiActivityEntry
 	lifecycle     tuiInteractiveSourceLifecycle
@@ -283,6 +288,7 @@ type tuiInteractiveSelectionState struct {
 	rows                       []tuiPlanTrackRow
 	details                    planSourceDetails
 	downloadOrder              engine.DownloadOrder
+	planWindow                 engine.PlanWindow
 	manifest                   engine.ExecutionManifest
 	hasManifest                bool
 	cursor                     int

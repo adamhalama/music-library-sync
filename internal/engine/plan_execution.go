@@ -6,6 +6,7 @@ type sourcePlanExecution struct {
 	SourceForExec           config.Source
 	SourcePreflight         *SoundCloudPreflight
 	PlannedSoundCloudTracks []soundCloudRemoteTrack
+	SpotifyDeemixPlan       *spotifyDeemixExecutionPlan
 	StateSwap               soundCloudStateSwap
 	DownloadOrder           DownloadOrder
 }

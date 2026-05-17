@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/engine"
 )
 
 func buildSyncShellState(m tuiRootModel, layout tuiShellLayout) tuiShellState {
@@ -278,6 +279,7 @@ func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, lim
 		planPromptField("source", state.sourceID),
 		planPromptField("mode", modeLabel),
 		planPromptField("limit", limitLabel),
+		planPromptField("window", string(state.planWindow)),
 	}
 	if showOrder {
 		parts = append(parts, planPromptField("order", string(state.downloadOrder)))
@@ -316,6 +318,7 @@ func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShe
 		renderPlanPromptKey("tab", "switch"),
 		renderPlanPromptKey("j/k", "move"),
 		renderPlanPromptKey("space", "toggle/apply"),
+		renderPlanPromptKey("w", "window"),
 		renderPlanPromptKey("a", "all visible"),
 		renderPlanPromptKey("n", "clear visible"),
 		renderPlanPromptKey("enter", "confirm"),
@@ -735,6 +738,7 @@ func (m tuiSyncModel) planSourceDetailsForSource(source config.Source) planSourc
 		TargetDir:  source.TargetDir,
 		StateFile:  source.StateFile,
 		PlanLimit:  m.planLimit,
+		PlanWindow: m.planWindowForSourceID(source.ID),
 		DryRun:     m.dryRun,
 	}
 }
@@ -754,6 +758,7 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 		infoState.sourceID = state.sourceID
 		infoState.details = state.details
 		infoState.downloadOrder = state.downloadOrder
+		infoState.planWindow = state.details.PlanWindow
 	}
 	lines := []string{renderPlanPromptInfoBar(infoState, modeLabel, limitLabel, m.currentInteractiveSourceSupportsDownloadOrder())}
 	if layout.Height < 24 {
@@ -822,6 +827,7 @@ func renderInteractiveIdleControls(layout tuiShellLayout, showOrder bool) []stri
 	if showOrder {
 		parts = append(parts[0:5], append([]string{renderPlanPromptKey("o", "order")}, parts[5:]...)...)
 	}
+	parts = append(parts[0:6], append([]string{renderPlanPromptKey("w", "window")}, parts[6:]...)...)
 	return renderPlanPromptControlLines(parts, layout)
 }
 
@@ -1245,7 +1251,11 @@ func (m tuiSyncModel) bodyView(includeSources bool) string {
 			if m.selected[source.ID] {
 				marker = "[x]"
 			}
-			lines = append(lines, fmt.Sprintf("%s %s %s (%s/%s)", cursor, marker, source.ID, source.Type, source.Adapter.Kind))
+			status := ""
+			if m.isInteractiveSyncWorkflow() && !engine.SupportsPlan(source) {
+				status = " standard-only"
+			}
+			lines = append(lines, fmt.Sprintf("%s %s %s (%s/%s%s)", cursor, marker, source.ID, source.Type, source.Adapter.Kind, status))
 		}
 		lines = append(lines, "")
 	}
@@ -1308,12 +1318,18 @@ func (m tuiSyncModel) sidebarSections(screen tuiScreen) []tuiSidebarSection {
 		}
 		label := marker + " " + source.ID
 		meta := string(source.Type) + "/" + source.Adapter.Kind
+		disabled := false
+		if m.isInteractiveSyncWorkflow() && !engine.SupportsPlan(source) {
+			meta += " standard-only"
+			disabled = true
+		}
 		tone := m.sourceSidebarTone(source.ID)
 		sourceItems = append(sourceItems, tuiSidebarItem{
-			Label:  label,
-			Meta:   meta,
-			Active: idx == m.cursor,
-			Tone:   tone,
+			Label:    label,
+			Meta:     meta,
+			Active:   idx == m.cursor,
+			Tone:     tone,
+			Disabled: disabled,
 		})
 	}
 	if len(sourceItems) == 0 {

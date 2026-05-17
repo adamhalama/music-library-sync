@@ -41,6 +41,8 @@ type SyncOptions struct {
 	TimeoutOverride     time.Duration
 	Plan                bool
 	PlanLimit           int
+	PlanWindow          PlanWindow
+	PlanWindowBySource  map[string]PlanWindow
 	AskOnExisting       bool
 	AskOnExistingSet    bool
 	ScanGaps            bool
@@ -56,6 +58,8 @@ type SyncOptions struct {
 type PlanSelectionResult struct {
 	Manifest ExecutionManifest
 	Canceled bool
+	Rebuild  bool
+	Window   PlanWindow
 }
 
 type PlanApplyOptions struct {

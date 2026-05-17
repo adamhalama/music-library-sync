@@ -100,7 +100,7 @@ func TestSyncPlanModeRunsSelectorPerSupportedSourceInOrderAndSkipsUnsupported(t 
 	if result.Succeeded != 2 || result.Skipped != 1 || result.Failed != 0 {
 		t.Fatalf("unexpected sync result: %+v", result)
 	}
-	if !strings.Contains(stdout.String(), "--plan only supports adapter.kind=scdl") {
+	if !strings.Contains(stdout.String(), "--plan does not support adapter.kind=spotdl") {
 		t.Fatalf("expected unsupported-source warning in output, got %s", stdout.String())
 	}
 }
@@ -256,6 +256,70 @@ func TestSyncPlanModeFailsAndPreservesStateWhenAdapterReportsNoTrackOutcomes(t *
 	}
 	if _, ok := archive["gap-a"]; !ok {
 		t.Fatalf("expected selected known gap to remain in archive, got %+v", archive)
+	}
+}
+
+func TestSyncPlanModeSpotifyDeemixRunsSelectedRowsOnly(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir, stateDir := syncerTestDirs(t, tmp, "spotify-plan")
+	source := config.Source{
+		ID:        "spotify-deemix",
+		Type:      config.SourceTypeSpotify,
+		Enabled:   true,
+		TargetDir: targetDir,
+		URL:       "https://open.spotify.com/playlist/a",
+		StateFile: "spotify-deemix.sync.spotify",
+		Adapter:   config.AdapterSpec{Kind: "deemix"},
+	}
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{source},
+	}
+	withSpotifyDeemixPlanStubs(t, []spotifyRemoteTrack{
+		{ID: "1abc234def", Title: "Track 1", Artist: "Artist 1"},
+		{ID: "2abc234def", Title: "Track 2", Artist: "Artist 2"},
+		{ID: "3abc234def", Title: "Track 3", Artist: "Artist 3"},
+	})
+
+	runner := &sequenceRunner{results: []ExecResult{{ExitCode: 0}}}
+	syncer := NewSyncer(
+		map[string]Adapter{"deemix": fakeDeemixAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
+		Plan:      true,
+		PlanLimit: 10,
+		SelectPlanRows: func(sourceID string, rows []PlanRow) (PlanSelectionResult, error) {
+			return PlanSelectionResult{
+				Manifest: testExecutionManifest(t, sourceID, rows, []int{2}, DownloadOrderNewestFirst),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 || result.Skipped != 0 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+	if len(runner.specs) != 1 {
+		t.Fatalf("expected one selected track execution, got %d", len(runner.specs))
+	}
+	if got := runner.specs[0].Args[0]; got != "https://open.spotify.com/track/2abc234def" {
+		t.Fatalf("expected selected track URL, got %q", got)
+	}
+	state, err := parseSpotifySyncState(filepath.Join(stateDir, source.StateFile))
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.KnownIDs["2abc234def"]; !ok || len(state.KnownIDs) != 1 {
+		t.Fatalf("expected only selected spotify track in state, got %+v", state.KnownIDs)
 	}
 }
 

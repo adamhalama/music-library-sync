@@ -37,6 +37,9 @@ func mergeInteractiveSelectionState(existing, next *tuiInteractiveSelectionState
 	if next.downloadOrder == "" {
 		next.downloadOrder = existing.downloadOrder
 	}
+	if next.planWindow == "" {
+		next.planWindow = existing.planWindow
+	}
 	if !next.hasManifest {
 		next.manifest = existing.manifest
 		next.hasManifest = existing.hasManifest
@@ -107,6 +110,10 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForSource(sourceID string) *tui
 		if state.downloadOrder == "" {
 			state.setDownloadOrder(m.downloadOrderForSourceID(sourceID))
 		}
+		if state.planWindow == "" {
+			state.planWindow = m.planWindowForSourceID(sourceID)
+			state.details.PlanWindow = state.planWindow
+		}
 		return state
 	}
 	state := newEmptyTUIInteractiveSelectionState()
@@ -115,6 +122,8 @@ func (m *tuiSyncModel) ensureInteractiveSelectionForSource(sourceID string) *tui
 		state.details = m.planSourceDetailsForSource(source)
 	}
 	state.setDownloadOrder(m.downloadOrderForSourceID(sourceID))
+	state.planWindow = m.planWindowForSourceID(sourceID)
+	state.details.PlanWindow = state.planWindow
 	m.storeInteractiveSelection(state)
 	return state
 }
@@ -419,6 +428,7 @@ func newTUIInteractiveSelectionState(req tuiPlanSelectRequestMsg) *tuiInteractiv
 		rows:          rows,
 		details:       req.Details,
 		downloadOrder: engine.NormalizeDownloadOrder(req.DownloadOrder),
+		planWindow:    engine.NormalizePlanWindow(req.PlanWindow),
 		selected:      selected,
 		filter:        tuiTrackFilterAll,
 		filterCursor:  0,

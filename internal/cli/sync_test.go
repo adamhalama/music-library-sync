@@ -180,6 +180,50 @@ func TestSyncPlanLimitRequiresPlan(t *testing.T) {
 	}
 }
 
+func TestSyncPlanWindowRequiresPlan(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := writeDryRunConfig(t, tmp)
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := &AppContext{
+		Build: BuildInfo{Version: "test"},
+		IO:    IOStreams{In: strings.NewReader(""), Out: stdout, ErrOut: stderr},
+	}
+	root := newRootCommand(app)
+	root.SetArgs([]string{"sync", "--config", configPath, "--dry-run", "--plan-window", "latest"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected usage error for --plan-window without --plan")
+	}
+	if !strings.Contains(err.Error(), "--plan-window requires --plan") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSyncRejectsInvalidPlanWindow(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := writeDryRunConfig(t, tmp)
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := &AppContext{
+		Build: BuildInfo{Version: "test"},
+		IO:    IOStreams{In: strings.NewReader(""), Out: stdout, ErrOut: stderr},
+	}
+	root := newRootCommand(app)
+	root.SetArgs([]string{"sync", "--config", configPath, "--dry-run", "--plan", "--plan-window", "middle"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected usage error for invalid --plan-window")
+	}
+	if !strings.Contains(err.Error(), "invalid --plan-window") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSyncRejectsNegativePlanLimit(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := writeDryRunConfig(t, tmp)

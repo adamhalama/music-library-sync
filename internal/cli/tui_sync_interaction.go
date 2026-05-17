@@ -26,6 +26,7 @@ type tuiSyncInteraction struct {
 	defaults   config.Defaults
 	sourceByID map[string]config.Source
 	orderByID  map[string]engine.DownloadOrder
+	windowByID map[string]engine.PlanWindow
 	planLimit  int
 	dryRun     bool
 }
@@ -88,7 +89,11 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 	if !ok {
 		source.ID = sourceID
 	}
-	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun)
+	planWindow := engine.DefaultPlanWindowForSource(source)
+	if window, ok := i.windowByID[sourceID]; ok {
+		planWindow = engine.NormalizePlanWindow(window)
+	}
+	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, planWindow, i.dryRun)
 	downloadOrder := engine.DownloadOrderNewestFirst
 	if order, ok := i.orderByID[sourceID]; ok && engine.SupportsDownloadOrder(source) {
 		downloadOrder = engine.NormalizeDownloadOrder(order)
@@ -99,6 +104,7 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 		Rows:          append([]engine.PlanRow{}, rows...),
 		Details:       details,
 		DownloadOrder: downloadOrder,
+		PlanWindow:    planWindow,
 		Reply:         reply,
 	}
 	result := <-reply
@@ -108,6 +114,8 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 	return engine.PlanSelectionResult{
 		Manifest: result.Manifest,
 		Canceled: result.Canceled,
+		Rebuild:  result.Rebuild,
+		Window:   result.Window,
 	}, nil
 }
 

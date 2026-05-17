@@ -63,6 +63,7 @@ func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.Ev
 	parserRegistry.RegisterFactory("spotdl", adapterlog.NewSpotDLParser)
 	planRegistry := NewPlanRegistry()
 	planRegistry.Register("scdl", NewSCDLPlanProvider())
+	planRegistry.Register("deemix", NewSpotifyDeemixPlanProvider())
 	return &Syncer{
 		Registry:     registry,
 		Runner:       runner,
@@ -144,7 +145,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 					Level:     output.LevelWarn,
 					Event:     output.EventSourceFinished,
 					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] --plan only supports adapter.kind=scdl in this release; skipping source", source.ID),
+					Message:   fmt.Sprintf("[%s] --plan does not support adapter.kind=%s for source type %s; skipping source", source.ID, source.Adapter.Kind, source.Type),
 					Details: map[string]any{
 						"adapter_kind": source.Adapter.Kind,
 						"skipped":      true,
@@ -229,6 +230,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		stateSwap := soundCloudStateSwap{}
 		var sourcePreflight *SoundCloudPreflight
 		plannedSoundCloudTracks := []soundCloudRemoteTrack{}
+		var spotifyDeemixPlan *spotifyDeemixExecutionPlan
 		downloadOrder := DownloadOrderNewestFirst
 		if opts.Plan {
 			sourcePlan, planErr := s.prepareSourcePlan(ctx, cfg, source, opts)
@@ -239,7 +241,9 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 				}
 				result.Failed++
 				result.Attempted++
-				if errors.Is(planErr, exec.ErrNotFound) {
+				if errors.Is(planErr, exec.ErrNotFound) ||
+					errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
+					errors.Is(planErr, auth.ErrDeemixARLNotFound) {
 					result.DependencyFailures++
 				}
 				_ = s.Emitter.Emit(output.Event{
@@ -258,6 +262,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			stateSwap = sourcePlan.StateSwap
 			sourcePreflight = sourcePlan.SourcePreflight
 			plannedSoundCloudTracks = append([]soundCloudRemoteTrack{}, sourcePlan.PlannedSoundCloudTracks...)
+			spotifyDeemixPlan = sourcePlan.SpotifyDeemixPlan
 			downloadOrder = sourcePlan.DownloadOrder
 		} else if source.Type == config.SourceTypeSoundCloud {
 			plan, planErr := s.prepareSoundCloudExecutionPlan(ctx, cfg, source, opts)
@@ -298,6 +303,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			sourceForExec,
 			sourcePreflight,
 			plannedSoundCloudTracks,
+			spotifyDeemixPlan,
 			stateSwap,
 			downloadOrder,
 			opts,
@@ -343,6 +349,9 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 }
 
 func (s *Syncer) planProviderForSource(source config.Source) PlanProvider {
+	if !SupportsPlan(source) {
+		return nil
+	}
 	if s.PlanRegistry == nil {
 		return nil
 	}
@@ -380,18 +389,33 @@ func (s *Syncer) prepareSourcePlan(
 	if provider == nil {
 		return sourcePlanExecution{}, fmt.Errorf("no plan provider registered for adapter %q", source.Adapter.Kind)
 	}
-	sourcePlan, err := provider.Build(ctx, cfg, source, opts)
-	if err != nil {
-		return sourcePlanExecution{}, err
+	if opts.PlanWindowBySource != nil {
+		if window, ok := opts.PlanWindowBySource[source.ID]; ok {
+			opts.PlanWindow = NormalizePlanWindow(window)
+		}
 	}
-	selection, err := opts.SelectPlanRows(source.ID, sourcePlan.Rows())
-	if err != nil {
-		return sourcePlanExecution{}, err
+	for {
+		sourcePlan, err := provider.Build(ctx, cfg, source, opts)
+		if err != nil {
+			return sourcePlanExecution{}, err
+		}
+		selection, err := opts.SelectPlanRows(source.ID, sourcePlan.Rows())
+		if err != nil {
+			return sourcePlanExecution{}, err
+		}
+		if selection.Canceled {
+			return sourcePlanExecution{}, ErrInterrupted
+		}
+		if selection.Rebuild {
+			opts.PlanWindow = NormalizePlanWindow(selection.Window)
+			if opts.PlanWindowBySource == nil {
+				opts.PlanWindowBySource = map[string]PlanWindow{}
+			}
+			opts.PlanWindowBySource[source.ID] = opts.PlanWindow
+			continue
+		}
+		return sourcePlan.ApplySelection(selection.Manifest, PlanApplyOptions{DryRun: opts.DryRun})
 	}
-	if selection.Canceled {
-		return sourcePlanExecution{}, ErrInterrupted
-	}
-	return sourcePlan.ApplySelection(selection.Manifest, PlanApplyOptions{DryRun: opts.DryRun})
 }
 
 func (s *Syncer) emitSourcePreflightSummary(source config.Source, preflight *SoundCloudPreflight, downloadOrder DownloadOrder) {
@@ -552,12 +576,13 @@ func (s *Syncer) runSource(
 	sourceForExec config.Source,
 	sourcePreflight *SoundCloudPreflight,
 	plannedSoundCloudTracks []soundCloudRemoteTrack,
+	spotifyDeemixPlan *spotifyDeemixExecutionPlan,
 	stateSwap soundCloudStateSwap,
 	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) sourceRunOutcome {
 	if source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
-		return s.runSpotifyDeemix(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, opts)
+		return s.runSpotifyDeemix(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, spotifyDeemixPlan, opts)
 	}
 	if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl-freedl" {
 		return s.runSoundCloudFreeDL(

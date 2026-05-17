@@ -22,11 +22,13 @@ import (
 var spotifyIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{10,32}$`)
 
 type spotifyRemoteTrack struct {
-	ID     string
-	Title  string
-	Artist string
-	Album  string
-	URL    string
+	ID       string
+	Title    string
+	Artist   string
+	Album    string
+	URL      string
+	AddedAt  time.Time
+	Position int
 }
 
 type spotifyTokenResponse struct {
@@ -36,7 +38,8 @@ type spotifyTokenResponse struct {
 
 type spotifyPlaylistTrackPage struct {
 	Items []struct {
-		Track *struct {
+		AddedAt string `json:"added_at"`
+		Track   *struct {
 			ID      string `json:"id"`
 			Name    string `json:"name"`
 			Artists []struct {
@@ -91,6 +94,7 @@ func enumerateSpotifyPlaylistTracksWithToken(
 	tracks := make([]spotifyRemoteTrack, 0, 256)
 	seen := map[string]struct{}{}
 
+	position := 0
 	for strings.TrimSpace(nextURL) != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
 		if err != nil {
@@ -117,6 +121,7 @@ func enumerateSpotifyPlaylistTracksWithToken(
 		}
 
 		for _, item := range page.Items {
+			position++
 			if item.Track == nil {
 				continue
 			}
@@ -143,13 +148,19 @@ func enumerateSpotifyPlaylistTracksWithToken(
 			if item.Track.ExternalURLs != nil && strings.TrimSpace(item.Track.ExternalURLs["spotify"]) != "" {
 				trackURL = strings.TrimSpace(item.Track.ExternalURLs["spotify"])
 			}
+			var addedAt time.Time
+			if trimmed := strings.TrimSpace(item.AddedAt); trimmed != "" {
+				addedAt, _ = time.Parse(time.RFC3339, trimmed)
+			}
 
 			tracks = append(tracks, spotifyRemoteTrack{
-				ID:     id,
-				Title:  title,
-				Artist: artist,
-				Album:  album,
-				URL:    trackURL,
+				ID:       id,
+				Title:    title,
+				Artist:   artist,
+				Album:    album,
+				URL:      trackURL,
+				AddedAt:  addedAt,
+				Position: position,
 			})
 		}
 
@@ -190,11 +201,12 @@ func enumerateSpotifyPlaylistTracksViaPage(
 	}
 
 	tracks := make([]spotifyRemoteTrack, 0, len(ids))
-	for _, id := range ids {
+	for i, id := range ids {
 		tracks = append(tracks, spotifyRemoteTrack{
-			ID:    id,
-			URL:   spotifyTrackURL(id),
-			Title: id,
+			ID:       id,
+			URL:      spotifyTrackURL(id),
+			Title:    id,
+			Position: i + 1,
 		})
 	}
 	return tracks, nil

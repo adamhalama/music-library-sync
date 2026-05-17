@@ -11,6 +11,7 @@ type cliInteraction struct {
 	defaults   config.Defaults
 	sourceByID map[string]config.Source
 	planLimit  int
+	planWindow engine.PlanWindow
 	dryRun     bool
 }
 
@@ -27,7 +28,7 @@ func (i cliInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engi
 	if !ok {
 		source.ID = sourceID
 	}
-	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, i.dryRun)
+	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, effectiveCLIPlanWindow(source, i.planWindow), i.dryRun)
 	selected, canceled, err := runPlanSelector(i.app, details, rows)
 	if err != nil {
 		return engine.PlanSelectionResult{}, err
@@ -42,7 +43,7 @@ func (i cliInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engi
 	}, nil
 }
 
-func buildCLIInteraction(appCtx *AppContext, cfg config.Config, planLimit int, dryRun bool) app.Interaction {
+func buildCLIInteraction(appCtx *AppContext, cfg config.Config, planLimit int, planWindow engine.PlanWindow, dryRun bool) app.Interaction {
 	sourceByID := map[string]config.Source{}
 	for _, source := range cfg.Sources {
 		sourceByID[source.ID] = source
@@ -52,6 +53,14 @@ func buildCLIInteraction(appCtx *AppContext, cfg config.Config, planLimit int, d
 		defaults:   cfg.Defaults,
 		sourceByID: sourceByID,
 		planLimit:  planLimit,
+		planWindow: planWindow,
 		dryRun:     dryRun,
 	}
+}
+
+func effectiveCLIPlanWindow(source config.Source, window engine.PlanWindow) engine.PlanWindow {
+	if window == "" {
+		return engine.DefaultPlanWindowForSource(source)
+	}
+	return engine.NormalizePlanWindow(window)
 }
