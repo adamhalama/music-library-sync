@@ -1385,7 +1385,7 @@ func (m tuiSyncModel) runStateLabel() string {
 		case tuiInteractivePhaseSyncing:
 			return "running"
 		case tuiInteractivePhaseDone:
-			if m.runErr != nil || m.result.Failed > 0 {
+			if m.runErr != nil || m.result.Failed > 0 || m.interactiveHasUnfinishedSelectedRows() {
 				return "done-with-errors"
 			}
 			return "complete"

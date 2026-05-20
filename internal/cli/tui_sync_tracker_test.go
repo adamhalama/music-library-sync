@@ -300,6 +300,26 @@ func TestTUISyncRunTrackerAggregateCountsAcrossConfirmedSources(t *testing.T) {
 	}
 }
 
+func TestTUISyncRunTrackerDoesNotForceDoneProgressWithoutTrackOutcomes(t *testing.T) {
+	tracker := newTUISyncRunTracker()
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID: "source-a",
+		Rows: []engine.PlanRow{
+			{Index: 1, Title: "A", RemoteID: "a", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+			{Index: 2, Title: "B", RemoteID: "b", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
+		},
+	})
+	tracker.ConfirmSelection(state)
+
+	selected, completed, skipped, failed, progress := tracker.AggregateCounts(true)
+	if selected != 2 || completed != 0 || skipped != 0 || failed != 0 {
+		t.Fatalf("unexpected aggregate counts: selected=%d completed=%d skipped=%d failed=%d", selected, completed, skipped, failed)
+	}
+	if progress != 0 {
+		t.Fatalf("expected done run without row outcomes to remain 0%%, got %.2f", progress)
+	}
+}
+
 func TestTUISyncRunTrackerBoundsActivityAndTracksFailure(t *testing.T) {
 	tracker := newTUISyncRunTracker()
 	for i := 0; i < 24; i++ {

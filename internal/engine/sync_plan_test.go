@@ -160,7 +160,7 @@ func TestSyncPlanModeCancelReturnsInterrupted(t *testing.T) {
 	}
 }
 
-func TestSyncPlanModeDoesNotDeleteSelectedKnownGapIfAdapterDoesNotRewriteState(t *testing.T) {
+func TestSyncPlanModeFailsAndPreservesStateWhenAdapterReportsNoTrackOutcomes(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir, stateDir := syncerTestDirs(t, tmp, "plan-merge")
 
@@ -202,10 +202,11 @@ func TestSyncPlanModeDoesNotDeleteSelectedKnownGapIfAdapterDoesNotRewriteState(t
 		return []soundCloudRemoteTrack{{ID: "gap-a", Title: "Gap A"}}, nil
 	}
 
+	emitter := &captureEventEmitter{}
 	syncer := NewSyncer(
 		map[string]Adapter{"scdl": fakeAdapter{}},
 		noOpRunner{},
-		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+		emitter,
 	)
 
 	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{
@@ -220,8 +221,26 @@ func TestSyncPlanModeDoesNotDeleteSelectedKnownGapIfAdapterDoesNotRewriteState(t
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if result.Succeeded != 1 || result.Failed != 0 {
+	if result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("unexpected sync result: %+v", result)
+	}
+	var failure *output.Event
+	for i := range emitter.events {
+		if emitter.events[i].Event == output.EventSourceFailed {
+			failure = &emitter.events[i]
+		}
+	}
+	if failure == nil {
+		t.Fatalf("expected source failure event, got %+v", emitter.events)
+	}
+	if got := failure.Details["planned_download_count"]; got != 1 {
+		t.Fatalf("expected planned_download_count=1, got %#v", got)
+	}
+	if got := failure.Details["terminal_track_outcomes"]; got != 0 {
+		t.Fatalf("expected terminal_track_outcomes=0, got %#v", got)
+	}
+	if command := strings.TrimSpace(failure.Details["command"].(string)); command == "" {
+		t.Fatalf("expected command detail, got %+v", failure.Details)
 	}
 
 	state, err := parseSoundCloudSyncState(statePath)

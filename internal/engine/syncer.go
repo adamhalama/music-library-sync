@@ -81,8 +81,9 @@ func (noOpEmitter) Emit(event output.Event) error {
 }
 
 type sourceFlowContext struct {
-	Progress progress.Sink
-	Parser   adapterlog.Parser
+	Progress              progress.Sink
+	Parser                adapterlog.Parser
+	TerminalTrackOutcomes int
 }
 
 type sourceRunOutcome struct {
@@ -458,8 +459,8 @@ func applySourceOutcome(result *SyncResult, outcome sourceRunOutcome) {
 	}
 }
 
-func (s *Syncer) applyFlowObservers(spec ExecSpec, flow sourceFlowContext, source config.Source) ExecSpec {
-	if flow.Parser == nil {
+func (s *Syncer) applyFlowObservers(spec ExecSpec, flow *sourceFlowContext, source config.Source) ExecSpec {
+	if flow == nil || flow.Parser == nil {
 		return spec
 	}
 	spec.StdoutObservers = append(spec.StdoutObservers, func(line string) {
@@ -473,8 +474,8 @@ func (s *Syncer) applyFlowObservers(spec ExecSpec, flow sourceFlowContext, sourc
 	return spec
 }
 
-func (s *Syncer) flushFlowParser(flow sourceFlowContext, source config.Source) {
-	if flow.Parser == nil || flow.Progress == nil {
+func (s *Syncer) flushFlowParser(flow *sourceFlowContext, source config.Source) {
+	if flow == nil || flow.Parser == nil || flow.Progress == nil {
 		return
 	}
 	events := flow.Parser.Flush()
@@ -484,6 +485,10 @@ func (s *Syncer) flushFlowParser(flow sourceFlowContext, source config.Source) {
 		}
 		if strings.TrimSpace(event.AdapterKind) == "" {
 			event.AdapterKind = source.Adapter.Kind
+		}
+		switch event.Kind {
+		case progress.TrackDone, progress.TrackSkip, progress.TrackFail:
+			flow.TerminalTrackOutcomes++
 		}
 		flow.Progress.RecordTrackEvent(event)
 		s.emitTrackEvent(source, event)
@@ -620,7 +625,7 @@ func (s *Syncer) runGenericAdapter(
 		outcome.Stop = !cfg.Defaults.ContinueOnError
 		return outcome
 	}
-	spec = s.applyFlowObservers(spec, flow, source)
+	spec = s.applyFlowObservers(spec, &flow, source)
 
 	if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 && (!opts.DryRun || opts.Plan) {
 		outcome.Attempted++
@@ -726,7 +731,7 @@ func (s *Syncer) runGenericAdapter(
 	}
 
 	execResult := s.Runner.Run(ctx, spec)
-	s.flushFlowParser(flow, source)
+	s.flushFlowParser(&flow, source)
 	if execResult.Interrupted {
 		s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
 		if err := cleanupTempStateFiles(stateSwap); err != nil {
@@ -774,7 +779,7 @@ func (s *Syncer) runGenericAdapter(
 				Message:   fmt.Sprintf("[%s] spotify auth retry setup failed: %v", source.ID, retryErr),
 			})
 		} else {
-			retrySpec = s.applyFlowObservers(retrySpec, flow, source)
+			retrySpec = s.applyFlowObservers(retrySpec, &flow, source)
 			retryHint := "paste redirected URL in terminal when prompted"
 			retryMode := "manual"
 			if opensBrowser {
@@ -795,7 +800,7 @@ func (s *Syncer) runGenericAdapter(
 				},
 			})
 			execResult = s.Runner.Run(ctx, retrySpec)
-			s.flushFlowParser(flow, source)
+			s.flushFlowParser(&flow, source)
 			spec = retrySpec
 			sourceForExec = retrySource
 			if execResult.Interrupted {
@@ -825,6 +830,40 @@ func (s *Syncer) runGenericAdapter(
 				return outcome
 			}
 		}
+	}
+
+	if execResult.ExitCode == 0 && sourcePreflight != nil && sourcePreflight.PlannedDownloadCount > 0 && opts.Plan && flow.TerminalTrackOutcomes == 0 {
+		s.cleanupArtifactsOnFailure(source.ID, spec.Dir, preArtifacts, cleanupSuffixes)
+		if err := cleanupTempStateFiles(stateSwap); err != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelWarn,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] unable to clean temporary state file: %v", source.ID, err),
+			})
+		}
+		outcome.Failed++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] command exited successfully but produced no terminal track outcomes for %d planned downloads", source.ID, sourcePreflight.PlannedDownloadCount),
+			Details: map[string]any{
+				"adapter_kind":            source.Adapter.Kind,
+				"command":                 spec.DisplayCommand,
+				"dir":                     spec.Dir,
+				"exit_code":               execResult.ExitCode,
+				"planned_download_count":  sourcePreflight.PlannedDownloadCount,
+				"terminal_track_outcomes": flow.TerminalTrackOutcomes,
+				"duration_ms":             execResult.Duration.Milliseconds(),
+				"stdout_tail":             strings.TrimSpace(execResult.StdoutTail),
+				"stderr_tail":             strings.TrimSpace(execResult.StderrTail),
+			},
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
 	}
 
 	if execResult.ExitCode != 0 && isSpotifyUserAuthRequired(sourceForExec, execResult) {

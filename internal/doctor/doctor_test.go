@@ -270,11 +270,13 @@ func TestDoctorSoundCloudDependencyMatrixCompatible(t *testing.T) {
 				return "0.0.0", nil
 			}
 		},
-		Getenv:                    func(key string) string { return "" },
-		CheckWritable:             func(path string) error { return nil },
-		Matrix:                    defaultDependencyMatrix(),
-		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "set", auth.CredentialStorageSourceEnv, nil },
-		LoadCredentialMetadata:    func(string) (auth.CredentialMetadataStore, error) { return auth.CredentialMetadataStore{}, nil },
+		Getenv:        func(key string) string { return "" },
+		CheckWritable: func(path string) error { return nil },
+		Matrix:        defaultDependencyMatrix(),
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) {
+			return "set", auth.CredentialStorageSourceEnv, nil
+		},
+		LoadCredentialMetadata: func(string) (auth.CredentialMetadataStore, error) { return auth.CredentialMetadataStore{}, nil },
 	}
 
 	report := checker.Check(context.Background(), soundcloudConfig())
@@ -526,14 +528,16 @@ func TestDoctorSpotifyDeemixAuthChecksPassWhenCredentialsPresent(t *testing.T) {
 
 func TestDoctorSoundCloudTargetDirCreatableDoesNotFail(t *testing.T) {
 	checker := &Checker{
-		LookPath:                  func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		LookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		ReadVersion: func(ctx context.Context, binary string) (string, error) {
 			if binary == "yt-dlp" {
 				return "yt-dlp 2026.2.4", nil
 			}
 			return "scdl 3.0.0", nil
 		},
-		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "client-id", auth.CredentialStorageSourceKeychain, nil },
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) {
+			return "client-id", auth.CredentialStorageSourceKeychain, nil
+		},
 		CheckDirAccess: func(path string) dirAccessResult {
 			if path == "/tmp/music" {
 				return dirAccessResult{Creatable: true}
@@ -551,12 +555,50 @@ func TestDoctorSoundCloudTargetDirCreatableDoesNotFail(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsWhenDefaultSCDLArchiveDivergesFromManagedArchive(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "music")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "scdl-archive.txt"), []byte("soundcloud rogue-a\nsoundcloud shared-a\n"), 0o644); err != nil {
+		t.Fatalf("write default archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sc-a.archive.txt"), []byte("soundcloud shared-a\n"), 0o644); err != nil {
+		t.Fatalf("write managed archive: %v", err)
+	}
+	cfg := soundcloudConfig()
+	cfg.Defaults.StateDir = stateDir
+	cfg.Sources[0].TargetDir = targetDir
+
+	checker := &Checker{
+		LookPath:    func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion: func(ctx context.Context, binary string) (string, error) { return "scdl 3.0.0", nil },
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) {
+			return "client-id", auth.CredentialStorageSourceKeychain, nil
+		},
+		CheckDirAccess: func(path string) dirAccessResult { return dirAccessResult{} },
+		ReadFile:       os.ReadFile,
+	}
+
+	report := checker.Check(context.Background(), cfg)
+	if !hasWarnContaining(report, "legacy SCDL archive") || !hasWarnContaining(report, "1 ID(s) missing") {
+		t.Fatalf("expected legacy archive drift warning, got %+v", report.Checks)
+	}
+}
+
 func TestDoctorSoundCloudCredentialNeedsRefresh(t *testing.T) {
 	checker := &Checker{
-		LookPath:                  func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		ReadVersion:               func(ctx context.Context, binary string) (string, error) { return "scdl 3.0.0", nil },
-		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) { return "client-id", auth.CredentialStorageSourceKeychain, nil },
-		CheckDirAccess:            func(path string) dirAccessResult { return dirAccessResult{} },
+		LookPath:    func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion: func(ctx context.Context, binary string) (string, error) { return "scdl 3.0.0", nil },
+		ResolveSoundCloudClientID: func() (string, auth.CredentialStorageSource, error) {
+			return "client-id", auth.CredentialStorageSourceKeychain, nil
+		},
+		CheckDirAccess: func(path string) dirAccessResult { return dirAccessResult{} },
 		LoadCredentialMetadata: func(stateDir string) (auth.CredentialMetadataStore, error) {
 			return auth.CredentialMetadataStore{
 				Credentials: map[auth.CredentialKind]auth.CredentialMetadata{

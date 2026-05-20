@@ -796,6 +796,14 @@ func (m tuiSyncModel) interactiveAggregateCounts() (selected, completed, skipped
 	return 0, 0, 0, 0, 0
 }
 
+func (m tuiSyncModel) interactiveHasUnfinishedSelectedRows() bool {
+	if m.interactiveTracker == nil {
+		return false
+	}
+	selected, completed, skipped, failed, _ := m.interactiveTracker.AggregateCounts(false)
+	return selected > 0 && completed+skipped+failed < selected
+}
+
 func (s *tuiInteractiveSelectionState) activityCollapsedFor(layout tuiShellLayout) bool {
 	if s == nil {
 		return layout.Compact

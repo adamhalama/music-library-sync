@@ -285,9 +285,96 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			} else {
 				report.Checks = append(report.Checks, Check{Severity: SeverityInfo, Name: "filesystem", Message: fmt.Sprintf("source %s state directory is writable", source.ID)})
 			}
+			if source.Adapter.Kind == "scdl" {
+				if check, ok := c.soundCloudDefaultArchiveDriftCheck(cfg.Defaults, source, targetDir); ok {
+					report.Checks = append(report.Checks, check)
+				}
+			}
 		}
 	}
 	return report
+}
+
+func (c *Checker) soundCloudDefaultArchiveDriftCheck(defaults config.Defaults, source config.Source, targetDir string) (Check, bool) {
+	if strings.TrimSpace(targetDir) == "" {
+		return Check{}, false
+	}
+	managedArchivePath, err := config.ResolveArchiveFile(defaults.StateDir, defaults.ArchiveFile, source.ID)
+	if err != nil {
+		return Check{}, false
+	}
+	defaultArchivePath := filepath.Join(targetDir, "scdl-archive.txt")
+	if filepath.Clean(defaultArchivePath) == filepath.Clean(managedArchivePath) {
+		return Check{}, false
+	}
+
+	readFile := c.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	defaultPayload, err := readFile(defaultArchivePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Check{}, false
+		}
+		return Check{
+			Severity: SeverityWarn,
+			Name:     "filesystem",
+			Message:  fmt.Sprintf("source %s default SCDL archive at %s could not be read: %v", source.ID, defaultArchivePath, err),
+		}, true
+	}
+	defaultIDs := parseSoundCloudArchiveIDs(defaultPayload)
+	if len(defaultIDs) == 0 {
+		return Check{}, false
+	}
+
+	managedIDs := map[string]struct{}{}
+	if managedPayload, err := readFile(managedArchivePath); err == nil {
+		managedIDs = parseSoundCloudArchiveIDs(managedPayload)
+	} else if err != nil && !os.IsNotExist(err) {
+		return Check{
+			Severity: SeverityWarn,
+			Name:     "filesystem",
+			Message:  fmt.Sprintf("source %s managed archive at %s could not be read: %v", source.ID, managedArchivePath, err),
+		}, true
+	}
+
+	missing := 0
+	for id := range defaultIDs {
+		if _, ok := managedIDs[id]; !ok {
+			missing++
+		}
+	}
+	if missing == 0 {
+		return Check{}, false
+	}
+
+	return Check{
+		Severity: SeverityWarn,
+		Name:     "filesystem",
+		Message: fmt.Sprintf(
+			"source %s target contains legacy SCDL archive %s with %d ID(s) missing from managed archive %s; UDL may keep planning those tracks as new until the archive/state is reconciled",
+			source.ID,
+			defaultArchivePath,
+			missing,
+			managedArchivePath,
+		),
+	}, true
+}
+
+func parseSoundCloudArchiveIDs(payload []byte) map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, line := range strings.Split(string(payload), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 || fields[0] != "soundcloud" {
+			continue
+		}
+		id := strings.TrimSpace(fields[1])
+		if id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
 }
 
 func (c *Checker) soundCloudClientIDCheck(stateDir string) Check {
