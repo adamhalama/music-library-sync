@@ -44,5 +44,6 @@ Current macOS runner labels:
   - `udl tui`
   - `udl sync --dry-run`
 - Confirm `Get Started` auto-opens when there is no config
-- Confirm Homebrew installed `scdl` and `yt-dlp` as formula dependencies
+- Confirm Homebrew installed `python@3.12`, `scdl`, and `yt-dlp` as formula dependencies
+- Run `udl rekordbox deps ensure` on a clean Mac if validating Rekordbox sync; this creates UDL's private pyrekordbox venv under the configured state directory.
 - Confirm tarball installs show explicit repair guidance when `scdl` or `yt-dlp` are missing

@@ -159,3 +159,62 @@ sources:
 		t.Fatalf("expected spotify adapter kind to remain explicit-only, got %q", cfg.Sources[0].Adapter.Kind)
 	}
 }
+
+func TestLoadRekordboxConfigAndEnvOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	payload := `version: 1
+defaults:
+  state_dir: "` + filepath.Join(tmp, "state") + `"
+  archive_file: "archive.txt"
+  threads: 1
+  continue_on_error: true
+  command_timeout_seconds: 900
+rekordbox:
+  db_dir: "/old/rb"
+  python_bin: "/old/python"
+  python_path: "/old/site-packages"
+  backup_dir: "/old/backups"
+  playlist_sync:
+    jobs:
+      - id: "apple-favourites"
+        music_playlist: "Favourites"
+        music_playlist_id: "70C641CA78BB0F3C"
+        rekordbox_playlist: "fav_imports"
+        rekordbox_playlist_id: "3150438241"
+        mode: "mirror"
+        create_playlist: false
+`
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(LoadOptions{
+		ExplicitPath: configPath,
+		Env: map[string]string{
+			"UDL_REKORDBOX_DB_DIR":     "/new/rb",
+			"UDL_REKORDBOX_PYTHON_BIN": "/new/python",
+			"UDL_REKORDBOX_PYTHONPATH": "/new/site-packages",
+			"UDL_REKORDBOX_BACKUP_DIR": "/new/backups",
+		},
+	})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Rekordbox == nil {
+		t.Fatalf("expected rekordbox config")
+	}
+	if cfg.Rekordbox.DBDir != "/new/rb" || cfg.Rekordbox.PythonBin != "/new/python" || cfg.Rekordbox.PythonPath != "/new/site-packages" || cfg.Rekordbox.BackupDir != "/new/backups" {
+		t.Fatalf("env overrides not applied: %+v", cfg.Rekordbox)
+	}
+	jobs := cfg.Rekordbox.PlaylistSync.Jobs
+	if len(jobs) != 1 || jobs[0].ID != "apple-favourites" || jobs[0].CreatePlaylist == nil || *jobs[0].CreatePlaylist {
+		t.Fatalf("unexpected rekordbox jobs: %+v", jobs)
+	}
+	if err := ValidateRekordbox(cfg); err != nil {
+		t.Fatalf("ValidateRekordbox: %v", err)
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected full Validate to still require sources")
+	}
+}

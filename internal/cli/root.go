@@ -75,6 +75,7 @@ Start here:
 	root.AddCommand(newValidateCommand(app))
 	root.AddCommand(newInitCommand(app))
 	root.AddCommand(newPromoteFreeDLCommand(app))
+	root.AddCommand(newRekordboxCommand(app))
 	root.AddCommand(newVersionCommand(app))
 
 	return root

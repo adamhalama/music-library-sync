@@ -34,6 +34,11 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 	}
 	if err := config.Validate(cfg); err != nil {
 		if len(cfg.Sources) == 0 {
+			if cfg.Rekordbox != nil {
+				if rbErr := config.ValidateRekordbox(cfg); rbErr == nil {
+					return startup, false
+				}
+			}
 			startup.Reason = tuiOnboardingReasonNoSources
 			startup.AutoStarted = true
 			startup.DetailLines = []string{"No sources are configured yet. The guided setup will create your first one."}
@@ -45,6 +50,9 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 		return startup, true
 	}
 	if len(cfg.Sources) == 0 {
+		if cfg.Rekordbox != nil {
+			return startup, false
+		}
 		startup.Reason = tuiOnboardingReasonNoSources
 		startup.AutoStarted = true
 		startup.DetailLines = []string{"No sources are configured yet. The guided setup will create your first one."}

@@ -384,6 +384,9 @@ func (m tuiConfigEditorModel) reviewBody(layout tuiShellLayout, saveMode bool) s
 		fmt.Sprintf("Sources: %d total", len(cfg.Sources)),
 		fmt.Sprintf("Enabled: %d", tuiEnabledSourceCount(cfg)),
 	}
+	if cfg.Rekordbox != nil {
+		summaryLines = append(summaryLines, fmt.Sprintf("Rekordbox: preserved (%d playlist sync jobs)", len(cfg.Rekordbox.PlaylistSync.Jobs)))
+	}
 	if saveMode {
 		if m.saveResult != nil {
 			summaryLines = append(summaryLines, "Saved: "+m.saveResult.Path, "State dir ensured: "+m.saveResult.StateDir)

@@ -13,6 +13,8 @@ import (
 
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
+	"github.com/jaa/update-downloads/internal/rekordbox/pyruntime"
 )
 
 type Severity string
@@ -97,6 +99,7 @@ func NewChecker() *Checker {
 
 func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 	report := Report{Checks: []Check{}}
+	rekordboxChecks := c.rekordboxChecks(ctx, cfg)
 
 	if len(cfg.Sources) == 0 {
 		report.Checks = append(report.Checks,
@@ -111,6 +114,7 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 				Message:  "doctor will start dependency and auth checks after at least one source is configured",
 			},
 		)
+		report.Checks = append(report.Checks, rekordboxChecks...)
 		return report
 	}
 
@@ -292,7 +296,60 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			}
 		}
 	}
+	report.Checks = append(report.Checks, rekordboxChecks...)
 	return report
+}
+
+func (c *Checker) rekordboxChecks(ctx context.Context, cfg config.Config) []Check {
+	if !shouldCheckRekordbox(cfg) {
+		return nil
+	}
+	resolved, err := playlistsync.ResolveOptions(cfg, playlistsync.Options{})
+	if err != nil {
+		return []Check{{Severity: SeverityError, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox config is invalid: %v", err)}}
+	}
+	checks := []Check{}
+	dbAccess := c.inspectDir(resolved.RekordboxDBDir)
+	if dbAccess.Err != nil {
+		checks = append(checks, Check{Severity: SeverityWarn, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox DB dir is not accessible: %v", dbAccess.Err)})
+	} else {
+		checks = append(checks, Check{Severity: SeverityInfo, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox DB dir is accessible: %s", resolved.RekordboxDBDir)})
+	}
+	backupAccess := c.inspectDir(resolved.BackupDir)
+	if backupAccess.Err != nil {
+		checks = append(checks, Check{Severity: SeverityError, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox backup dir is not writable: %v", backupAccess.Err)})
+	} else if backupAccess.Creatable {
+		checks = append(checks, Check{Severity: SeverityInfo, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox backup dir will be created: %s", resolved.BackupDir)})
+	} else {
+		checks = append(checks, Check{Severity: SeverityInfo, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox backup dir is writable: %s", resolved.BackupDir)})
+	}
+	status := (pyruntime.Resolver{}).Status(ctx, pyruntime.Request{Config: cfg})
+	if status.Healthy {
+		checks = append(checks, Check{Severity: SeverityInfo, Name: "rekordbox", Message: fmt.Sprintf("Rekordbox Python runtime ready at %s", status.PythonBin)})
+		if status.Version != "" {
+			checks = append(checks, Check{Severity: SeverityInfo, Name: "rekordbox", Message: fmt.Sprintf("pyrekordbox version %s is available", status.Version)})
+		}
+	} else {
+		checks = append(checks, Check{Severity: SeverityWarn, Name: "rekordbox", Message: status.Message})
+	}
+	if err := playlistsync.CheckRekordboxClosed(ctx, resolved.RekordboxDBDir); err != nil {
+		checks = append(checks, Check{Severity: SeverityWarn, Name: "rekordbox", Message: err.Error()})
+	} else {
+		checks = append(checks, Check{Severity: SeverityInfo, Name: "rekordbox", Message: "Rekordbox appears closed"})
+	}
+	return checks
+}
+
+func shouldCheckRekordbox(cfg config.Config) bool {
+	if cfg.Rekordbox != nil {
+		return true
+	}
+	dbDir, err := config.ExpandPath(playlistsync.DefaultRekordboxDBDir)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(dbDir)
+	return err == nil
 }
 
 func (c *Checker) soundCloudDefaultArchiveDriftCheck(defaults config.Defaults, source config.Source, targetDir string) (Check, bool) {

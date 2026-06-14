@@ -66,11 +66,14 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	if root.menuItems[0] != "Run Sync" {
 		t.Fatalf("expected Run Sync first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "Get Started" {
-		t.Fatalf("expected Get Started second, got %v", root.menuItems)
+	if root.menuItems[1] != "Rekordbox Sync" {
+		t.Fatalf("expected Rekordbox Sync second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Credentials" {
-		t.Fatalf("expected Credentials third, got %v", root.menuItems)
+	if root.menuItems[2] != "Get Started" {
+		t.Fatalf("expected Get Started third, got %v", root.menuItems)
+	}
+	if root.menuItems[3] != "Credentials" {
+		t.Fatalf("expected Credentials fourth, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
@@ -94,6 +97,23 @@ func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
 	}
 	if next.screen != tuiScreenInteractiveSync {
 		t.Fatalf("expected default enter to open interactive sync, got %v", next.screen)
+	}
+}
+
+func TestTUIRootEnterOpensRekordboxSyncWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "Rekordbox Sync")
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenRekordboxSync {
+		t.Fatalf("expected rekordbox sync screen, got %v", next.screen)
+	}
+	if next.rekordboxModel.phase != tuiRekordboxPhaseLoading {
+		t.Fatalf("expected loading rekordbox phase, got %q", next.rekordboxModel.phase)
 	}
 }
 
@@ -343,6 +363,38 @@ func TestTUIRootAutoStartsGetStartedWhenNoSourcesConfigured(t *testing.T) {
 	}
 	if root.onboardingModel.startup.Reason != tuiOnboardingReasonNoSources {
 		t.Fatalf("expected no-sources onboarding reason, got %q", root.onboardingModel.startup.Reason)
+	}
+}
+
+func TestTUIRootDoesNotAutoStartGetStartedForRekordboxOnlyConfig(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "udl.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: " + filepath.Join(tmp, "state"),
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"rekordbox:",
+		"  db_dir: ~/Library/Pioneer/rekordbox",
+		"  backup_dir: /Users/jaa/Music/rb-library-export",
+		"  playlist_sync:",
+		"    jobs:",
+		"      - id: apple-favourites",
+		"        music_playlist: Favourites",
+		"        rekordbox_playlist: fav_imports",
+		"        mode: mirror",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	root := newTUIRootModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}}, false)
+	if root.screen != tuiScreenMenu {
+		t.Fatalf("expected menu for rekordbox-only config, got %v", root.screen)
 	}
 }
 
@@ -597,6 +649,39 @@ func TestTUIConfigEditorDirectSaveFromSourcesWritesConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
 		t.Fatalf("expected saved config file from sources: %v", err)
+	}
+}
+
+func TestTUIConfigEditorPreservesRekordboxConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	cfg := config.DefaultConfig()
+	cfg.Rekordbox = &config.RekordboxConfig{
+		DBDir:      "~/Library/Pioneer/rekordbox",
+		PythonBin:  "python3",
+		PythonPath: "/tmp/site-packages",
+		BackupDir:  "/tmp/rb-backups",
+		PlaylistSync: config.RekordboxPlaylistSyncConfig{Jobs: []config.RekordboxPlaylistSyncJob{{
+			ID:                  "apple-favourites",
+			MusicPlaylist:       "Favourites",
+			MusicPlaylistID:     "70C641CA78BB0F3C",
+			RekordboxPlaylist:   "fav_imports",
+			RekordboxPlaylistID: "3150438241",
+			Mode:                "mirror",
+		}}},
+	}
+	model.applyConfig(cfg, false)
+
+	built := model.buildConfig()
+	if built.Rekordbox == nil || len(built.Rekordbox.PlaylistSync.Jobs) != 1 {
+		t.Fatalf("expected rekordbox config to be preserved: %+v", built.Rekordbox)
+	}
+	if built.Rekordbox.PlaylistSync.Jobs[0].ID != "apple-favourites" {
+		t.Fatalf("unexpected rekordbox job: %+v", built.Rekordbox.PlaylistSync.Jobs[0])
+	}
+	view := model.reviewBody(newTUIShellLayout(180, 36), false)
+	if !strings.Contains(view, "Rekordbox: preserved (1 playlist sync jobs)") {
+		t.Fatalf("expected review to mention preserved rekordbox config, got: %s", view)
 	}
 }
 

@@ -325,6 +325,8 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 		return buildCredentialsShellState(m, layout)
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		return buildSyncShellState(m, layout)
+	case tuiScreenRekordboxSync:
+		return buildRekordboxShellState(m, layout)
 	case tuiScreenDoctor:
 		return buildDoctorShellState(m, layout)
 	case tuiScreenValidate:
@@ -456,6 +458,8 @@ func workflowNavigationItems(m tuiRootModel) []tuiSidebarSection {
 			active = item == "Run Sync"
 		case tuiScreenSync:
 			active = item == "Run Sync"
+		case tuiScreenRekordboxSync:
+			active = item == "Rekordbox Sync"
 		case tuiScreenDoctor:
 			active = item == "Check System"
 		case tuiScreenValidate:
@@ -493,6 +497,8 @@ func landingWorkflowMeta(item string) string {
 		return "checks"
 	case "Run Sync":
 		return "interactive"
+	case "Rekordbox Sync":
+		return "music to RB"
 	case "Advanced Config":
 		return "editor"
 	case "Quit":
@@ -530,6 +536,8 @@ func landingWorkflowSummary(item string) string {
 		return "Verify tools, credentials, and folder access before syncing."
 	case "Run Sync":
 		return "Review enabled sources, preview the plan, and run a sync."
+	case "Rekordbox Sync":
+		return "Mirror Music.app favourites into a Rekordbox playlist with backup-first DB writes."
 	case "Advanced Config":
 		return "Open the full config editor for raw source and adapter settings."
 	case "Quit":
