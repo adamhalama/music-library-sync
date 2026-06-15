@@ -29,8 +29,10 @@ func (f fakeRekordboxMusicReader) ReadPlaylist(ctx context.Context, selector mus
 type fakeRekordboxBridge struct {
 	inspect      bridge.InspectResponse
 	applyResp    bridge.ApplyResponse
+	batchResp    bridge.ApplyBatchResponse
 	inspectCalls int
 	applyCalls   int
+	batchCalls   int
 	onApply      func()
 }
 
@@ -45,6 +47,11 @@ func (f *fakeRekordboxBridge) Apply(ctx context.Context, req bridge.ApplyRequest
 		f.onApply()
 	}
 	return f.applyResp, nil
+}
+
+func (f *fakeRekordboxBridge) ApplyBatch(ctx context.Context, req bridge.ApplyBatchRequest) (bridge.ApplyBatchResponse, error) {
+	f.batchCalls++
+	return f.batchResp, nil
 }
 
 func TestRekordboxPlaylistSyncUseCasePlanBuildsSignedPlan(t *testing.T) {

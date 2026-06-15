@@ -19,6 +19,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
+	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -30,6 +31,7 @@ const (
 	DefaultBackupDir         = "/Users/jaa/Music/rb-library-export"
 	DefaultMode              = "mirror"
 	PlanVersion              = "1"
+	PlanVersionFolder        = "2"
 )
 
 type Options struct {
@@ -46,6 +48,7 @@ type Options struct {
 	CreatePlaylist      bool
 	CreatePlaylistSet   bool
 	OutPath             string
+	MappingID           string
 }
 
 type ResolvedOptions struct {
@@ -61,6 +64,7 @@ type ResolvedOptions struct {
 	Mode                string `json:"mode"`
 	CreatePlaylist      bool   `json:"create_playlist"`
 	OutPath             string `json:"out_path,omitempty"`
+	MappingID           string `json:"mapping_id,omitempty"`
 }
 
 type Plan struct {
@@ -70,6 +74,42 @@ type Plan struct {
 	Mode              string                `json:"mode"`
 	RekordboxDBDir    string                `json:"rekordbox_db_dir"`
 	BackupDir         string                `json:"backup_dir"`
+	MusicFolder       PlanMusicFolder       `json:"music_folder,omitempty"`
+	RekordboxFolder   PlanRekordboxFolder   `json:"rekordbox_folder,omitempty"`
+	MusicPlaylist     PlanMusicPlaylist     `json:"music_playlist"`
+	RekordboxPlaylist PlanRekordboxPlaylist `json:"rekordbox_playlist"`
+	Summary           PlanSummary           `json:"summary"`
+	Rows              []PlanRow             `json:"rows"`
+	Operations        []PlanOperation       `json:"operations,omitempty"`
+	RemovalContentIDs []string              `json:"removal_content_ids"`
+	FinalContentIDs   []string              `json:"final_content_ids"`
+	Preconditions     PlanPreconditions     `json:"preconditions"`
+	Warnings          []string              `json:"warnings,omitempty"`
+	ChecksumSHA256    string                `json:"checksum_sha256"`
+}
+
+type PlanMusicFolder struct {
+	Name         string `json:"name,omitempty"`
+	PersistentID string `json:"persistent_id,omitempty"`
+	ChildCount   int    `json:"child_count,omitempty"`
+}
+
+type PlanRekordboxFolder struct {
+	ID            string `json:"id,omitempty"`
+	Name          string `json:"name,omitempty"`
+	CurrentCount  int    `json:"current_count"`
+	CreatePlanned bool   `json:"create_planned"`
+}
+
+type PlanMusicPlaylist struct {
+	Name         string `json:"name"`
+	PersistentID string `json:"persistent_id,omitempty"`
+	Smart        bool   `json:"smart"`
+	TrackCount   int    `json:"track_count"`
+}
+
+type PlanOperation struct {
+	ID                string                `json:"id"`
 	MusicPlaylist     PlanMusicPlaylist     `json:"music_playlist"`
 	RekordboxPlaylist PlanRekordboxPlaylist `json:"rekordbox_playlist"`
 	Summary           PlanSummary           `json:"summary"`
@@ -78,14 +118,6 @@ type Plan struct {
 	FinalContentIDs   []string              `json:"final_content_ids"`
 	Preconditions     PlanPreconditions     `json:"preconditions"`
 	Warnings          []string              `json:"warnings,omitempty"`
-	ChecksumSHA256    string                `json:"checksum_sha256"`
-}
-
-type PlanMusicPlaylist struct {
-	Name         string `json:"name"`
-	PersistentID string `json:"persistent_id,omitempty"`
-	Smart        bool   `json:"smart"`
-	TrackCount   int    `json:"track_count"`
 }
 
 type PlanRekordboxPlaylist struct {
@@ -128,6 +160,7 @@ type PlanRow struct {
 type PlanPreconditions struct {
 	TargetPlaylistID          string                       `json:"target_playlist_id,omitempty"`
 	TargetPlaylistName        string                       `json:"target_playlist_name"`
+	TargetParentID            string                       `json:"target_parent_id,omitempty"`
 	TargetPlaylistMissing     bool                         `json:"target_playlist_missing"`
 	ExpectedCurrentContentIDs []string                     `json:"expected_current_content_ids"`
 	MatchedContent            []MatchedContentPrecondition `json:"matched_content"`
@@ -144,6 +177,28 @@ type BuildRequest struct {
 	MusicPlaylist music.Playlist
 	MusicTracks   []music.Track
 	Inspect       bridge.InspectResponse
+}
+
+type FolderMusicPlaylistTracks struct {
+	Playlist music.Playlist
+	Tracks   []music.Track
+}
+
+type FolderBuildRequest struct {
+	Options       ResolvedOptions
+	Mapping       syncconfig.FolderMapping
+	MusicFolder   music.Playlist
+	MusicChildren []FolderMusicPlaylistTracks
+	Inspect       bridge.InspectResponse
+}
+
+type operationBuildRequest struct {
+	Mode           string
+	MusicPlaylist  music.Playlist
+	MusicTracks    []music.Track
+	TargetPlaylist bridge.Playlist
+	TargetMissing  bool
+	Inspect        bridge.InspectResponse
 }
 
 func ResolveOptions(cfg config.Config, opts Options) (ResolvedOptions, error) {
@@ -212,6 +267,9 @@ func ResolveOptions(cfg config.Config, opts Options) (ResolvedOptions, error) {
 	}
 	if value := strings.TrimSpace(opts.OutPath); value != "" {
 		resolved.OutPath = value
+	}
+	if value := strings.TrimSpace(opts.MappingID); value != "" {
+		resolved.MappingID = value
 	}
 
 	if resolved.Mode != DefaultMode {
@@ -403,6 +461,214 @@ func BuildPlan(req BuildRequest, now time.Time) (Plan, error) {
 	return plan, nil
 }
 
+func BuildFolderPlan(req FolderBuildRequest, now time.Time) (Plan, error) {
+	if req.Options.Mode != DefaultMode {
+		return Plan{}, fmt.Errorf("unsupported playlist-sync mode %q", req.Options.Mode)
+	}
+	createFolder := boolPtrValue(req.Mapping.CreateFolders, true)
+	createPlaylist := boolPtrValue(req.Mapping.CreatePlaylists, true)
+	targetFolder, targetMissing, err := selectRekordboxFolder(req.Inspect.Playlists, req.Mapping.RekordboxFolder, req.Mapping.RekordboxFolderID, createFolder)
+	if err != nil {
+		return Plan{}, err
+	}
+	folderID := targetFolder.ID
+	ops := []PlanOperation{}
+	warnings := []string{}
+	aggregate := PlanSummary{}
+	for _, child := range req.MusicChildren {
+		targetName := child.Playlist.Name
+		if mapped := strings.TrimSpace(req.Mapping.PlaylistNameMap[child.Playlist.Name]); mapped != "" {
+			targetName = mapped
+		}
+		targetPlaylist, childMissing, err := selectRekordboxPlaylistInParent(req.Inspect.Playlists, targetName, "", folderID, createPlaylist)
+		if err != nil {
+			return Plan{}, err
+		}
+		if targetMissing {
+			targetPlaylist = bridge.Playlist{Name: targetName, ParentID: folderID}
+			childMissing = true
+		}
+		op, err := buildOperation(operationBuildRequest{
+			Mode:           req.Options.Mode,
+			MusicPlaylist:  child.Playlist,
+			MusicTracks:    child.Tracks,
+			TargetPlaylist: targetPlaylist,
+			TargetMissing:  childMissing,
+			Inspect:        req.Inspect,
+		})
+		if err != nil {
+			return Plan{}, err
+		}
+		op.ID = safeFilename(child.Playlist.Name)
+		op.Preconditions.TargetParentID = folderID
+		ops = append(ops, op)
+		aggregate = addSummaries(aggregate, op.Summary)
+		warnings = append(warnings, op.Warnings...)
+	}
+	plan := Plan{
+		Version:        PlanVersionFolder,
+		GeneratedAt:    now.UTC().Format(time.RFC3339),
+		JobID:          req.Options.MappingID,
+		Mode:           req.Options.Mode,
+		RekordboxDBDir: req.Options.RekordboxDBDir,
+		BackupDir:      req.Options.BackupDir,
+		MusicFolder: PlanMusicFolder{
+			Name:         req.MusicFolder.Name,
+			PersistentID: req.MusicFolder.PersistentID,
+			ChildCount:   len(req.MusicChildren),
+		},
+		RekordboxFolder: PlanRekordboxFolder{
+			ID:            targetFolder.ID,
+			Name:          firstNonEmpty(targetFolder.Name, req.Mapping.RekordboxFolder),
+			CurrentCount:  countChildren(req.Inspect.Playlists, targetFolder.ID),
+			CreatePlanned: targetMissing,
+		},
+		Summary:    aggregate,
+		Operations: ops,
+		Warnings:   uniqueStrings(warnings),
+		Preconditions: PlanPreconditions{
+			TargetPlaylistID:      targetFolder.ID,
+			TargetPlaylistName:    firstNonEmpty(targetFolder.Name, req.Mapping.RekordboxFolder),
+			TargetPlaylistMissing: targetMissing,
+		},
+	}
+	if err := SignPlan(&plan); err != nil {
+		return Plan{}, err
+	}
+	return plan, nil
+}
+
+func buildOperation(req operationBuildRequest) (PlanOperation, error) {
+	contentByPath := map[string][]bridge.Content{}
+	for _, content := range req.Inspect.Contents {
+		normalized := NormalizePath(content.FolderPath)
+		if normalized != "" {
+			contentByPath[normalized] = append(contentByPath[normalized], content)
+		}
+	}
+	currentIDs := []string{}
+	if !req.TargetMissing {
+		currentIDs = append(currentIDs, req.TargetPlaylist.ContentIDs...)
+	}
+	currentPos := map[string]int{}
+	for idx, id := range currentIDs {
+		if _, exists := currentPos[id]; !exists {
+			currentPos[id] = idx
+		}
+	}
+	rows := make([]PlanRow, 0, len(req.MusicTracks))
+	finalIDs := []string{}
+	matchedPreconditions := []MatchedContentPrecondition{}
+	matchedByPath := 0
+	missing := 0
+	ambiguous := 0
+	willAdd := 0
+	willMove := 0
+	willKeep := 0
+	for _, track := range req.MusicTracks {
+		normalizedPath := NormalizePath(track.Path)
+		row := PlanRow{
+			MusicIndex:        track.Index,
+			MusicPersistentID: track.PersistentID,
+			MusicDatabaseID:   track.DatabaseID,
+			Artist:            track.Artist,
+			Title:             track.Title,
+			Album:             track.Album,
+			Duration:          track.Duration,
+			Path:              track.Path,
+			NormalizedPath:    normalizedPath,
+			MatchStatus:       "missing",
+			Action:            "skip",
+		}
+		candidates := contentByPath[normalizedPath]
+		switch len(candidates) {
+		case 0:
+			missing++
+		case 1:
+			content := candidates[0]
+			matchedByPath++
+			row.RekordboxContentID = content.ID
+			row.RekordboxTitle = content.Title
+			row.MatchStatus = "matched_path"
+			finalIDs = append(finalIDs, content.ID)
+			matchedPreconditions = append(matchedPreconditions, MatchedContentPrecondition{
+				ContentID:  content.ID,
+				Title:      content.Title,
+				FolderPath: content.FolderPath,
+			})
+			if pos, exists := currentPos[content.ID]; !exists {
+				row.Action = "add"
+				willAdd++
+			} else if pos == len(finalIDs)-1 {
+				row.Action = "keep"
+				willKeep++
+			} else {
+				row.Action = "move"
+				willMove++
+			}
+		default:
+			ambiguous++
+			row.MatchStatus = "ambiguous_path"
+			row.Action = "skip"
+		}
+		rows = append(rows, row)
+	}
+	finalSet := map[string]struct{}{}
+	for _, id := range finalIDs {
+		finalSet[id] = struct{}{}
+	}
+	removals := []string{}
+	for _, id := range currentIDs {
+		if _, keep := finalSet[id]; !keep {
+			removals = append(removals, id)
+		}
+	}
+	op := PlanOperation{
+		MusicPlaylist: PlanMusicPlaylist{
+			Name:         req.MusicPlaylist.Name,
+			PersistentID: req.MusicPlaylist.PersistentID,
+			Smart:        req.MusicPlaylist.Smart,
+			TrackCount:   req.MusicPlaylist.TrackCount,
+		},
+		RekordboxPlaylist: PlanRekordboxPlaylist{
+			ID:            req.TargetPlaylist.ID,
+			Name:          firstNonEmpty(req.TargetPlaylist.Name, req.MusicPlaylist.Name),
+			Attribute:     req.TargetPlaylist.Attribute,
+			CurrentCount:  len(currentIDs),
+			CreatePlanned: req.TargetMissing,
+		},
+		Summary: PlanSummary{
+			MusicTotal:         len(req.MusicTracks),
+			MatchedByPath:      matchedByPath,
+			MissingInRekordbox: missing,
+			AmbiguousInRB:      ambiguous,
+			CurrentTargetCount: len(currentIDs),
+			FinalTargetCount:   len(finalIDs),
+			WillAdd:            willAdd,
+			WillRemove:         len(removals),
+			WillMove:           willMove,
+			WillKeep:           willKeep,
+		},
+		Rows:              rows,
+		RemovalContentIDs: removals,
+		FinalContentIDs:   finalIDs,
+		Preconditions: PlanPreconditions{
+			TargetPlaylistID:          req.TargetPlaylist.ID,
+			TargetPlaylistName:        firstNonEmpty(req.TargetPlaylist.Name, req.MusicPlaylist.Name),
+			TargetPlaylistMissing:     req.TargetMissing,
+			ExpectedCurrentContentIDs: currentIDs,
+			MatchedContent:            matchedPreconditions,
+		},
+	}
+	if missing > 0 {
+		op.Warnings = append(op.Warnings, fmt.Sprintf("%s: %d Music track(s) are missing from Rekordbox and will not be imported in v1", req.MusicPlaylist.Name, missing))
+	}
+	if ambiguous > 0 {
+		op.Warnings = append(op.Warnings, fmt.Sprintf("%s: %d Music track(s) matched multiple Rekordbox rows by path", req.MusicPlaylist.Name, ambiguous))
+	}
+	return op, nil
+}
+
 func SelectMusicPlaylist(playlists []music.Playlist, name, persistentID string) (music.Playlist, error) {
 	if strings.TrimSpace(persistentID) != "" {
 		for _, playlist := range playlists {
@@ -428,15 +694,110 @@ func SelectMusicPlaylist(playlists []music.Playlist, name, persistentID string) 
 	return matches[0], nil
 }
 
+func SelectMusicFolderChildren(playlists []music.Playlist, mapping syncconfig.FolderMapping) (music.Playlist, []music.Playlist, error) {
+	folder, err := selectMusicFolder(playlists, mapping.MusicFolder, mapping.MusicFolderID)
+	if err != nil {
+		return music.Playlist{}, nil, err
+	}
+	include := stringSet(mapping.IncludePlaylists)
+	exclude := stringSet(mapping.ExcludePlaylists)
+	children := []music.Playlist{}
+	for _, playlist := range playlists {
+		if playlist.Folder {
+			continue
+		}
+		parentMatches := false
+		if folder.PersistentID != "" && playlist.ParentID == folder.PersistentID {
+			parentMatches = true
+		}
+		if !parentMatches && folder.Name != "" && playlist.ParentName == folder.Name {
+			parentMatches = true
+		}
+		if !parentMatches {
+			continue
+		}
+		if len(include) > 0 {
+			if _, ok := include[playlist.Name]; !ok {
+				continue
+			}
+		}
+		if _, skip := exclude[playlist.Name]; skip {
+			continue
+		}
+		children = append(children, playlist)
+	}
+	sort.SliceStable(children, func(i, j int) bool {
+		return children[i].Name < children[j].Name
+	})
+	if len(children) == 0 {
+		return music.Playlist{}, nil, fmt.Errorf("Music folder %q has no direct child playlists to sync", folder.Name)
+	}
+	return folder, children, nil
+}
+
+func selectMusicFolder(playlists []music.Playlist, name, persistentID string) (music.Playlist, error) {
+	if strings.TrimSpace(persistentID) != "" {
+		for _, playlist := range playlists {
+			if playlist.PersistentID == persistentID {
+				if !playlist.Folder {
+					return music.Playlist{}, fmt.Errorf("Music playlist %q is not a folder", playlist.Name)
+				}
+				return playlist, nil
+			}
+		}
+		return music.Playlist{}, fmt.Errorf("Music folder with persistent ID %q not found", persistentID)
+	}
+	matches := []music.Playlist{}
+	for _, playlist := range playlists {
+		if playlist.Folder && playlist.Name == name {
+			matches = append(matches, playlist)
+		}
+	}
+	if len(matches) == 0 {
+		return music.Playlist{}, fmt.Errorf("Music folder %q not found", name)
+	}
+	if len(matches) > 1 {
+		return music.Playlist{}, fmt.Errorf("multiple Music folders named %q; use music_folder_id", name)
+	}
+	return matches[0], nil
+}
+
+func stringSet(values []string) map[string]struct{} {
+	result := map[string]struct{}{}
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			result[strings.TrimSpace(value)] = struct{}{}
+		}
+	}
+	return result
+}
+
 func ValidatePlanForApply(plan Plan) error {
 	if err := VerifyPlanChecksum(plan); err != nil {
 		return err
 	}
-	if plan.Version != PlanVersion {
+	if plan.Version != PlanVersion && plan.Version != PlanVersionFolder {
 		return fmt.Errorf("unsupported plan version %q", plan.Version)
 	}
 	if plan.Mode != DefaultMode {
 		return fmt.Errorf("unsupported plan mode %q", plan.Mode)
+	}
+	if plan.Version == PlanVersionFolder {
+		if len(plan.Operations) == 0 {
+			return fmt.Errorf("folder plan has no playlist operations")
+		}
+		for _, op := range plan.Operations {
+			if op.Summary.MissingInRekordbox > 0 {
+				return fmt.Errorf("playlist %q has %d missing Rekordbox tracks; v1 refuses partial mirror apply", op.MusicPlaylist.Name, op.Summary.MissingInRekordbox)
+			}
+			if op.Summary.AmbiguousInRB > 0 {
+				return fmt.Errorf("playlist %q has %d ambiguous Rekordbox path matches", op.MusicPlaylist.Name, op.Summary.AmbiguousInRB)
+			}
+			if len(op.FinalContentIDs) != op.Summary.FinalTargetCount {
+				return fmt.Errorf("playlist %q final content count does not match summary", op.MusicPlaylist.Name)
+			}
+		}
+		return nil
 	}
 	if plan.Summary.MissingInRekordbox > 0 {
 		return fmt.Errorf("plan has %d missing Rekordbox tracks; v1 refuses partial mirror apply", plan.Summary.MissingInRekordbox)
@@ -451,6 +812,32 @@ func ValidatePlanForApply(plan Plan) error {
 }
 
 func ValidatePreconditions(plan Plan, inspect bridge.InspectResponse) error {
+	if plan.Version == PlanVersionFolder {
+		if plan.Preconditions.TargetPlaylistMissing {
+			if _, missing, err := selectRekordboxFolder(inspect.Playlists, plan.RekordboxFolder.Name, plan.RekordboxFolder.ID, plan.RekordboxFolder.CreatePlanned); err != nil {
+				return err
+			} else if !missing {
+				return fmt.Errorf("target folder %q now exists; regenerate the plan", plan.RekordboxFolder.Name)
+			}
+		} else {
+			folder, missing, err := selectRekordboxFolder(inspect.Playlists, plan.RekordboxFolder.Name, plan.RekordboxFolder.ID, false)
+			if err != nil {
+				return err
+			}
+			if missing {
+				return fmt.Errorf("target folder %q is missing", plan.RekordboxFolder.Name)
+			}
+			if folder.ID != plan.RekordboxFolder.ID {
+				return fmt.Errorf("target folder ID changed from %q to %q", plan.RekordboxFolder.ID, folder.ID)
+			}
+		}
+		for _, op := range plan.Operations {
+			if err := validateOperationPreconditions(op, inspect); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	target, missing, err := selectRekordboxPlaylist(inspect.Playlists, plan.RekordboxPlaylist.Name, plan.RekordboxPlaylist.ID, plan.RekordboxPlaylist.CreatePlanned)
 	if err != nil {
 		return err
@@ -476,6 +863,42 @@ func ValidatePreconditions(plan Plan, inspect bridge.InspectResponse) error {
 		contentsByID[content.ID] = content
 	}
 	for _, expected := range plan.Preconditions.MatchedContent {
+		actual, ok := contentsByID[expected.ContentID]
+		if !ok {
+			return fmt.Errorf("planned Rekordbox content ID %q no longer exists", expected.ContentID)
+		}
+		if NormalizePath(actual.FolderPath) != NormalizePath(expected.FolderPath) {
+			return fmt.Errorf("planned Rekordbox content ID %q path changed", expected.ContentID)
+		}
+	}
+	return nil
+}
+
+func validateOperationPreconditions(op PlanOperation, inspect bridge.InspectResponse) error {
+	target, missing, err := selectRekordboxPlaylistInParent(inspect.Playlists, op.RekordboxPlaylist.Name, op.RekordboxPlaylist.ID, op.Preconditions.TargetParentID, op.RekordboxPlaylist.CreatePlanned)
+	if err != nil {
+		return err
+	}
+	if op.Preconditions.TargetPlaylistMissing {
+		if !missing {
+			return fmt.Errorf("target playlist %q now exists; regenerate the plan", op.Preconditions.TargetPlaylistName)
+		}
+	} else {
+		if missing {
+			return fmt.Errorf("target playlist %q is missing", op.Preconditions.TargetPlaylistName)
+		}
+		if target.ID != op.Preconditions.TargetPlaylistID {
+			return fmt.Errorf("target playlist ID changed from %q to %q", op.Preconditions.TargetPlaylistID, target.ID)
+		}
+		if !sameStrings(target.ContentIDs, op.Preconditions.ExpectedCurrentContentIDs) {
+			return fmt.Errorf("target playlist %q membership changed since plan generation", op.Preconditions.TargetPlaylistName)
+		}
+	}
+	contentsByID := map[string]bridge.Content{}
+	for _, content := range inspect.Contents {
+		contentsByID[content.ID] = content
+	}
+	for _, expected := range op.Preconditions.MatchedContent {
 		actual, ok := contentsByID[expected.ContentID]
 		if !ok {
 			return fmt.Errorf("planned Rekordbox content ID %q no longer exists", expected.ContentID)
@@ -655,6 +1078,64 @@ func selectRekordboxPlaylist(playlists []bridge.Playlist, name, id string, creat
 	return matches[0], false, nil
 }
 
+func selectRekordboxFolder(playlists []bridge.Playlist, name, id string, createIfMissing bool) (bridge.Playlist, bool, error) {
+	if strings.TrimSpace(id) != "" {
+		for _, playlist := range playlists {
+			if playlist.ID == id {
+				if playlist.Attribute != 1 {
+					return bridge.Playlist{}, false, fmt.Errorf("Rekordbox target %q is not a folder", playlist.Name)
+				}
+				return playlist, false, nil
+			}
+		}
+		return bridge.Playlist{}, true, fmt.Errorf("Rekordbox folder ID %q not found", id)
+	}
+	matches := []bridge.Playlist{}
+	for _, playlist := range playlists {
+		if playlist.Name == name && playlist.ParentID == "root" {
+			matches = append(matches, playlist)
+		}
+	}
+	if len(matches) == 0 {
+		if createIfMissing {
+			return bridge.Playlist{Name: name, Attribute: 1, ParentID: "root"}, true, nil
+		}
+		return bridge.Playlist{}, true, fmt.Errorf("Rekordbox folder %q not found", name)
+	}
+	if len(matches) > 1 {
+		return bridge.Playlist{}, false, fmt.Errorf("multiple root Rekordbox folders named %q; use --rekordbox-folder-id", name)
+	}
+	if matches[0].Attribute != 1 {
+		return bridge.Playlist{}, false, fmt.Errorf("Rekordbox target %q is not a folder", name)
+	}
+	return matches[0], false, nil
+}
+
+func selectRekordboxPlaylistInParent(playlists []bridge.Playlist, name, id, parentID string, createIfMissing bool) (bridge.Playlist, bool, error) {
+	if strings.TrimSpace(id) != "" {
+		return selectRekordboxPlaylist(playlists, name, id, createIfMissing)
+	}
+	matches := []bridge.Playlist{}
+	for _, playlist := range playlists {
+		if playlist.Name == name && playlist.ParentID == parentID {
+			matches = append(matches, playlist)
+		}
+	}
+	if len(matches) == 0 {
+		if createIfMissing {
+			return bridge.Playlist{Name: name, ParentID: parentID}, true, nil
+		}
+		return bridge.Playlist{}, true, fmt.Errorf("Rekordbox playlist %q not found under target folder", name)
+	}
+	if len(matches) > 1 {
+		return bridge.Playlist{}, false, fmt.Errorf("multiple Rekordbox playlists named %q under target folder", name)
+	}
+	if matches[0].Attribute != 0 {
+		return bridge.Playlist{}, false, fmt.Errorf("Rekordbox playlist %q is not a normal playlist", name)
+	}
+	return matches[0], false, nil
+}
+
 func findJob(jobs []config.RekordboxPlaylistSyncJob, id string) (config.RekordboxPlaylistSyncJob, bool) {
 	for _, job := range jobs {
 		if job.ID == id {
@@ -683,6 +1164,54 @@ func applyJob(resolved *ResolvedOptions, job config.RekordboxPlaylistSyncJob) {
 	if job.CreatePlaylist != nil {
 		resolved.CreatePlaylist = *job.CreatePlaylist
 	}
+}
+
+func addSummaries(a, b PlanSummary) PlanSummary {
+	a.MusicTotal += b.MusicTotal
+	a.MatchedByPath += b.MatchedByPath
+	a.MissingInRekordbox += b.MissingInRekordbox
+	a.AmbiguousInRB += b.AmbiguousInRB
+	a.CurrentTargetCount += b.CurrentTargetCount
+	a.FinalTargetCount += b.FinalTargetCount
+	a.WillAdd += b.WillAdd
+	a.WillRemove += b.WillRemove
+	a.WillMove += b.WillMove
+	a.WillKeep += b.WillKeep
+	return a
+}
+
+func countChildren(playlists []bridge.Playlist, parentID string) int {
+	count := 0
+	for _, playlist := range playlists {
+		if playlist.ParentID == parentID {
+			count++
+		}
+	}
+	return count
+}
+
+func boolPtrValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func uniqueStrings(values []string) []string {
+	result := []string{}
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func rekordboxProcesses(ctx context.Context) ([]string, error) {

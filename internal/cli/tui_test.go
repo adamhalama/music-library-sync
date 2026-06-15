@@ -17,6 +17,7 @@ import (
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
+	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
 func TestTUICommandHelp(t *testing.T) {
@@ -114,6 +115,112 @@ func TestTUIRootEnterOpensRekordboxSyncWorkflow(t *testing.T) {
 	}
 	if next.rekordboxModel.phase != tuiRekordboxPhaseLoading {
 		t.Fatalf("expected loading rekordbox phase, got %q", next.rekordboxModel.phase)
+	}
+}
+
+func TestTUIRekordboxSetupSaveWritesMappingConfig(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "rekordbox.yaml")
+	model := tuiRekordboxModel{
+		app: &AppContext{Opts: GlobalOptions{RekordboxConfigPath: path}},
+		cfg: configWithRekordboxSyncDefaults(config.DefaultConfig(), syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+		}),
+		rbCfg: syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+		},
+		setup: tuiRekordboxSetupState{
+			ConfigPath: path,
+			EditIndex:  -1,
+			Mapping: syncconfig.FolderMapping{
+				ID:              "phone",
+				MusicFolder:     "Phone",
+				RekordboxFolder: "Phone RB",
+			},
+		},
+	}
+
+	next, cmd := model.saveSetupMapping()
+	if next.phase != tuiRekordboxPhaseSetupSaving {
+		t.Fatalf("expected saving phase, got %q", next.phase)
+	}
+	raw := cmd()
+	msg, ok := raw.(tuiRekordboxSetupSavedMsg)
+	if !ok {
+		t.Fatalf("expected setup saved msg, got %T", raw)
+	}
+	next, _ = next.Update(msg)
+	if next.phase != tuiRekordboxPhaseReady {
+		t.Fatalf("expected ready after save, got %q err=%v", next.phase, next.setup.SaveErr)
+	}
+	if len(next.rbCfg.Sync.Folders) != 1 || next.rbCfg.Sync.Folders[0].ID != "phone" {
+		t.Fatalf("unexpected saved mappings: %+v", next.rbCfg.Sync.Folders)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(payload), "rekordbox_folder: Phone RB") {
+		t.Fatalf("expected saved mapping in config:\n%s", string(payload))
+	}
+}
+
+func TestTUIRekordboxDeleteMappingWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "rekordbox.yaml")
+	model := tuiRekordboxModel{
+		app:       &AppContext{Opts: GlobalOptions{RekordboxConfigPath: path}},
+		phase:     tuiRekordboxPhaseReady,
+		jobCursor: 0,
+		rbCfg: syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+			Sync: syncconfig.Sync{Folders: []syncconfig.FolderMapping{{
+				ID:              "phone",
+				MusicFolder:     "Phone",
+				RekordboxFolder: "Phone RB",
+			}}},
+		},
+		setup: tuiRekordboxSetupState{ConfigPath: path},
+	}
+
+	next, cmd := model.deleteSelectedMapping()
+	if next.phase != tuiRekordboxPhaseSetupSaving {
+		t.Fatalf("expected saving phase, got %q", next.phase)
+	}
+	raw := cmd()
+	msg, ok := raw.(tuiRekordboxSetupSavedMsg)
+	if !ok {
+		t.Fatalf("expected setup saved msg, got %T", raw)
+	}
+	next, _ = next.Update(msg)
+	if len(next.rbCfg.Sync.Folders) != 0 {
+		t.Fatalf("expected mapping deletion, got %+v", next.rbCfg.Sync.Folders)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if strings.Contains(string(payload), "id: phone") {
+		t.Fatalf("deleted mapping still present:\n%s", string(payload))
 	}
 }
 
@@ -1172,8 +1279,11 @@ func TestTUIRootStandardSyncPromptModalAndFailureDiagnostics(t *testing.T) {
 	if !strings.Contains(view, "Prompt") || !strings.Contains(view, "Retry login?") {
 		t.Fatalf("expected standard sync shell prompt modal, got: %s", view)
 	}
-	if !strings.Contains(view, "last failure:") || !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
+	if !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
 		t.Fatalf("expected failure diagnostics to render in activity section, got: %s", view)
+	}
+	if got := lipgloss.Height(view); got > root.height {
+		t.Fatalf("expected modal shell height <= %d, got %d", root.height, got)
 	}
 }
 

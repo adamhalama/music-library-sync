@@ -17,6 +17,9 @@ type PlaylistSelector struct {
 type Playlist struct {
 	Name         string `json:"name"`
 	PersistentID string `json:"persistent_id"`
+	ParentName   string `json:"parent_name,omitempty"`
+	ParentID     string `json:"parent_id,omitempty"`
+	Folder       bool   `json:"folder"`
 	Smart        bool   `json:"smart"`
 	TrackCount   int    `json:"track_count"`
 }
@@ -88,20 +91,39 @@ func ParsePlaylistList(raw string) ([]Playlist, error) {
 	playlists := []Playlist{}
 	for _, line := range splitLines(raw) {
 		cols := strings.Split(line, "\t")
-		if len(cols) != 4 {
-			return nil, fmt.Errorf("parse Music playlist row %q: expected 4 columns, got %d", line, len(cols))
+		if len(cols) != 4 && len(cols) != 7 {
+			return nil, fmt.Errorf("parse Music playlist row %q: expected 4 or 7 columns, got %d", line, len(cols))
 		}
-		smart, err := strconv.ParseBool(cols[2])
-		if err != nil {
-			return nil, fmt.Errorf("parse Music playlist smart flag %q: %w", cols[2], err)
+		folder := false
+		parentID := ""
+		parentName := ""
+		smartCol := 2
+		countCol := 3
+		if len(cols) == 7 {
+			parentID = cols[2]
+			parentName = cols[3]
+			var err error
+			folder, err = strconv.ParseBool(cols[4])
+			if err != nil {
+				return nil, fmt.Errorf("parse Music playlist folder flag %q: %w", cols[4], err)
+			}
+			smartCol = 5
+			countCol = 6
 		}
-		count, err := strconv.Atoi(cols[3])
+		smart, err := strconv.ParseBool(cols[smartCol])
 		if err != nil {
-			return nil, fmt.Errorf("parse Music playlist track count %q: %w", cols[3], err)
+			return nil, fmt.Errorf("parse Music playlist smart flag %q: %w", cols[smartCol], err)
+		}
+		count, err := strconv.Atoi(cols[countCol])
+		if err != nil {
+			return nil, fmt.Errorf("parse Music playlist track count %q: %w", cols[countCol], err)
 		}
 		playlists = append(playlists, Playlist{
 			PersistentID: cols[0],
 			Name:         cols[1],
+			ParentID:     parentID,
+			ParentName:   parentName,
+			Folder:       folder,
 			Smart:        smart,
 			TrackCount:   count,
 		})
@@ -193,6 +215,9 @@ try
     repeat with p in user playlists
       set pid to ""
       set pname to ""
+      set parentID to ""
+      set parentName to ""
+      set folderFlag to "false"
       set psmart to "false"
       set pcount to "0"
       try
@@ -202,12 +227,24 @@ try
         set pname to name of p as text
       end try
       try
+        if (special kind of p as text) is "folder" then
+          set folderFlag to "true"
+        end if
+      end try
+      try
+        set parentPlaylist to parent of p
+        if class of parentPlaylist is user playlist then
+          set parentID to persistent ID of parentPlaylist as text
+          set parentName to name of parentPlaylist as text
+        end if
+      end try
+      try
         set psmart to smart of p as text
       end try
       try
         set pcount to (count of tracks of p) as text
       end try
-      set end of rows to pid & tab & pname & tab & psmart & tab & pcount
+      set end of rows to pid & tab & pname & tab & parentID & tab & parentName & tab & folderFlag & tab & psmart & tab & pcount
     end repeat
   end tell
   set outText to rows as text

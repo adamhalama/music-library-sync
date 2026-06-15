@@ -7,6 +7,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
+	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
 func TestBuildPlanMatchesByExactNormalizedPath(t *testing.T) {
@@ -107,5 +108,57 @@ func TestResolveOptionsUsesConfigJobAndEnvStyleOverrides(t *testing.T) {
 	}
 	if resolved.CreatePlaylist {
 		t.Fatalf("expected job create_playlist=false")
+	}
+}
+
+func TestBuildFolderPlanMirrorsChildPlaylists(t *testing.T) {
+	opts := ResolvedOptions{
+		MappingID:         "phone",
+		RekordboxDBDir:    "/tmp/rb",
+		BackupDir:         "/tmp/backups",
+		Mode:              DefaultMode,
+		CreatePlaylist:    true,
+		RekordboxPlaylist: DefaultRekordboxPlaylist,
+		MusicPlaylist:     DefaultMusicPlaylist,
+	}
+	mapping := syncconfig.FolderMapping{
+		ID:              "phone",
+		MusicFolder:     "Phone",
+		RekordboxFolder: "Phone RB",
+		PlaylistNameMap: map[string]string{"Favourites": "fav_imports"},
+	}
+	inspect := bridge.InspectResponse{
+		Playlists: []bridge.Playlist{
+			{ID: "folder-1", Name: "Phone RB", Attribute: 1, ParentID: "root"},
+			{ID: "playlist-1", Name: "fav_imports", Attribute: 0, ParentID: "folder-1", ContentIDs: []string{"old"}},
+		},
+		Contents: []bridge.Content{{ID: "c1", Title: "One", FolderPath: "/Music/One.mp3"}},
+	}
+
+	plan, err := BuildFolderPlan(FolderBuildRequest{
+		Options:     opts,
+		Mapping:     mapping,
+		MusicFolder: music.Playlist{Name: "Phone", PersistentID: "folder-pid", Folder: true},
+		MusicChildren: []FolderMusicPlaylistTracks{{
+			Playlist: music.Playlist{Name: "Favourites", PersistentID: "fav-pid", Smart: true, TrackCount: 1, ParentID: "folder-pid"},
+			Tracks:   []music.Track{{Index: 1, Title: "One", Path: "/Music/One.mp3"}},
+		}},
+		Inspect: inspect,
+	}, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("BuildFolderPlan: %v", err)
+	}
+	if plan.Version != PlanVersionFolder || len(plan.Operations) != 1 {
+		t.Fatalf("expected folder plan operation, got version=%s ops=%d", plan.Version, len(plan.Operations))
+	}
+	op := plan.Operations[0]
+	if op.RekordboxPlaylist.Name != "fav_imports" || op.Preconditions.TargetParentID != "folder-1" {
+		t.Fatalf("unexpected operation target: %+v preconditions=%+v", op.RekordboxPlaylist, op.Preconditions)
+	}
+	if plan.Summary.MatchedByPath != 1 || plan.Summary.WillAdd != 1 || plan.Summary.WillRemove != 1 {
+		t.Fatalf("unexpected folder summary: %+v", plan.Summary)
+	}
+	if err := ValidatePlanForApply(plan); err != nil {
+		t.Fatalf("ValidatePlanForApply: %v", err)
 	}
 }

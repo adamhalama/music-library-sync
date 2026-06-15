@@ -10,6 +10,7 @@ import (
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 	"github.com/jaa/update-downloads/internal/rekordbox/pyruntime"
+	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
 type RekordboxMusicReader interface {
@@ -20,6 +21,7 @@ type RekordboxMusicReader interface {
 type RekordboxBridge interface {
 	Inspect(ctx context.Context, dbDir string) (bridge.InspectResponse, error)
 	Apply(ctx context.Context, req bridge.ApplyRequest) (bridge.ApplyResponse, error)
+	ApplyBatch(ctx context.Context, req bridge.ApplyBatchRequest) (bridge.ApplyBatchResponse, error)
 }
 
 type RekordboxPlaylistSyncUseCase struct {
@@ -32,8 +34,10 @@ type RekordboxPlaylistSyncUseCase struct {
 }
 
 type RekordboxPlaylistSyncPlanRequest struct {
-	Config  config.Config
-	Options playlistsync.Options
+	Config     config.Config
+	SyncConfig *syncconfig.Config
+	MappingID  string
+	Options    playlistsync.Options
 }
 
 type RekordboxPlaylistSyncPlanResult struct {
@@ -44,6 +48,7 @@ type RekordboxPlaylistSyncPlanResult struct {
 
 type RekordboxPlaylistSyncApplyRequest struct {
 	Config     config.Config
+	SyncConfig *syncconfig.Config
 	Plan       playlistsync.Plan
 	PythonBin  string
 	PythonPath string
@@ -52,14 +57,18 @@ type RekordboxPlaylistSyncApplyRequest struct {
 }
 
 type RekordboxPlaylistSyncApplyResult struct {
-	DryRun     bool
-	BackupPath string
-	Response   bridge.ApplyResponse
+	DryRun        bool
+	BackupPath    string
+	Response      bridge.ApplyResponse
+	BatchResponse bridge.ApplyBatchResponse
 }
 
 func (u RekordboxPlaylistSyncUseCase) Plan(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {
 	if err := config.ValidateRekordbox(req.Config); err != nil {
 		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	if req.SyncConfig != nil && req.SyncConfig.HasFolderMappings() {
+		return u.planFolder(ctx, req)
 	}
 	resolved, err := playlistsync.ResolveOptions(req.Config, req.Options)
 	if err != nil {
@@ -125,11 +134,79 @@ func (u RekordboxPlaylistSyncUseCase) Plan(ctx context.Context, req RekordboxPla
 	}, nil
 }
 
+func (u RekordboxPlaylistSyncUseCase) planFolder(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {
+	mapping, ok := req.SyncConfig.FolderMapping(req.MappingID)
+	if !ok {
+		return RekordboxPlaylistSyncPlanResult{}, fmt.Errorf("Rekordbox folder mapping %q not found", req.MappingID)
+	}
+	cfg := configForSyncConfig(req.Config, *req.SyncConfig)
+	resolved, err := playlistsync.ResolveOptions(cfg, playlistsync.Options{
+		MappingID: req.MappingID,
+		OutPath:   req.Options.OutPath,
+	})
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	resolved, err = u.ensureRuntime(ctx, resolved, pyruntime.Request{Config: cfg})
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	if err := u.checkClosed(ctx, resolved.RekordboxDBDir); err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	reader := u.musicReader()
+	playlists, err := reader.ListPlaylists(ctx)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	folder, children, err := playlistsync.SelectMusicFolderChildren(playlists, mapping)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	childTracks := make([]playlistsync.FolderMusicPlaylistTracks, 0, len(children))
+	for _, child := range children {
+		selector := music.PlaylistSelector{Name: child.Name, PersistentID: child.PersistentID}
+		playlist, tracks, err := reader.ReadPlaylist(ctx, selector)
+		if err != nil {
+			return RekordboxPlaylistSyncPlanResult{}, err
+		}
+		childTracks = append(childTracks, playlistsync.FolderMusicPlaylistTracks{Playlist: playlist, Tracks: tracks})
+	}
+	inspect, err := u.bridge(resolved).Inspect(ctx, resolved.RekordboxDBDir)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	now := u.now()
+	outPath, err := playlistsync.DefaultOutPath(cfg, resolved, now)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	resolved.OutPath = outPath
+	plan, err := playlistsync.BuildFolderPlan(playlistsync.FolderBuildRequest{
+		Options:       resolved,
+		Mapping:       mapping,
+		MusicFolder:   folder,
+		MusicChildren: childTracks,
+		Inspect:       inspect,
+	}, now)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	if err := playlistsync.WritePlan(outPath, plan); err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	return RekordboxPlaylistSyncPlanResult{Resolved: resolved, Plan: plan, PlanPath: outPath}, nil
+}
+
 func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPlaylistSyncApplyRequest) (RekordboxPlaylistSyncApplyResult, error) {
-	if err := config.ValidateRekordbox(req.Config); err != nil {
+	cfg := req.Config
+	if req.SyncConfig != nil {
+		cfg = configForSyncConfig(req.Config, *req.SyncConfig)
+	}
+	if err := config.ValidateRekordbox(cfg); err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
-	resolved, err := playlistsync.ResolveOptions(req.Config, playlistsync.Options{
+	resolved, err := playlistsync.ResolveOptions(cfg, playlistsync.Options{
 		PythonBin:  req.PythonBin,
 		PythonPath: req.PythonPath,
 		BackupDir:  req.BackupDir,
@@ -138,7 +215,7 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
 	resolved, err = u.ensureRuntime(ctx, resolved, pyruntime.Request{
-		Config:         req.Config,
+		Config:         cfg,
 		PythonBin:      req.PythonBin,
 		PythonPath:     req.PythonPath,
 		ExplicitPython: req.PythonBin != "" || req.PythonPath != "",
@@ -172,6 +249,40 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 	if err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
+	if plan.Version == playlistsync.PlanVersionFolder {
+		ops := make([]bridge.ApplyRequest, 0, len(plan.Operations))
+		for _, op := range plan.Operations {
+			ops = append(ops, bridge.ApplyRequest{
+				DBDir:                     plan.RekordboxDBDir,
+				TargetPlaylistID:          op.RekordboxPlaylist.ID,
+				TargetPlaylistName:        op.RekordboxPlaylist.Name,
+				CreatePlaylistIfMissing:   op.RekordboxPlaylist.CreatePlanned,
+				ExpectedCurrentContentIDs: op.Preconditions.ExpectedCurrentContentIDs,
+				FinalContentIDs:           op.FinalContentIDs,
+			})
+		}
+		resp, err := client.ApplyBatch(ctx, bridge.ApplyBatchRequest{
+			DBDir:                   plan.RekordboxDBDir,
+			TargetFolderID:          plan.RekordboxFolder.ID,
+			TargetFolderName:        plan.RekordboxFolder.Name,
+			CreateFolderIfMissing:   plan.RekordboxFolder.CreatePlanned,
+			CreatePlaylistIfMissing: true,
+			Operations:              ops,
+		})
+		if err != nil {
+			return RekordboxPlaylistSyncApplyResult{}, err
+		}
+		if len(resp.Responses) != len(plan.Operations) {
+			return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist count does not match plan")
+		}
+		for idx, op := range plan.Operations {
+			if !sameStringSlice(resp.Responses[idx].FinalContentIDs, op.FinalContentIDs) {
+				return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist order does not match plan for %q", op.RekordboxPlaylist.Name)
+			}
+		}
+		return RekordboxPlaylistSyncApplyResult{BackupPath: backupPath, BatchResponse: resp}, nil
+	}
+
 	resp, err := client.Apply(ctx, bridge.ApplyRequest{
 		DBDir:                     plan.RekordboxDBDir,
 		TargetPlaylistID:          plan.RekordboxPlaylist.ID,
@@ -187,6 +298,17 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 		return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist order does not match plan")
 	}
 	return RekordboxPlaylistSyncApplyResult{BackupPath: backupPath, Response: resp}, nil
+}
+
+func configForSyncConfig(base config.Config, rb syncconfig.Config) config.Config {
+	cfg := base
+	cfg.Rekordbox = &config.RekordboxConfig{
+		DBDir:      rb.Defaults.DBDir,
+		PythonBin:  rb.Defaults.PythonBin,
+		PythonPath: rb.Defaults.PythonPath,
+		BackupDir:  rb.Defaults.BackupDir,
+	}
+	return cfg
 }
 
 func (u RekordboxPlaylistSyncUseCase) musicReader() RekordboxMusicReader {

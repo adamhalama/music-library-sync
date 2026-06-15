@@ -43,17 +43,37 @@ type ApplyRequest struct {
 	DBDir                     string   `json:"db_dir"`
 	TargetPlaylistID          string   `json:"target_playlist_id,omitempty"`
 	TargetPlaylistName        string   `json:"target_playlist_name"`
+	TargetParentID            string   `json:"target_parent_id,omitempty"`
 	CreatePlaylistIfMissing   bool     `json:"create_playlist_if_missing"`
 	ExpectedCurrentContentIDs []string `json:"expected_current_content_ids"`
 	FinalContentIDs           []string `json:"final_content_ids"`
 }
 
+type ApplyBatchRequest struct {
+	DBDir                   string         `json:"db_dir"`
+	TargetFolderID          string         `json:"target_folder_id,omitempty"`
+	TargetFolderName        string         `json:"target_folder_name,omitempty"`
+	CreateFolderIfMissing   bool           `json:"create_folder_if_missing"`
+	CreatePlaylistIfMissing bool           `json:"create_playlist_if_missing"`
+	Operations              []ApplyRequest `json:"operations"`
+}
+
 type ApplyResponse struct {
 	PlaylistID      string   `json:"playlist_id"`
 	PlaylistName    string   `json:"playlist_name"`
+	ParentID        string   `json:"parent_id,omitempty"`
 	FinalContentIDs []string `json:"final_content_ids"`
 	FinalTrackCount int      `json:"final_track_count"`
 	CreatedPlaylist bool     `json:"created_playlist"`
+}
+
+type ApplyBatchResponse struct {
+	FolderID           string          `json:"folder_id,omitempty"`
+	FolderName         string          `json:"folder_name,omitempty"`
+	CreatedFolder      bool            `json:"created_folder"`
+	Responses          []ApplyResponse `json:"responses"`
+	FinalPlaylistCount int             `json:"final_playlist_count"`
+	FinalTrackCount    int             `json:"final_track_count"`
 }
 
 func (c Client) Inspect(ctx context.Context, dbDir string) (InspectResponse, error) {
@@ -69,6 +89,16 @@ func (c Client) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, err
 	var resp ApplyResponse
 	payload := map[string]any{
 		"op":      "apply",
+		"request": req,
+	}
+	err := c.run(ctx, payload, &resp)
+	return resp, err
+}
+
+func (c Client) ApplyBatch(ctx context.Context, req ApplyBatchRequest) (ApplyBatchResponse, error) {
+	var resp ApplyBatchResponse
+	payload := map[string]any{
+		"op":      "apply_batch",
 		"request": req,
 	}
 	err := c.run(ctx, payload, &resp)

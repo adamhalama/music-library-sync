@@ -313,8 +313,41 @@ func renderTUIModal(base string, state tuiShellState, theme tuiShellTheme, layou
 		boxWidth = 24
 	}
 	box := theme.modalBox.Width(styleContentWidth(boxWidth, theme.modalBox)).Render(strings.Join(lines, "\n"))
-	centered := lipgloss.Place(shellMainSectionWidth(layout, theme), 0, lipgloss.Center, lipgloss.Top, box)
-	return theme.backdrop.Render(base) + "\n\n" + centered
+	return overlayTUIModal(theme.backdrop.Render(base), box, layout)
+}
+
+func overlayTUIModal(base string, box string, layout tuiShellLayout) string {
+	baseLines := strings.Split(base, "\n")
+	if len(baseLines) > layout.Height {
+		baseLines = baseLines[:layout.Height]
+	}
+	for len(baseLines) < layout.Height {
+		baseLines = append(baseLines, "")
+	}
+	boxLines := strings.Split(box, "\n")
+	boxHeight := len(boxLines)
+	boxWidth := lipgloss.Width(box)
+	if boxHeight > layout.Height {
+		boxLines = boxLines[:layout.Height]
+		boxHeight = len(boxLines)
+	}
+	y := (layout.Height - boxHeight) / 2
+	if y < 0 {
+		y = 0
+	}
+	x := (layout.Width - boxWidth) / 2
+	if x < 0 {
+		x = 0
+	}
+	prefix := strings.Repeat(" ", x)
+	for i, boxLine := range boxLines {
+		target := y + i
+		if target >= len(baseLines) {
+			break
+		}
+		baseLines[target] = prefix + boxLine
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {

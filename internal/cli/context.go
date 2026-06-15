@@ -15,16 +15,17 @@ type IOStreams struct {
 }
 
 type GlobalOptions struct {
-	ConfigPath    string
-	JSON          bool
-	Quiet         bool
-	Verbose       bool
-	NoColor       bool
-	NoInput       bool
-	DryRun        bool
-	AskOnExisting bool
-	ScanGaps      bool
-	NoPreflight   bool
+	ConfigPath          string
+	RekordboxConfigPath string
+	JSON                bool
+	Quiet               bool
+	Verbose             bool
+	NoColor             bool
+	NoInput             bool
+	DryRun              bool
+	AskOnExisting       bool
+	ScanGaps            bool
+	NoPreflight         bool
 }
 
 type AppContext struct {
