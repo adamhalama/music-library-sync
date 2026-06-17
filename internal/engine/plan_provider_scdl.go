@@ -30,11 +30,28 @@ func (p *SCDLPlanProvider) Build(
 	source config.Source,
 	opts SyncOptions,
 ) (SourcePlan, error) {
+	enumerateStage, err := enumerateSoundCloudStage(ctx, soundCloudEnumerateStageInput{
+		Source: source,
+		Limit:  opts.PlanLimit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return p.BuildWithTracks(ctx, cfg, source, opts, enumerateStage.Tracks)
+}
+
+func (p *SCDLPlanProvider) BuildWithTracks(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	opts SyncOptions,
+	tracks []SoundCloudRemoteTrack,
+) (SourcePlan, error) {
 	if source.Type != config.SourceTypeSoundCloud {
 		return nil, fmt.Errorf("scdl plan provider only supports soundcloud sources")
 	}
-	if source.Adapter.Kind != "scdl" {
-		return nil, fmt.Errorf("scdl plan provider only supports adapter.kind=scdl")
+	if source.Adapter.Kind != "scdl" && source.Adapter.Kind != "scdl-freedl" {
+		return nil, fmt.Errorf("scdl plan provider only supports adapter.kind=scdl or scdl-freedl")
 	}
 
 	stateFilePath, err := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
@@ -47,16 +64,6 @@ func (p *SCDLPlanProvider) Build(
 	sourceForExec.StateFile = stateFilePath
 	breakOnExisting := mode == SoundCloudModeBreak
 	sourceForExec.Sync.BreakOnExisting = &breakOnExisting
-
-	enumerateStage, err := enumerateSoundCloudStage(ctx, soundCloudEnumerateStageInput{
-		Source: source,
-		Limit:  opts.PlanLimit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	tracks := enumerateStage.Tracks
-
 	targetDir, err := config.ExpandPath(source.TargetDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve target_dir: %w", err)
@@ -109,6 +116,7 @@ func (p *SCDLPlanProvider) Build(
 		rows = append(rows, PlanRow{
 			Index:             i + 1,
 			RemoteID:          track.ID,
+			RemoteURL:         track.URL,
 			Title:             track.Title,
 			Status:            status,
 			Toggleable:        toggleable,

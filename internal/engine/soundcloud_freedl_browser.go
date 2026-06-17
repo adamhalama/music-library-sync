@@ -78,7 +78,7 @@ func browserOpenCommand(rawURL string) (string, []string, error) {
 		if browserApp != "" {
 			return "open", []string{"-a", browserApp, trimmed}, nil
 		}
-		return "open", []string{trimmed}, nil
+		return "open", []string{"-a", "Helium", trimmed}, nil
 	case "linux":
 		return "xdg-open", []string{trimmed}, nil
 	case "windows":
