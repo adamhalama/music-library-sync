@@ -242,6 +242,49 @@ func TestTUIFreeDLPlanningRowMergePreservesSelectionOverride(t *testing.T) {
 	}
 }
 
+func TestTUIFreeDLPlanningViewShowsLockedWaitingState(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePlanning
+	m.planningStages = map[string]string{"playlist": "running: enumerating"}
+	m.plan = &freedl.CapturePlan{Rows: []freedl.PlanRow{{
+		Index:    1,
+		RemoteID: "track-1",
+		Title:    "Waiting Track",
+	}}}
+
+	view := m.shellBody(tuiShellLayout{Width: 120, Height: 30})
+
+	for _, want := range []string{"download locked", "checking", "Waiting Track"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected planning view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTUIFreeDLPromotionLoadingDoesNotShowNoMatchMessage(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePromote
+
+	lines := strings.Join(m.promotionRowLines(120), "\n")
+	if strings.Contains(lines, "No captured files matched the library.") {
+		t.Fatalf("loading promotion view should not show final no-match message: %s", lines)
+	}
+	if !strings.Contains(lines, "Matching captured downloads") {
+		t.Fatalf("expected loading promotion view to explain matching state, got: %s", lines)
+	}
+}
+
+func TestTUIFreeDLPromotionCompletedEmptyPlanShowsNoMatchMessage(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePromote
+	m.promoPlan = &freedl.PromotionPlan{}
+
+	lines := strings.Join(m.promotionRowLines(120), "\n")
+	if !strings.Contains(lines, "No captured files matched the library.") {
+		t.Fatalf("completed empty promotion plan should show no-match message, got: %s", lines)
+	}
+}
+
 func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
 

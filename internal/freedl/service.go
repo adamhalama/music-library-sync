@@ -131,6 +131,11 @@ type mediaFile struct {
 	Quality   Quality
 }
 
+type captureStateEntry struct {
+	TrackID string
+	Path    string
+}
+
 func (s Service) BuildCapturePlan(ctx context.Context, main config.Config, job Job) (CapturePlan, error) {
 	now := s.now()
 	runID := now.Format("20060102-150405")
@@ -230,7 +235,9 @@ func (s Service) BuildPromotionPlan(ctx context.Context, job Job, runID string, 
 	if err != nil {
 		return PromotionPlan{}, fmt.Errorf("scan library: %w", err)
 	}
-	assignments := buildAssignments(libraryFiles, freeFiles, job.MinMatchScore, job.AmbiguityGap)
+	capturePlan, _ := readCapturePlan(filepath.Join(logDir, runID, "capture-plan.json"))
+	captureState, _ := readCaptureState(filepath.Join(logDir, runID, "capture.sync.scdl"))
+	assignments := buildPromotionAssignments(libraryFiles, freeFiles, capturePlan, captureState, filepath.Join(bufferDir, runID, "downloads"), job.MinMatchScore, job.AmbiguityGap)
 	rows := make([]PromotionRow, 0, len(assignments))
 	for idx, assignment := range assignments {
 		action, reason := decidePromotion(targetFormat, assignment.free, assignment.free.Quality, assignment.library.Ext)
@@ -553,6 +560,143 @@ func buildAssignments(libraryFiles, freeFiles []mediaFile, minScore, ambiguityGa
 		return candidates[i].library.Rel < candidates[j].library.Rel
 	})
 	return candidates
+}
+
+func buildPromotionAssignments(libraryFiles, freeFiles []mediaFile, plan CapturePlan, state []captureStateEntry, downloadsRoot string, minScore, ambiguityGap int) []assignment {
+	assignments, usedLibrary, usedFree := buildIdentityAssignments(libraryFiles, freeFiles, plan, state, downloadsRoot)
+	if len(usedLibrary) == 0 && len(usedFree) == 0 {
+		return buildAssignments(libraryFiles, freeFiles, minScore, ambiguityGap)
+	}
+
+	fallbackLibrary := make([]mediaFile, 0, len(libraryFiles))
+	for _, library := range libraryFiles {
+		if _, ok := usedLibrary[cleanPath(library.Path)]; !ok {
+			fallbackLibrary = append(fallbackLibrary, library)
+		}
+	}
+	fallbackFree := make([]mediaFile, 0, len(freeFiles))
+	for _, free := range freeFiles {
+		if _, ok := usedFree[cleanPath(free.Path)]; !ok {
+			fallbackFree = append(fallbackFree, free)
+		}
+	}
+	assignments = append(assignments, buildAssignments(fallbackLibrary, fallbackFree, minScore, ambiguityGap)...)
+	sort.SliceStable(assignments, func(i, j int) bool {
+		return assignments[i].library.Rel < assignments[j].library.Rel
+	})
+	return assignments
+}
+
+func buildIdentityAssignments(libraryFiles, freeFiles []mediaFile, plan CapturePlan, state []captureStateEntry, downloadsRoot string) ([]assignment, map[string]struct{}, map[string]struct{}) {
+	usedLibrary := map[string]struct{}{}
+	usedFree := map[string]struct{}{}
+	if len(plan.Rows) == 0 || len(state) == 0 {
+		return nil, usedLibrary, usedFree
+	}
+
+	libraryByPath := map[string]mediaFile{}
+	for _, library := range libraryFiles {
+		libraryByPath[cleanPath(library.Path)] = library
+	}
+	freeByPath := map[string]mediaFile{}
+	for _, free := range freeFiles {
+		freeByPath[cleanPath(free.Path)] = free
+	}
+
+	localByTrackID := map[string]string{}
+	for _, row := range plan.Rows {
+		trackID := strings.TrimSpace(row.RemoteID)
+		localPath := strings.TrimSpace(row.LocalPath)
+		if trackID != "" && localPath != "" {
+			localByTrackID[trackID] = cleanPath(localPath)
+		}
+	}
+
+	assignments := make([]assignment, 0, len(state))
+	for _, entry := range state {
+		libraryPath := localByTrackID[strings.TrimSpace(entry.TrackID)]
+		if libraryPath == "" {
+			continue
+		}
+		library, ok := libraryByPath[libraryPath]
+		if !ok {
+			continue
+		}
+		freePath := resolveCaptureDownloadPath(downloadsRoot, entry.Path)
+		free, ok := freeByPath[freePath]
+		if !ok {
+			continue
+		}
+		if _, ok := usedLibrary[libraryPath]; ok {
+			continue
+		}
+		if _, ok := usedFree[freePath]; ok {
+			continue
+		}
+		assignments = append(assignments, assignment{library: library, free: free, score: 100})
+		usedLibrary[libraryPath] = struct{}{}
+		usedFree[freePath] = struct{}{}
+	}
+	sort.SliceStable(assignments, func(i, j int) bool {
+		return assignments[i].library.Rel < assignments[j].library.Rel
+	})
+	return assignments, usedLibrary, usedFree
+}
+
+func readCapturePlan(path string) (CapturePlan, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return CapturePlan{}, err
+	}
+	var plan CapturePlan
+	if err := json.Unmarshal(payload, &plan); err != nil {
+		return CapturePlan{}, err
+	}
+	return plan, nil
+}
+
+func readCaptureState(path string) ([]captureStateEntry, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	entries := []captureStateEntry{}
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "soundcloud" {
+			continue
+		}
+		entries = append(entries, captureStateEntry{
+			TrackID: fields[1],
+			Path:    strings.Join(fields[2:], " "),
+		})
+	}
+	return entries, nil
+}
+
+func resolveCaptureDownloadPath(downloadsRoot string, statePath string) string {
+	statePath = strings.TrimSpace(statePath)
+	if statePath == "" {
+		return ""
+	}
+	if filepath.IsAbs(statePath) {
+		return cleanPath(statePath)
+	}
+	return cleanPath(filepath.Join(downloadsRoot, filepath.FromSlash(statePath)))
+}
+
+func cleanPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
 }
 
 func scoreMatch(library, free mediaFile) int {

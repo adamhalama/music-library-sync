@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/freedl"
 )
 
@@ -361,15 +363,15 @@ func (m tuiFreeDLModel) planSummaryLines() []string {
 
 func (m tuiFreeDLModel) planningSummaryLines() []string {
 	lines := []string{
-		"Rows appear as SoundCloud enumeration returns them.",
-		"Capture unlocks after state, local quality, and Free DL probes finish.",
+		planPromptChip("Planning", "info") + "  " + planPromptChip("download locked", "warning") + "  waiting for required checks",
+		"Rows appear as SoundCloud enumeration returns them; capture unlocks when all checks finish.",
 	}
 	for _, stage := range []string{"playlist", "state_archive", "local_quality", "free_dl"} {
 		status := m.planningStages[stage]
 		if status == "" {
 			status = "pending"
 		}
-		lines = append(lines, fmt.Sprintf("%s: %s", stage, status))
+		lines = append(lines, freeDLStageLine(stage, status))
 	}
 	if m.plan != nil {
 		lines = append(lines, fmt.Sprintf("Rows visible: %d", len(m.plan.Rows)))
@@ -382,25 +384,118 @@ func (m tuiFreeDLModel) planRowLines(width int) []string {
 	if m.plan == nil || len(m.plan.Rows) == 0 {
 		return []string{"Waiting for SoundCloud rows."}
 	}
-	lines := []string{"SEL  #   LOCAL QUALITY        FREE DL             TITLE"}
+	return strings.Split(m.renderFreeDLPlanTable(width), "\n")
+}
+
+func (m tuiFreeDLModel) renderFreeDLPlanTable(width int) string {
+	if width < 56 {
+		width = 56
+	}
+	selectWidth := 4
+	indexWidth := 4
+	statusWidth := 18
+	qualityWidth := 18
+	idWidth := 12
+	gapWidth := 10
+	titleWidth := width - selectWidth - indexWidth - statusWidth - qualityWidth - idWidth - gapWidth
+	if titleWidth < 16 {
+		titleWidth = 16
+	}
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	header := strings.Join([]string{
+		headerStyle.Width(selectWidth).Render("SEL"),
+		headerStyle.Width(indexWidth).Render("#"),
+		headerStyle.Width(statusWidth).Render("FREE DL"),
+		headerStyle.Width(qualityWidth).Render("LOCAL"),
+		headerStyle.Width(titleWidth).Render("TRACK"),
+		headerStyle.Width(idWidth).Render("ID"),
+	}, "  ")
+	header = lipgloss.NewStyle().Background(lipgloss.Color("237")).Padding(0, 1).Render(header)
+	lines := []string{
+		header,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render(strings.Repeat("─", maxInt(16, width))),
+	}
 	start, end := visibleWindow(m.rowCursor, len(m.plan.Rows), 14)
 	for idx := start; idx < end; idx++ {
-		row := m.plan.Rows[idx]
-		cursor := " "
-		if idx == m.rowCursor {
-			cursor = ">"
-		}
-		sel := "[ ]"
-		if row.Selected {
-			sel = "[x]"
-		}
-		if !row.Selectable {
-			sel = " - "
-		}
-		line := fmt.Sprintf("%s%s %-3d %-20s %-19s %s", cursor, sel, row.Index, truncateForWidth(qualityLabel(row.LocalQuality), 20), truncateForWidth(freeDLStatusLabel(row), 19), row.Title)
-		lines = append(lines, truncateForWidth(line, width-4))
+		lines = append(lines, renderFreeDLPlanRow(m.plan.Rows[idx], idx == m.rowCursor, selectWidth, indexWidth, statusWidth, qualityWidth, titleWidth, idWidth))
 	}
-	return lines
+	return strings.Join(lines, "\n")
+}
+
+func renderFreeDLPlanRow(row freedl.PlanRow, isCursor bool, selectWidth, indexWidth, statusWidth, qualityWidth, titleWidth, idWidth int) string {
+	cursorPrefix := " "
+	if isCursor {
+		cursorPrefix = ">"
+	}
+	selectLabel := "[-]"
+	selectTone := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	if row.Selectable {
+		selectLabel = "[ ]"
+		selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		if row.Selected {
+			selectLabel = "[x]"
+			selectTone = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
+		}
+	}
+	statusLabel, statusStyle := freeDLPlanStatusChip(row)
+	qualityStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	if row.LocalQuality.Codec == "" && row.LocalQuality.Error == "" {
+		qualityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	}
+	title := strings.TrimSpace(row.Title)
+	if title == "" {
+		title = "(untitled)"
+	}
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	if !row.Selectable && row.FreeDLProbe.Status != engine.SoundCloudFreeDLAvailable {
+		titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	}
+	idStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	line := strings.Join([]string{
+		selectTone.Width(selectWidth).Render(cursorPrefix + selectLabel),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Width(indexWidth).Render(fmt.Sprintf("%d", row.Index)),
+		statusStyle.Width(statusWidth).Render(statusLabel),
+		qualityStyle.Width(qualityWidth).Render(ansi.Truncate(qualityLabel(row.LocalQuality), qualityWidth, "")),
+		titleStyle.Width(titleWidth).Render(ansi.Truncate(title, titleWidth, "")),
+		idStyle.Width(idWidth).Render(ansi.Truncate(row.RemoteID, idWidth, "")),
+	}, "  ")
+	if isCursor {
+		return lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(line)
+	}
+	return line
+}
+
+func freeDLPlanStatusChip(row freedl.PlanRow) (string, lipgloss.Style) {
+	switch row.FreeDLProbe.Status {
+	case engine.SoundCloudFreeDLAvailable:
+		if row.Selectable {
+			return " available ", lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Background(lipgloss.Color("22")).Bold(true)
+		}
+		return " waiting ", lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Background(lipgloss.Color("58")).Bold(true)
+	case engine.SoundCloudFreeDLNoLink:
+		return " no-free-dl ", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("238"))
+	case engine.SoundCloudFreeDLUnsupportedHost:
+		return " unsupported ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
+	case engine.SoundCloudFreeDLLookupFailed:
+		return " lookup-failed ", lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Background(lipgloss.Color("52")).Bold(true)
+	default:
+		return " checking ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
+	}
+}
+
+func freeDLStageLine(stage, status string) string {
+	tone := "muted"
+	switch {
+	case strings.HasPrefix(status, "running"):
+		tone = "info"
+	case strings.HasPrefix(status, "done"):
+		tone = "success"
+	case strings.HasPrefix(status, "failed"):
+		tone = "danger"
+	case strings.HasPrefix(status, "pending"):
+		tone = "warning"
+	}
+	return planPromptChip(stage, tone) + "  " + status
 }
 
 func (m tuiFreeDLModel) promotionSummaryLines() []string {
@@ -417,7 +512,10 @@ func (m tuiFreeDLModel) promotionSummaryLines() []string {
 }
 
 func (m tuiFreeDLModel) promotionRowLines(width int) []string {
-	if m.promoPlan == nil || len(m.promoPlan.Rows) == 0 {
+	if m.promoPlan == nil {
+		return []string{"Matching captured downloads to selected library tracks."}
+	}
+	if len(m.promoPlan.Rows) == 0 {
 		return []string{"No captured files matched the library."}
 	}
 	lines := []string{"SEL  #   QUALITY CHANGE                  ACTION       TITLE"}
