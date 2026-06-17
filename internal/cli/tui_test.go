@@ -261,6 +261,32 @@ func TestTUIFreeDLPlanningViewShowsLockedWaitingState(t *testing.T) {
 	}
 }
 
+func TestTUIFreeDLLocalQualityLabelShowsProgressAndCache(t *testing.T) {
+	tests := []struct {
+		name string
+		row  freedl.PlanRow
+		want string
+	}{
+		{name: "matching", row: freedl.PlanRow{LocalState: freedl.LocalLookupMatching}, want: "matching..."},
+		{name: "not found", row: freedl.PlanRow{LocalState: freedl.LocalLookupNotFound}, want: "not found"},
+		{
+			name: "cached quality",
+			row: freedl.PlanRow{
+				LocalState:   freedl.LocalLookupCached,
+				LocalQuality: freedl.Quality{Codec: "aac", EffectiveBitrate: 256000},
+			},
+			want: "aac 256k · cached",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := localQualityLabel(test.row); got != test.want {
+				t.Fatalf("local quality label: got %q want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestTUIFreeDLPromotionLoadingDoesNotShowNoMatchMessage(t *testing.T) {
 	m := newTUIFreeDLModel(&AppContext{})
 	m.phase = tuiFreeDLPhasePromote

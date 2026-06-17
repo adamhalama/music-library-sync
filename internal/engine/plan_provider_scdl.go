@@ -47,6 +47,30 @@ func (p *SCDLPlanProvider) BuildWithTracks(
 	opts SyncOptions,
 	tracks []SoundCloudRemoteTrack,
 ) (SourcePlan, error) {
+	return p.buildWithTracks(ctx, cfg, source, opts, tracks, nil)
+}
+
+// BuildWithTracksAndLocalIndex reuses an already-discovered local filename
+// index so callers that need richer local metadata do not walk the library twice.
+func (p *SCDLPlanProvider) BuildWithTracksAndLocalIndex(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	opts SyncOptions,
+	tracks []SoundCloudRemoteTrack,
+	localIndex map[string]int,
+) (SourcePlan, error) {
+	return p.buildWithTracks(ctx, cfg, source, opts, tracks, localIndex)
+}
+
+func (p *SCDLPlanProvider) buildWithTracks(
+	ctx context.Context,
+	cfg config.Config,
+	source config.Source,
+	opts SyncOptions,
+	tracks []SoundCloudRemoteTrack,
+	suppliedLocalIndex map[string]int,
+) (SourcePlan, error) {
 	if source.Type != config.SourceTypeSoundCloud {
 		return nil, fmt.Errorf("scdl plan provider only supports soundcloud sources")
 	}
@@ -82,24 +106,30 @@ func (p *SCDLPlanProvider) BuildWithTracks(
 		return nil, fmt.Errorf("parse archive file: %w", err)
 	}
 
-	cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
 	needsLocalIndex := needsSoundCloudLocalIndex(tracks, stateStage.State, archiveStage.KnownIDs, targetDir)
-	localIndexStage, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
-		SourceID:  source.ID,
-		TargetDir: targetDir,
-		StateDir:  cfg.Defaults.StateDir,
-		NeedScan:  needsLocalIndex,
-		UseCache:  cacheEnabled,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build local index: %w", err)
+	localIndex := suppliedLocalIndex
+	if localIndex == nil {
+		cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
+		localIndexStage, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
+			SourceID:  source.ID,
+			TargetDir: targetDir,
+			StateDir:  cfg.Defaults.StateDir,
+			NeedScan:  needsLocalIndex,
+			UseCache:  cacheEnabled,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build local index: %w", err)
+		}
+		localIndex = localIndexStage.Index
+	} else if !needsLocalIndex {
+		localIndex = map[string]int{}
 	}
 
 	planStage := planSoundCloudPreflightStage(soundCloudPlanStageInput{
 		RemoteTracks:   tracks,
 		State:          stateStage.State,
 		ArchiveKnownID: archiveStage.KnownIDs,
-		LocalIndex:     localIndexStage.Index,
+		LocalIndex:     localIndex,
 		TargetDir:      targetDir,
 		Mode:           mode,
 	})

@@ -439,8 +439,10 @@ func renderFreeDLPlanRow(row freedl.PlanRow, isCursor bool, selectWidth, indexWi
 	}
 	statusLabel, statusStyle := freeDLPlanStatusChip(row)
 	qualityStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	if row.LocalQuality.Codec == "" && row.LocalQuality.Error == "" {
+	if row.LocalState == freedl.LocalLookupPending || row.LocalState == freedl.LocalLookupMatching || row.LocalState == freedl.LocalLookupProbing {
 		qualityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	} else if row.LocalState == freedl.LocalLookupNotFound || row.LocalState == freedl.LocalLookupError {
+		qualityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	}
 	title := strings.TrimSpace(row.Title)
 	if title == "" {
@@ -455,7 +457,7 @@ func renderFreeDLPlanRow(row freedl.PlanRow, isCursor bool, selectWidth, indexWi
 		selectTone.Width(selectWidth).Render(cursorPrefix + selectLabel),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Width(indexWidth).Render(fmt.Sprintf("%d", row.Index)),
 		statusStyle.Width(statusWidth).Render(statusLabel),
-		qualityStyle.Width(qualityWidth).Render(ansi.Truncate(qualityLabel(row.LocalQuality), qualityWidth, "")),
+		qualityStyle.Width(qualityWidth).Render(ansi.Truncate(localQualityLabel(row), qualityWidth, "")),
 		titleStyle.Width(titleWidth).Render(ansi.Truncate(title, titleWidth, "")),
 		idStyle.Width(idWidth).Render(ansi.Truncate(row.RemoteID, idWidth, "")),
 	}, "  ")
@@ -463,6 +465,28 @@ func renderFreeDLPlanRow(row freedl.PlanRow, isCursor bool, selectWidth, indexWi
 		return lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(line)
 	}
 	return line
+}
+
+func localQualityLabel(row freedl.PlanRow) string {
+	switch row.LocalState {
+	case freedl.LocalLookupPending:
+		return "waiting"
+	case freedl.LocalLookupMatching:
+		if row.LocalQuality.Codec == "" && row.LocalQuality.Error == "" {
+			return "matching..."
+		}
+	case freedl.LocalLookupProbing:
+		return "probing..."
+	case freedl.LocalLookupNotFound:
+		return "not found"
+	case freedl.LocalLookupError:
+		return "probe failed"
+	}
+	label := qualityLabel(row.LocalQuality)
+	if row.LocalState == freedl.LocalLookupCached {
+		return label + " · cached"
+	}
+	return label
 }
 
 func freeDLPlanStatusChip(row freedl.PlanRow) (string, lipgloss.Style) {

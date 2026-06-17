@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
@@ -13,9 +14,11 @@ import (
 func TestBuildCapturePlanProgressEmitsRowsBeforeDone(t *testing.T) {
 	origStream := streamSoundCloudTracksFn
 	origProbe := probeSoundCloudFreeDLFn
+	origLocalProbe := probeLocalMediaFn
 	t.Cleanup(func() {
 		streamSoundCloudTracksFn = origStream
 		probeSoundCloudFreeDLFn = origProbe
+		probeLocalMediaFn = origLocalProbe
 	})
 
 	streamSoundCloudTracksFn = func(ctx context.Context, source config.Source, limit int, onTrack func(engine.SoundCloudRemoteTrack) error) ([]engine.SoundCloudRemoteTrack, error) {
@@ -43,6 +46,19 @@ func TestBuildCapturePlanProgressEmitsRowsBeforeDone(t *testing.T) {
 	if err := os.MkdirAll(libraryDir, 0o755); err != nil {
 		t.Fatalf("mkdir library: %v", err)
 	}
+	localPath := filepath.Join(libraryDir, "First.m4a")
+	if err := os.WriteFile(localPath, []byte("audio"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+	probeLocalMediaFn = func(_ context.Context, root string, candidate localMediaCandidate, _ time.Duration) (mediaFile, localMediaRecord) {
+		record := localMediaRecord{
+			Size:      candidate.Size,
+			ModTimeNS: candidate.ModTimeNS,
+			Title:     "First",
+			Quality:   Quality{Codec: "aac", EffectiveBitrate: 192000},
+		}
+		return mediaFileFromRecord(root, candidate, record), record
+	}
 	main := config.DefaultConfig()
 	main.Defaults.StateDir = filepath.Join(dir, "state")
 	main.Defaults.ArchiveFile = "archive.txt"
@@ -65,12 +81,16 @@ func TestBuildCapturePlanProgressEmitsRowsBeforeDone(t *testing.T) {
 
 	events := Service{}.BuildCapturePlanProgress(context.Background(), main, job)
 	rowBeforeDone := false
+	localQualityBeforeDone := false
 	var final CapturePlan
 	for event := range events {
 		switch event.Kind {
 		case CapturePlanEventRow:
 			if final.RunID == "" {
 				rowBeforeDone = true
+				if event.Row.RemoteID == "111" && event.Row.LocalQuality.Codec == "aac" {
+					localQualityBeforeDone = true
+				}
 			}
 		case CapturePlanEventDone:
 			final = event.Plan
@@ -81,6 +101,9 @@ func TestBuildCapturePlanProgressEmitsRowsBeforeDone(t *testing.T) {
 
 	if !rowBeforeDone {
 		t.Fatalf("expected at least one row event before final plan")
+	}
+	if !localQualityBeforeDone {
+		t.Fatalf("expected local quality to populate before final plan")
 	}
 	if len(final.Rows) != 2 {
 		t.Fatalf("expected 2 final rows, got %d", len(final.Rows))

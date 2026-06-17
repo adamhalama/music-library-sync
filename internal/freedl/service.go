@@ -42,6 +42,18 @@ type Quality struct {
 	Error            string `json:"error,omitempty"`
 }
 
+type LocalLookupState string
+
+const (
+	LocalLookupPending  LocalLookupState = "pending"
+	LocalLookupMatching LocalLookupState = "matching"
+	LocalLookupCached   LocalLookupState = "cached"
+	LocalLookupProbing  LocalLookupState = "probing"
+	LocalLookupMatched  LocalLookupState = "matched"
+	LocalLookupNotFound LocalLookupState = "not_found"
+	LocalLookupError    LocalLookupState = "error"
+)
+
 type PlanRow struct {
 	Index        int                          `json:"index"`
 	RemoteID     string                       `json:"remote_id"`
@@ -49,6 +61,7 @@ type PlanRow struct {
 	Title        string                       `json:"title"`
 	LocalPath    string                       `json:"local_path,omitempty"`
 	LocalQuality Quality                      `json:"local_quality"`
+	LocalState   LocalLookupState             `json:"local_state,omitempty"`
 	FreeDLProbe  engine.SoundCloudFreeDLProbe `json:"free_dl_probe"`
 	Selectable   bool                         `json:"selectable"`
 	Selected     bool                         `json:"selected"`
@@ -129,6 +142,7 @@ type mediaFile struct {
 	URLKey    string
 	Tokens    []string
 	Quality   Quality
+	Cached    bool
 }
 
 type captureStateEntry struct {
@@ -137,70 +151,21 @@ type captureStateEntry struct {
 }
 
 func (s Service) BuildCapturePlan(ctx context.Context, main config.Config, job Job) (CapturePlan, error) {
-	now := s.now()
-	runID := now.Format("20060102-150405")
-	libraryDir, err := config.ExpandPath(job.LibraryDir)
-	if err != nil {
-		return CapturePlan{}, fmt.Errorf("resolve library_dir: %w", err)
+	for event := range s.BuildCapturePlanProgress(ctx, main, job) {
+		switch event.Kind {
+		case CapturePlanEventDone:
+			return event.Plan, nil
+		case CapturePlanEventFailed:
+			if event.Err != nil {
+				return CapturePlan{}, event.Err
+			}
+			return CapturePlan{}, fmt.Errorf("capture planning failed")
+		}
 	}
-	bufferRoot, err := config.ExpandPath(job.BufferDir)
-	if err != nil {
-		return CapturePlan{}, fmt.Errorf("resolve buffer_dir: %w", err)
-	}
-	logDir, err := config.ExpandPath(job.LogDir)
-	if err != nil {
-		return CapturePlan{}, fmt.Errorf("resolve log_dir: %w", err)
-	}
-
-	source := sourceForJob(job, libraryDir)
-	provider := engine.NewSCDLPlanProvider()
-	sourcePlan, err := provider.Build(ctx, main, source, engine.SyncOptions{PlanLimit: job.PlanLimit})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return CapturePlan{}, err
 	}
-	localFiles, _ := collectMediaFiles(ctx, libraryDir, 2*time.Second, true)
-	localByTitle := indexMediaByTitle(localFiles)
-
-	rows := make([]PlanRow, 0, len(sourcePlan.Rows()))
-	for _, row := range sourcePlan.Rows() {
-		local := bestLocalForTitle(row.Title, localByTitle)
-		quality := Quality{}
-		localPath := ""
-		if local != nil {
-			quality = local.Quality
-			localPath = local.Path
-		}
-		probe := engine.ProbeSoundCloudFreeDL(ctx, row)
-		selectable := row.Toggleable && probe.Status == engine.SoundCloudFreeDLAvailable
-		skipReason := ""
-		if !row.Toggleable {
-			skipReason = "already-present"
-		} else if probe.Status != engine.SoundCloudFreeDLAvailable {
-			skipReason = string(probe.Status)
-		}
-		rows = append(rows, PlanRow{
-			Index:        row.Index,
-			RemoteID:     row.RemoteID,
-			RemoteURL:    row.RemoteURL,
-			Title:        row.Title,
-			LocalPath:    localPath,
-			LocalQuality: quality,
-			FreeDLProbe:  probe,
-			Selectable:   selectable,
-			Selected:     selectable,
-			SkipReason:   skipReason,
-		})
-	}
-	plan := CapturePlan{
-		RunID:      runID,
-		CreatedAt:  now,
-		Job:        job,
-		Rows:       rows,
-		BufferRoot: filepath.Join(bufferRoot, runID),
-		LogDir:     filepath.Join(logDir, runID),
-	}
-	_ = WriteJSON(filepath.Join(plan.LogDir, "capture-plan.json"), plan)
-	return plan, nil
+	return CapturePlan{}, fmt.Errorf("capture planning stopped before completion")
 }
 
 func (s Service) BuildPromotionPlan(ctx context.Context, job Job, runID string, targetFormat string) (PromotionPlan, error) {

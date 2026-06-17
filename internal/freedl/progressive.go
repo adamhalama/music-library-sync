@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +67,16 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 	stage := func(name, status, detail string) bool {
 		return send(CapturePlanEvent{Kind: CapturePlanEventStage, Stage: name, Status: status, Detail: detail})
 	}
+	stageProgress := func(name, status, detail string, current, total int) bool {
+		return send(CapturePlanEvent{
+			Kind:    CapturePlanEventStage,
+			Stage:   name,
+			Status:  status,
+			Detail:  detail,
+			Current: current,
+			Total:   total,
+		})
+	}
 	fail := func(err error) {
 		_ = send(CapturePlanEvent{Kind: CapturePlanEventFailed, Err: err})
 		cancel()
@@ -107,7 +118,31 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 	rowByID := map[string]int{}
 	planRowByID := map[string]engine.PlanRow{}
 	localByTitle := map[string][]mediaFile{}
+	localByPath := map[string]mediaFile{}
+	localPathByRemoteID := map[string]string{}
 	localReady := false
+	localTitleCounts := map[string]int{}
+	var localErr error
+	localProbeReady := make(chan struct{})
+	var localProbeReadyOnce sync.Once
+	releaseLocalProbes := func() {
+		localProbeReadyOnce.Do(func() { close(localProbeReady) })
+	}
+	defer releaseLocalProbes()
+	if statePath, resolveErr := config.ResolveStateFile(main.Defaults.StateDir, job.StateFile); resolveErr == nil {
+		if entries, readErr := readCaptureState(statePath); readErr == nil {
+			for _, entry := range entries {
+				path := strings.TrimSpace(entry.Path)
+				if path == "" {
+					continue
+				}
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(libraryDir, filepath.FromSlash(path))
+				}
+				localPathByRemoteID[strings.TrimSpace(entry.TrackID)] = cleanPath(path)
+			}
+		}
+	}
 
 	emitRow := func(row PlanRow) bool {
 		return send(CapturePlanEvent{Kind: CapturePlanEventRow, Row: row})
@@ -144,15 +179,46 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 		return out
 	}
 	applyLocalIfReady := func(row *PlanRow) {
-		if !localReady {
+		if row.LocalPath != "" {
+			if row.LocalState == "" {
+				if row.LocalQuality.Error != "" {
+					row.LocalState = LocalLookupError
+				} else {
+					row.LocalState = LocalLookupMatched
+				}
+			}
 			return
+		}
+		if path := localPathByRemoteID[row.RemoteID]; path != "" {
+			if local, ok := localByPath[path]; ok {
+				row.LocalPath = local.Path
+				row.LocalQuality = local.Quality
+				if local.Quality.Error != "" {
+					row.LocalState = LocalLookupError
+				} else if local.Cached {
+					row.LocalState = LocalLookupCached
+				} else {
+					row.LocalState = LocalLookupMatched
+				}
+				return
+			}
 		}
 		local := bestLocalForTitle(row.Title, localByTitle)
 		if local == nil {
+			if localReady {
+				row.LocalState = LocalLookupNotFound
+			}
 			return
 		}
 		row.LocalPath = local.Path
 		row.LocalQuality = local.Quality
+		if local.Quality.Error != "" {
+			row.LocalState = LocalLookupError
+		} else if local.Cached {
+			row.LocalState = LocalLookupCached
+		} else if localReady {
+			row.LocalState = LocalLookupMatched
+		}
 	}
 	recomputeSelectable := func(row *PlanRow, planRow engine.PlanRow) {
 		selectable := planRow.Toggleable && row.FreeDLProbe.Status == engine.SoundCloudFreeDLAvailable
@@ -173,21 +239,119 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 	localDone := make(chan struct{})
 	go func() {
 		defer close(localDone)
-		if !stage("local_quality", "running", "scanning library and probing audio quality") {
+		if !stage("local_quality", "running", "indexing local media") {
 			return
 		}
-		files, scanErr := collectMediaFiles(ctx, libraryDir, capturePlanQualityTimeout, true)
+		files, titleCounts, scanErr := scanLocalMediaCached(
+			ctx,
+			libraryDir,
+			localMediaCachePath(logDir),
+			capturePlanQualityTimeout,
+			localProbeReady,
+			func(candidate localMediaCandidate) bool {
+				candidateKey := normalizeKey(strings.TrimSuffix(filepath.Base(candidate.Path), filepath.Ext(candidate.Path)))
+				candidatePath := cleanPath(candidate.Path)
+				mu.Lock()
+				defer mu.Unlock()
+				for _, row := range rows {
+					if localPathByRemoteID[row.RemoteID] == candidatePath || normalizeKey(row.Title) == candidateKey {
+						return true
+					}
+				}
+				return false
+			},
+			func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				if len(rows) == 0 {
+					return false
+				}
+				for _, row := range rows {
+					if row.LocalPath == "" {
+						return true
+					}
+				}
+				return false
+			},
+			func(candidate localMediaCandidate) {
+				candidateKey := normalizeKey(strings.TrimSuffix(filepath.Base(candidate.Path), filepath.Ext(candidate.Path)))
+				candidatePath := cleanPath(candidate.Path)
+				mu.Lock()
+				updated := make([]PlanRow, 0, len(rows))
+				for idx := range rows {
+					statePathMatch := localPathByRemoteID[rows[idx].RemoteID] == candidatePath
+					titleMatch := normalizeKey(rows[idx].Title) == candidateKey
+					if rows[idx].LocalPath == "" && (statePathMatch || titleMatch) {
+						rows[idx].LocalState = LocalLookupProbing
+						updated = append(updated, rows[idx])
+					}
+				}
+				mu.Unlock()
+				for _, row := range updated {
+					if !emitRow(row) {
+						return
+					}
+				}
+			},
+			func(progress localMediaScanProgress) {
+				detail := fmt.Sprintf("indexed %d files", progress.Discovered)
+				if progress.Cached > 0 || progress.Probed > 0 {
+					detail = fmt.Sprintf("cache %d/%d · probed %d/%d", progress.Cached, progress.Total, progress.Probed, progress.Total-progress.Cached)
+				}
+				_ = stageProgress("local_quality", "running", detail, progress.Cached+progress.Probed, progress.Total)
+			},
+			func(result localMediaResult) {
+				result.File.Cached = result.Cached
+				mu.Lock()
+				localByPath[cleanPath(result.File.Path)] = result.File
+				for _, key := range []string{result.File.TitleKey, result.File.Key} {
+					if key != "" {
+						localByTitle[key] = append(localByTitle[key], result.File)
+					}
+				}
+				updated := make([]PlanRow, 0, len(rows))
+				for idx := range rows {
+					statePathMatch := localPathByRemoteID[rows[idx].RemoteID] == cleanPath(result.File.Path)
+					titleMatch := normalizeKey(rows[idx].Title) == result.File.Key || normalizeKey(rows[idx].Title) == result.File.TitleKey
+					if rows[idx].LocalPath != "" || !statePathMatch && !titleMatch {
+						continue
+					}
+					rows[idx].LocalPath = result.File.Path
+					rows[idx].LocalQuality = result.File.Quality
+					switch {
+					case result.File.Quality.Error != "":
+						rows[idx].LocalState = LocalLookupError
+					case result.Cached:
+						rows[idx].LocalState = LocalLookupCached
+					default:
+						rows[idx].LocalState = LocalLookupMatched
+					}
+					updated = append(updated, rows[idx])
+				}
+				mu.Unlock()
+				for _, row := range updated {
+					if !emitRow(row) {
+						return
+					}
+				}
+			},
+		)
 		if scanErr != nil {
-			_ = stage("local_quality", "failed", scanErr.Error())
+			localErr = scanErr
+			if !isContextError(scanErr) {
+				_ = stage("local_quality", "failed", scanErr.Error())
+			}
 			return
 		}
-		index := indexMediaByTitle(files)
 		mu.Lock()
-		localByTitle = index
+		localTitleCounts = titleCounts
 		localReady = true
 		updated := make([]PlanRow, 0, len(rows))
 		for idx := range rows {
 			applyLocalIfReady(&rows[idx])
+			if rows[idx].LocalPath == "" {
+				rows[idx].LocalState = LocalLookupNotFound
+			}
 			updated = append(updated, rows[idx])
 		}
 		mu.Unlock()
@@ -242,10 +406,11 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 	}
 	tracks, err := streamSoundCloudTracksFn(ctx, source, job.PlanLimit, func(track engine.SoundCloudRemoteTrack) error {
 		row := PlanRow{
-			Index:     len(rowSnapshot()) + 1,
-			RemoteID:  track.ID,
-			RemoteURL: track.URL,
-			Title:     track.Title,
+			Index:      len(rowSnapshot()) + 1,
+			RemoteID:   track.ID,
+			RemoteURL:  track.URL,
+			Title:      track.Title,
+			LocalState: LocalLookupMatching,
 		}
 		mu.Lock()
 		applyLocalIfReady(&row)
@@ -260,6 +425,7 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 			return nil
 		}
 	})
+	releaseLocalProbes()
 	closeProbeJobs()
 	if err != nil {
 		fail(err)
@@ -272,8 +438,22 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 	if !stage("state_archive", "running", "resolving downloaded and archived tracks") {
 		return
 	}
+	<-localDone
+	if localErr != nil {
+		if !isContextError(localErr) {
+			fail(localErr)
+		}
+		return
+	}
 	provider := engine.NewSCDLPlanProvider()
-	sourcePlan, err := provider.BuildWithTracks(ctx, main, source, engine.SyncOptions{PlanLimit: job.PlanLimit}, tracks)
+	sourcePlan, err := provider.BuildWithTracksAndLocalIndex(
+		ctx,
+		main,
+		source,
+		engine.SyncOptions{PlanLimit: job.PlanLimit},
+		tracks,
+		localTitleCounts,
+	)
 	if err != nil {
 		fail(err)
 		return
@@ -295,7 +475,6 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 		}
 	}
 
-	<-localDone
 	probeWG.Wait()
 	for _, planRow := range planRows {
 		if !updateRow(planRow.RemoteID, func(target *PlanRow) {
