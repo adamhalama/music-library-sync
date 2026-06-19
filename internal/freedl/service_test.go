@@ -1,10 +1,14 @@
 package freedl
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/jaa/update-downloads/internal/fileops"
 )
 
 func TestBackupOriginalCopiesOriginalAndRefusesOverwrite(t *testing.T) {
@@ -18,7 +22,7 @@ func TestBackupOriginalCopiesOriginalAndRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sum, err := backupOriginal(original, backup)
+	sum, err := backupOriginal(original, backup, fileops.CreationTime{})
 	if err != nil {
 		t.Fatalf("backup original: %v", err)
 	}
@@ -36,7 +40,7 @@ func TestBackupOriginalCopiesOriginalAndRefusesOverwrite(t *testing.T) {
 	if err := os.WriteFile(original, []byte("changed audio"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backupOriginal(original, backup); err == nil {
+	if _, err := backupOriginal(original, backup, fileops.CreationTime{}); err == nil {
 		t.Fatal("expected second backup to fail instead of overwriting")
 	}
 	payload, err = os.ReadFile(backup)
@@ -45,6 +49,71 @@ func TestBackupOriginalCopiesOriginalAndRefusesOverwrite(t *testing.T) {
 	}
 	if string(payload) != "original audio" {
 		t.Fatalf("backup was overwritten: %q", payload)
+	}
+}
+
+func TestBackupOriginalRemovesOutputWhenCreationTimeRestoreFails(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "library", "track.mp3")
+	backup := filepath.Join(dir, "backups", "track.mp3")
+	if err := os.MkdirAll(filepath.Dir(original), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(original, []byte("original audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRestore := restorePromotionCreationTime
+	restorePromotionCreationTime = func(string, fileops.CreationTime) error {
+		return errors.New("injected creation time failure")
+	}
+	t.Cleanup(func() {
+		restorePromotionCreationTime = originalRestore
+	})
+
+	if _, err := backupOriginal(original, backup, fileops.CreationTime{Available: true}); err == nil {
+		t.Fatal("expected creation time restoration failure")
+	}
+	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected incomplete backup removal, stat err: %v", err)
+	}
+}
+
+func TestApplyReplacementKeepsOriginalWhenCreationTimeRestoreFails(t *testing.T) {
+	dir := t.TempDir()
+	libraryPath := filepath.Join(dir, "track.m4a")
+	if err := os.WriteFile(libraryPath, []byte("original audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRun := runPromotionFFmpeg
+	originalRestore := restorePromotionCreationTime
+	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, outputPath string) error {
+		return os.WriteFile(outputPath, []byte("upgraded audio"), 0o644)
+	}
+	restorePromotionCreationTime = func(string, fileops.CreationTime) error {
+		return errors.New("injected creation time failure")
+	}
+	t.Cleanup(func() {
+		runPromotionFFmpeg = originalRun
+		restorePromotionCreationTime = originalRestore
+	})
+
+	err := applyReplacement(
+		context.Background(),
+		PromotionPlan{},
+		PromotionRow{LibraryPath: libraryPath},
+		fileops.CreationTime{Available: true},
+	)
+	if err == nil {
+		t.Fatal("expected creation time restoration failure")
+	}
+	payload, readErr := os.ReadFile(libraryPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(payload) != "original audio" {
+		t.Fatalf("original library file changed: %q", payload)
 	}
 }
 

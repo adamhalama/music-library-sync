@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -32,6 +33,12 @@ type Service struct {
 	Now      func() time.Time
 	LookPath func(string) (string, error)
 }
+
+var (
+	readPromotionCreationTime    = fileops.ReadCreationTime
+	restorePromotionCreationTime = fileops.RestoreCreationTime
+	runPromotionFFmpeg           = runFFmpeg
+)
 
 type Quality struct {
 	Codec            string `json:"codec,omitempty"`
@@ -266,7 +273,15 @@ func (s Service) ApplyPromotionPlan(ctx context.Context, plan PromotionPlan) Pro
 			result.Rows = append(result.Rows, rowResult)
 			continue
 		}
-		sum, err := backupOriginal(row.LibraryPath, row.BackupPath)
+		creation, err := readPromotionCreationTime(row.LibraryPath)
+		if err != nil {
+			rowResult.Status = "failed"
+			rowResult.Error = "creation time read failed: " + err.Error()
+			result.Failed++
+			result.Rows = append(result.Rows, rowResult)
+			continue
+		}
+		sum, err := backupOriginal(row.LibraryPath, row.BackupPath, creation)
 		if err != nil {
 			rowResult.Status = "failed"
 			rowResult.Error = "backup failed: " + err.Error()
@@ -275,7 +290,7 @@ func (s Service) ApplyPromotionPlan(ctx context.Context, plan PromotionPlan) Pro
 			continue
 		}
 		rowResult.SHA256 = sum
-		if err := applyReplacement(ctx, plan, row); err != nil {
+		if err := applyReplacement(ctx, plan, row, creation); err != nil {
 			rowResult.Status = "failed"
 			rowResult.Error = "replace failed: " + err.Error()
 			result.Failed++
@@ -751,27 +766,49 @@ func validateTargetFormat(format string) error {
 	return fmt.Errorf("invalid target format %q", format)
 }
 
-func backupOriginal(sourcePath, backupPath string) (string, error) {
+func backupOriginal(sourcePath, backupPath string, creation fileops.CreationTime) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(backupPath); err == nil {
-		return "", fmt.Errorf("backup already exists: %s", backupPath)
-	} else if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	payload, err := os.ReadFile(sourcePath)
+	source, err := os.Open(sourcePath)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(payload)
-	if err := os.WriteFile(backupPath, payload, 0o644); err != nil {
+	defer source.Close()
+	sourceInfo, err := source.Stat()
+	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(sum[:]), nil
+	backup, err := os.OpenFile(backupPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, sourceInfo.Mode().Perm())
+	if err != nil {
+		if os.IsExist(err) {
+			return "", fmt.Errorf("backup already exists: %s", backupPath)
+		}
+		return "", err
+	}
+	complete := false
+	defer func() {
+		_ = backup.Close()
+		if !complete {
+			_ = os.Remove(backupPath)
+		}
+	}()
+
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(backup, hash), source); err != nil {
+		return "", err
+	}
+	if err := backup.Close(); err != nil {
+		return "", err
+	}
+	if err := restorePromotionCreationTime(backupPath, creation); err != nil {
+		return "", err
+	}
+	complete = true
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func applyReplacement(ctx context.Context, plan PromotionPlan, row PromotionRow) error {
+func applyReplacement(ctx context.Context, plan PromotionPlan, row PromotionRow, creation fileops.CreationTime) error {
 	tempFile, err := os.CreateTemp(filepath.Dir(row.LibraryPath), ".udl-freedl-promote-*"+filepath.Ext(row.LibraryPath))
 	if err != nil {
 		return err
@@ -779,7 +816,11 @@ func applyReplacement(ctx context.Context, plan PromotionPlan, row PromotionRow)
 	tempPath := tempFile.Name()
 	_ = tempFile.Close()
 	_ = os.Remove(tempPath)
-	if err := runFFmpeg(ctx, plan, row, tempPath); err != nil {
+	if err := runPromotionFFmpeg(ctx, plan, row, tempPath); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+	if err := restorePromotionCreationTime(tempPath, creation); err != nil {
 		_ = os.Remove(tempPath)
 		return err
 	}
