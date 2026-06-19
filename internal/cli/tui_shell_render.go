@@ -325,6 +325,8 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 		return buildCredentialsShellState(m, layout)
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		return buildSyncShellState(m, layout)
+	case tuiScreenFreeDL:
+		return buildFreeDLShellState(m, layout)
 	case tuiScreenDoctor:
 		return buildDoctorShellState(m, layout)
 	case tuiScreenValidate:
@@ -454,6 +456,8 @@ func workflowNavigationItems(m tuiRootModel) []tuiSidebarSection {
 			active = item == "Credentials"
 		case tuiScreenInteractiveSync:
 			active = item == "Run Sync"
+		case tuiScreenFreeDL:
+			active = item == "SoundCloud Free DL"
 		case tuiScreenSync:
 			active = item == "Run Sync"
 		case tuiScreenDoctor:
@@ -493,6 +497,8 @@ func landingWorkflowMeta(item string) string {
 		return "checks"
 	case "Run Sync":
 		return "interactive"
+	case "SoundCloud Free DL":
+		return "upgrade"
 	case "Advanced Config":
 		return "editor"
 	case "Quit":
@@ -530,6 +536,8 @@ func landingWorkflowSummary(item string) string {
 		return "Verify tools, credentials, and folder access before syncing."
 	case "Run Sync":
 		return "Review enabled sources, preview the plan, and run a sync."
+	case "SoundCloud Free DL":
+		return "Fetch Free DL upgrades into a buffer, back up originals, and promote selected tracks."
 	case "Advanced Config":
 		return "Open the full config editor for raw source and adapter settings."
 	case "Quit":

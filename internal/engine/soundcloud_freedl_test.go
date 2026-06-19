@@ -113,7 +113,7 @@ func TestBrowserOpenCommandDarwinDefault(t *testing.T) {
 	if bin != "open" {
 		t.Fatalf("expected open binary, got %q", bin)
 	}
-	wantArgs := []string{"https://hypeddit.com/pichi/pichibofunk"}
+	wantArgs := []string{"-a", "Helium", "https://hypeddit.com/pichi/pichibofunk"}
 	if !reflect.DeepEqual(args, wantArgs) {
 		t.Fatalf("expected args %v, got %v", wantArgs, args)
 	}

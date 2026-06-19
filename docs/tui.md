@@ -181,9 +181,48 @@ Cancellation also works while waiting in plan selection or prompt dialogs.
 - `s`: save from review or save step
 - `esc`: back, or prompt to discard unsaved changes
 
+## SoundCloud Free DL Workflow
+
+`SoundCloud Free DL` is a guarded capture-and-promote workflow backed by a separate feature config (`--freedl-config`, `UDL_FREEDL_CONFIG`, user `freedl.yaml`, or project `udl.freedl.yaml`).
+
+Flow:
+
+- if no enabled jobs exist, create or enable a Free DL job in the setup screen
+- choose an enabled Free DL job and plan limit
+- build a plan that streams SoundCloud rows first, then fills in local quality and Free DL availability as checks complete
+- select local tracks to fetch into the job buffer directory
+- build a promotion plan from successful downloads
+- choose target quality, select rows to promote, and confirm
+- copy originals to the configured backup directory before replacement
+- write capture, promotion, and result JSON logs under the job log directory
+
+Controls:
+
+- `j/k`: move inside job, setup, plan, and promotion lists
+- `e`: manage Free DL jobs from the job list
+- `a`: add a Free DL job from the job list or setup list
+- `[` / `]`: adjust the pre-plan track limit
+- `l`: type the pre-plan track limit
+- `u`: toggle unlimited pre-plan rows
+- `space`: toggle capture or promotion rows
+- `tab`: switch between Free DL setup list and form panes
+- `r`: review the canonical `freedl.yaml` preview in setup
+- `s`: save Free DL feature config
+- `t`: cycle promotion target format
+- `enter`: advance to plan, capture, confirm, or promote depending on phase
+- `x`: cancel an active planning/capture/promotion phase
+- `esc`: return when no active operation or confirmation is in progress
+
+Config behavior:
+
+- native edits save to `--freedl-config` when set, otherwise to the user `freedl.yaml`
+- `./udl.freedl.yaml` remains a runtime override; the setup screen warns when that project file exists while editing the user config
+- the starter job is not saveable until `source_url` is set
+- macOS HypeEdit handoff opens Helium by default; `UDL_FREEDL_BROWSER_APP` overrides the browser app
+
 ## Current Limitations
 
-- `promote-freedl`, `version`, `validate`, and low-level `init` are not exposed on the public TUI home screen.
+- `version`, `validate`, and low-level `init` are not exposed on the public TUI home screen.
 - `sync` output style controls (`progress`, `preflight-summary`, `track-status`) are not currently configurable from TUI.
 - Workflow sidebar/top-nav switching is not active yet; use `esc` to return to the landing screen first.
 - The config editor rewrites canonical YAML; it does not preserve hand-written comments or original layout.

@@ -16,6 +16,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -66,11 +67,11 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	if root.menuItems[0] != "Run Sync" {
 		t.Fatalf("expected Run Sync first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "Get Started" {
-		t.Fatalf("expected Get Started second, got %v", root.menuItems)
+	if root.menuItems[1] != "SoundCloud Free DL" {
+		t.Fatalf("expected SoundCloud Free DL second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Credentials" {
-		t.Fatalf("expected Credentials third, got %v", root.menuItems)
+	if root.menuItems[2] != "Get Started" {
+		t.Fatalf("expected Get Started third, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
@@ -81,6 +82,232 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	}
 	if !strings.Contains(view, "Review enabled sources") {
 		t.Fatalf("expected landing body summary, got: %s", view)
+	}
+}
+
+func TestTUIRootEnterOpensFreeDLWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "SoundCloud Free DL")
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenFreeDL {
+		t.Fatalf("expected Free DL workflow, got %v", next.screen)
+	}
+	if next.freeDLModel.phase != tuiFreeDLPhaseLoading {
+		t.Fatalf("expected Free DL model to start loading, got %s", next.freeDLModel.phase)
+	}
+}
+
+func TestTUIFreeDLModelPlanLimitControls(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhaseSelect
+	m.jobs = []freedl.Job{{ID: "upgrades", PlanLimit: 12}}
+	m.planLimit = m.jobPlanLimit()
+
+	if m.planLimit != 12 {
+		t.Fatalf("expected job plan limit 12, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	if m.planLimit != 13 {
+		t.Fatalf("expected incremented plan limit, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	if m.planLimit != 12 {
+		t.Fatalf("expected decremented plan limit, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if m.planLimit != 0 {
+		t.Fatalf("expected unlimited plan limit, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if m.planLimit != 12 {
+		t.Fatalf("expected job plan limit after disabling unlimited, got %d", m.planLimit)
+	}
+}
+
+func TestTUIFreeDLModelPlanLimitTypedEntry(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhaseSelect
+	m.jobs = []freedl.Job{{ID: "upgrades", PlanLimit: 12}}
+	m.planLimit = 12
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if !m.limitEditing {
+		t.Fatalf("expected limit editing to be active")
+	}
+	if m.allowBack() {
+		t.Fatalf("expected esc/back to stay inside Free DL limit input")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.planLimit != 25 {
+		t.Fatalf("expected typed plan limit 25, got %d", m.planLimit)
+	}
+	if m.limitEditing {
+		t.Fatalf("expected limit editing to close after apply")
+	}
+}
+
+func TestTUIFreeDLModelNoJobsOpensSetup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freedl.yaml")
+	m := newTUIFreeDLModel(&AppContext{Opts: GlobalOptions{FreeDLConfigPath: path}})
+	main := config.DefaultConfig()
+
+	next, _ := m.Update(tuiFreeDLLoadedMsg{Main: main, Cfg: freedl.Config{Version: 1}, Jobs: nil})
+
+	if next.phase != tuiFreeDLPhaseConfig {
+		t.Fatalf("expected setup config phase, got %s", next.phase)
+	}
+	if len(next.configCfg.Jobs) != 1 {
+		t.Fatalf("expected one starter job, got %d", len(next.configCfg.Jobs))
+	}
+	if next.configCfg.Jobs[0].SourceURL != "" {
+		t.Fatalf("expected starter job to require source_url edit, got %q", next.configCfg.Jobs[0].SourceURL)
+	}
+}
+
+func TestTUIFreeDLConfigSaveBlocksInvalidStarterJob(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freedl.yaml")
+	m := newTUIFreeDLModel(&AppContext{Opts: GlobalOptions{FreeDLConfigPath: path}})
+	m.mainConfig = config.DefaultConfig()
+	m.cfg = freedl.Config{Version: 1, Defaults: freedl.DefaultConfig(m.mainConfig).Defaults}
+	m.openConfigEditor(true)
+
+	next := m.saveConfig()
+
+	if next.configSaved {
+		t.Fatalf("expected invalid starter job not to save")
+	}
+	if next.configErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected no config file, got err=%v", err)
+	}
+}
+
+func TestTUIFreeDLConfigSaveWritesAndReloadsJobs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freedl.yaml")
+	m := newTUIFreeDLModel(&AppContext{Opts: GlobalOptions{FreeDLConfigPath: path}})
+	m.mainConfig = config.DefaultConfig()
+	m.cfg = freedl.Config{Version: 1, Defaults: freedl.DefaultConfig(m.mainConfig).Defaults}
+	m.openConfigEditor(true)
+	m.configCfg.Jobs[0].SourceURL = "https://soundcloud.com/example/likes"
+
+	next := m.saveConfig()
+
+	if !next.configSaved {
+		t.Fatalf("expected config to save, err=%v saveErr=%v validation=%v", next.configErr, next.configSaveErr, next.configValidation)
+	}
+	if len(next.jobs) != 1 || next.jobs[0].ID == "" {
+		t.Fatalf("expected saved enabled job to reload, got %+v", next.jobs)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected saved config file: %v", err)
+	}
+}
+
+func TestTUIFreeDLPlanningRowMergePreservesSelectionOverride(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePlanning
+	m.plan = &freedl.CapturePlan{}
+	m.selectionOverrides = map[string]bool{"track-1": false}
+
+	m.mergePlanRow(freedl.PlanRow{
+		Index:      1,
+		RemoteID:   "track-1",
+		Title:      "Track One",
+		Selectable: true,
+		Selected:   true,
+		FreeDLProbe: engine.SoundCloudFreeDLProbe{
+			Status: engine.SoundCloudFreeDLAvailable,
+		},
+	})
+
+	if len(m.plan.Rows) != 1 {
+		t.Fatalf("expected one merged row, got %d", len(m.plan.Rows))
+	}
+	if m.plan.Rows[0].Selected {
+		t.Fatalf("expected user deselection override to survive async row update")
+	}
+}
+
+func TestTUIFreeDLPlanningViewShowsLockedWaitingState(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePlanning
+	m.planningStages = map[string]string{"playlist": "running: enumerating"}
+	m.plan = &freedl.CapturePlan{Rows: []freedl.PlanRow{{
+		Index:    1,
+		RemoteID: "track-1",
+		Title:    "Waiting Track",
+	}}}
+
+	view := m.shellBody(tuiShellLayout{Width: 120, Height: 30})
+
+	for _, want := range []string{"download locked", "checking", "Waiting Track"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected planning view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTUIFreeDLLocalQualityLabelShowsProgressAndCache(t *testing.T) {
+	tests := []struct {
+		name string
+		row  freedl.PlanRow
+		want string
+	}{
+		{name: "matching", row: freedl.PlanRow{LocalState: freedl.LocalLookupMatching}, want: "matching..."},
+		{name: "not found", row: freedl.PlanRow{LocalState: freedl.LocalLookupNotFound}, want: "not found"},
+		{
+			name: "cached quality",
+			row: freedl.PlanRow{
+				LocalState:   freedl.LocalLookupCached,
+				LocalQuality: freedl.Quality{Codec: "aac", EffectiveBitrate: 256000},
+			},
+			want: "aac 256k · cached",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := localQualityLabel(test.row); got != test.want {
+				t.Fatalf("local quality label: got %q want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTUIFreeDLPromotionLoadingDoesNotShowNoMatchMessage(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePromote
+
+	lines := strings.Join(m.promotionRowLines(120), "\n")
+	if strings.Contains(lines, "No captured files matched the library.") {
+		t.Fatalf("loading promotion view should not show final no-match message: %s", lines)
+	}
+	if !strings.Contains(lines, "Matching captured downloads") {
+		t.Fatalf("expected loading promotion view to explain matching state, got: %s", lines)
+	}
+}
+
+func TestTUIFreeDLPromotionCompletedEmptyPlanShowsNoMatchMessage(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePromote
+	m.promoPlan = &freedl.PromotionPlan{}
+
+	lines := strings.Join(m.promotionRowLines(120), "\n")
+	if !strings.Contains(lines, "No captured files matched the library.") {
+		t.Fatalf("completed empty promotion plan should show no-match message, got: %s", lines)
 	}
 }
 

@@ -105,6 +105,7 @@ Commands:
 
 Global flags:
 - `-c, --config <path>`
+- `--freedl-config <path>` (SoundCloud Free DL feature config; also `UDL_FREEDL_CONFIG`)
 - `--json`
 - `-q, --quiet`
 - `-v, --verbose`
@@ -126,8 +127,9 @@ Global flags:
 
 `tui`:
 - Launch with `udl tui`
-- Public home screen actions are `Get Started`, `Check System`, `Run Sync`, and `Advanced Config`
+- Public home screen actions are `Run Sync`, `SoundCloud Free DL`, `Get Started`, `Credentials`, `Check System`, and `Advanced Config`
 - First-run startup enters `Get Started` automatically when config is missing, invalid, or has zero sources
+- `SoundCloud Free DL` can create and edit its separate `freedl.yaml` feature config natively from the workflow screen
 - See `docs/tui.md` for keybindings, onboarding flow, sync options, and known limitations
 - Release packaging notes live in `docs/release-homebrew.md`
 
@@ -163,6 +165,7 @@ Precedence (highest to lowest):
 
 Supported config env overrides:
 - `UDL_CONFIG`
+- `UDL_FREEDL_CONFIG`
 - `UDL_STATE_DIR`
 - `UDL_ARCHIVE_FILE`
 - `UDL_THREADS`
@@ -278,11 +281,14 @@ Notes:
 - SoundCloud sources support two separate adapter flows:
   - `adapter.kind: scdl` (current/default stream-rip flow)
   - `adapter.kind: scdl-freedl` (new free-download-link flow using each track's SoundCloud `FREE DL`/purchase URL)
+- The TUI `SoundCloud Free DL` workflow uses a separate feature config at `$XDG_CONFIG_HOME/udl/freedl.yaml`, `~/.config/udl/freedl.yaml`, `./udl.freedl.yaml`, or `--freedl-config`. Native edits save to `--freedl-config` when set, otherwise to the user `freedl.yaml`; a project `udl.freedl.yaml` is still loaded as an override and shown as a warning in the editor.
+- If no enabled Free DL jobs exist, the TUI opens setup automatically. Existing jobs can be managed from the Free DL job list with `e`, and new jobs can be added with `a`.
+- A Free DL TUI run chooses a plan limit first, streams the plan table as SoundCloud rows, local quality, and Free DL availability arrive, captures selected downloads into a configured buffer directory, builds a promotion plan from successful downloads, then confirms selected replacements. Originals are copied into the configured backup directory before any library file is replaced.
 - `scdl-freedl` keeps deterministic preflight/state/archive behavior but skips tracks that do not expose a free-download link.
 - `scdl-freedl` currently downloads only HypeEdit free-DL links (browser handoff opens the gate URL and waits for a completed file in `~/Downloads`). Non-HypeEdit free-DL hosts are skipped.
 - `scdl-freedl` tags downloaded files with track metadata and attempts to embed SoundCloud artwork thumbnails into the resulting media file.
 - Override watched browser download directory with `UDL_FREEDL_BROWSER_DOWNLOAD_DIR`.
-- On macOS, set `UDL_FREEDL_BROWSER_APP` (for example `Helium`) to force a specific browser app for HypeEdit handoff.
+- On macOS, HypeEdit handoff opens Helium by default. Set `UDL_FREEDL_BROWSER_APP` to force another browser app.
 - HypeEdit browser handoff now uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
 - Override idle timeout with `UDL_FREEDL_BROWSER_IDLE_TIMEOUT` (Go duration format, for example `45s` or `90s`).
 - Browser launch/wait/post-processing failures are persisted for manual follow-up in `defaults.state_dir/<source-id>.freedl-stuck.jsonl`.
