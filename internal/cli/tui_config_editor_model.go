@@ -98,6 +98,7 @@ type tuiConfigEditorModel struct {
 	prepareErr         error
 	parseErr           error
 	defaults           config.Defaults
+	rekordbox          *config.RekordboxConfig
 	sources            []tuiConfigEditorSourceState
 	dirty              bool
 	previewVisible     bool
@@ -217,6 +218,7 @@ func (m *tuiConfigEditorModel) loadTarget() {
 
 func (m *tuiConfigEditorModel) applyConfig(cfg config.Config, dirty bool) {
 	m.defaults = cfg.Defaults
+	m.rekordbox = cloneRekordboxConfig(cfg.Rekordbox)
 	m.sources = make([]tuiConfigEditorSourceState, 0, len(cfg.Sources))
 	for _, source := range cfg.Sources {
 		state := newTUIConfigEditorSourceState(source)
@@ -332,9 +334,10 @@ func (m *tuiConfigEditorModel) revalidate() {
 
 func (m tuiConfigEditorModel) buildConfig() config.Config {
 	cfg := config.Config{
-		Version:  1,
-		Defaults: m.defaults,
-		Sources:  make([]config.Source, 0, len(m.sources)),
+		Version:   1,
+		Defaults:  m.defaults,
+		Rekordbox: cloneRekordboxConfig(m.rekordbox),
+		Sources:   make([]config.Source, 0, len(m.sources)),
 	}
 	for _, source := range m.sources {
 		item := source
@@ -343,6 +346,17 @@ func (m tuiConfigEditorModel) buildConfig() config.Config {
 		cfg.Sources = append(cfg.Sources, item.Source)
 	}
 	return cfg
+}
+
+func cloneRekordboxConfig(rb *config.RekordboxConfig) *config.RekordboxConfig {
+	if rb == nil {
+		return nil
+	}
+	clone := *rb
+	if len(rb.PlaylistSync.Jobs) > 0 {
+		clone.PlaylistSync.Jobs = append([]config.RekordboxPlaylistSyncJob(nil), rb.PlaylistSync.Jobs...)
+	}
+	return &clone
 }
 
 func (m tuiConfigEditorModel) allowBack() bool {

@@ -7,6 +7,7 @@
 - Enforced tools:
   - `scdl` for `adapter.kind: scdl`
   - `yt-dlp` for SoundCloud preflight/enumeration (`adapter.kind: scdl` and `adapter.kind: scdl-freedl`)
+  - managed Python runtime with `pyrekordbox` for Rekordbox playlist sync
 - Enforcement point: `udl doctor`
 - Transitional tool: `spotdl` remains supported but is outside strict matrix enforcement in this phase.
 
@@ -16,6 +17,8 @@
 |---|---|---|
 | `scdl` | `>= 3.0.0` and `< 4.0.0` | Required only for `adapter.kind: scdl`; must support `--yt-dlp-args` passthrough. |
 | `yt-dlp` | `>= 2024.1.0` and `< 2027.0.0` | Used for SoundCloud preflight/enumeration. `scdl-freedl` media download execution is browser handoff for HypeEdit links. |
+| `python@3.12` | Homebrew dependency | Used to create UDL's private Rekordbox Python venv. Tarball users may provide any `python3 >= 3.8`. |
+| `pyrekordbox` | `0.4.4` | Installed into UDL's private venv on first Rekordbox sync use. |
 
 Known-bad versions can be blocked explicitly in doctor matrix rules as regressions are discovered.
 
@@ -36,8 +39,10 @@ Known-bad versions can be blocked explicitly in doctor matrix rules as regressio
 ## Homebrew behavior
 
 - Homebrew formula installs `udl` and depends on external formulas for:
+  - `python@3.12`
   - `scdl`
   - `yt-dlp`
+- Rekordbox Python packages are not installed globally by Homebrew. UDL creates a private venv under `defaults.state_dir/rekordbox/python-venv` and repairs it with `udl rekordbox deps ensure`.
 - `spotdl` is not required as a Homebrew formula dependency in this phase.
 
 ## Release direction

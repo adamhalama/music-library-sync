@@ -18,6 +18,7 @@ import (
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/output"
+	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
 func TestTUICommandHelp(t *testing.T) {
@@ -70,8 +71,14 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	if root.menuItems[1] != "SoundCloud Free DL" {
 		t.Fatalf("expected SoundCloud Free DL second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Get Started" {
-		t.Fatalf("expected Get Started third, got %v", root.menuItems)
+	if root.menuItems[2] != "Rekordbox Sync" {
+		t.Fatalf("expected Rekordbox Sync third, got %v", root.menuItems)
+	}
+	if root.menuItems[3] != "Get Started" {
+		t.Fatalf("expected Get Started fourth, got %v", root.menuItems)
+	}
+	if root.menuItems[4] != "Credentials" {
+		t.Fatalf("expected Credentials fifth, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
@@ -324,6 +331,129 @@ func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
 	}
 }
 
+func TestTUIRootEnterOpensRekordboxSyncWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "Rekordbox Sync")
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenRekordboxSync {
+		t.Fatalf("expected rekordbox sync screen, got %v", next.screen)
+	}
+	if next.rekordboxModel.phase != tuiRekordboxPhaseLoading {
+		t.Fatalf("expected loading rekordbox phase, got %q", next.rekordboxModel.phase)
+	}
+}
+
+func TestTUIRekordboxSetupSaveWritesMappingConfig(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "rekordbox.yaml")
+	model := tuiRekordboxModel{
+		app: &AppContext{Opts: GlobalOptions{RekordboxConfigPath: path}},
+		cfg: configWithRekordboxSyncDefaults(config.DefaultConfig(), syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+		}),
+		rbCfg: syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+		},
+		setup: tuiRekordboxSetupState{
+			ConfigPath: path,
+			EditIndex:  -1,
+			Mapping: syncconfig.FolderMapping{
+				ID:              "phone",
+				MusicFolder:     "Phone",
+				RekordboxFolder: "Phone RB",
+			},
+		},
+	}
+
+	next, cmd := model.saveSetupMapping()
+	if next.phase != tuiRekordboxPhaseSetupSaving {
+		t.Fatalf("expected saving phase, got %q", next.phase)
+	}
+	raw := cmd()
+	msg, ok := raw.(tuiRekordboxSetupSavedMsg)
+	if !ok {
+		t.Fatalf("expected setup saved msg, got %T", raw)
+	}
+	next, _ = next.Update(msg)
+	if next.phase != tuiRekordboxPhaseReady {
+		t.Fatalf("expected ready after save, got %q err=%v", next.phase, next.setup.SaveErr)
+	}
+	if len(next.rbCfg.Sync.Folders) != 1 || next.rbCfg.Sync.Folders[0].ID != "phone" {
+		t.Fatalf("unexpected saved mappings: %+v", next.rbCfg.Sync.Folders)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(payload), "rekordbox_folder: Phone RB") {
+		t.Fatalf("expected saved mapping in config:\n%s", string(payload))
+	}
+}
+
+func TestTUIRekordboxDeleteMappingWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "rekordbox.yaml")
+	model := tuiRekordboxModel{
+		app:       &AppContext{Opts: GlobalOptions{RekordboxConfigPath: path}},
+		phase:     tuiRekordboxPhaseReady,
+		jobCursor: 0,
+		rbCfg: syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+			Sync: syncconfig.Sync{Folders: []syncconfig.FolderMapping{{
+				ID:              "phone",
+				MusicFolder:     "Phone",
+				RekordboxFolder: "Phone RB",
+			}}},
+		},
+		setup: tuiRekordboxSetupState{ConfigPath: path},
+	}
+
+	next, cmd := model.deleteSelectedMapping()
+	if next.phase != tuiRekordboxPhaseSetupSaving {
+		t.Fatalf("expected saving phase, got %q", next.phase)
+	}
+	raw := cmd()
+	msg, ok := raw.(tuiRekordboxSetupSavedMsg)
+	if !ok {
+		t.Fatalf("expected setup saved msg, got %T", raw)
+	}
+	next, _ = next.Update(msg)
+	if len(next.rbCfg.Sync.Folders) != 0 {
+		t.Fatalf("expected mapping deletion, got %+v", next.rbCfg.Sync.Folders)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if strings.Contains(string(payload), "id: phone") {
+		t.Fatalf("deleted mapping still present:\n%s", string(payload))
+	}
+}
+
 func TestTUIRootViewUsesFullShellAtWidth110(t *testing.T) {
 	root := newMenuRootModelForTest()
 	root.width = 110
@@ -570,6 +700,38 @@ func TestTUIRootAutoStartsGetStartedWhenNoSourcesConfigured(t *testing.T) {
 	}
 	if root.onboardingModel.startup.Reason != tuiOnboardingReasonNoSources {
 		t.Fatalf("expected no-sources onboarding reason, got %q", root.onboardingModel.startup.Reason)
+	}
+}
+
+func TestTUIRootDoesNotAutoStartGetStartedForRekordboxOnlyConfig(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "udl.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: " + filepath.Join(tmp, "state"),
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"rekordbox:",
+		"  db_dir: ~/Library/Pioneer/rekordbox",
+		"  backup_dir: /Users/jaa/Music/rb-library-export",
+		"  playlist_sync:",
+		"    jobs:",
+		"      - id: apple-favourites",
+		"        music_playlist: Favourites",
+		"        rekordbox_playlist: fav_imports",
+		"        mode: mirror",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	root := newTUIRootModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}}, false)
+	if root.screen != tuiScreenMenu {
+		t.Fatalf("expected menu for rekordbox-only config, got %v", root.screen)
 	}
 }
 
@@ -824,6 +986,39 @@ func TestTUIConfigEditorDirectSaveFromSourcesWritesConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
 		t.Fatalf("expected saved config file from sources: %v", err)
+	}
+}
+
+func TestTUIConfigEditorPreservesRekordboxConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	cfg := config.DefaultConfig()
+	cfg.Rekordbox = &config.RekordboxConfig{
+		DBDir:      "~/Library/Pioneer/rekordbox",
+		PythonBin:  "python3",
+		PythonPath: "/tmp/site-packages",
+		BackupDir:  "/tmp/rb-backups",
+		PlaylistSync: config.RekordboxPlaylistSyncConfig{Jobs: []config.RekordboxPlaylistSyncJob{{
+			ID:                  "apple-favourites",
+			MusicPlaylist:       "Favourites",
+			MusicPlaylistID:     "70C641CA78BB0F3C",
+			RekordboxPlaylist:   "fav_imports",
+			RekordboxPlaylistID: "3150438241",
+			Mode:                "mirror",
+		}}},
+	}
+	model.applyConfig(cfg, false)
+
+	built := model.buildConfig()
+	if built.Rekordbox == nil || len(built.Rekordbox.PlaylistSync.Jobs) != 1 {
+		t.Fatalf("expected rekordbox config to be preserved: %+v", built.Rekordbox)
+	}
+	if built.Rekordbox.PlaylistSync.Jobs[0].ID != "apple-favourites" {
+		t.Fatalf("unexpected rekordbox job: %+v", built.Rekordbox.PlaylistSync.Jobs[0])
+	}
+	view := model.reviewBody(newTUIShellLayout(180, 36), false)
+	if !strings.Contains(view, "Rekordbox: preserved (1 playlist sync jobs)") {
+		t.Fatalf("expected review to mention preserved rekordbox config, got: %s", view)
 	}
 }
 
@@ -1314,8 +1509,11 @@ func TestTUIRootStandardSyncPromptModalAndFailureDiagnostics(t *testing.T) {
 	if !strings.Contains(view, "Prompt") || !strings.Contains(view, "Retry login?") {
 		t.Fatalf("expected standard sync shell prompt modal, got: %s", view)
 	}
-	if !strings.Contains(view, "last failure:") || !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
+	if !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
 		t.Fatalf("expected failure diagnostics to render in activity section, got: %s", view)
+	}
+	if got := lipgloss.Height(view); got > root.height {
+		t.Fatalf("expected modal shell height <= %d, got %d", root.height, got)
 	}
 }
 

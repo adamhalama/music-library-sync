@@ -15,6 +15,7 @@ const (
 	tuiScreenCredentials
 	tuiScreenInteractiveSync
 	tuiScreenFreeDL
+	tuiScreenRekordboxSync
 	tuiScreenSync
 	tuiScreenDoctor
 	tuiScreenValidate
@@ -38,6 +39,7 @@ type tuiRootModel struct {
 	credentialsModel tuiCredentialsModel
 	syncModel        tuiSyncModel
 	freeDLModel      tuiFreeDLModel
+	rekordboxModel   tuiRekordboxModel
 	doctorModel      tuiDoctorModel
 	validateModel    tuiValidateModel
 	configModel      tuiConfigEditorModel
@@ -48,7 +50,7 @@ func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
 	model := tuiRootModel{
 		app:           app,
 		debugMessages: debugMessages,
-		menuItems:     []string{"Run Sync", "SoundCloud Free DL", "Get Started", "Credentials", "Check System", "Advanced Config", "Quit"},
+		menuItems:     []string{"Run Sync", "SoundCloud Free DL", "Rekordbox Sync", "Get Started", "Credentials", "Check System", "Advanced Config", "Quit"},
 		screen:        tuiScreenMenu,
 	}
 	if startup, needsOnboarding := tuiDetectOnboardingState(app); needsOnboarding {
@@ -84,6 +86,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.freeDLModel.height = typed.Height
 			next, cmd := m.freeDLModel.Update(msg)
 			m.freeDLModel = next
+			return m, cmd
+		case tuiScreenRekordboxSync:
+			next, cmd := m.rekordboxModel.Update(msg)
+			m.rekordboxModel = next
 			return m, cmd
 		case tuiScreenGetStarted:
 			next, cmd := m.onboardingModel.Update(msg)
@@ -153,6 +159,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.screen = tuiScreenFreeDL
 					m.freeDLModel = newTUIFreeDLModel(m.app)
 					return m, m.freeDLModel.Init()
+				case "Rekordbox Sync":
+					m.screen = tuiScreenRekordboxSync
+					m.rekordboxModel = newTUIRekordboxModel(m.app)
+					return m, m.rekordboxModel.Init()
 				case "Check System":
 					m.screen = tuiScreenDoctor
 					m.doctorModel = newTUIDoctorModel(m.app)
@@ -194,6 +204,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.freeDLModel.Update(msg)
 		m.freeDLModel = next
 		return m, cmd
+	case tuiScreenRekordboxSync:
+		next, cmd := m.rekordboxModel.Update(msg)
+		m.rekordboxModel = next
+		return m, cmd
 	case tuiScreenDoctor:
 		next, cmd := m.doctorModel.Update(msg)
 		m.doctorModel = next
@@ -229,6 +243,8 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 			!m.syncModel.hasActiveTimeoutInput()
 	case tuiScreenFreeDL:
 		return m.freeDLModel.allowBack()
+	case tuiScreenRekordboxSync:
+		return m.rekordboxModel.allowBack()
 	case tuiScreenInit:
 		return m.initModel.allowBack()
 	case tuiScreenConfigEditor:

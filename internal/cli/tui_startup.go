@@ -35,7 +35,7 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 	}
 	if err := config.Validate(cfg); err != nil {
 		if len(cfg.Sources) == 0 {
-			if tuiHasEnabledFreeDLConfig(app, cfg) {
+			if tuiHasEnabledFreeDLConfig(app, cfg) || tuiHasValidRekordboxConfig(cfg) {
 				return startup, false
 			}
 			startup.Reason = tuiOnboardingReasonNoSources
@@ -49,7 +49,7 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 		return startup, true
 	}
 	if len(cfg.Sources) == 0 {
-		if tuiHasEnabledFreeDLConfig(app, cfg) {
+		if tuiHasEnabledFreeDLConfig(app, cfg) || tuiHasValidRekordboxConfig(cfg) {
 			return startup, false
 		}
 		startup.Reason = tuiOnboardingReasonNoSources
@@ -75,4 +75,8 @@ func tuiHasEnabledFreeDLConfig(app *AppContext, main config.Config) bool {
 		return false
 	}
 	return len(freedl.EnabledJobs(cfg)) > 0
+}
+
+func tuiHasValidRekordboxConfig(cfg config.Config) bool {
+	return cfg.Rekordbox != nil && config.ValidateRekordbox(cfg) == nil
 }
