@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
@@ -89,6 +90,44 @@ func TestRekordboxPlaylistSyncUseCasePlanBuildsSignedPlan(t *testing.T) {
 	}
 	if rb.inspectCalls != 1 {
 		t.Fatalf("expected one inspect call, got %d", rb.inspectCalls)
+	}
+}
+
+func TestRekordboxPlaylistSyncUseCasePlansFromStandaloneSnapshot(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Defaults.StateDir = filepath.Join(tmp, "state")
+	if _, err := playlists.WriteSnapshot(cfg.Defaults.StateDir, playlists.Snapshot{
+		PlaylistID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic,
+		ProviderPlaylist: "Favourites", RefreshedAt: time.Date(2026, 5, 21, 11, 0, 0, 0, time.UTC),
+		Tracks: []playlists.Track{{Index: 1, ProviderID: "track-1", Title: "Track", Artist: "Artist", Path: "/Music/Track.mp3"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := playlists.LoadSnapshot(cfg.Defaults.StateDir, "favorites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
+		Playlists: []bridge.Playlist{{ID: "3150438241", Name: "fav_imports", Attribute: 0}},
+		Contents:  []bridge.Content{{ID: "content-1", Title: "Track", FolderPath: "/Music/Track.mp3"}},
+	}}
+	useCase := RekordboxPlaylistSyncUseCase{
+		Bridge: rb,
+		Now:    func() time.Time { return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC) },
+		CheckClosed: func(context.Context, string) error {
+			return nil
+		},
+	}
+
+	result, err := useCase.Plan(context.Background(), RekordboxPlaylistSyncPlanRequest{
+		Config: cfg, Snapshot: &snapshot,
+	})
+	if err != nil {
+		t.Fatalf("Plan snapshot: %v", err)
+	}
+	if result.Plan.MusicPlaylist.Name != "Favorites" || result.Plan.Summary.MatchedByPath != 1 {
+		t.Fatalf("unexpected snapshot plan: %+v", result.Plan)
 	}
 }
 

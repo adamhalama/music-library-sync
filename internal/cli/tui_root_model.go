@@ -14,6 +14,7 @@ const (
 	tuiScreenGetStarted
 	tuiScreenCredentials
 	tuiScreenInteractiveSync
+	tuiScreenPlaylists
 	tuiScreenFreeDL
 	tuiScreenRekordboxSync
 	tuiScreenSync
@@ -35,22 +36,24 @@ type tuiRootModel struct {
 	menuItems        []string
 	startupAttention *tuiStartupAttentionState
 
-	onboardingModel  tuiOnboardingModel
-	credentialsModel tuiCredentialsModel
-	syncModel        tuiSyncModel
-	freeDLModel      tuiFreeDLModel
-	rekordboxModel   tuiRekordboxModel
-	doctorModel      tuiDoctorModel
-	validateModel    tuiValidateModel
-	configModel      tuiConfigEditorModel
-	initModel        tuiInitModel
+	onboardingModel     tuiOnboardingModel
+	credentialsModel    tuiCredentialsModel
+	syncModel           tuiSyncModel
+	playlistModel       tuiPlaylistModel
+	freeDLModel         tuiFreeDLModel
+	rekordboxModel      tuiRekordboxModel
+	doctorModel         tuiDoctorModel
+	validateModel       tuiValidateModel
+	configModel         tuiConfigEditorModel
+	initModel           tuiInitModel
+	playlistChildActive bool
 }
 
 func newTUIRootModel(app *AppContext, debugMessages bool) tuiRootModel {
 	model := tuiRootModel{
 		app:           app,
 		debugMessages: debugMessages,
-		menuItems:     []string{"Run Sync", "SoundCloud Free DL", "Rekordbox Sync", "Get Started", "Credentials", "Check System", "Advanced Config", "Quit"},
+		menuItems:     []string{"Run Sync", "Playlists", "SoundCloud Free DL", "Rekordbox Sync", "Get Started", "Credentials", "Check System", "Advanced Config", "Quit"},
 		screen:        tuiScreenMenu,
 	}
 	if startup, needsOnboarding := tuiDetectOnboardingState(app); needsOnboarding {
@@ -86,6 +89,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.freeDLModel.height = typed.Height
 			next, cmd := m.freeDLModel.Update(msg)
 			m.freeDLModel = next
+			return m, cmd
+		case tuiScreenPlaylists:
+			next, cmd := m.playlistModel.Update(msg)
+			m.playlistModel = next
 			return m, cmd
 		case tuiScreenRekordboxSync:
 			next, cmd := m.rekordboxModel.Update(msg)
@@ -124,6 +131,16 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshStartupAttention()
 		}
 		return m, nil
+	case tuiPlaylistOpenFreeDLMsg:
+		m.screen = tuiScreenFreeDL
+		m.playlistChildActive = true
+		m.freeDLModel = newTUIFreeDLModelForPlaylist(m.app, typed.Definition, typed.Snapshot)
+		return m, m.freeDLModel.Init()
+	case tuiPlaylistOpenRekordboxMsg:
+		m.screen = tuiScreenRekordboxSync
+		m.playlistChildActive = true
+		m.rekordboxModel = newTUIRekordboxModelForPlaylist(m.app, typed.Definition, typed.Snapshot)
+		return m, m.rekordboxModel.Init()
 	case tea.KeyMsg:
 		if typed.String() == "c" && m.canOpenCredentialsShortcut() {
 			return m.openCredentials(m.recommendedCredentialFocus())
@@ -155,6 +172,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.screen = tuiScreenInteractiveSync
 					m.syncModel = newTUISyncModel(m.app, tuiSyncWorkflowInteractive)
 					return m, m.syncModel.Init()
+				case "Playlists":
+					m.screen = tuiScreenPlaylists
+					m.playlistModel = newTUIPlaylistModel(m.app)
+					return m, m.playlistModel.Init()
 				case "SoundCloud Free DL":
 					m.screen = tuiScreenFreeDL
 					m.freeDLModel = newTUIFreeDLModel(m.app)
@@ -177,6 +198,11 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if typed.String() == "esc" && m.canReturnToMenuOnEsc() {
+			if m.playlistChildActive && (m.screen == tuiScreenFreeDL || m.screen == tuiScreenRekordboxSync) {
+				m.screen = tuiScreenPlaylists
+				m.playlistChildActive = false
+				return m, nil
+			}
 			m.screen = tuiScreenMenu
 			m.refreshStartupAttention()
 			return m, nil
@@ -197,6 +223,10 @@ func (m tuiRootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncModel.height = m.height
 		next, cmd := m.syncModel.Update(msg)
 		m.syncModel = next
+		return m, cmd
+	case tuiScreenPlaylists:
+		next, cmd := m.playlistModel.Update(msg)
+		m.playlistModel = next
 		return m, cmd
 	case tuiScreenFreeDL:
 		m.freeDLModel.width = m.width
@@ -243,6 +273,8 @@ func (m tuiRootModel) canReturnToMenuOnEsc() bool {
 			!m.syncModel.hasActiveTimeoutInput()
 	case tuiScreenFreeDL:
 		return m.freeDLModel.allowBack()
+	case tuiScreenPlaylists:
+		return m.playlistModel.allowBack()
 	case tuiScreenRekordboxSync:
 		return m.rekordboxModel.allowBack()
 	case tuiScreenInit:

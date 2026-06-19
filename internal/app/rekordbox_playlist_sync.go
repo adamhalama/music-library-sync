@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
@@ -38,6 +39,7 @@ type RekordboxPlaylistSyncPlanRequest struct {
 	SyncConfig *syncconfig.Config
 	MappingID  string
 	Options    playlistsync.Options
+	Snapshot   *playlists.Snapshot
 }
 
 type RekordboxPlaylistSyncPlanResult struct {
@@ -66,6 +68,9 @@ type RekordboxPlaylistSyncApplyResult struct {
 func (u RekordboxPlaylistSyncUseCase) Plan(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {
 	if err := config.ValidateRekordbox(req.Config); err != nil {
 		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	if req.Snapshot != nil {
+		return u.planSnapshot(ctx, req)
 	}
 	if req.SyncConfig != nil && req.SyncConfig.HasFolderMappings() {
 		return u.planFolder(ctx, req)
@@ -132,6 +137,64 @@ func (u RekordboxPlaylistSyncUseCase) Plan(ctx context.Context, req RekordboxPla
 		Plan:     plan,
 		PlanPath: outPath,
 	}, nil
+}
+
+func (u RekordboxPlaylistSyncUseCase) planSnapshot(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {
+	snapshot := *req.Snapshot
+	if err := playlists.ValidateSnapshot(snapshot); err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	resolved, err := playlistsync.ResolveOptions(req.Config, req.Options)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	resolved.MusicPlaylist = snapshot.Name
+	resolved.MusicPlaylistID = snapshot.PlaylistID
+	resolved, err = u.ensureRuntime(ctx, resolved, pyruntime.Request{
+		Config:         req.Config,
+		PythonBin:      req.Options.PythonBin,
+		PythonPath:     req.Options.PythonPath,
+		ExplicitPython: req.Options.PythonBin != "" || req.Options.PythonPath != "",
+	})
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	if err := u.checkClosed(ctx, resolved.RekordboxDBDir); err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	inspect, err := u.bridge(resolved).Inspect(ctx, resolved.RekordboxDBDir)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	tracks := make([]music.Track, 0, len(snapshot.Tracks))
+	for _, track := range snapshot.Tracks {
+		tracks = append(tracks, music.Track{
+			Index: track.Index, PersistentID: track.ProviderID, DatabaseID: track.DatabaseID,
+			Artist: track.Artist, Title: track.Title, Album: track.Album,
+			Duration: track.Duration, Path: track.Path,
+		})
+	}
+	now := u.now()
+	outPath, err := playlistsync.DefaultOutPath(req.Config, resolved, now)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	resolved.OutPath = outPath
+	plan, err := playlistsync.BuildPlan(playlistsync.BuildRequest{
+		Options: resolved,
+		MusicPlaylist: music.Playlist{
+			Name: snapshot.Name, PersistentID: snapshot.PlaylistID, TrackCount: len(tracks),
+		},
+		MusicTracks: tracks,
+		Inspect:     inspect,
+	}, now)
+	if err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	if err := playlistsync.WritePlan(outPath, plan); err != nil {
+		return RekordboxPlaylistSyncPlanResult{}, err
+	}
+	return RekordboxPlaylistSyncPlanResult{Resolved: resolved, Plan: plan, PlanPath: outPath}, nil
 }
 
 func (u RekordboxPlaylistSyncUseCase) planFolder(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {

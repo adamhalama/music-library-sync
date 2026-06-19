@@ -358,6 +358,8 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 		return buildCredentialsShellState(m, layout)
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		return buildSyncShellState(m, layout)
+	case tuiScreenPlaylists:
+		return buildPlaylistShellState(m, layout)
 	case tuiScreenFreeDL:
 		return buildFreeDLShellState(m, layout)
 	case tuiScreenRekordboxSync:
@@ -491,6 +493,8 @@ func workflowNavigationItems(m tuiRootModel) []tuiSidebarSection {
 			active = item == "Credentials"
 		case tuiScreenInteractiveSync:
 			active = item == "Run Sync"
+		case tuiScreenPlaylists:
+			active = item == "Playlists"
 		case tuiScreenFreeDL:
 			active = item == "SoundCloud Free DL"
 		case tuiScreenSync:
@@ -534,6 +538,8 @@ func landingWorkflowMeta(item string) string {
 		return "checks"
 	case "Run Sync":
 		return "interactive"
+	case "Playlists":
+		return "snapshots"
 	case "SoundCloud Free DL":
 		return "upgrade"
 	case "Rekordbox Sync":
@@ -575,6 +581,8 @@ func landingWorkflowSummary(item string) string {
 		return "Verify tools, credentials, and folder access before syncing."
 	case "Run Sync":
 		return "Review enabled sources, preview the plan, and run a sync."
+	case "Playlists":
+		return "Manage saved playlist snapshots and run focused FreeDL or Rekordbox workflows."
 	case "SoundCloud Free DL":
 		return "Fetch Free DL upgrades into a buffer, back up originals, and promote selected tracks."
 	case "Rekordbox Sync":

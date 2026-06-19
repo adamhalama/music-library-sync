@@ -18,6 +18,7 @@ import (
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/output"
+	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
@@ -68,17 +69,17 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	if root.menuItems[0] != "Run Sync" {
 		t.Fatalf("expected Run Sync first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "SoundCloud Free DL" {
-		t.Fatalf("expected SoundCloud Free DL second, got %v", root.menuItems)
+	if root.menuItems[1] != "Playlists" {
+		t.Fatalf("expected Playlists second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Rekordbox Sync" {
-		t.Fatalf("expected Rekordbox Sync third, got %v", root.menuItems)
+	if root.menuItems[2] != "SoundCloud Free DL" {
+		t.Fatalf("expected SoundCloud Free DL third, got %v", root.menuItems)
 	}
-	if root.menuItems[3] != "Get Started" {
-		t.Fatalf("expected Get Started fourth, got %v", root.menuItems)
+	if root.menuItems[3] != "Rekordbox Sync" {
+		t.Fatalf("expected Rekordbox Sync fourth, got %v", root.menuItems)
 	}
-	if root.menuItems[4] != "Credentials" {
-		t.Fatalf("expected Credentials fifth, got %v", root.menuItems)
+	if root.menuItems[4] != "Get Started" {
+		t.Fatalf("expected Get Started fifth, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
@@ -89,6 +90,79 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	}
 	if !strings.Contains(view, "Review enabled sources") {
 		t.Fatalf("expected landing body summary, got: %s", view)
+	}
+}
+
+func TestTUIPlaylistOpeningUsesSavedSnapshotWithoutRefresh(t *testing.T) {
+	snapshot := playlists.Snapshot{
+		Version: playlists.SnapshotVersion, PlaylistID: "favorites", Name: "Favorites",
+		Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+		RefreshedAt: time.Now(), Tracks: []playlists.Track{{Index: 1, Title: "Track"}},
+		ChecksumSHA256: "test",
+	}
+	model := newTUIPlaylistModel(&AppContext{})
+	model.phase = tuiPlaylistPhaseList
+	model.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+	}}}
+	model.snapshots["favorites"] = snapshot
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("opening a saved playlist must not start background work")
+	}
+	if next.phase != tuiPlaylistPhaseDetail {
+		t.Fatalf("expected detail phase, got %s", next.phase)
+	}
+	if next.refreshCancel != nil {
+		t.Fatal("opening a saved playlist must not start refresh")
+	}
+}
+
+func TestTUIPlaylistDetailLaunchesFreeDLWithSnapshot(t *testing.T) {
+	definition := playlists.Definition{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+	}
+	snapshot := playlists.Snapshot{PlaylistID: "favorites", Name: "Favorites"}
+	model := newTUIPlaylistModel(&AppContext{})
+	model.phase = tuiPlaylistPhaseDetail
+	model.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}}
+	model.snapshots["favorites"] = snapshot
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if cmd == nil {
+		t.Fatal("expected FreeDL launch command")
+	}
+	msg := cmd()
+	if _, ok := msg.(tuiPlaylistOpenFreeDLMsg); !ok {
+		t.Fatalf("unexpected launch message %T", msg)
+	}
+}
+
+func TestTUIPlaylistDetailRendersAtNarrowAndWideSizes(t *testing.T) {
+	definition := playlists.Definition{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+	}
+	snapshot := playlists.Snapshot{
+		PlaylistID: "favorites", Name: "Favorites", RefreshedAt: time.Now(),
+		Tracks: []playlists.Track{{Index: 1, Artist: "Artist", Title: "Track", Path: "/Music/Track.m4a"}},
+	}
+	for _, size := range []struct {
+		width  int
+		height int
+	}{{80, 28}, {150, 42}} {
+		root := newMenuRootModelForTest()
+		root.width = size.width
+		root.height = size.height
+		root.screen = tuiScreenPlaylists
+		root.playlistModel = newTUIPlaylistModel(&AppContext{})
+		root.playlistModel.phase = tuiPlaylistPhaseDetail
+		root.playlistModel.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}}
+		root.playlistModel.snapshots["favorites"] = snapshot
+		view := root.View()
+		if !strings.Contains(view, "Standalone Playlists") || !strings.Contains(view, "Artist") {
+			t.Fatalf("expected playlist detail at %dx%d, got: %s", size.width, size.height, view)
+		}
 	}
 }
 

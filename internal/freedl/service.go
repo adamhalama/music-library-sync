@@ -20,6 +20,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/fileops"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 const (
@@ -62,26 +63,30 @@ const (
 )
 
 type PlanRow struct {
-	Index        int                          `json:"index"`
-	RemoteID     string                       `json:"remote_id"`
-	RemoteURL    string                       `json:"remote_url,omitempty"`
-	Title        string                       `json:"title"`
-	LocalPath    string                       `json:"local_path,omitempty"`
-	LocalQuality Quality                      `json:"local_quality"`
-	LocalState   LocalLookupState             `json:"local_state,omitempty"`
-	FreeDLProbe  engine.SoundCloudFreeDLProbe `json:"free_dl_probe"`
-	Selectable   bool                         `json:"selectable"`
-	Selected     bool                         `json:"selected"`
-	SkipReason   string                       `json:"skip_reason,omitempty"`
+	Index              int                          `json:"index"`
+	RemoteID           string                       `json:"remote_id"`
+	RemoteURL          string                       `json:"remote_url,omitempty"`
+	Title              string                       `json:"title"`
+	LocalPath          string                       `json:"local_path,omitempty"`
+	LocalQuality       Quality                      `json:"local_quality"`
+	LocalState         LocalLookupState             `json:"local_state,omitempty"`
+	FreeDLProbe        engine.SoundCloudFreeDLProbe `json:"free_dl_probe"`
+	Selectable         bool                         `json:"selectable"`
+	Selected           bool                         `json:"selected"`
+	SkipReason         string                       `json:"skip_reason,omitempty"`
+	PlaylistMatch      playlists.MatchStatus        `json:"playlist_match,omitempty"`
+	PlaylistTrackIndex int                          `json:"playlist_track_index,omitempty"`
 }
 
 type CapturePlan struct {
-	RunID      string    `json:"run_id"`
-	CreatedAt  time.Time `json:"created_at"`
-	Job        Job       `json:"job"`
-	Rows       []PlanRow `json:"rows"`
-	BufferRoot string    `json:"buffer_root"`
-	LogDir     string    `json:"log_dir"`
+	RunID            string    `json:"run_id"`
+	CreatedAt        time.Time `json:"created_at"`
+	Job              Job       `json:"job"`
+	Rows             []PlanRow `json:"rows"`
+	BufferRoot       string    `json:"buffer_root"`
+	LogDir           string    `json:"log_dir"`
+	PlaylistID       string    `json:"playlist_id,omitempty"`
+	PlaylistChecksum string    `json:"playlist_checksum,omitempty"`
 }
 
 type PromotionAction string
@@ -159,6 +164,24 @@ type captureStateEntry struct {
 
 func (s Service) BuildCapturePlan(ctx context.Context, main config.Config, job Job) (CapturePlan, error) {
 	for event := range s.BuildCapturePlanProgress(ctx, main, job) {
+		switch event.Kind {
+		case CapturePlanEventDone:
+			return event.Plan, nil
+		case CapturePlanEventFailed:
+			if event.Err != nil {
+				return CapturePlan{}, event.Err
+			}
+			return CapturePlan{}, fmt.Errorf("capture planning failed")
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return CapturePlan{}, err
+	}
+	return CapturePlan{}, fmt.Errorf("capture planning stopped before completion")
+}
+
+func (s Service) BuildCapturePlanForPlaylist(ctx context.Context, main config.Config, job Job, snapshot playlists.Snapshot) (CapturePlan, error) {
+	for event := range s.BuildCapturePlanProgressForPlaylist(ctx, main, job, snapshot) {
 		switch event.Kind {
 		case CapturePlanEventDone:
 			return event.Plan, nil
@@ -544,6 +567,9 @@ func buildAssignments(libraryFiles, freeFiles []mediaFile, minScore, ambiguityGa
 
 func buildPromotionAssignments(libraryFiles, freeFiles []mediaFile, plan CapturePlan, state []captureStateEntry, downloadsRoot string, minScore, ambiguityGap int) []assignment {
 	assignments, usedLibrary, usedFree := buildIdentityAssignments(libraryFiles, freeFiles, plan, state, downloadsRoot)
+	if strings.TrimSpace(plan.PlaylistID) != "" {
+		return assignments
+	}
 	if len(usedLibrary) == 0 && len(usedFree) == 0 {
 		return buildAssignments(libraryFiles, freeFiles, minScore, ambiguityGap)
 	}

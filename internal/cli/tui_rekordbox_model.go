@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
@@ -64,28 +65,30 @@ type tuiRekordboxSetupState struct {
 }
 
 type tuiRekordboxModel struct {
-	app            *AppContext
-	phase          tuiRekordboxPhase
-	cfg            config.Config
-	rbCfg          syncconfig.Config
-	cfgErr         error
-	jobs           []tuiRekordboxJobState
-	jobCursor      int
-	dryRun         bool
-	scroll         int
-	plan           *playlistsync.Plan
-	planPath       string
-	resolved       playlistsync.ResolvedOptions
-	err            error
-	backupPath     string
-	applyResp      bridge.ApplyResponse
-	applyBatchResp bridge.ApplyBatchResponse
-	lastDryRun     bool
-	runtimeStatus  pyruntime.Status
-	setup          tuiRekordboxSetupState
-	runCancel      context.CancelFunc
-	width          int
-	height         int
+	app                *AppContext
+	phase              tuiRekordboxPhase
+	cfg                config.Config
+	rbCfg              syncconfig.Config
+	cfgErr             error
+	jobs               []tuiRekordboxJobState
+	jobCursor          int
+	dryRun             bool
+	scroll             int
+	plan               *playlistsync.Plan
+	planPath           string
+	resolved           playlistsync.ResolvedOptions
+	err                error
+	backupPath         string
+	applyResp          bridge.ApplyResponse
+	applyBatchResp     bridge.ApplyBatchResponse
+	lastDryRun         bool
+	runtimeStatus      pyruntime.Status
+	setup              tuiRekordboxSetupState
+	runCancel          context.CancelFunc
+	width              int
+	height             int
+	playlistDefinition *playlists.Definition
+	playlistSnapshot   *playlists.Snapshot
 }
 
 type tuiRekordboxConfigLoadedMsg struct {
@@ -135,6 +138,13 @@ func newTUIRekordboxModel(app *AppContext) tuiRekordboxModel {
 	return tuiRekordboxModel{app: app, phase: tuiRekordboxPhaseLoading, dryRun: dryRun}
 }
 
+func newTUIRekordboxModelForPlaylist(app *AppContext, definition playlists.Definition, snapshot playlists.Snapshot) tuiRekordboxModel {
+	model := newTUIRekordboxModel(app)
+	model.playlistDefinition = &definition
+	model.playlistSnapshot = &snapshot
+	return model
+}
+
 func (m tuiRekordboxModel) Init() tea.Cmd {
 	return func() tea.Msg {
 		cfg, err := loadConfig(m.app)
@@ -168,6 +178,9 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		m.cfgErr = typed.Err
 		m.runtimeStatus = typed.RuntimeStatus
 		m.jobs = tuiRekordboxJobsForConfig(typed.Config, typed.SyncConfig)
+		if m.playlistSnapshot != nil {
+			m.jobs = tuiRekordboxJobsForPlaylist(typed.SyncConfig, *m.playlistDefinition)
+		}
 		if len(m.jobs) == 0 {
 			m.jobs = []tuiRekordboxJobState{tuiDefaultRekordboxJobState()}
 		}
@@ -297,13 +310,22 @@ func (m tuiRekordboxModel) updateKey(msg tea.KeyMsg) (tuiRekordboxModel, tea.Cmd
 			m.dryRun = !m.dryRun
 			return m, nil
 		case "s", "n":
+			if m.playlistSnapshot != nil {
+				return m, nil
+			}
 			return m.startSetup(-1)
 		case "e":
+			if m.playlistSnapshot != nil {
+				return m, nil
+			}
 			if mapping, ok := m.selectedFolderMapping(); ok {
 				return m.startSetupWithMapping(m.jobCursor, mapping)
 			}
 			return m.startSetup(-1)
 		case "x":
+			if m.playlistSnapshot != nil {
+				return m, nil
+			}
 			if _, ok := m.selectedFolderMapping(); ok {
 				m.setup.DeleteConfirm = true
 				return m, nil
@@ -398,6 +420,7 @@ func (m tuiRekordboxModel) startPlan() (tuiRekordboxModel, tea.Cmd) {
 			SyncConfig: &m.rbCfg,
 			MappingID:  options.MappingID,
 			Options:    options,
+			Snapshot:   m.playlistSnapshot,
 		})
 		if errors.Is(err, context.Canceled) {
 			err = fmt.Errorf("Rekordbox playlist sync canceled")
@@ -897,6 +920,40 @@ func tuiDefaultRekordboxJobState() tuiRekordboxJobState {
 			RekordboxPlaylist: playlistsync.DefaultRekordboxPlaylist,
 		},
 	}
+}
+
+func tuiRekordboxJobsForPlaylist(rbCfg syncconfig.Config, definition playlists.Definition) []tuiRekordboxJobState {
+	jobs := []tuiRekordboxJobState{}
+	for _, job := range rbCfg.Sync.Jobs {
+		label := firstNonEmpty(job.ID, job.RekordboxPlaylist, "destination")
+		options := playlistsync.Options{
+			RekordboxPlaylist:   job.RekordboxPlaylist,
+			RekordboxPlaylistID: job.RekordboxPlaylistID,
+			Mode:                job.Mode,
+		}
+		if job.CreatePlaylist != nil {
+			options.CreatePlaylist = *job.CreatePlaylist
+			options.CreatePlaylistSet = true
+		}
+		jobs = append(jobs, tuiRekordboxJobState{Label: label, Options: options})
+	}
+	target := firstNonEmpty(definition.DefaultRekordboxTarget, playlistsync.DefaultRekordboxPlaylist)
+	defaultJob := tuiRekordboxJobState{
+		Label: "target: " + target,
+		Options: playlistsync.Options{
+			RekordboxPlaylist: target,
+		},
+	}
+	ordered := []tuiRekordboxJobState{defaultJob}
+	for idx, job := range jobs {
+		if job.Label == definition.DefaultRekordboxTarget || job.Options.RekordboxPlaylist == definition.DefaultRekordboxTarget {
+			ordered = []tuiRekordboxJobState{job, defaultJob}
+			ordered = append(ordered, jobs[:idx]...)
+			ordered = append(ordered, jobs[idx+1:]...)
+			return ordered
+		}
+	}
+	return append(ordered, jobs...)
 }
 
 func (m tuiRekordboxModel) musicFolders() []music.Playlist {

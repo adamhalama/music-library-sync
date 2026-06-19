@@ -78,6 +78,9 @@ func (m tuiFreeDLModel) shellBadges() []tuiBadge {
 		badges = append(badges, tuiBadge{Label: fmt.Sprintf("RUN: %s", m.plan.RunID), Tone: "muted"})
 		badges = append(badges, tuiBadge{Label: fmt.Sprintf("SELECTED: %d", selectedCaptureCount(m.plan)), Tone: "info"})
 	}
+	if m.playlistSnapshot != nil {
+		badges = append(badges, tuiBadge{Label: "PLAYLIST: " + strings.ToUpper(m.playlistSnapshot.Name), Tone: "info"})
+	}
 	if m.promoPlan != nil {
 		badges = append(badges, tuiBadge{Label: "FORMAT: " + strings.ToUpper(m.promoPlan.TargetFormat), Tone: "info"})
 	}
@@ -86,6 +89,9 @@ func (m tuiFreeDLModel) shellBadges() []tuiBadge {
 
 func (m tuiFreeDLModel) shellCommandSummary() []string {
 	parts := []string{"udl", "tui", "freedl", "phase=" + string(m.phase)}
+	if m.playlistSnapshot != nil {
+		parts = append(parts, "playlist="+m.playlistSnapshot.PlaylistID)
+	}
 	if job, ok := m.currentJob(); ok {
 		parts = append(parts, "job="+job.ID)
 	}
@@ -117,6 +123,9 @@ func (m tuiFreeDLModel) shellFooterStats() []tuiFooterStat {
 	stats := []tuiFooterStat{{Label: "phase", Value: string(m.phase), Tone: "info"}, {Label: "jobs", Value: fmt.Sprintf("%d", len(m.jobs)), Tone: "info"}}
 	if m.plan != nil {
 		stats = append(stats, tuiFooterStat{Label: "capture", Value: fmt.Sprintf("%d/%d", selectedCaptureCount(m.plan), len(m.plan.Rows)), Tone: "info"})
+	}
+	if m.playlistSnapshot != nil {
+		stats = append(stats, tuiFooterStat{Label: "playlist", Value: fmt.Sprintf("%d tracks", len(m.playlistSnapshot.Tracks)), Tone: "info"})
 	}
 	if m.promoPlan != nil {
 		stats = append(stats, tuiFooterStat{Label: "promote", Value: fmt.Sprintf("%d/%d", selectedPromotionCount(m.promoPlan), len(m.promoPlan.Rows)), Tone: "warning"})
@@ -202,6 +211,12 @@ func (m tuiFreeDLModel) jobLines(width int) []string {
 	lines := []string{
 		"Plan limit: " + formatPlanLimit(m.planLimit),
 		"Use [/] to adjust, u for unlimited, l to type a count, e to manage jobs.",
+	}
+	if m.playlistSnapshot != nil {
+		lines = append([]string{
+			fmt.Sprintf("Playlist filter: %s (%d tracks)", m.playlistSnapshot.Name, len(m.playlistSnapshot.Tracks)),
+			"Only safe path or unique artist/title matches can be selected.",
+		}, lines...)
 	}
 	if m.limitEditing {
 		lines = append(lines, fmt.Sprintf("limit_input=%q  enter apply  esc cancel", m.limitInput))
@@ -352,13 +367,21 @@ func (m tuiFreeDLModel) planSummaryLines() []string {
 			available++
 		}
 	}
-	return []string{
+	lines := []string{
 		fmt.Sprintf("Rows: %d", len(m.plan.Rows)),
 		fmt.Sprintf("Free DL available: %d", available),
 		fmt.Sprintf("Selected for capture: %d", selectedCaptureCount(m.plan)),
 		"Capture target: " + shortPath(m.plan.BufferRoot),
 		"Logs: " + shortPath(m.plan.LogDir),
 	}
+	if m.playlistSnapshot != nil {
+		lines = append([]string{
+			fmt.Sprintf("Playlist tracks: %d", len(m.playlistSnapshot.Tracks)),
+			fmt.Sprintf("Playlist matches: %d", playlistMatchedCaptureCount(m.plan)),
+			fmt.Sprintf("Playlist ambiguous: %d", playlistAmbiguousCaptureCount(m.plan)),
+		}, lines...)
+	}
+	return lines
 }
 
 func (m tuiFreeDLModel) planningSummaryLines() []string {
@@ -490,6 +513,12 @@ func localQualityLabel(row freedl.PlanRow) string {
 }
 
 func freeDLPlanStatusChip(row freedl.PlanRow) (string, lipgloss.Style) {
+	if row.PlaylistMatch == "ambiguous" {
+		return " ambiguous ", lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Background(lipgloss.Color("52")).Bold(true)
+	}
+	if row.PlaylistMatch == "none" {
+		return " outside-list ", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("238"))
+	}
 	switch row.FreeDLProbe.Status {
 	case engine.SoundCloudFreeDLAvailable:
 		if row.Selectable {
@@ -505,6 +534,32 @@ func freeDLPlanStatusChip(row freedl.PlanRow) (string, lipgloss.Style) {
 	default:
 		return " checking ", lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("17")).Bold(true)
 	}
+}
+
+func playlistMatchedCaptureCount(plan *freedl.CapturePlan) int {
+	if plan == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range plan.Rows {
+		if row.PlaylistMatch == "path" || row.PlaylistMatch == "metadata" {
+			count++
+		}
+	}
+	return count
+}
+
+func playlistAmbiguousCaptureCount(plan *freedl.CapturePlan) int {
+	if plan == nil {
+		return 0
+	}
+	count := 0
+	for _, row := range plan.Rows {
+		if row.PlaylistMatch == "ambiguous" {
+			count++
+		}
+	}
+	return count
 }
 
 func freeDLStageLine(stage, status string) string {

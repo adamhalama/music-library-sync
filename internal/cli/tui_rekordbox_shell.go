@@ -45,11 +45,17 @@ func (m tuiRekordboxModel) shellBadges() []tuiBadge {
 	if m.plan != nil {
 		badges = append(badges, tuiBadge{Label: fmt.Sprintf("MATCHED: %d/%d", m.plan.Summary.MatchedByPath, m.plan.Summary.MusicTotal), Tone: m.planTone()})
 	}
+	if m.playlistSnapshot != nil {
+		badges = append(badges, tuiBadge{Label: "PLAYLIST: " + strings.ToUpper(m.playlistSnapshot.Name), Tone: "info"})
+	}
 	return badges
 }
 
 func (m tuiRekordboxModel) shellCommandSummary() []string {
 	parts := []string{"udl", "rekordbox", "playlist-sync"}
+	if m.playlistSnapshot != nil {
+		parts = append(parts, "playlist="+m.playlistSnapshot.PlaylistID)
+	}
 	switch m.phase {
 	case tuiRekordboxPhaseSetupDiscovering, tuiRekordboxPhaseSetupList, tuiRekordboxPhaseSetupSource, tuiRekordboxPhaseSetupTarget, tuiRekordboxPhaseSetupReview, tuiRekordboxPhaseSetupSaving:
 		return []string{"udl", "rekordbox", "config", "show", "path=" + firstNonEmpty(m.setup.ConfigPath, "auto")}
@@ -70,6 +76,14 @@ func (m tuiRekordboxModel) shellCommandSummary() []string {
 func (m tuiRekordboxModel) shellShortcuts() []tuiShortcut {
 	switch m.phase {
 	case tuiRekordboxPhaseReady:
+		if m.playlistSnapshot != nil {
+			return []tuiShortcut{
+				{Key: "j/k", Label: "destination"},
+				{Key: "d", Label: "dry-run"},
+				{Key: "enter", Label: "plan"},
+				{Key: "esc", Label: "back"},
+			}
+		}
 		shortcuts := []tuiShortcut{
 			{Key: "j/k", Label: "job"},
 			{Key: "s/n", Label: "setup"},
@@ -209,6 +223,21 @@ func (m tuiRekordboxModel) shellBody(layout tuiShellLayout) string {
 }
 
 func (m tuiRekordboxModel) readyLines() []string {
+	if m.playlistSnapshot != nil {
+		lines := []string{
+			"Standalone playlist: " + m.playlistSnapshot.Name,
+			fmt.Sprintf("Snapshot tracks: %d", len(m.playlistSnapshot.Tracks)),
+			"Snapshot refreshed: " + m.playlistSnapshot.RefreshedAt.Format("2006-01-02 15:04 MST"),
+			"Destination: " + firstNonEmpty(m.resolved.RekordboxPlaylist, playlistsync.DefaultRekordboxPlaylist),
+			"DB dir: " + m.resolved.RekordboxDBDir,
+			"Backup dir: " + m.resolved.BackupDir,
+		}
+		if m.runtimeStatus.Healthy {
+			lines = append(lines, "Runtime: "+m.runtimeStatus.Message)
+		}
+		lines = append(lines, "j/k: choose destination  enter: generate signed plan")
+		return lines
+	}
 	if mapping, ok := m.selectedFolderMapping(); ok {
 		lines := []string{
 			"Mapping: " + m.selectedJobLabel(),

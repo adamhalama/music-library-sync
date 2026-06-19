@@ -9,6 +9,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 func TestBuildCapturePlanProgressEmitsRowsBeforeDone(t *testing.T) {
@@ -112,5 +113,25 @@ func TestBuildCapturePlanProgressEmitsRowsBeforeDone(t *testing.T) {
 		if !row.Selectable || !row.Selected {
 			t.Fatalf("expected row selectable and selected by default: %+v", row)
 		}
+	}
+}
+
+func TestCapturePlaylistMatchRejectsTrackOutsideSnapshot(t *testing.T) {
+	snapshot := playlists.Snapshot{Tracks: []playlists.Track{{
+		Artist: "Wanted Artist", Title: "Wanted Track", Path: "/Music/Wanted.m4a",
+	}}}
+	status, index, allowed := capturePlaylistMatch(snapshot, "/Music/Other.m4a", "Other Artist - Other Track")
+	if allowed || status != playlists.MatchNone || index != 0 {
+		t.Fatalf("expected outside track to be rejected, got status=%s index=%d allowed=%t", status, index, allowed)
+	}
+}
+
+func TestCapturePlaylistMatchAllowsExactPath(t *testing.T) {
+	snapshot := playlists.Snapshot{Tracks: []playlists.Track{{
+		Artist: "Wanted Artist", Title: "Wanted Track", Path: "/Music/Wanted.m4a",
+	}}}
+	status, index, allowed := capturePlaylistMatch(snapshot, "/Music/Wanted.m4a", "renamed remote title")
+	if !allowed || status != playlists.MatchPath || index != 1 {
+		t.Fatalf("expected exact path match, got status=%s index=%d allowed=%t", status, index, allowed)
 	}
 }

@@ -30,3 +30,4 @@ We are building this together. When you learn something non-obvious, add it here
 - Shell-based subprocess tests can buffer stdout unexpectedly; for deterministic rate-limit guard tests, emit the trigger line on stderr so `SubprocessRunner` observers see it immediately.
 - pyrekordbox `db6.tables.datetime_to_str` drops second precision when `datetime.microsecond == 0` (stores `YYYY-MM-DD HH:MM +00:00`); when writing `djmdContent.created_at` for deterministic Date Added ordering, always use non-zero microseconds (for example `.900000`) so seconds survive serialization.
 - Public macOS releases now ship `udl` only; Homebrew installs `scdl` and `yt-dlp` as external dependencies, and tarball installs rely on `doctor` / TUI repair guidance when those tools are missing.
+- Standalone playlist snapshots are cache-first and never refresh on open; Apple Music is read only after an explicit refresh, and failed or canceled refreshes must preserve the previous valid snapshot.

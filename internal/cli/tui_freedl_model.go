@@ -18,6 +18,7 @@ import (
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/output"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 type tuiFreeDLPhase string
@@ -94,6 +95,9 @@ type tuiFreeDLModel struct {
 	configEdit           *tuiConfigEditorInlineEditState
 	configDeleteConfirm  bool
 	configDiscardConfirm bool
+
+	playlistDefinition *playlists.Definition
+	playlistSnapshot   *playlists.Snapshot
 }
 
 type tuiFreeDLLoadedMsg struct {
@@ -135,6 +139,13 @@ func newTUIFreeDLModel(app *AppContext) tuiFreeDLModel {
 	}
 }
 
+func newTUIFreeDLModelForPlaylist(app *AppContext, definition playlists.Definition, snapshot playlists.Snapshot) tuiFreeDLModel {
+	model := newTUIFreeDLModel(app)
+	model.playlistDefinition = &definition
+	model.playlistSnapshot = &snapshot
+	return model
+}
+
 func (m tuiFreeDLModel) Init() tea.Cmd {
 	return func() tea.Msg {
 		mainCfg, err := loadConfig(m.app)
@@ -168,6 +179,14 @@ func (m tuiFreeDLModel) Update(msg tea.Msg) (tuiFreeDLModel, tea.Cmd) {
 		if typed.Err != nil {
 			m.phase = tuiFreeDLPhaseFailed
 		} else {
+			if m.playlistDefinition != nil {
+				for idx, job := range m.jobs {
+					if job.ID == m.playlistDefinition.DefaultFreeDLJob {
+						m.jobCursor = idx
+						break
+					}
+				}
+			}
 			m.planLimit = m.jobPlanLimit()
 			if len(typed.Jobs) == 0 {
 				m.openConfigEditor(true)
@@ -378,6 +397,9 @@ func (m tuiFreeDLModel) startPlan() (tuiFreeDLModel, tea.Cmd) {
 	m.planningStages = map[string]string{}
 	m.selectionOverrides = map[string]bool{}
 	events := freedl.Service{}.BuildCapturePlanProgress(ctx, m.mainConfig, job)
+	if m.playlistSnapshot != nil {
+		events = freedl.Service{}.BuildCapturePlanProgressForPlaylist(ctx, m.mainConfig, job, *m.playlistSnapshot)
+	}
 	return m, waitFreeDLPlanEvent(events)
 }
 

@@ -211,6 +211,21 @@ func TestBuildPromotionAssignmentsFallsBackToSemanticMatching(t *testing.T) {
 	}
 }
 
+func TestBuildPromotionAssignmentsDoesNotFallbackOutsidePlaylistSnapshot(t *testing.T) {
+	assignments := buildPromotionAssignments(
+		[]mediaFile{{Path: "/library/other.m4a", Rel: "other.m4a", Key: "other track"}},
+		[]mediaFile{{Path: "/buffer/other.wav", Rel: "other.wav", Key: "other track"}},
+		CapturePlan{PlaylistID: "favorites"},
+		nil,
+		"/buffer",
+		72,
+		8,
+	)
+	if len(assignments) != 0 {
+		t.Fatalf("expected playlist-scoped promotion to require identity matching, got %+v", assignments)
+	}
+}
+
 func TestReadCaptureStateKeepsPathsWithSpaces(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capture.sync.scdl")
 	payload := "# comment\nsoundcloud 123 track 1 master.wav\nsoundcloud 456 nested/other file.aiff\n"

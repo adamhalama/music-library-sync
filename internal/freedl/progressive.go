@@ -10,6 +10,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 const (
@@ -45,15 +46,23 @@ type CapturePlanEvent struct {
 }
 
 func (s Service) BuildCapturePlanProgress(ctx context.Context, main config.Config, job Job) <-chan CapturePlanEvent {
+	return s.buildCapturePlanProgressStream(ctx, main, job, nil)
+}
+
+func (s Service) BuildCapturePlanProgressForPlaylist(ctx context.Context, main config.Config, job Job, snapshot playlists.Snapshot) <-chan CapturePlanEvent {
+	return s.buildCapturePlanProgressStream(ctx, main, job, &snapshot)
+}
+
+func (s Service) buildCapturePlanProgressStream(ctx context.Context, main config.Config, job Job, snapshot *playlists.Snapshot) <-chan CapturePlanEvent {
 	events := make(chan CapturePlanEvent, 64)
 	go func() {
 		defer close(events)
-		s.buildCapturePlanProgress(ctx, main, job, events)
+		s.buildCapturePlanProgress(ctx, main, job, snapshot, events)
 	}()
 	return events
 }
 
-func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Config, job Job, events chan<- CapturePlanEvent) {
+func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Config, job Job, snapshot *playlists.Snapshot, events chan<- CapturePlanEvent) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	send := func(event CapturePlanEvent) bool {
@@ -107,6 +116,14 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 		Rows:       []PlanRow{},
 		BufferRoot: filepath.Join(bufferRoot, runID),
 		LogDir:     filepath.Join(logDir, runID),
+	}
+	if snapshot != nil {
+		if err := playlists.ValidateSnapshot(*snapshot); err != nil {
+			fail(err)
+			return
+		}
+		plan.PlaylistID = snapshot.PlaylistID
+		plan.PlaylistChecksum = snapshot.ChecksumSHA256
 	}
 	if !send(CapturePlanEvent{Kind: CapturePlanEventStarted, Plan: plan}) {
 		return
@@ -221,10 +238,18 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 		}
 	}
 	recomputeSelectable := func(row *PlanRow, planRow engine.PlanRow) {
-		selectable := planRow.Toggleable && row.FreeDLProbe.Status == engine.SoundCloudFreeDLAvailable
+		playlistAllowed := true
+		if snapshot != nil {
+			row.PlaylistMatch, row.PlaylistTrackIndex, playlistAllowed = capturePlaylistMatch(*snapshot, row.LocalPath, row.Title)
+		}
+		selectable := planRow.Toggleable && row.FreeDLProbe.Status == engine.SoundCloudFreeDLAvailable && playlistAllowed
 		row.Selectable = selectable
 		row.Selected = selectable
 		switch {
+		case snapshot != nil && row.PlaylistMatch == playlists.MatchAmbiguous:
+			row.SkipReason = "playlist-ambiguous"
+		case snapshot != nil && row.PlaylistMatch == playlists.MatchNone:
+			row.SkipReason = "not-in-playlist"
 		case !planRow.Toggleable:
 			row.SkipReason = "already-present"
 		case row.FreeDLProbe.Status != "" && row.FreeDLProbe.Status != engine.SoundCloudFreeDLAvailable:
@@ -490,4 +515,9 @@ func (s Service) buildCapturePlanProgress(ctx context.Context, main config.Confi
 	plan.Rows = rowSnapshot()
 	_ = WriteJSON(filepath.Join(plan.LogDir, "capture-plan.json"), plan)
 	_ = send(CapturePlanEvent{Kind: CapturePlanEventDone, Plan: plan})
+}
+
+func capturePlaylistMatch(snapshot playlists.Snapshot, localPath, remoteTitle string) (playlists.MatchStatus, int, bool) {
+	match := playlists.MatchTrack(snapshot, localPath, remoteTitle)
+	return match.Status, match.Index + 1, match.Status == playlists.MatchPath || match.Status == playlists.MatchMetadata
 }
