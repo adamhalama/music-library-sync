@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"io"
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
@@ -12,6 +13,7 @@ type ExecSpec struct {
 	Dir             string
 	Timeout         time.Duration
 	DisplayCommand  string
+	Stdin           io.Reader
 	StdoutObservers []func(line string)
 	StderrObservers []func(line string)
 }

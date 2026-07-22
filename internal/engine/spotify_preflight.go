@@ -334,31 +334,30 @@ func buildSpotifyPreflight(
 	state spotifySyncState,
 	targetDir string,
 	mode SoundCloudMode,
-) (SoundCloudPreflight, map[string]struct{}, map[string]struct{}, []string, []string) {
+) (SoundCloudPreflight, map[string]struct{}, map[string]struct{}, []string, []string, []spotifyStateBackfillEntry) {
 	archiveGapIDs := map[string]struct{}{}
 	knownGapIDs := map[string]struct{}{}
 	existingKnownIDs := make([]string, 0, len(remoteTracks))
-	localMediaByTitle := scanLocalMediaTitleIndex(targetDir)
-	availableLocalTitles := copyTitleCountMap(localMediaByTitle)
+	availableLocalPaths := scanLocalMediaTitlePathIndex(targetDir)
 	consumedStatePaths := map[string]struct{}{}
+	backfillEntries := []spotifyStateBackfillEntry{}
 
 	knownCount := 0
 	firstExisting := 0
 
 	for i, track := range remoteTracks {
 		_, known := state.KnownIDs[track.ID]
-		if !known {
-			archiveGapIDs[track.ID] = struct{}{}
-			continue
-		}
-
-		knownCount++
 		entry := state.Entries[track.ID]
+		if known {
+			knownCount++
+		}
 		hasLocal := spotifyStateTrackPresent(targetDir, entry, consumedStatePaths)
+		localPath := ""
 		if !hasLocal {
 			for _, candidate := range spotifyTrackLocalTitleCandidates(track, entry) {
-				if consumeLocalTitleMatch(availableLocalTitles, candidate) {
+				if matchedPath, ok := consumeLocalTitlePathMatch(availableLocalPaths, candidate); ok {
 					hasLocal = true
+					localPath = matchedPath
 					break
 				}
 			}
@@ -368,6 +367,17 @@ func buildSpotifyPreflight(
 			if firstExisting == 0 {
 				firstExisting = i + 1
 			}
+			if !known {
+				backfillEntries = append(backfillEntries, spotifyStateBackfillEntry{
+					ID:          track.ID,
+					DisplayName: spotifyTrackLocalTitle(track),
+					LocalPath:   localPath,
+				})
+			}
+			continue
+		}
+		if !known {
+			archiveGapIDs[track.ID] = struct{}{}
 			continue
 		}
 		knownGapIDs[track.ID] = struct{}{}
@@ -411,7 +421,7 @@ func buildSpotifyPreflight(
 		PlannedDownloadCount: len(planned),
 		Mode:                 mode,
 	}
-	return preflight, archiveGapIDs, knownGapIDs, planned, existingKnownIDs
+	return preflight, archiveGapIDs, knownGapIDs, planned, existingKnownIDs, backfillEntries
 }
 
 func spotifyTrackLocalTitle(track spotifyRemoteTrack) string {
@@ -444,9 +454,74 @@ func spotifyTrackLocalTitleCandidates(track spotifyRemoteTrack, entry spotifySta
 
 	add(spotifyTrackLocalTitle(track))
 	add(entry.DisplayName)
+	for _, artist := range splitSpotifyArtistCandidates(track.Artist) {
+		if track.Title != "" {
+			add(artist + " - " + track.Title)
+		}
+	}
 	add(track.Title)
 	add(track.ID)
 	return candidates
+}
+
+func splitSpotifyArtistCandidates(artist string) []string {
+	parts := strings.FieldsFunc(artist, func(r rune) bool {
+		return r == ',' || r == '&' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func scanLocalMediaTitlePathIndex(root string) map[string][]string {
+	index := map[string][]string{}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return index
+	}
+	if _, err := os.Stat(root); err != nil {
+		return index
+	}
+	_ = filepath.WalkDir(root, func(mediaPath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if !isMediaExt(ext) {
+			return nil
+		}
+		stem := strings.TrimSpace(strings.TrimSuffix(name, ext))
+		key := normalizeTrackKey(stem)
+		if key == "" {
+			return nil
+		}
+		rel, err := filepath.Rel(root, mediaPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			rel = name
+		}
+		index[key] = append(index[key], filepath.ToSlash(rel))
+		return nil
+	})
+	return index
+}
+
+func consumeLocalTitlePathMatch(available map[string][]string, title string) (string, bool) {
+	key := normalizeTrackKey(title)
+	if key == "" {
+		return "", false
+	}
+	paths := available[key]
+	if len(paths) == 0 {
+		return "", false
+	}
+	path := paths[0]
+	available[key] = paths[1:]
+	return path, true
 }
 
 func spotifyStateTrackPresent(targetDir string, entry spotifyStateEntry, consumed map[string]struct{}) bool {

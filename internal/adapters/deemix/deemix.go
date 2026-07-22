@@ -96,6 +96,7 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 		Dir:            runtimeDir,
 		Timeout:        timeout,
 		DisplayCommand: formatCommand(bin, displayArgs),
+		Stdin:          strings.NewReader(""),
 	}, nil
 }
 

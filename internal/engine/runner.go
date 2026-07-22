@@ -88,6 +88,9 @@ func (r *SubprocessRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
 	cmd := exec.CommandContext(runCtx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Stdin = r.Stdin
+	if spec.Stdin != nil {
+		cmd.Stdin = spec.Stdin
+	}
 	configureCommandForTermination(cmd)
 
 	stdoutTail := newTailBuffer(64 * 1024)

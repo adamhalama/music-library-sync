@@ -75,6 +75,20 @@ func TestSpotifyDeemixPlanProviderFirstWindowPreservesRemoteOrder(t *testing.T) 
 	}
 }
 
+func TestApplySpotifyPlanWindowLatestWithoutAddedAtUsesTailReversed(t *testing.T) {
+	tracks := []spotifyRemoteTrack{
+		{ID: "one12345678", Position: 1},
+		{ID: "two12345678", Position: 2},
+		{ID: "three123456", Position: 3},
+		{ID: "four1234567", Position: 4},
+	}
+
+	selected := applySpotifyPlanWindow(tracks, 2, PlanWindowLatest)
+	if got, want := []string{selected[0].ID, selected[1].ID}, []string{"four1234567", "three123456"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected fallback latest tail reversed %v, got %v", want, got)
+	}
+}
+
 func testSpotifyDeemixPlanSource(t *testing.T) (config.Config, config.Source, string, string) {
 	t.Helper()
 	tmp := t.TempDir()
@@ -120,7 +134,7 @@ func TestSpotifyDeemixPlanProviderBuildClassifiesRowsAndDefaultSelection(t *test
 		{ID: "3abc234def", Title: "Track 3", Artist: "Artist 3"},
 	})
 
-	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10})
+	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10, PlanWindow: PlanWindowFirst})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
@@ -150,7 +164,7 @@ func TestSpotifyDeemixPlanProviderApplySelectionOrdersSpotifyExecution(t *testin
 		{ID: "3abc234def", Title: "Track 3", Artist: "Artist 3"},
 	})
 
-	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, ScanGaps: true})
+	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, ScanGaps: true, PlanWindow: PlanWindowFirst})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
@@ -190,7 +204,7 @@ func TestSpotifyDeemixPlanProviderEnrichesIDOnlyPlaylistRows(t *testing.T) {
 		}
 	}
 
-	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10})
+	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10, PlanWindow: PlanWindowFirst})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}

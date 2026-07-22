@@ -121,7 +121,9 @@ func buildSpotifyDeemixPlan(
 	if err != nil {
 		return plan, nil, nil, nil, nil, fmt.Errorf("resolve state_file: %w", err)
 	}
-	plan.Source.StateFile = stateFilePath
+	stateStore := resolveSpotifyStateStore(stateFilePath)
+	plan.Source.StateFile = stateStore.WritePath
+	plan.StateWritePath = stateStore.WritePath
 
 	spotifyCreds, err := resolveSpotifyCredentialsFn()
 	if err != nil {
@@ -173,18 +175,20 @@ func buildSpotifyDeemixPlan(
 
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
-	state, err := parseSpotifySyncState(stateFilePath)
+	state, stateStore, err := loadSpotifySyncState(stateFilePath)
 	if err != nil {
 		return plan, nil, nil, nil, nil, fmt.Errorf("parse spotify sync state file: %w", err)
 	}
 	plan.State = state
+	plan.Source.StateFile = stateStore.WritePath
+	plan.StateWritePath = stateStore.WritePath
 
 	targetDir, err := config.ExpandPath(source.TargetDir)
 	if err != nil {
 		return plan, nil, nil, nil, nil, fmt.Errorf("resolve target_dir: %w", err)
 	}
 
-	preflight, archiveGapIDs, knownGapIDs, plannedTrackIDs, existingTrackIDs := buildSpotifyPreflight(tracks, state, targetDir, mode)
+	preflight, archiveGapIDs, knownGapIDs, plannedTrackIDs, existingTrackIDs, backfills := buildSpotifyPreflight(tracks, state, targetDir, mode)
 	if resolveAskOnExisting(source, opts) &&
 		mode == SoundCloudModeBreak &&
 		preflight.FirstExistingIndex > 0 &&
@@ -196,13 +200,14 @@ func buildSpotifyDeemixPlan(
 		}
 		if shouldScanGaps {
 			mode = SoundCloudModeScanGaps
-			preflight, archiveGapIDs, knownGapIDs, plannedTrackIDs, existingTrackIDs = buildSpotifyPreflight(tracks, state, targetDir, mode)
+			preflight, archiveGapIDs, knownGapIDs, plannedTrackIDs, existingTrackIDs, backfills = buildSpotifyPreflight(tracks, state, targetDir, mode)
 		}
 	}
 
 	plan.Preflight = &preflight
 	plan.PlannedTrackIDs = orderForExecution(plannedTrackIDs, plan.DownloadOrder)
 	plan.ExistingTrackIDs = existingTrackIDs
+	plan.BackfillEntries = backfills
 	breakOnExisting = mode == SoundCloudModeBreak
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting
 	return plan, tracks, archiveGapIDs, knownGapIDs, plannedTrackIDs, nil
@@ -211,28 +216,43 @@ func buildSpotifyDeemixPlan(
 func applySpotifyPlanWindow(tracks []spotifyRemoteTrack, limit int, window PlanWindow) []spotifyRemoteTrack {
 	selected := append([]spotifyRemoteTrack(nil), tracks...)
 	if NormalizePlanWindow(window) == PlanWindowLatest {
-		slices.SortStableFunc(selected, func(a, b spotifyRemoteTrack) int {
-			switch {
-			case !a.AddedAt.IsZero() && !b.AddedAt.IsZero() && !a.AddedAt.Equal(b.AddedAt):
-				if a.AddedAt.After(b.AddedAt) {
+		if spotifyTracksHaveAddedAt(selected) {
+			slices.SortStableFunc(selected, func(a, b spotifyRemoteTrack) int {
+				switch {
+				case !a.AddedAt.IsZero() && !b.AddedAt.IsZero() && !a.AddedAt.Equal(b.AddedAt):
+					if a.AddedAt.After(b.AddedAt) {
+						return -1
+					}
+					return 1
+				case !a.AddedAt.IsZero() && b.AddedAt.IsZero():
 					return -1
+				case a.AddedAt.IsZero() && !b.AddedAt.IsZero():
+					return 1
+				case a.Position > 0 && b.Position > 0 && a.Position != b.Position:
+					return a.Position - b.Position
+				default:
+					return 0
 				}
-				return 1
-			case !a.AddedAt.IsZero() && b.AddedAt.IsZero():
-				return -1
-			case a.AddedAt.IsZero() && !b.AddedAt.IsZero():
-				return 1
-			case a.Position > 0 && b.Position > 0 && a.Position != b.Position:
-				return a.Position - b.Position
-			default:
-				return 0
+			})
+		} else {
+			for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+				selected[i], selected[j] = selected[j], selected[i]
 			}
-		})
+		}
 	}
 	if limit > 0 && len(selected) > limit {
 		selected = selected[:limit]
 	}
 	return selected
+}
+
+func spotifyTracksHaveAddedAt(tracks []spotifyRemoteTrack) bool {
+	for _, track := range tracks {
+		if !track.AddedAt.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 func spotifyTrackRowTitle(track spotifyRemoteTrack) string {

@@ -97,3 +97,79 @@ func TestAppendSpotifySyncStateEntry(t *testing.T) {
 		t.Fatalf("unexpected local path %q", entry.LocalPath)
 	}
 }
+
+func TestParseSpotifySyncStateReadsSpotDLJSON(t *testing.T) {
+	tmp := t.TempDir()
+	statePath := filepath.Join(tmp, "spotify.sync.spotdl")
+	payload := `{
+  "type": "sync",
+  "songs": [
+    {
+      "song_id": "2GcncPaqXotQIPokzRM5pP",
+      "name": "90s Bitch",
+      "artist": "Maddix, The Rocketman"
+    }
+  ]
+}`
+	if err := os.WriteFile(statePath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	state, err := parseSpotifySyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state file: %v", err)
+	}
+	if _, ok := state.KnownIDs["2GcncPaqXotQIPokzRM5pP"]; !ok {
+		t.Fatalf("expected spotDL song_id to be known, got %+v", state.KnownIDs)
+	}
+	if got := state.Entries["2GcncPaqXotQIPokzRM5pP"].DisplayName; got != "Maddix, The Rocketman - 90s Bitch" {
+		t.Fatalf("unexpected display name %q", got)
+	}
+}
+
+func TestParseSpotifySyncStateReadsHybridSpotDLAndUDLTrailingLines(t *testing.T) {
+	tmp := t.TempDir()
+	statePath := filepath.Join(tmp, "spotify.sync.spotdl")
+	payload := `{"songs":[{"song_id":"2GcncPaqXotQIPokzRM5pP","name":"90s Bitch","artist":"Maddix"}]}` +
+		`4Q6TuhtBOgaV0m8mlccIpU	title=Dance+With+The+Devil`
+	if err := os.WriteFile(statePath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	state, err := parseSpotifySyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state file: %v", err)
+	}
+	if _, ok := state.KnownIDs["2GcncPaqXotQIPokzRM5pP"]; !ok {
+		t.Fatalf("expected JSON id to be known")
+	}
+	if _, ok := state.KnownIDs["4Q6TuhtBOgaV0m8mlccIpU"]; !ok {
+		t.Fatalf("expected trailing UDL id to be known, got %+v", state.KnownIDs)
+	}
+}
+
+func TestLoadSpotifySyncStateUsesSiblingWritePathForSpotDLState(t *testing.T) {
+	tmp := t.TempDir()
+	legacyPath := filepath.Join(tmp, "technicko.sync.spotdl")
+	udlPath := filepath.Join(tmp, "technicko.sync.spotify")
+	if err := os.WriteFile(legacyPath, []byte(`{"songs":[{"song_id":"2GcncPaqXotQIPokzRM5pP","name":"90s Bitch","artist":"Maddix"}]}`), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+	if err := os.WriteFile(udlPath, []byte("4Q6TuhtBOgaV0m8mlccIpU\ttitle=Reinier+-+Dance\n"), 0o644); err != nil {
+		t.Fatalf("write udl state: %v", err)
+	}
+
+	state, store, err := loadSpotifySyncState(legacyPath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if store.ReadPath != legacyPath || store.WritePath != udlPath {
+		t.Fatalf("unexpected state store: %+v", store)
+	}
+	if _, ok := state.KnownIDs["2GcncPaqXotQIPokzRM5pP"]; !ok {
+		t.Fatalf("expected legacy id to be merged")
+	}
+	if _, ok := state.KnownIDs["4Q6TuhtBOgaV0m8mlccIpU"]; !ok {
+		t.Fatalf("expected sibling udl id to be merged")
+	}
+}
