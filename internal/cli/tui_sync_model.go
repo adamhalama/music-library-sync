@@ -9,12 +9,12 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/adapters/deemix"
 	"github.com/jaa/update-downloads/internal/adapters/scdl"
 	"github.com/jaa/update-downloads/internal/adapters/scdlfreedl"
 	"github.com/jaa/update-downloads/internal/adapters/spotdl"
 	workflows "github.com/jaa/update-downloads/internal/app"
+	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
@@ -39,6 +39,7 @@ func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
 		interactivePhase:      interactivePhase,
 		interactiveSelections: map[string]*tuiInteractiveSelectionState{},
 		interactiveOrders:     map[string]engine.DownloadOrder{},
+		interactiveWindows:    map[string]engine.PlanWindow{},
 		interactiveTracker:    newTUISyncRunTracker(),
 	}
 }
@@ -67,9 +68,12 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			for _, source := range typed.cfg.Sources {
 				if source.Enabled {
 					m.sources = append(m.sources, source)
-					m.selected[source.ID] = true
+					m.selected[source.ID] = !m.isInteractiveSyncWorkflow() || engine.SupportsPlan(source)
 					if m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
 						m.interactiveOrders[source.ID] = engine.DownloadOrderOldestFirst
+					}
+					if m.isInteractiveSyncWorkflow() && engine.SupportsPlanWindow(source) {
+						m.interactiveWindows[source.ID] = engine.DefaultPlanWindowForSource(source)
 					}
 				}
 			}
@@ -203,6 +207,20 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			if typed.String() == "o" {
 				m.toggleInteractiveDownloadOrder(m.planPrompt.sourceID)
 				return m, nil
+			}
+			if typed.String() == "w" {
+				source, ok := m.interactiveSourceByID(m.planPrompt.sourceID)
+				if !ok || !engine.SupportsPlanWindow(source) {
+					return m, nil
+				}
+				m.toggleInteractivePlanWindow(m.planPrompt.sourceID)
+				m.planPrompt.reply <- tuiPlanSelectResult{
+					Rebuild: true,
+					Window:  m.planWindowForSourceID(m.planPrompt.sourceID),
+				}
+				m.planPrompt = nil
+				m.syncDisplayedInteractiveSelection()
+				return m, m.waitRunMsgCmd()
 			}
 			if m.planPrompt.focusFilters {
 				filters := m.planPrompt.filtersForPhase(filterPhase)
@@ -369,8 +387,14 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, nil
 		case " ":
 			if len(m.sources) > 0 {
-				sourceID := m.sources[m.cursor].ID
+				source := m.sources[m.cursor]
+				if m.isInteractiveSyncWorkflow() && !engine.SupportsPlan(source) {
+					m.validationErr = fmt.Sprintf("%s is not supported by interactive plan mode", source.ID)
+					return m, nil
+				}
+				sourceID := source.ID
 				m.selected[sourceID] = !m.selected[sourceID]
+				m.validationErr = ""
 			}
 			return m, nil
 		case "d":
@@ -382,6 +406,17 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			}
 			m.toggleInteractiveDownloadOrder(m.currentInteractiveDisplaySourceID())
+			m.validationErr = ""
+			return m, nil
+		case "w":
+			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
+			source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
+			if !ok || !engine.SupportsPlanWindow(source) {
+				return m, nil
+			}
+			m.toggleInteractivePlanWindow(m.currentInteractiveDisplaySourceID())
 			m.validationErr = ""
 			return m, nil
 		case "a":
@@ -612,11 +647,16 @@ func (m tuiSyncModel) startRunCmd(runCtx context.Context) tea.Cmd {
 			sourceByID[source.ID] = source
 			orderByID[source.ID] = m.downloadOrderForSourceID(source.ID)
 		}
+		windowByID := map[string]engine.PlanWindow{}
+		for _, source := range m.sources {
+			windowByID[source.ID] = m.planWindowForSourceID(source.ID)
+		}
 		interaction := &tuiSyncInteraction{
 			ch:         ch,
 			defaults:   cfg.Defaults,
 			sourceByID: sourceByID,
 			orderByID:  orderByID,
+			windowByID: windowByID,
 			planLimit:  req.PlanLimit,
 			dryRun:     req.DryRun,
 		}
@@ -699,8 +739,10 @@ func (m tuiSyncModel) interactiveDisplayStateForSelection(state *tuiInteractiveS
 	}
 	if state != nil {
 		display.downloadOrder = state.downloadOrder
+		display.planWindow = state.planWindow
 	} else {
 		display.downloadOrder = m.downloadOrderForSourceID(sourceID)
+		display.planWindow = m.planWindowForSourceID(sourceID)
 	}
 
 	snapshot := tuiTrackedSourceSnapshot{lifecycle: tuiSourceLifecycleIdle}
@@ -852,6 +894,12 @@ func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncReque
 	if m.isInteractiveSyncWorkflow() {
 		req.Plan = true
 		req.PlanLimit = m.planLimit
+		req.PlanWindowBySource = map[string]engine.PlanWindow{}
+		for _, source := range m.sources {
+			if engine.SupportsPlanWindow(source) {
+				req.PlanWindowBySource[source.ID] = m.planWindowForSourceID(source.ID)
+			}
+		}
 		return req
 	}
 	req.AskOnExisting = m.askOnExisting
@@ -859,6 +907,44 @@ func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncReque
 	req.ScanGaps = m.scanGaps
 	req.NoPreflight = m.noPreflight
 	return req
+}
+
+func (m *tuiSyncModel) toggleInteractivePlanWindow(sourceID string) {
+	if m == nil || !m.isInteractiveSyncWorkflow() {
+		return
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return
+	}
+	source, ok := m.interactiveSourceByID(sourceID)
+	if !ok || !engine.SupportsPlanWindow(source) {
+		return
+	}
+	current := m.planWindowForSourceID(sourceID)
+	if current == engine.PlanWindowLatest {
+		m.interactiveWindows[sourceID] = engine.PlanWindowFirst
+	} else {
+		m.interactiveWindows[sourceID] = engine.PlanWindowLatest
+	}
+	if state := m.interactiveSelectionForSource(sourceID); state != nil {
+		state.planWindow = m.planWindowForSourceID(sourceID)
+		state.details.PlanWindow = state.planWindow
+	}
+}
+
+func (m tuiSyncModel) planWindowForSourceID(sourceID string) engine.PlanWindow {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return engine.PlanWindowFirst
+	}
+	if window, ok := m.interactiveWindows[sourceID]; ok {
+		return engine.NormalizePlanWindow(window)
+	}
+	if source, ok := m.interactiveSourceByID(sourceID); ok {
+		return engine.DefaultPlanWindowForSource(source)
+	}
+	return engine.PlanWindowFirst
 }
 
 func (m tuiSyncModel) interactiveDownloadOrder() engine.DownloadOrder {
@@ -913,6 +999,14 @@ func (m tuiSyncModel) currentInteractiveSourceSupportsDownloadOrder() bool {
 	}
 	source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
 	return ok && engine.SupportsDownloadOrder(source)
+}
+
+func (m tuiSyncModel) currentInteractiveSourceSupportsPlanWindow() bool {
+	if !m.isInteractiveSyncWorkflow() {
+		return false
+	}
+	source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
+	return ok && engine.SupportsPlanWindow(source)
 }
 
 func formatTimeoutOverride(timeout time.Duration) string {
@@ -1282,6 +1376,16 @@ func validateTUISyncOptions(m tuiSyncModel) string {
 	}
 	if m.isInteractiveSyncWorkflow() && m.noPreflight {
 		return "plan mode cannot be combined with no-preflight"
+	}
+	if m.selectedSourceCount() == 0 {
+		return "select at least one source"
+	}
+	if m.isInteractiveSyncWorkflow() {
+		for _, source := range m.sources {
+			if m.selected[source.ID] && !engine.SupportsPlan(source) {
+				return fmt.Sprintf("%s is not supported by interactive plan mode", source.ID)
+			}
+		}
 	}
 	return ""
 }

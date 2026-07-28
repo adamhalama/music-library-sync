@@ -184,6 +184,101 @@ func (a fakeDeemixAdapter) BuildExecSpec(source config.Source, defaults config.D
 	}, nil
 }
 
+func TestSyncerSpotifyDeemixBackfillsLocalTrackWithoutRunningCommand(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "Maddix - 90s Bitch.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+	legacyStatePath := filepath.Join(stateDir, "spotify-deemix.sync.spotdl")
+	if err := os.WriteFile(legacyStatePath, []byte(`{"type":"sync","songs":[]}`), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			StateDir:              stateDir,
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			ContinueOnError:       true,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []config.Source{
+			{
+				ID:        "spotify-deemix",
+				Type:      config.SourceTypeSpotify,
+				Enabled:   true,
+				TargetDir: targetDir,
+				URL:       "https://open.spotify.com/playlist/a",
+				StateFile: "spotify-deemix.sync.spotdl",
+				Adapter:   config.AdapterSpec{Kind: "deemix"},
+			},
+		},
+	}
+
+	origResolveCreds := resolveSpotifyCredentialsFn
+	origResolveARL := resolveDeemixARLFn
+	origSaveARL := saveDeemixARLFn
+	origEnumerate := enumerateSpotifyTracksFn
+	t.Cleanup(func() {
+		resolveSpotifyCredentialsFn = origResolveCreds
+		resolveDeemixARLFn = origResolveARL
+		saveDeemixARLFn = origSaveARL
+		enumerateSpotifyTracksFn = origEnumerate
+	})
+	resolveSpotifyCredentialsFn = func() (auth.SpotifyCredentials, error) {
+		return auth.SpotifyCredentials{ClientID: "id", ClientSecret: "secret"}, nil
+	}
+	resolveDeemixARLFn = func() (string, error) { return "arl", nil }
+	saveDeemixARLFn = func(string) error { return nil }
+	enumerateSpotifyTracksFn = func(ctx context.Context, source config.Source, creds auth.SpotifyCredentials) ([]spotifyRemoteTrack, error) {
+		return []spotifyRemoteTrack{
+			{ID: "2GcncPaqXotQIPokzRM5pP", Title: "90s Bitch", Artist: "Maddix"},
+		}, nil
+	}
+
+	runner := &sequenceRunner{}
+	syncer := NewSyncer(
+		map[string]Adapter{"deemix": fakeDeemixAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	result, err := syncer.Sync(context.Background(), cfg, SyncOptions{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("expected successful backfill-only sync, got %+v", result)
+	}
+	if len(runner.specs) != 0 {
+		t.Fatalf("expected no deemix executions for local backfill, got %d", len(runner.specs))
+	}
+	statePath := filepath.Join(stateDir, "spotify-deemix.sync.spotify")
+	state, err := parseSpotifySyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse backfilled state: %v", err)
+	}
+	if _, ok := state.KnownIDs["2GcncPaqXotQIPokzRM5pP"]; !ok {
+		t.Fatalf("expected backfilled spotify id, got %+v", state.KnownIDs)
+	}
+	legacyPayload, err := os.ReadFile(legacyStatePath)
+	if err != nil {
+		t.Fatalf("read legacy state: %v", err)
+	}
+	if string(legacyPayload) != `{"type":"sync","songs":[]}` {
+		t.Fatalf("legacy spotDL state was mutated: %q", string(legacyPayload))
+	}
+}
+
 func TestSyncerDryRunDeterministicJSON(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")

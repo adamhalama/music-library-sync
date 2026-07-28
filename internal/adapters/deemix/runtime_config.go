@@ -47,6 +47,11 @@ func PrepareRuntimeConfig(source config.Source) (string, error) {
 		_ = os.RemoveAll(runtimeDir)
 		return "", fmt.Errorf("write deemix ARL: %w", err)
 	}
+	rootARLPath := filepath.Join(runtimeDir, ".arl")
+	if err := os.WriteFile(rootARLPath, []byte(arl), 0o600); err != nil {
+		_ = os.RemoveAll(runtimeDir)
+		return "", fmt.Errorf("write portable deemix ARL: %w", err)
+	}
 
 	spotifyDir := filepath.Join(configDir, "spotify")
 	if err := os.MkdirAll(spotifyDir, 0o700); err != nil {

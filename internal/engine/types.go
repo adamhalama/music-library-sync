@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"io"
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
@@ -12,6 +13,7 @@ type ExecSpec struct {
 	Dir             string
 	Timeout         time.Duration
 	DisplayCommand  string
+	Stdin           io.Reader
 	StdoutObservers []func(line string)
 	StderrObservers []func(line string)
 }
@@ -41,6 +43,8 @@ type SyncOptions struct {
 	TimeoutOverride     time.Duration
 	Plan                bool
 	PlanLimit           int
+	PlanWindow          PlanWindow
+	PlanWindowBySource  map[string]PlanWindow
 	AskOnExisting       bool
 	AskOnExistingSet    bool
 	ScanGaps            bool
@@ -56,6 +60,8 @@ type SyncOptions struct {
 type PlanSelectionResult struct {
 	Manifest ExecutionManifest
 	Canceled bool
+	Rebuild  bool
+	Window   PlanWindow
 }
 
 type PlanApplyOptions struct {

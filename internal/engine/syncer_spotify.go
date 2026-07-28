@@ -11,6 +11,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/engine/progress"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -19,8 +20,10 @@ type spotifyDeemixExecutionPlan struct {
 	Preflight        *SoundCloudPreflight
 	PlannedTrackIDs  []string
 	ExistingTrackIDs []string
+	BackfillEntries  []spotifyStateBackfillEntry
 	TrackMetadata    map[string]spotifyTrackMetadata
 	State            spotifySyncState
+	StateWritePath   string
 	DownloadOrder    DownloadOrder
 }
 
@@ -31,32 +34,42 @@ func (s *Syncer) runSpotifyDeemix(
 	adapter Adapter,
 	sourceForExec config.Source,
 	sourcePreflight *SoundCloudPreflight,
+	preparedPlan *spotifyDeemixExecutionPlan,
 	opts SyncOptions,
 ) sourceRunOutcome {
 	outcome := sourceRunOutcome{}
 	flow := s.buildSourceFlowContext(source)
 
-	plan, planErr := s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
-	if planErr != nil {
-		outcome.Failed++
-		outcome.Attempted++
-		if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
-			errors.Is(planErr, auth.ErrDeemixARLNotFound) {
-			outcome.DependencyFailures++
+	var plan spotifyDeemixExecutionPlan
+	if preparedPlan != nil {
+		plan = *preparedPlan
+	} else {
+		var planErr error
+		plan, planErr = s.prepareSpotifyDeemixExecutionPlan(ctx, cfg, source, opts)
+		if planErr != nil {
+			outcome.Failed++
+			outcome.Attempted++
+			if errors.Is(planErr, auth.ErrSpotifyCredentialsNotFound) ||
+				errors.Is(planErr, auth.ErrDeemixARLNotFound) {
+				outcome.DependencyFailures++
+			}
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(),
+				Level:     output.LevelError,
+				Event:     output.EventSourceFailed,
+				SourceID:  source.ID,
+				Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
+			})
+			outcome.Stop = !cfg.Defaults.ContinueOnError
+			return outcome
 		}
-		_ = s.Emitter.Emit(output.Event{
-			Timestamp: s.Now(),
-			Level:     output.LevelError,
-			Event:     output.EventSourceFailed,
-			SourceID:  source.ID,
-			Message:   fmt.Sprintf("[%s] spotify deemix preflight failed: %v", source.ID, planErr),
-		})
-		outcome.Stop = !cfg.Defaults.ContinueOnError
-		return outcome
 	}
 	sourceForExec = plan.Source
 	sourcePreflight = plan.Preflight
-	if plan.Preflight != nil {
+	if strings.TrimSpace(plan.StateWritePath) == "" {
+		plan.StateWritePath = sourceForExec.StateFile
+	}
+	if plan.Preflight != nil && preparedPlan == nil {
 		s.emitSourcePreflightSummary(source, plan.Preflight, plan.DownloadOrder)
 	}
 	emitSpotifyDeemixExistingTrackStatus(s, source.ID, plan, opts.TrackStatus)
@@ -79,6 +92,34 @@ func (s *Syncer) runSpotifyDeemix(
 		return outcome
 	}
 
+	backfilledCount, backfillErr := appendSpotifyStateBackfillEntries(plan.StateWritePath, plan.BackfillEntries, &plan.State)
+	if backfillErr != nil {
+		outcome.Attempted++
+		outcome.Failed++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelError,
+			Event:     output.EventSourceFailed,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] failed to backfill spotify state file: %v", source.ID, backfillErr),
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+	if backfilledCount > 0 {
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(),
+			Level:     output.LevelInfo,
+			Event:     output.EventSourcePreflight,
+			SourceID:  source.ID,
+			Message:   fmt.Sprintf("[%s] backfilled spotify state for %d local track(s)", source.ID, backfilledCount),
+			Details: map[string]any{
+				"backfilled_state_count": backfilledCount,
+				"state_file":             plan.StateWritePath,
+			},
+		})
+	}
+
 	if sourcePreflight != nil && sourcePreflight.PlannedDownloadCount == 0 {
 		outcome.Attempted++
 		outcome.Succeeded++
@@ -91,6 +132,7 @@ func (s *Syncer) runSpotifyDeemix(
 			Details: map[string]any{
 				"planned_download_count": 0,
 				"mode":                   sourcePreflight.Mode,
+				"backfilled_state_count": backfilledCount,
 			},
 		})
 		return outcome
@@ -211,6 +253,10 @@ func (s *Syncer) runSpotifyDeemix(
 				SourceID:  source.ID,
 				Message:   message,
 			})
+			if flow.Parser != nil {
+				flow.Parser.OnStdoutLine(message)
+				s.flushFlowParser(&flow, source)
+			}
 		}
 
 		var mediaBefore map[string]mediaFileSnapshot
@@ -262,6 +308,10 @@ func (s *Syncer) runSpotifyDeemix(
 				SourceID:  source.ID,
 				Message:   fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason),
 			})
+			if flow.Parser != nil {
+				flow.Parser.OnStdoutLine(fmt.Sprintf("[%s] [skip] %s (%s) (%s)", source.ID, trackID, display, reason))
+				s.flushFlowParser(&flow, source)
+			}
 			continue
 		}
 
@@ -269,6 +319,7 @@ func (s *Syncer) runSpotifyDeemix(
 			sourceFailed = true
 			sourceFailureMessage = fmt.Sprintf("[%s] command failed with exit code %d", source.ID, execResult.ExitCode)
 			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
+			s.emitSpotifyDeemixTrackFailure(flow, source, trackID, trackLabel, idx+1, len(plannedTrackIDs), fmt.Sprintf("exit-%d", execResult.ExitCode))
 			break
 		}
 		if failed, reason := deemixReportedFailure(execResult); failed {
@@ -279,6 +330,7 @@ func (s *Syncer) runSpotifyDeemix(
 				reason,
 			)
 			sourceFailureDetails = buildExecFailureDetails(source, spec, execResult)
+			s.emitSpotifyDeemixTrackFailure(flow, source, trackID, trackLabel, idx+1, len(plannedTrackIDs), reason)
 			break
 		}
 
@@ -298,7 +350,7 @@ func (s *Syncer) runSpotifyDeemix(
 			if entryLabel != "" {
 				doneMessage = fmt.Sprintf("[%s] [done] %s (%s)", source.ID, trackID, entryLabel)
 			}
-			if appendErr := appendSpotifySyncStateEntry(sourceForExec.StateFile, trackID, entryLabel, localPath); appendErr != nil {
+			if appendErr := upsertSpotifySyncStateEntry(plan.StateWritePath, trackID, entryLabel, localPath); appendErr != nil {
 				sourceFailed = true
 				sourceFailureMessage = fmt.Sprintf("[%s] failed to update spotify state file: %v", source.ID, appendErr)
 				break
@@ -321,6 +373,10 @@ func (s *Syncer) runSpotifyDeemix(
 				SourceID:  source.ID,
 				Message:   doneMessage,
 			})
+			if flow.Parser != nil {
+				flow.Parser.OnStdoutLine(doneMessage)
+				s.flushFlowParser(&flow, source)
+			}
 		}
 	}
 
@@ -353,6 +409,7 @@ func (s *Syncer) runSpotifyDeemix(
 		Details: map[string]any{
 			"planned_download_count": len(plannedTrackIDs),
 			"skipped_unavailable":    skippedUnavailable,
+			"backfilled_state_count": backfilledCount,
 		},
 	})
 
@@ -377,7 +434,9 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 	if err != nil {
 		return plan, fmt.Errorf("resolve state_file: %w", err)
 	}
-	plan.Source.StateFile = stateFilePath
+	stateStore := resolveSpotifyStateStore(stateFilePath)
+	plan.Source.StateFile = stateStore.WritePath
+	plan.StateWritePath = stateStore.WritePath
 
 	spotifyCreds, err := resolveSpotifyCredentialsFn()
 	if err != nil {
@@ -456,18 +515,20 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 	}
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
-	state, err := parseSpotifySyncState(stateFilePath)
+	state, stateStore, err := loadSpotifySyncState(stateFilePath)
 	if err != nil {
 		return plan, fmt.Errorf("parse spotify sync state file: %w", err)
 	}
 	plan.State = state
+	plan.Source.StateFile = stateStore.WritePath
+	plan.StateWritePath = stateStore.WritePath
 
 	targetDir, err := config.ExpandPath(source.TargetDir)
 	if err != nil {
 		return plan, fmt.Errorf("resolve target_dir: %w", err)
 	}
 
-	preflight, _, _, plannedTrackIDs, existingTrackIDs := buildSpotifyPreflight(tracks, state, targetDir, mode)
+	preflight, _, _, plannedTrackIDs, existingTrackIDs, backfills := buildSpotifyPreflight(tracks, state, targetDir, mode)
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&
 		preflight.FirstExistingIndex > 0 &&
@@ -479,7 +540,7 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 		}
 		if shouldScanGaps {
 			mode = SoundCloudModeScanGaps
-			preflight, _, _, plannedTrackIDs, existingTrackIDs = buildSpotifyPreflight(tracks, state, targetDir, mode)
+			preflight, _, _, plannedTrackIDs, existingTrackIDs, backfills = buildSpotifyPreflight(tracks, state, targetDir, mode)
 		}
 	}
 
@@ -487,9 +548,43 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 	plan.DownloadOrder = DownloadOrderNewestFirst
 	plan.PlannedTrackIDs = orderForExecution(plannedTrackIDs, plan.DownloadOrder)
 	plan.ExistingTrackIDs = existingTrackIDs
+	plan.BackfillEntries = backfills
 	breakOnExisting = mode == SoundCloudModeBreak
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting
 	return plan, nil
+}
+
+func (s *Syncer) emitSpotifyDeemixTrackFailure(
+	flow sourceFlowContext,
+	source config.Source,
+	trackID string,
+	trackLabel string,
+	index int,
+	total int,
+	reason string,
+) {
+	trackID = strings.TrimSpace(trackID)
+	if trackID == "" {
+		return
+	}
+	trackName := strings.TrimSpace(trackLabel)
+	if trackName == "" {
+		trackName = trackID
+	}
+	event := progress.TrackEvent{
+		Kind:        progress.TrackFail,
+		TrackID:     trackID,
+		TrackName:   trackName,
+		Index:       index,
+		Total:       total,
+		Reason:      strings.TrimSpace(reason),
+		SourceID:    source.ID,
+		AdapterKind: source.Adapter.Kind,
+	}
+	if flow.Progress != nil {
+		flow.Progress.RecordTrackEvent(event)
+	}
+	s.emitTrackEvent(source, event)
 }
 
 func shouldRetrySpotifyWithUserAuth(source config.Source, execResult ExecResult, opts SyncOptions) bool {
@@ -612,6 +707,8 @@ func deemixReportedFailure(execResult ExecResult) (bool, string) {
 	combined := strings.ToLower(execResult.StdoutTail + "\n" + execResult.StderrTail)
 
 	switch {
+	case strings.Contains(combined, "enter your arl"):
+		return true, "deezer-arl-prompted"
 	case strings.Contains(combined, "cannot read properties of undefined") &&
 		strings.Contains(combined, "spotifyplugin."):
 		return true, "spotify-plugin-exception"

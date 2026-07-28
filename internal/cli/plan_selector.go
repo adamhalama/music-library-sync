@@ -20,6 +20,7 @@ type planSourceDetails struct {
 	TargetDir  string
 	StateFile  string
 	PlanLimit  int
+	PlanWindow engine.PlanWindow
 	DryRun     bool
 }
 
@@ -152,7 +153,7 @@ func (m planSelectorModel) View() string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("udl sync --plan  source=%s  mode=%s  plan-limit=%s", m.sourceID, modeLabel, limitLabel),
+		fmt.Sprintf("udl sync --plan  source=%s  mode=%s  plan-limit=%s  plan-window=%s", m.sourceID, modeLabel, limitLabel, m.details.PlanWindow),
 		fmt.Sprintf("type=%s  adapter=%s", m.details.SourceType, m.details.Adapter),
 		fmt.Sprintf("target_dir=%s", m.details.TargetDir),
 		fmt.Sprintf("state_file=%s", m.details.StateFile),
@@ -281,7 +282,7 @@ func defaultPlanSelectorKeys() planSelectorKeys {
 	}
 }
 
-func buildPlanSourceDetails(source config.Source, defaults config.Defaults, planLimit int, dryRun bool) planSourceDetails {
+func buildPlanSourceDetails(source config.Source, defaults config.Defaults, planLimit int, planWindow engine.PlanWindow, dryRun bool) planSourceDetails {
 	targetDir := strings.TrimSpace(source.TargetDir)
 	if expanded, err := config.ExpandPath(targetDir); err == nil && strings.TrimSpace(expanded) != "" {
 		targetDir = expanded
@@ -307,6 +308,7 @@ func buildPlanSourceDetails(source config.Source, defaults config.Defaults, plan
 		TargetDir:  targetDir,
 		StateFile:  stateFile,
 		PlanLimit:  planLimit,
+		PlanWindow: engine.NormalizePlanWindow(planWindow),
 		DryRun:     dryRun,
 	}
 }

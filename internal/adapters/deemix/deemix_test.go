@@ -70,6 +70,9 @@ func TestBuildExecSpec(t *testing.T) {
 	if strings.Contains(spec.DisplayCommand, "?si=") {
 		t.Fatalf("expected sanitized URL in display command, got %q", spec.DisplayCommand)
 	}
+	if spec.Stdin == nil {
+		t.Fatalf("expected deemix stdin override")
+	}
 }
 
 func TestBuildExecSpecRespectsUserPathFlags(t *testing.T) {
@@ -144,6 +147,13 @@ func TestPrepareRuntimeConfig(t *testing.T) {
 	}
 	if string(arlPayload) != "arl-value" {
 		t.Fatalf("unexpected .arl payload %q", string(arlPayload))
+	}
+	rootARLPayload, err := os.ReadFile(filepath.Join(runtimeDir, ".arl"))
+	if err != nil {
+		t.Fatalf("read portable .arl: %v", err)
+	}
+	if string(rootARLPayload) != "arl-value" {
+		t.Fatalf("unexpected portable .arl payload %q", string(rootARLPayload))
 	}
 
 	spotifyPath := filepath.Join(runtimeDir, "config", "spotify", "config.json")

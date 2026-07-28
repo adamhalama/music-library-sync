@@ -82,6 +82,7 @@ Inside active workflows, the sidebar/top navigation is informational in this sta
 - `u`: toggle unlimited plan limit
 - `d`: toggle dry-run
 - `t`: type timeout override (Go duration, for example `10m`, `90s`, `1h`)
+- `w`: switch the plan window between `latest` and `first` for Spotify+deemix
 - `p`: collapse/expand the activity panel
 - `enter`: start run
 
@@ -89,10 +90,11 @@ Inside active workflows, the sidebar/top navigation is informational in this sta
 
 ### Interactive track selector (`--plan`)
 
-For supported sources (currently `adapter.kind=scdl`), interactive sync enters an interactive selector before download:
+For supported sources (SoundCloud+`scdl` and Spotify+`deemix`), interactive sync enters an interactive selector before download:
 
 - `j/k` or up/down: move
 - `space`: toggle current row
+- `w`: rebuild Spotify+deemix rows using the `latest` or `first` plan window
 - `a`: select all toggleable rows
 - `n`: clear all toggleable rows
 - `enter`: confirm selection and continue run
@@ -104,6 +106,9 @@ Selector header includes source config context:
 - state file
 - source URL
 - current plan limit and run mode
+- current plan window for Spotify+deemix (`latest` by default)
+
+The window control is intentionally hidden for SoundCloud because its `scdl` plan provider does not implement first/latest window switching. Spotify `latest` uses playlist `added_at` timestamps when available; public-page fallback uses the playlist tail in reverse order.
 
 The selector is rendered inline in the main content area instead of opening a separate overlay.
 

@@ -2709,6 +2709,65 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	}
 }
 
+func TestTUISyncInteractionRebuildUsesUpdatedWindowOnNextPrompt(t *testing.T) {
+	ch := make(chan tea.Msg, 1)
+	source := config.Source{
+		ID:      "spotify-plan",
+		Type:    config.SourceTypeSpotify,
+		Adapter: config.AdapterSpec{Kind: "deemix"},
+	}
+	interaction := &tuiSyncInteraction{
+		ch:         ch,
+		sourceByID: map[string]config.Source{source.ID: source},
+		windowByID: map[string]engine.PlanWindow{source.ID: engine.PlanWindowLatest},
+		planLimit:  3,
+	}
+	rows := []engine.PlanRow{
+		{Index: 1, RemoteID: "track123456", Toggleable: true, SelectedByDefault: true},
+	}
+
+	firstDone := make(chan engine.PlanSelectionResult, 1)
+	go func() {
+		result, _ := interaction.SelectRows(source.ID, rows)
+		firstDone <- result
+	}()
+
+	firstRequest := (<-ch).(tuiPlanSelectRequestMsg)
+	if firstRequest.PlanWindow != engine.PlanWindowLatest {
+		t.Fatalf("expected initial latest window, got %q", firstRequest.PlanWindow)
+	}
+	firstRequest.Reply <- tuiPlanSelectResult{
+		Rebuild: true,
+		Window:  engine.PlanWindowFirst,
+	}
+	firstResult := <-firstDone
+	if !firstResult.Rebuild || firstResult.Window != engine.PlanWindowFirst {
+		t.Fatalf("expected first-window rebuild result, got %+v", firstResult)
+	}
+
+	secondDone := make(chan engine.PlanSelectionResult, 1)
+	go func() {
+		result, _ := interaction.SelectRows(source.ID, rows)
+		secondDone <- result
+	}()
+
+	secondRequest := (<-ch).(tuiPlanSelectRequestMsg)
+	if secondRequest.PlanWindow != engine.PlanWindowFirst {
+		t.Fatalf("expected rebuilt request to use first window, got %q", secondRequest.PlanWindow)
+	}
+	if secondRequest.Details.PlanWindow != engine.PlanWindowFirst {
+		t.Fatalf("expected rebuilt selector details to use first window, got %q", secondRequest.Details.PlanWindow)
+	}
+	manifest, err := engine.BuildExecutionManifest(source.ID, rows, []int{1}, engine.DownloadOrderNewestFirst)
+	if err != nil {
+		t.Fatalf("build manifest: %v", err)
+	}
+	secondRequest.Reply <- tuiPlanSelectResult{Manifest: manifest}
+	if result := <-secondDone; result.Rebuild {
+		t.Fatalf("did not expect another rebuild, got %+v", result)
+	}
+}
+
 func TestTUISyncModelPlanLimitControls(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
@@ -2798,6 +2857,85 @@ func TestTUISyncModelPlanPromptDownloadOrderToggleRebuildsManifest(t *testing.T)
 	}
 	if got := m.planPrompt.manifest.DownloadOrder; got != engine.DownloadOrderNewestFirst {
 		t.Fatalf("expected prompt manifest order to update, got %q", got)
+	}
+}
+
+func TestTUISyncModelPlanPromptWindowToggleRequestsRebuild(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	source := config.Source{
+		ID:        "spotify-technicko",
+		Type:      config.SourceTypeSpotify,
+		TargetDir: "/tmp/music",
+		URL:       "https://open.spotify.com/playlist/test",
+		StateFile: "/tmp/spotify.sync.spotify",
+		Adapter:   config.AdapterSpec{Kind: "deemix"},
+	}
+	m.sources = []config.Source{source}
+	m.selected[source.ID] = true
+	m.interactiveWindows[source.ID] = engine.PlanWindowLatest
+	reply := make(chan tuiPlanSelectResult, 1)
+	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
+		SourceID:      source.ID,
+		Rows:          []engine.PlanRow{{Index: 1, Toggleable: true, SelectedByDefault: true}},
+		Details:       m.planSourceDetailsForSource(source),
+		DownloadOrder: engine.DownloadOrderOldestFirst,
+		PlanWindow:    engine.PlanWindowLatest,
+		Reply:         reply,
+	})
+	m.planPrompt = &tuiPlanPromptState{
+		tuiInteractiveSelectionState: state,
+		reply:                        reply,
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	result := <-reply
+	if !result.Rebuild || result.Window != engine.PlanWindowFirst {
+		t.Fatalf("expected rebuild with first window, got %+v", result)
+	}
+	if m.planPrompt != nil {
+		t.Fatalf("expected prompt to close while rebuild is requested")
+	}
+	if got := m.interactiveWindows[source.ID]; got != engine.PlanWindowFirst {
+		t.Fatalf("expected source window to toggle to first, got %q", got)
+	}
+}
+
+func TestTUISyncModelIgnoresWindowToggleForSoundCloud(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	source := config.Source{
+		ID:      "soundcloud-plan",
+		Type:    config.SourceTypeSoundCloud,
+		Adapter: config.AdapterSpec{Kind: "scdl"},
+	}
+	m.sources = []config.Source{source}
+	m.selected[source.ID] = true
+	reply := make(chan tuiPlanSelectResult, 1)
+	m.planPrompt = newTUIPlanPromptState(tuiPlanSelectRequestMsg{
+		SourceID: source.ID,
+		Rows: []engine.PlanRow{
+			{Index: 1, RemoteID: "track123456", Toggleable: true, SelectedByDefault: true},
+		},
+		Details: m.planSourceDetailsForSource(source),
+		Reply:   reply,
+	})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	if m.planPrompt == nil {
+		t.Fatalf("expected unsupported window toggle to leave prompt open")
+	}
+	if _, exists := m.interactiveWindows[source.ID]; exists {
+		t.Fatalf("did not expect a plan window override for soundcloud")
+	}
+	select {
+	case result := <-reply:
+		t.Fatalf("did not expect rebuild reply for soundcloud, got %+v", result)
+	default:
+	}
+	view := m.View()
+	if strings.Contains(view, "window=") || strings.Contains(view, "w window") {
+		t.Fatalf("expected soundcloud selector to hide window controls, got: %s", view)
 	}
 }
 

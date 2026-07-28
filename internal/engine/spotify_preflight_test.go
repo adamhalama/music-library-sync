@@ -52,7 +52,7 @@ func TestBuildSpotifyPreflightBreakMode(t *testing.T) {
 		},
 	}
 
-	preflight, archiveGaps, knownGaps, planned, existing := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
+	preflight, archiveGaps, knownGaps, planned, existing, _ := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
 	if preflight.RemoteTotal != 3 || preflight.KnownCount != 1 {
 		t.Fatalf("unexpected preflight counts: %+v", preflight)
 	}
@@ -96,7 +96,7 @@ func TestBuildSpotifyPreflightScanMode(t *testing.T) {
 		},
 	}
 
-	preflight, archiveGaps, knownGaps, planned, existing := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeScanGaps)
+	preflight, archiveGaps, knownGaps, planned, existing, _ := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeScanGaps)
 	if preflight.PlannedDownloadCount != 3 {
 		t.Fatalf("expected three planned downloads (archive + known gaps), got %+v", preflight)
 	}
@@ -139,7 +139,7 @@ func TestBuildSpotifyPreflightUsesStateLocalPathWhenPresent(t *testing.T) {
 		},
 	}
 
-	preflight, _, knownGaps, planned, existing := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
+	preflight, _, knownGaps, planned, existing, _ := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
 	if preflight.FirstExistingIndex != 1 {
 		t.Fatalf("expected first existing index from local path metadata, got %+v", preflight)
 	}
@@ -154,5 +154,92 @@ func TestBuildSpotifyPreflightUsesStateLocalPathWhenPresent(t *testing.T) {
 	}
 	if len(existing) != 1 || existing[0] != "41gXFhitx4whS6PsoXREzy" {
 		t.Fatalf("expected existing list to include known local path id, got %v", existing)
+	}
+}
+
+func TestBuildSpotifyPreflightBackfillsUnknownLocalTrack(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "Maddix - 90s Bitch.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+
+	remote := []spotifyRemoteTrack{
+		{ID: "2GcncPaqXotQIPokzRM5pP", Title: "90s Bitch", Artist: "Maddix"},
+	}
+	state := spotifySyncState{KnownIDs: map[string]struct{}{}, Entries: map[string]spotifyStateEntry{}}
+
+	preflight, archiveGaps, knownGaps, planned, existing, backfills := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
+	if preflight.ArchiveGapCount != 0 || preflight.KnownGapCount != 0 || preflight.PlannedDownloadCount != 0 {
+		t.Fatalf("expected local unknown track to be treated as present, got %+v", preflight)
+	}
+	if len(archiveGaps) != 0 || len(knownGaps) != 0 || len(planned) != 0 {
+		t.Fatalf("unexpected gaps/planned: archive=%v known=%v planned=%v", archiveGaps, knownGaps, planned)
+	}
+	if len(existing) != 1 || existing[0] != "2GcncPaqXotQIPokzRM5pP" {
+		t.Fatalf("expected existing local id, got %v", existing)
+	}
+	if len(backfills) != 1 || backfills[0].ID != "2GcncPaqXotQIPokzRM5pP" || backfills[0].LocalPath != "Maddix - 90s Bitch.mp3" {
+		t.Fatalf("unexpected backfill entries: %+v", backfills)
+	}
+}
+
+func TestBuildSpotifyPreflightDoesNotReuseStatePathForSameTitle(t *testing.T) {
+	tmp := t.TempDir()
+	localName := "Artist - Shared Title.mp3"
+	if err := os.WriteFile(filepath.Join(tmp, localName), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+
+	remote := []spotifyRemoteTrack{
+		{ID: "known1234567890123456", Title: "Shared Title", Artist: "Artist"},
+		{ID: "newer1234567890123456", Title: "Shared Title", Artist: "Artist"},
+	}
+	state := spotifySyncState{
+		KnownIDs: map[string]struct{}{"known1234567890123456": {}},
+		Entries: map[string]spotifyStateEntry{
+			"known1234567890123456": {DisplayName: "Artist - Shared Title", LocalPath: localName},
+		},
+	}
+
+	preflight, archiveGaps, knownGaps, planned, existing, backfills := buildSpotifyPreflight(
+		remote,
+		state,
+		tmp,
+		SoundCloudModeScanGaps,
+	)
+	if len(existing) != 1 || existing[0] != "known1234567890123456" {
+		t.Fatalf("expected only state-backed track to be present, got %v", existing)
+	}
+	if _, ok := archiveGaps["newer1234567890123456"]; !ok {
+		t.Fatalf("expected same-title unknown track to remain an archive gap")
+	}
+	if len(knownGaps) != 0 || len(backfills) != 0 {
+		t.Fatalf("unexpected known gaps/backfills: known=%v backfills=%+v", knownGaps, backfills)
+	}
+	if len(planned) != 1 || planned[0] != "newer1234567890123456" {
+		t.Fatalf("expected only unknown duplicate-title track to be planned, got %v", planned)
+	}
+	if preflight.PlannedDownloadCount != 1 {
+		t.Fatalf("expected one planned download, got %+v", preflight)
+	}
+}
+
+func TestBuildSpotifyPreflightMatchesUnicodeFoldedLocalTrack(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "BYØRN - Bass Fusion.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+
+	remote := []spotifyRemoteTrack{
+		{ID: "1gngfhBp6ffaF83T0dLRfO", Title: "Bass Fusion", Artist: "BYORN"},
+	}
+	state := spotifySyncState{KnownIDs: map[string]struct{}{}, Entries: map[string]spotifyStateEntry{}}
+
+	preflight, _, _, planned, existing, backfills := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
+	if preflight.PlannedDownloadCount != 0 || len(planned) != 0 {
+		t.Fatalf("expected unicode-folded local match to avoid download, got %+v planned=%v", preflight, planned)
+	}
+	if len(existing) != 1 || len(backfills) != 1 {
+		t.Fatalf("expected existing/backfill match, existing=%v backfills=%+v", existing, backfills)
 	}
 }
