@@ -237,10 +237,10 @@ func mergeSpotifyStateEntry(state *spotifySyncState, id string, entry spotifySta
 }
 
 func appendSpotifySyncStateID(path string, id string) error {
-	return appendSpotifySyncStateEntry(path, id, "", "")
+	return upsertSpotifySyncStateEntry(path, id, "", "")
 }
 
-func appendSpotifySyncStateEntry(path string, id string, displayName string, localPath string) error {
+func upsertSpotifySyncStateEntry(path string, id string, displayName string, localPath string) error {
 	trackID := extractSpotifyTrackID(id)
 	if trackID == "" {
 		return errors.New("spotify track id must not be empty")
@@ -251,40 +251,108 @@ func appendSpotifySyncStateEntry(path string, id string, displayName string, loc
 		return err
 	}
 
-	writeHeader := false
-	if info, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			writeHeader = true
-		} else {
-			return err
-		}
-	} else if info.Size() == 0 {
-		writeHeader = true
+	payload, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+
+	prefix, lines := splitSpotifyStatePayload(payload)
+	updatedLines := make([]string, 0, len(lines)+2)
+	replaced := false
+	newEntry := spotifyStateEntry{
+		DisplayName: strings.TrimSpace(displayName),
+		LocalPath:   normalizeSpotifyStatePath(localPath),
+	}
+	for _, line := range lines {
+		existingID, existingEntry := parseSpotifyStateLine(line)
+		if existingID != trackID {
+			updatedLines = append(updatedLines, line)
+			continue
+		}
+		if replaced {
+			continue
+		}
+		if newEntry.DisplayName != "" {
+			existingEntry.DisplayName = newEntry.DisplayName
+		}
+		if newEntry.LocalPath != "" {
+			existingEntry.LocalPath = newEntry.LocalPath
+		}
+		updatedLines = append(updatedLines, formatSpotifyStateLine(trackID, existingEntry))
+		replaced = true
+	}
+	if !replaced {
+		updatedLines = append(updatedLines, formatSpotifyStateLine(trackID, newEntry))
+	}
+
+	for len(updatedLines) > 0 && strings.TrimSpace(updatedLines[len(updatedLines)-1]) == "" {
+		updatedLines = updatedLines[:len(updatedLines)-1]
+	}
+	if len(prefix) == 0 && len(updatedLines) == 1 {
+		updatedLines = append([]string{"# udl spotify state v2"}, updatedLines...)
+	}
+	updatedPayload := append([]byte(nil), prefix...)
+	if len(updatedPayload) > 0 && updatedPayload[len(updatedPayload)-1] != '\n' {
+		updatedPayload = append(updatedPayload, '\n')
+	}
+	updatedPayload = append(updatedPayload, []byte(strings.Join(updatedLines, "\n")+"\n")...)
+	return writeSpotifyStateAtomically(path, updatedPayload, mode)
+}
+
+func splitSpotifyStatePayload(payload []byte) ([]byte, []string) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	if !bytes.HasPrefix(trimmed, []byte("{")) {
+		return nil, strings.Split(string(payload), "\n")
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, strings.Split(string(payload), "\n")
+	}
+	offset := decoder.InputOffset()
+	return append([]byte(nil), payload[:offset]...), strings.Split(string(payload[offset:]), "\n")
+}
+
+func formatSpotifyStateLine(trackID string, entry spotifyStateEntry) string {
+	fields := []string{trackID}
+	if title := strings.TrimSpace(entry.DisplayName); title != "" {
+		fields = append(fields, "title="+encodeSpotifyStateValue(title))
+	}
+	if localPath := normalizeSpotifyStatePath(entry.LocalPath); localPath != "" {
+		fields = append(fields, "path="+encodeSpotifyStateValue(localPath))
+	}
+	return strings.Join(fields, "\t")
+}
+
+func writeSpotifyStateAtomically(path string, payload []byte, mode os.FileMode) error {
+	tempFile, err := os.CreateTemp(filepath.Dir(path), ".udl-spotify-state-*")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
 
-	if writeHeader {
-		if _, err := file.WriteString("# udl spotify state v2\n"); err != nil {
-			return err
-		}
+	if err := tempFile.Chmod(mode); err != nil {
+		_ = tempFile.Close()
+		return err
 	}
-
-	fields := []string{trackID}
-	title := strings.TrimSpace(displayName)
-	if title != "" {
-		fields = append(fields, "title="+encodeSpotifyStateValue(title))
+	if _, err := tempFile.Write(payload); err != nil {
+		_ = tempFile.Close()
+		return err
 	}
-	normalizedPath := normalizeSpotifyStatePath(localPath)
-	if normalizedPath != "" {
-		fields = append(fields, "path="+encodeSpotifyStateValue(normalizedPath))
+	if err := tempFile.Close(); err != nil {
+		return err
 	}
-	_, err = file.WriteString(strings.Join(fields, "\t") + "\n")
-	return err
+	return os.Rename(tempPath, path)
 }
 
 func appendSpotifyStateBackfillEntries(path string, entries []spotifyStateBackfillEntry, state *spotifySyncState) (int, error) {
@@ -303,7 +371,7 @@ func appendSpotifyStateBackfillEntries(path string, entries []spotifyStateBackfi
 		if _, exists := state.KnownIDs[id]; exists {
 			continue
 		}
-		if err := appendSpotifySyncStateEntry(path, id, entry.DisplayName, entry.LocalPath); err != nil {
+		if err := upsertSpotifySyncStateEntry(path, id, entry.DisplayName, entry.LocalPath); err != nil {
 			return written, err
 		}
 		mergeSpotifyStateEntry(state, id, spotifyStateEntry{

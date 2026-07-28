@@ -111,6 +111,12 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 	if result.Err != nil {
 		return engine.PlanSelectionResult{}, result.Err
 	}
+	if result.Rebuild {
+		if i.windowByID == nil {
+			i.windowByID = map[string]engine.PlanWindow{}
+		}
+		i.windowByID[sourceID] = engine.NormalizePlanWindow(result.Window)
+	}
 	return engine.PlanSelectionResult{
 		Manifest: result.Manifest,
 		Canceled: result.Canceled,

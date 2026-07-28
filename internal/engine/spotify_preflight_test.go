@@ -183,6 +183,47 @@ func TestBuildSpotifyPreflightBackfillsUnknownLocalTrack(t *testing.T) {
 	}
 }
 
+func TestBuildSpotifyPreflightDoesNotReuseStatePathForSameTitle(t *testing.T) {
+	tmp := t.TempDir()
+	localName := "Artist - Shared Title.mp3"
+	if err := os.WriteFile(filepath.Join(tmp, localName), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+
+	remote := []spotifyRemoteTrack{
+		{ID: "known1234567890123456", Title: "Shared Title", Artist: "Artist"},
+		{ID: "newer1234567890123456", Title: "Shared Title", Artist: "Artist"},
+	}
+	state := spotifySyncState{
+		KnownIDs: map[string]struct{}{"known1234567890123456": {}},
+		Entries: map[string]spotifyStateEntry{
+			"known1234567890123456": {DisplayName: "Artist - Shared Title", LocalPath: localName},
+		},
+	}
+
+	preflight, archiveGaps, knownGaps, planned, existing, backfills := buildSpotifyPreflight(
+		remote,
+		state,
+		tmp,
+		SoundCloudModeScanGaps,
+	)
+	if len(existing) != 1 || existing[0] != "known1234567890123456" {
+		t.Fatalf("expected only state-backed track to be present, got %v", existing)
+	}
+	if _, ok := archiveGaps["newer1234567890123456"]; !ok {
+		t.Fatalf("expected same-title unknown track to remain an archive gap")
+	}
+	if len(knownGaps) != 0 || len(backfills) != 0 {
+		t.Fatalf("unexpected known gaps/backfills: known=%v backfills=%+v", knownGaps, backfills)
+	}
+	if len(planned) != 1 || planned[0] != "newer1234567890123456" {
+		t.Fatalf("expected only unknown duplicate-title track to be planned, got %v", planned)
+	}
+	if preflight.PlannedDownloadCount != 1 {
+		t.Fatalf("expected one planned download, got %+v", preflight)
+	}
+}
+
 func TestBuildSpotifyPreflightMatchesUnicodeFoldedLocalTrack(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, "BYØRN - Bass Fusion.mp3"), []byte("x"), 0o644); err != nil {

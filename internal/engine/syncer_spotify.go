@@ -350,7 +350,7 @@ func (s *Syncer) runSpotifyDeemix(
 			if entryLabel != "" {
 				doneMessage = fmt.Sprintf("[%s] [done] %s (%s)", source.ID, trackID, entryLabel)
 			}
-			if appendErr := appendSpotifySyncStateEntry(plan.StateWritePath, trackID, entryLabel, localPath); appendErr != nil {
+			if appendErr := upsertSpotifySyncStateEntry(plan.StateWritePath, trackID, entryLabel, localPath); appendErr != nil {
 				sourceFailed = true
 				sourceFailureMessage = fmt.Sprintf("[%s] failed to update spotify state file: %v", source.ID, appendErr)
 				break

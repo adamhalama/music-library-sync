@@ -355,7 +355,7 @@ func buildSpotifyPreflight(
 		localPath := ""
 		if !hasLocal {
 			for _, candidate := range spotifyTrackLocalTitleCandidates(track, entry) {
-				if matchedPath, ok := consumeLocalTitlePathMatch(availableLocalPaths, candidate); ok {
+				if matchedPath, ok := consumeLocalTitlePathMatch(availableLocalPaths, candidate, consumedStatePaths); ok {
 					hasLocal = true
 					localPath = matchedPath
 					break
@@ -510,18 +510,23 @@ func scanLocalMediaTitlePathIndex(root string) map[string][]string {
 	return index
 }
 
-func consumeLocalTitlePathMatch(available map[string][]string, title string) (string, bool) {
+func consumeLocalTitlePathMatch(available map[string][]string, title string, consumed map[string]struct{}) (string, bool) {
 	key := normalizeTrackKey(title)
 	if key == "" {
 		return "", false
 	}
 	paths := available[key]
-	if len(paths) == 0 {
-		return "", false
+	for len(paths) > 0 {
+		path := paths[0]
+		paths = paths[1:]
+		available[key] = paths
+		if _, used := consumed[path]; used {
+			continue
+		}
+		consumed[path] = struct{}{}
+		return path, true
 	}
-	path := paths[0]
-	available[key] = paths[1:]
-	return path, true
+	return "", false
 }
 
 func spotifyStateTrackPresent(targetDir string, entry spotifyStateEntry, consumed map[string]struct{}) bool {

@@ -72,7 +72,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 					if m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
 						m.interactiveOrders[source.ID] = engine.DownloadOrderOldestFirst
 					}
-					if m.isInteractiveSyncWorkflow() {
+					if m.isInteractiveSyncWorkflow() && engine.SupportsPlanWindow(source) {
 						m.interactiveWindows[source.ID] = engine.DefaultPlanWindowForSource(source)
 					}
 				}
@@ -209,6 +209,10 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 				return m, nil
 			}
 			if typed.String() == "w" {
+				source, ok := m.interactiveSourceByID(m.planPrompt.sourceID)
+				if !ok || !engine.SupportsPlanWindow(source) {
+					return m, nil
+				}
 				m.toggleInteractivePlanWindow(m.planPrompt.sourceID)
 				m.planPrompt.reply <- tuiPlanSelectResult{
 					Rebuild: true,
@@ -406,6 +410,10 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			return m, nil
 		case "w":
 			if !m.isInteractiveSyncWorkflow() {
+				return m, nil
+			}
+			source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
+			if !ok || !engine.SupportsPlanWindow(source) {
 				return m, nil
 			}
 			m.toggleInteractivePlanWindow(m.currentInteractiveDisplaySourceID())
@@ -888,7 +896,9 @@ func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncReque
 		req.PlanLimit = m.planLimit
 		req.PlanWindowBySource = map[string]engine.PlanWindow{}
 		for _, source := range m.sources {
-			req.PlanWindowBySource[source.ID] = m.planWindowForSourceID(source.ID)
+			if engine.SupportsPlanWindow(source) {
+				req.PlanWindowBySource[source.ID] = m.planWindowForSourceID(source.ID)
+			}
 		}
 		return req
 	}
@@ -905,6 +915,10 @@ func (m *tuiSyncModel) toggleInteractivePlanWindow(sourceID string) {
 	}
 	sourceID = strings.TrimSpace(sourceID)
 	if sourceID == "" {
+		return
+	}
+	source, ok := m.interactiveSourceByID(sourceID)
+	if !ok || !engine.SupportsPlanWindow(source) {
 		return
 	}
 	current := m.planWindowForSourceID(sourceID)
@@ -985,6 +999,14 @@ func (m tuiSyncModel) currentInteractiveSourceSupportsDownloadOrder() bool {
 	}
 	source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
 	return ok && engine.SupportsDownloadOrder(source)
+}
+
+func (m tuiSyncModel) currentInteractiveSourceSupportsPlanWindow() bool {
+	if !m.isInteractiveSyncWorkflow() {
+		return false
+	}
+	source, ok := m.interactiveSourceByID(m.currentInteractiveDisplaySourceID())
+	return ok && engine.SupportsPlanWindow(source)
 }
 
 func formatTimeoutOverride(timeout time.Duration) string {

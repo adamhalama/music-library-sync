@@ -253,8 +253,9 @@ func (m tuiSyncModel) planPromptBody(layout tuiShellLayout) string {
 
 func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, layout tuiShellLayout) []string {
 	showOrder := state != nil && state.downloadOrder != ""
-	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel, showOrder)
-	controls := renderPlanPromptControls(state, layout, showOrder)
+	showWindow := state != nil && planSourceDetailsSupportsWindow(state.details)
+	infoBar := renderPlanPromptInfoBar(state, modeLabel, limitLabel, showOrder, showWindow)
+	controls := renderPlanPromptControls(state, layout, showOrder, showWindow)
 	if layout.Height < 24 {
 		lines := []string{
 			infoBar,
@@ -273,13 +274,15 @@ func planPromptHeaderLines(state *tuiInteractiveSelectionState, modeLabel, limit
 	return append(lines, controls...)
 }
 
-func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, showOrder bool) string {
+func renderPlanPromptInfoBar(state *tuiInteractiveSelectionState, modeLabel, limitLabel string, showOrder, showWindow bool) string {
 	parts := []string{
 		planPromptChip("Plan Selection", "info"),
 		planPromptField("source", state.sourceID),
 		planPromptField("mode", modeLabel),
 		planPromptField("limit", limitLabel),
-		planPromptField("window", string(state.planWindow)),
+	}
+	if showWindow {
+		parts = append(parts, planPromptField("window", string(state.planWindow)))
 	}
 	if showOrder {
 		parts = append(parts, planPromptField("order", string(state.downloadOrder)))
@@ -306,7 +309,7 @@ func renderPlanPromptPathLine(left, right string) string {
 		Render(strings.Join(parts, "  "))
 }
 
-func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout, showOrder bool) []string {
+func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShellLayout, showOrder, showWindow bool) []string {
 	state.syncFilterForPhase(tuiInteractivePhaseReview)
 	focusTone := "warning"
 	if !state.focusFilters {
@@ -318,16 +321,27 @@ func renderPlanPromptControls(state *tuiInteractiveSelectionState, layout tuiShe
 		renderPlanPromptKey("tab", "switch"),
 		renderPlanPromptKey("j/k", "move"),
 		renderPlanPromptKey("space", "toggle/apply"),
-		renderPlanPromptKey("w", "window"),
+	}
+	if showOrder {
+		parts = append(parts, renderPlanPromptKey("o", "order"))
+	}
+	if showWindow {
+		parts = append(parts, renderPlanPromptKey("w", "window"))
+	}
+	parts = append(parts,
 		renderPlanPromptKey("a", "all visible"),
 		renderPlanPromptKey("n", "clear visible"),
 		renderPlanPromptKey("enter", "confirm"),
 		renderPlanPromptKey("esc", "cancel"),
-	}
-	if showOrder {
-		parts = append(parts[0:5], append([]string{renderPlanPromptKey("o", "order")}, parts[5:]...)...)
-	}
+	)
 	return renderPlanPromptControlLines(parts, layout)
+}
+
+func planSourceDetailsSupportsWindow(details planSourceDetails) bool {
+	return engine.SupportsPlanWindow(config.Source{
+		Type:    config.SourceType(details.SourceType),
+		Adapter: config.AdapterSpec{Kind: details.Adapter},
+	})
 }
 
 func renderPlanPromptKey(keyLabel, label string) string {
@@ -760,7 +774,13 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 		infoState.downloadOrder = state.downloadOrder
 		infoState.planWindow = state.details.PlanWindow
 	}
-	lines := []string{renderPlanPromptInfoBar(infoState, modeLabel, limitLabel, m.currentInteractiveSourceSupportsDownloadOrder())}
+	lines := []string{renderPlanPromptInfoBar(
+		infoState,
+		modeLabel,
+		limitLabel,
+		m.currentInteractiveSourceSupportsDownloadOrder(),
+		m.currentInteractiveSourceSupportsPlanWindow(),
+	)}
 	if layout.Height < 24 {
 		lines = append(lines, renderPlanPromptPathLine(
 			fmt.Sprintf("target %s", filepath.Base(state.details.TargetDir)),
@@ -776,14 +796,27 @@ func (m tuiSyncModel) interactiveSelectionContextLines(selectionState *tuiIntera
 
 func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDisplayState, layout tuiShellLayout) []string {
 	if m.planPrompt != nil {
-		return renderPlanPromptControls(m.planPrompt.tuiInteractiveSelectionState, layout, m.currentInteractiveSourceSupportsDownloadOrder())
+		return renderPlanPromptControls(
+			m.planPrompt.tuiInteractiveSelectionState,
+			layout,
+			m.currentInteractiveSourceSupportsDownloadOrder(),
+			m.currentInteractiveSourceSupportsPlanWindow(),
+		)
 	}
 	if state == nil || len(state.rows) == 0 {
-		return renderInteractiveIdleControls(layout, m.currentInteractiveSourceSupportsDownloadOrder())
+		return renderInteractiveIdleControls(
+			layout,
+			m.currentInteractiveSourceSupportsDownloadOrder(),
+			m.currentInteractiveSourceSupportsPlanWindow(),
+		)
 	}
 	selectionState := m.currentInteractiveSelection()
 	if selectionState == nil {
-		return renderInteractiveIdleControls(layout, m.currentInteractiveSourceSupportsDownloadOrder())
+		return renderInteractiveIdleControls(
+			layout,
+			m.currentInteractiveSourceSupportsDownloadOrder(),
+			m.currentInteractiveSourceSupportsPlanWindow(),
+		)
 	}
 	focusTone := "warning"
 	if !selectionState.focusFilters {
@@ -811,23 +844,27 @@ func (m tuiSyncModel) renderInteractiveSelectionControls(state *tuiInteractiveDi
 	return renderPlanPromptControlLines(parts, layout)
 }
 
-func renderInteractiveIdleControls(layout tuiShellLayout, showOrder bool) []string {
+func renderInteractiveIdleControls(layout tuiShellLayout, showOrder, showWindow bool) []string {
 	parts := []string{
 		planPromptChip("source controls", "info"),
 		renderPlanPromptKey("j/k", "move"),
 		renderPlanPromptKey("space", "toggle source"),
 		renderPlanPromptKey("d", "dry-run"),
 		renderPlanPromptKey("t", "timeout"),
+	}
+	if showOrder {
+		parts = append(parts, renderPlanPromptKey("o", "order"))
+	}
+	if showWindow {
+		parts = append(parts, renderPlanPromptKey("w", "window"))
+	}
+	parts = append(parts,
 		renderPlanPromptKey("[/]", "plan limit"),
 		renderPlanPromptKey("l", "type limit"),
 		renderPlanPromptKey("u", "unlimited"),
 		renderPlanPromptKey("p", "activity"),
 		renderPlanPromptKey("enter", "run"),
-	}
-	if showOrder {
-		parts = append(parts[0:5], append([]string{renderPlanPromptKey("o", "order")}, parts[5:]...)...)
-	}
-	parts = append(parts[0:6], append([]string{renderPlanPromptKey("w", "window")}, parts[6:]...)...)
+	)
 	return renderPlanPromptControlLines(parts, layout)
 }
 

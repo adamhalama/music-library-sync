@@ -120,6 +120,7 @@ Global flags:
 - `--no-preflight`
 - `--plan`
 - `--plan-limit <n>` (`0` = unlimited; requires `--plan`)
+- `--plan-window <first|latest>` (requires `--plan`; defaults to `latest` for Spotify+deemix and `first` otherwise)
 - `--progress <auto|always|never>`
 - `--preflight-summary <auto|always|never>`
 - `--track-status <names|count|none>`
@@ -249,6 +250,8 @@ Notes:
 - SoundCloud sources support `adapter.kind: scdl` (default stream-rip flow) and `adapter.kind: scdl-freedl` (separate free-download-link flow).
 - Recommended Spotify path is `adapter.kind: deemix`; `spotdl` remains available as fallback/legacy.
 - Spotify+`deemix` supports the same preflight planning controls as SoundCloud (`break_on_existing`, `ask_on_existing`, `--scan-gaps`, `--no-preflight`) and tracks known Spotify IDs in the source state file.
+- Interactive `--plan` supports SoundCloud+`scdl` and Spotify+`deemix`. Spotify plans default to the latest remote window; use `--plan-window first` to inspect playlist order from the beginning.
+- Spotify's `latest` plan window sorts by Spotify `added_at` before applying `--plan-limit`. When the Web API is unavailable and public-page enumeration has no timestamps, it uses the playlist tail in reverse order as the deterministic fallback.
 - Spotify+`deemix` preflight now treats known tracks missing from `target_dir` as `known_gaps` (SCDL-style), so deleted local files are re-planned automatically.
 - In default compact mode, Spotify+`deemix` progress is rendered as live per-track/global bars with persistent `[done]/[skip]/[fail]` lines. Raw deemix stack/progress chatter is suppressed; use `--verbose` for raw subprocess output.
 - Compact mode now preserves source preflight summary lines by default. Use `--preflight-summary never` to hide them.

@@ -50,6 +50,10 @@ func SupportsDownloadOrder(source config.Source) bool {
 		(source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix")
 }
 
+func SupportsPlanWindow(source config.Source) bool {
+	return source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix"
+}
+
 func SupportsPlan(source config.Source) bool {
 	return source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" ||
 		source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix"

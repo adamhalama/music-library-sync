@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,11 +72,11 @@ func TestAppendSpotifySyncStateID(t *testing.T) {
 	}
 }
 
-func TestAppendSpotifySyncStateEntry(t *testing.T) {
+func TestUpsertSpotifySyncStateEntry(t *testing.T) {
 	tmp := t.TempDir()
 	statePath := filepath.Join(tmp, "spotify.sync")
 
-	if err := appendSpotifySyncStateEntry(statePath, "41gXFhitx4whS6PsoXREzy", "Regent - Permean", "spotify/Regent - Permean.mp3"); err != nil {
+	if err := upsertSpotifySyncStateEntry(statePath, "41gXFhitx4whS6PsoXREzy", "Regent - Permean", "spotify/Regent - Permean.mp3"); err != nil {
 		t.Fatalf("append entry: %v", err)
 	}
 
@@ -95,6 +96,48 @@ func TestAppendSpotifySyncStateEntry(t *testing.T) {
 	}
 	if entry.LocalPath != "spotify/Regent - Permean.mp3" {
 		t.Fatalf("unexpected local path %q", entry.LocalPath)
+	}
+}
+
+func TestUpsertSpotifySyncStateEntryReplacesExistingID(t *testing.T) {
+	tmp := t.TempDir()
+	statePath := filepath.Join(tmp, "spotify.sync")
+	trackID := "41gXFhitx4whS6PsoXREzy"
+	payload := "# udl spotify state v2\n" +
+		trackID + "\ttitle=Regent+-+Permean\tpath=old.mp3\n" +
+		trackID + "\ttitle=duplicate\tpath=duplicate.mp3\n"
+	if err := os.WriteFile(statePath, []byte(payload), 0o640); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	if err := upsertSpotifySyncStateEntry(statePath, trackID, "", "new.mp3"); err != nil {
+		t.Fatalf("upsert entry: %v", err)
+	}
+
+	updated, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if got := strings.Count(string(updated), trackID); got != 1 {
+		t.Fatalf("expected one state row for track, got %d in %q", got, updated)
+	}
+	state, err := parseSpotifySyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	entry := state.Entries[trackID]
+	if entry.DisplayName != "Regent - Permean" {
+		t.Fatalf("expected existing title to be preserved, got %q", entry.DisplayName)
+	}
+	if entry.LocalPath != "new.mp3" {
+		t.Fatalf("expected path to be replaced, got %q", entry.LocalPath)
+	}
+	info, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatalf("stat state: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("expected mode 0640 to be preserved, got %o", info.Mode().Perm())
 	}
 }
 
