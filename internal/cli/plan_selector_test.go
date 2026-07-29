@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/engine"
 )
 
 func TestBuildPlanSourceDetails(t *testing.T) {
@@ -19,7 +20,7 @@ func TestBuildPlanSourceDetails(t *testing.T) {
 		StateFile: "scdl-source.sync.scdl",
 		Adapter:   config.AdapterSpec{Kind: "scdl"},
 	}
-	details := buildPlanSourceDetails(source, config.Defaults{StateDir: stateDir}, 10, true)
+	details := buildPlanSourceDetails(source, config.Defaults{StateDir: stateDir}, 10, engine.PlanWindowFirst, true)
 
 	if details.SourceID != "scdl-source" {
 		t.Fatalf("expected source id, got %q", details.SourceID)

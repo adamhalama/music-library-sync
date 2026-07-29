@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"golang.org/x/text/unicode/norm"
 )
 
 type soundCloudRemoteTrack struct {
@@ -525,8 +526,11 @@ func normalizeTrackKey(raw string) string {
 
 	var b strings.Builder
 	prevSpace := false
-	for _, r := range trimmed {
+	for _, r := range norm.NFD.String(trimmed) {
+		r = foldTrackKeyRune(r)
 		switch {
+		case unicode.Is(unicode.Mn, r):
+			continue
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
 			b.WriteRune(r)
 			prevSpace = false
@@ -543,6 +547,25 @@ func normalizeTrackKey(raw string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func foldTrackKeyRune(r rune) rune {
+	switch r {
+	case 'ø', 'Ø':
+		return 'o'
+	case 'đ', 'Đ':
+		return 'd'
+	case 'ł', 'Ł':
+		return 'l'
+	case 'ß':
+		return 's'
+	case 'æ', 'Æ':
+		return 'a'
+	case 'œ', 'Œ':
+		return 'o'
+	default:
+		return r
+	}
 }
 
 func copyTitleCountMap(in map[string]int) map[string]int {

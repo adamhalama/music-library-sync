@@ -18,8 +18,8 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 
 | Phase | Status | Exit condition |
 | --- | --- | --- |
-| 0. Update from `master` | In progress | Merge complete and both providers registered |
-| 1. Portability and plan integrity | Not started | Defaults and backup override fixed |
+| 0. Update from `master` | Done | Merge complete and both providers registered |
+| 1. Portability and plan integrity | In progress | Defaults and backup override fixed |
 | 2. Validation and snapshot correctness | Not started | Invalid jobs and duplicates covered |
 | 3. CLI and TUI completion | Not started | Blockers visible and 80×24 useful |
 | 4. Documentation and packaging | Not started | Public behavior and dependencies documented |
@@ -27,22 +27,22 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 
 ## Phase 0 — Update from `master`
 
-**Status:** In progress
+**Status:** Done
 
-- [ ] Confirm the target worktree is clean before merging.
-- [ ] Fetch the latest remote refs.
-- [ ] Merge `origin/master` into `feature/freedl-rekordbox-tui` with a merge commit.
-- [ ] Resolve `AGENTS.md` by retaining the applicable notes from both branches.
-- [ ] Resolve `internal/engine/syncer.go` by registering both:
+- [x] Confirm the target worktree is clean before merging.
+- [x] Fetch the latest remote refs.
+- [x] Merge `origin/master` into `feature/freedl-rekordbox-tui` with a merge commit.
+- [x] Resolve `AGENTS.md` by retaining the applicable notes from both branches.
+- [x] Resolve `internal/engine/syncer.go` by registering both:
   - `deemix` with `NewSpotifyDeemixPlanProvider()`
   - `scdl-freedl` with `NewSCDLPlanProvider()`
-- [ ] Add or update a registry test that proves both providers are available.
-- [ ] Run the focused engine tests after conflict resolution.
-- [ ] Confirm the merge did not alter cache-first playlist or fail-closed Rekordbox behavior.
+- [x] Add or update a registry test that proves both providers are available.
+- [x] Run the focused engine tests after conflict resolution.
+- [x] Confirm the merge did not alter cache-first playlist or fail-closed Rekordbox behavior.
 
 ## Phase 1 — Portability and Plan Integrity
 
-**Status:** Not started
+**Status:** In progress
 
 ### Portable Rekordbox backup defaults
 
@@ -230,3 +230,10 @@ These checks describe the branch before the finishing implementation begins:
 - Began implementation in the dedicated `feature/freedl-rekordbox-tui` worktree.
 - Confirmed the worktree contains no unrelated changes; only `PLAN.md` and this tracker are initially untracked.
 - Confirmed the branch is nine commits ahead and one commit behind the locally known `origin/master`.
+- Committed the planning baseline before integration.
+- Fetched `origin` and merged `origin/master`; the only conflicts were the predicted `AGENTS.md` notes and built-in plan-provider registrations.
+- Preserved all three built-in providers (`scdl`, `scdl-freedl`, and `deemix`) and added a regression test for the registry.
+- Validation after conflict resolution:
+  - `go test ./internal/engine/...`
+  - `go test ./internal/cli ./internal/rekordbox/...`
+- Started Phase 1.

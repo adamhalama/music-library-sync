@@ -47,6 +47,37 @@ func buildSpotifyTrackMetadataIndex(tracks []spotifyRemoteTrack) map[string]spot
 	return lookup
 }
 
+func enrichSpotifyRemoteTrackMetadata(ctx context.Context, tracks []spotifyRemoteTrack) []spotifyRemoteTrack {
+	if len(tracks) == 0 {
+		return tracks
+	}
+	out := append([]spotifyRemoteTrack(nil), tracks...)
+	for i, track := range out {
+		if hasUsableSpotifyMetadata(spotifyTrackMetadata{Title: track.Title, Artist: track.Artist, Album: track.Album}) {
+			continue
+		}
+		id := extractSpotifyTrackID(track.ID)
+		if id == "" {
+			continue
+		}
+		metadata, err := fetchSpotifyTrackMetadataFn(ctx, id)
+		if err != nil {
+			continue
+		}
+		metadata = normalizeSpotifyTrackMetadata(metadata)
+		if strings.TrimSpace(metadata.Title) != "" {
+			out[i].Title = metadata.Title
+		}
+		if strings.TrimSpace(metadata.Artist) != "" {
+			out[i].Artist = metadata.Artist
+		}
+		if strings.TrimSpace(metadata.Album) != "" {
+			out[i].Album = metadata.Album
+		}
+	}
+	return out
+}
+
 func resolveSpotifyTrackMetadataForExecution(
 	ctx context.Context,
 	trackID string,

@@ -24,15 +24,16 @@ type tuiCredentialsCard struct {
 }
 
 type tuiCredentialsEditState struct {
-	Kind            auth.CredentialKind
-	Field           string
-	Title           string
-	Buffer          string
-	Cursor          int
-	MaskInput       bool
-	Help            []string
-	NextSpotifyID   string
-	ExternalSource  auth.CredentialStorageSource
+	Kind           auth.CredentialKind
+	Field          string
+	Title          string
+	Buffer         string
+	ExistingValue  string
+	Cursor         int
+	MaskInput      bool
+	Help           []string
+	NextSpotifyID  string
+	ExternalSource auth.CredentialStorageSource
 }
 
 type tuiCredentialsLoadMsg struct {
@@ -188,12 +189,11 @@ func (m *tuiCredentialsModel) startEditForCard(card tuiCredentialsCard) {
 			Kind:           card.Kind,
 			Field:          "deemix_arl",
 			Title:          "Deezer ARL",
-			Buffer:         value,
-			Cursor:         utf8RuneCount(value),
+			ExistingValue:  value,
 			MaskInput:      true,
 			ExternalSource: source,
 			Help: []string{
-				"Paste the Deezer ARL used for Spotify-to-Deezer conversion.",
+				"Paste a new Deezer ARL, or leave blank to keep the current value.",
 				"UDL saves it to macOS Keychain, not to YAML.",
 			},
 		}
@@ -222,15 +222,14 @@ func (m tuiCredentialsModel) updateEdit(msg tea.KeyMsg) (tuiCredentialsModel, te
 			nextID := strings.TrimSpace(m.edit.Buffer)
 			creds, _, _ := auth.ResolveSpotifyCredentialsWithSource()
 			m.edit = &tuiCredentialsEditState{
-				Kind:           auth.CredentialKindSpotifyApp,
-				Field:          "spotify_client_secret",
-				Title:          "Spotify Client Secret",
-				Buffer:         creds.ClientSecret,
-				Cursor:         utf8RuneCount(creds.ClientSecret),
-				MaskInput:      true,
-				NextSpotifyID:  nextID,
+				Kind:          auth.CredentialKindSpotifyApp,
+				Field:         "spotify_client_secret",
+				Title:         "Spotify Client Secret",
+				ExistingValue: creds.ClientSecret,
+				MaskInput:     true,
+				NextSpotifyID: nextID,
 				Help: []string{
-					"Paste your Spotify app client secret.",
+					"Paste a new client secret, or leave blank to keep the current value.",
 					"UDL saves both values to macOS Keychain.",
 				},
 			}
@@ -290,7 +289,11 @@ func (m tuiCredentialsModel) saveEditCmd() tea.Cmd {
 			}
 			return tuiCredentialsSavedMsg{Flash: flash}
 		case auth.CredentialKindDeemixARL:
-			if err := auth.SaveDeemixARL(strings.TrimSpace(edit.Buffer)); err != nil {
+			arl := strings.TrimSpace(edit.Buffer)
+			if arl == "" {
+				arl = strings.TrimSpace(edit.ExistingValue)
+			}
+			if err := auth.SaveDeemixARL(arl); err != nil {
 				return tuiCredentialsSavedMsg{Err: err}
 			}
 			_ = auth.ClearCredentialFailure(stateDir, auth.CredentialKindDeemixARL)
@@ -300,9 +303,13 @@ func (m tuiCredentialsModel) saveEditCmd() tea.Cmd {
 			}
 			return tuiCredentialsSavedMsg{Flash: flash}
 		case auth.CredentialKindSpotifyApp:
+			clientSecret := strings.TrimSpace(edit.Buffer)
+			if clientSecret == "" {
+				clientSecret = strings.TrimSpace(edit.ExistingValue)
+			}
 			creds := auth.SpotifyCredentials{
 				ClientID:     strings.TrimSpace(edit.NextSpotifyID),
-				ClientSecret: strings.TrimSpace(edit.Buffer),
+				ClientSecret: clientSecret,
 			}
 			if err := auth.SaveSpotifyCredentials(creds); err != nil {
 				return tuiCredentialsSavedMsg{Err: err}

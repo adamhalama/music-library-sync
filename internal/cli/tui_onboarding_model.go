@@ -14,13 +14,13 @@ import (
 type tuiOnboardingPhase string
 
 const (
-	tuiOnboardingPhaseIntro     tuiOnboardingPhase = "intro"
-	tuiOnboardingPhaseLocations tuiOnboardingPhase = "locations"
-	tuiOnboardingPhaseSource    tuiOnboardingPhase = "source"
+	tuiOnboardingPhaseIntro       tuiOnboardingPhase = "intro"
+	tuiOnboardingPhaseLocations   tuiOnboardingPhase = "locations"
+	tuiOnboardingPhaseSource      tuiOnboardingPhase = "source"
 	tuiOnboardingPhaseCredentials tuiOnboardingPhase = "credentials"
-	tuiOnboardingPhaseReview    tuiOnboardingPhase = "review"
-	tuiOnboardingPhaseSaving    tuiOnboardingPhase = "saving"
-	tuiOnboardingPhaseDone      tuiOnboardingPhase = "done"
+	tuiOnboardingPhaseReview      tuiOnboardingPhase = "review"
+	tuiOnboardingPhaseSaving      tuiOnboardingPhase = "saving"
+	tuiOnboardingPhaseDone        tuiOnboardingPhase = "done"
 )
 
 type tuiOnboardingReason string
@@ -41,12 +41,13 @@ type tuiOnboardingStartupState struct {
 }
 
 type tuiOnboardingInlineEditState struct {
-	Field       string
-	Title       string
-	Buffer      string
-	Cursor      int
-	Placeholder string
-	Help        []string
+	Field         string
+	Title         string
+	Buffer        string
+	ExistingValue string
+	Cursor        int
+	Placeholder   string
+	Help          []string
 }
 
 type tuiOnboardingSaveState struct {
@@ -62,28 +63,28 @@ type tuiOnboardingDoneMsg struct {
 }
 
 type tuiOnboardingModel struct {
-	app                *AppContext
-	phase              tuiOnboardingPhase
-	startup            tuiOnboardingStartupState
-	locationsCursor    int
-	sourceCursor       int
-	credentialsCursor  int
-	libraryRoot        string
-	stateDir           string
-	sourceType         config.SourceType
-	sourceID           string
-	sourceURL          string
-	soundCloudClientID string
-	deemixARL          string
-	spotifyClientID    string
+	app                 *AppContext
+	phase               tuiOnboardingPhase
+	startup             tuiOnboardingStartupState
+	locationsCursor     int
+	sourceCursor        int
+	credentialsCursor   int
+	libraryRoot         string
+	stateDir            string
+	sourceType          config.SourceType
+	sourceID            string
+	sourceURL           string
+	soundCloudClientID  string
+	deemixARL           string
+	spotifyClientID     string
 	spotifyClientSecret string
-	edit               *tuiOnboardingInlineEditState
-	saveResult         *tuiOnboardingSaveState
-	saveErr            error
-	doctorReport       doctor.Report
-	doctorChecks       []doctor.Check
-	doctorSummary      tuiDoctorSummaryState
-	validationProblems []string
+	edit                *tuiOnboardingInlineEditState
+	saveResult          *tuiOnboardingSaveState
+	saveErr             error
+	doctorReport        doctor.Report
+	doctorChecks        []doctor.Check
+	doctorSummary       tuiDoctorSummaryState
+	validationProblems  []string
 }
 
 func newTUIOnboardingModel(app *AppContext, startup tuiOnboardingStartupState) tuiOnboardingModel {
@@ -344,12 +345,20 @@ func (m tuiOnboardingModel) updateEdit(msg tea.KeyMsg) (tuiOnboardingModel, tea.
 }
 
 func (m *tuiOnboardingModel) startEdit(field string, title string, value string, help []string) {
+	buffer := value
+	existingValue := ""
+	if tuiOnboardingFieldShouldMask(field) {
+		buffer = ""
+		existingValue = value
+		help = append([]string{"Paste a replacement, or leave blank to keep the current value."}, help...)
+	}
 	m.edit = &tuiOnboardingInlineEditState{
-		Field:  field,
-		Title:  title,
-		Buffer: value,
-		Cursor: utf8RuneCount(value),
-		Help:   help,
+		Field:         field,
+		Title:         title,
+		Buffer:        buffer,
+		ExistingValue: existingValue,
+		Cursor:        utf8RuneCount(buffer),
+		Help:          help,
 	}
 }
 
@@ -358,6 +367,9 @@ func (m *tuiOnboardingModel) applyEdit() {
 		return
 	}
 	value := strings.TrimSpace(m.edit.Buffer)
+	if value == "" && tuiOnboardingFieldShouldMask(m.edit.Field) {
+		value = strings.TrimSpace(m.edit.ExistingValue)
+	}
 	switch m.edit.Field {
 	case "library_root":
 		m.libraryRoot = value

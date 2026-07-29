@@ -30,6 +30,7 @@ func newSyncCommand(app *AppContext) *cobra.Command {
 	var noPreflight bool
 	var plan bool
 	var planLimit int
+	var planWindow string
 	var progressMode string
 	var preflightSummaryMode string
 	var trackStatusMode string
@@ -70,6 +71,13 @@ Operational notes:
 			}
 			if cmd.Flags().Changed("plan-limit") && !plan {
 				return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan-limit requires --plan"))
+			}
+			parsedPlanWindow, err := parsePlanWindow(planWindow)
+			if err != nil {
+				return withExitCode(exitcode.InvalidUsage, err)
+			}
+			if cmd.Flags().Changed("plan-window") && !plan {
+				return withExitCode(exitcode.InvalidUsage, fmt.Errorf("--plan-window requires --plan"))
 			}
 			if plan {
 				if app.Opts.JSON {
@@ -156,13 +164,14 @@ Operational notes:
 			ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 			defer stop()
 
-			interaction := buildCLIInteraction(app, cfg, planLimit, app.Opts.DryRun)
+			interaction := buildCLIInteraction(app, cfg, planLimit, parsedPlanWindow, app.Opts.DryRun)
 			result, runErr := useCase.Run(ctx, cfg, workflows.SyncRequest{
 				SourceIDs:        sourceIDs,
 				DryRun:           app.Opts.DryRun,
 				TimeoutOverride:  timeout,
 				Plan:             plan,
 				PlanLimit:        planLimit,
+				PlanWindow:       parsedPlanWindow,
 				AskOnExisting:    askOnExisting,
 				AskOnExistingSet: cmd.Flags().Changed("ask-on-existing"),
 				ScanGaps:         scanGaps,
@@ -197,12 +206,27 @@ Operational notes:
 	cmd.Flags().BoolVar(&askOnExisting, "ask-on-existing", false, "Prompt once when first existing track is found and optionally continue with gap scan")
 	cmd.Flags().BoolVar(&scanGaps, "scan-gaps", false, "Continue full remote scan to fill archive and local-file gaps")
 	cmd.Flags().BoolVar(&noPreflight, "no-preflight", false, "Skip remote preflight diff stage for supported adapters")
-	cmd.Flags().BoolVar(&plan, "plan", false, "Interactive plan mode for selecting tracks to download (currently adapter.kind=scdl only)")
+	cmd.Flags().BoolVar(&plan, "plan", false, "Interactive plan mode for selecting tracks to download (supported: soundcloud/scdl, spotify/deemix)")
 	cmd.Flags().IntVar(&planLimit, "plan-limit", 10, "Per-source remote track check limit in --plan mode (0 = unlimited)")
+	cmd.Flags().StringVar(&planWindow, "plan-window", "", "Which remote tracks enter --plan: first or latest (default: latest for spotify/deemix, first otherwise)")
 	cmd.Flags().StringVar(&progressMode, "progress", "auto", "Progress rendering mode: auto, always, or never")
 	cmd.Flags().StringVar(&preflightSummaryMode, "preflight-summary", "auto", "Preflight summary output: auto, always, or never")
 	cmd.Flags().StringVar(&trackStatusMode, "track-status", "names", "Per-track status output: names, count, or none")
 	return cmd
+}
+
+func parsePlanWindow(raw string) (engine.PlanWindow, error) {
+	mode := strings.TrimSpace(strings.ToLower(raw))
+	switch mode {
+	case "":
+		return "", nil
+	case string(engine.PlanWindowFirst):
+		return engine.PlanWindowFirst, nil
+	case string(engine.PlanWindowLatest):
+		return engine.PlanWindowLatest, nil
+	default:
+		return "", fmt.Errorf("invalid --plan-window %q (expected: first, latest)", raw)
+	}
 }
 
 func parseProgressMode(raw string) (string, error) {

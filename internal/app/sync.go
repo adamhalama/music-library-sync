@@ -11,17 +11,19 @@ import (
 )
 
 type SyncRequest struct {
-	SourceIDs        []string
-	DryRun           bool
-	TimeoutOverride  time.Duration
-	Plan             bool
-	PlanLimit        int
-	AskOnExisting    bool
-	AskOnExistingSet bool
-	ScanGaps         bool
-	NoPreflight      bool
-	AllowPrompt      bool
-	TrackStatus      engine.TrackStatusMode
+	SourceIDs          []string
+	DryRun             bool
+	TimeoutOverride    time.Duration
+	Plan               bool
+	PlanLimit          int
+	PlanWindow         engine.PlanWindow
+	PlanWindowBySource map[string]engine.PlanWindow
+	AskOnExisting      bool
+	AskOnExistingSet   bool
+	ScanGaps           bool
+	NoPreflight        bool
+	AllowPrompt        bool
+	TrackStatus        engine.TrackStatusMode
 }
 
 type SyncUseCase struct {
@@ -36,16 +38,18 @@ func (u SyncUseCase) Run(ctx context.Context, cfg config.Config, req SyncRequest
 	}
 	syncer := engine.NewSyncer(u.Registry, u.Runner, u.Emitter)
 	return syncer.Sync(ctx, cfg, engine.SyncOptions{
-		SourceIDs:        req.SourceIDs,
-		DryRun:           req.DryRun,
-		TimeoutOverride:  req.TimeoutOverride,
-		Plan:             req.Plan,
-		PlanLimit:        req.PlanLimit,
-		AskOnExisting:    req.AskOnExisting,
-		AskOnExistingSet: req.AskOnExistingSet,
-		ScanGaps:         req.ScanGaps,
-		NoPreflight:      req.NoPreflight,
-		AllowPrompt:      req.AllowPrompt,
+		SourceIDs:          req.SourceIDs,
+		DryRun:             req.DryRun,
+		TimeoutOverride:    req.TimeoutOverride,
+		Plan:               req.Plan,
+		PlanLimit:          req.PlanLimit,
+		PlanWindow:         req.PlanWindow,
+		PlanWindowBySource: req.PlanWindowBySource,
+		AskOnExisting:      req.AskOnExisting,
+		AskOnExistingSet:   req.AskOnExistingSet,
+		ScanGaps:           req.ScanGaps,
+		NoPreflight:        req.NoPreflight,
+		AllowPrompt:        req.AllowPrompt,
 		SelectPlanRows: func(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 			return interaction.SelectRows(sourceID, rows)
 		},
