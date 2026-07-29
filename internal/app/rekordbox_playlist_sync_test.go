@@ -55,7 +55,7 @@ func (f *fakeRekordboxBridge) ApplyBatch(ctx context.Context, req bridge.ApplyBa
 	return f.batchResp, nil
 }
 
-func TestRekordboxPlaylistSyncUseCasePlanBuildsSignedPlan(t *testing.T) {
+func TestRekordboxPlaylistSyncUseCasePlanBuildsChecksummedPlan(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Defaults.StateDir = filepath.Join(tmp, "state")
@@ -83,7 +83,7 @@ func TestRekordboxPlaylistSyncUseCasePlanBuildsSignedPlan(t *testing.T) {
 		t.Fatalf("unexpected plan summary: %+v", result.Plan.Summary)
 	}
 	if result.Plan.ChecksumSHA256 == "" {
-		t.Fatalf("expected signed plan")
+		t.Fatalf("expected checksummed plan")
 	}
 	if result.PlanPath != filepath.Join(tmp, "state", "rekordbox", "playlist-sync", "fav_imports-20260521-120000.plan.json") {
 		t.Fatalf("unexpected plan path: %s", result.PlanPath)
@@ -160,13 +160,81 @@ func TestRekordboxPlaylistSyncUseCaseApplyDryRunSkipsBackupAndWrite(t *testing.T
 	if !result.DryRun {
 		t.Fatalf("expected dry-run result")
 	}
+	if result.EffectiveBackupDir != plan.BackupDir {
+		t.Fatalf("expected plan backup dir %q, got %q", plan.BackupDir, result.EffectiveBackupDir)
+	}
 	if backupCalls != 0 || rb.applyCalls != 0 {
 		t.Fatalf("expected no backup/apply calls, got backup=%d apply=%d", backupCalls, rb.applyCalls)
 	}
 }
 
+func TestRekordboxPlaylistSyncUseCaseApplyBackupOverrideDoesNotInvalidatePlan(t *testing.T) {
+	plan := testRekordboxApplyPlan(t)
+	originalChecksum := plan.ChecksumSHA256
+	override := filepath.Join(t.TempDir(), "override")
+	rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
+		Playlists: []bridge.Playlist{{ID: "3150438241", Name: "fav_imports", Attribute: 0}},
+		Contents:  []bridge.Content{{ID: "content-1", Title: "Track", FolderPath: "/Music/Track.mp3"}},
+	}}
+	useCase := RekordboxPlaylistSyncUseCase{
+		Bridge:      rb,
+		CheckClosed: func(context.Context, string) error { return nil },
+	}
+
+	result, err := useCase.Apply(context.Background(), RekordboxPlaylistSyncApplyRequest{
+		Config:    config.DefaultConfig(),
+		Plan:      plan,
+		BackupDir: override,
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("Apply with backup override: %v", err)
+	}
+	if result.EffectiveBackupDir != override {
+		t.Fatalf("expected effective backup dir %q, got %q", override, result.EffectiveBackupDir)
+	}
+	if plan.BackupDir != "/tmp/backups" || plan.ChecksumSHA256 != originalChecksum {
+		t.Fatalf("apply mutated checksummed plan: %+v", plan)
+	}
+	if err := playlistsync.VerifyPlanChecksum(plan); err != nil {
+		t.Fatalf("plan checksum after apply: %v", err)
+	}
+}
+
+func TestRekordboxPlaylistSyncUseCaseApplyUsesConfiguredBackupWhenPlanOmitsIt(t *testing.T) {
+	plan := testRekordboxApplyPlan(t)
+	plan.BackupDir = ""
+	if err := playlistsync.SignPlan(&plan); err != nil {
+		t.Fatalf("SignPlan: %v", err)
+	}
+	configured := filepath.Join(t.TempDir(), "configured")
+	cfg := config.DefaultConfig()
+	cfg.Rekordbox = &config.RekordboxConfig{BackupDir: configured}
+	rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
+		Playlists: []bridge.Playlist{{ID: "3150438241", Name: "fav_imports", Attribute: 0}},
+		Contents:  []bridge.Content{{ID: "content-1", Title: "Track", FolderPath: "/Music/Track.mp3"}},
+	}}
+	useCase := RekordboxPlaylistSyncUseCase{
+		Bridge:      rb,
+		CheckClosed: func(context.Context, string) error { return nil },
+	}
+
+	result, err := useCase.Apply(context.Background(), RekordboxPlaylistSyncApplyRequest{
+		Config: cfg,
+		Plan:   plan,
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("Apply with configured backup: %v", err)
+	}
+	if result.EffectiveBackupDir != configured {
+		t.Fatalf("expected configured backup dir %q, got %q", configured, result.EffectiveBackupDir)
+	}
+}
+
 func TestRekordboxPlaylistSyncUseCaseApplyBacksUpBeforeWrite(t *testing.T) {
 	plan := testRekordboxApplyPlan(t)
+	override := filepath.Join(t.TempDir(), "override")
 	sequence := []string{}
 	rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
 		Playlists: []bridge.Playlist{{ID: "3150438241", Name: "fav_imports", Attribute: 0}},
@@ -185,7 +253,10 @@ func TestRekordboxPlaylistSyncUseCaseApplyBacksUpBeforeWrite(t *testing.T) {
 		CheckClosed: func(context.Context, string) error {
 			return nil
 		},
-		CreateBackup: func(context.Context, string, string, time.Time) (string, error) {
+		CreateBackup: func(_ context.Context, _ string, backupRoot string, _ time.Time) (string, error) {
+			if backupRoot != override {
+				t.Fatalf("expected override backup root %q, got %q", override, backupRoot)
+			}
 			sequence = append(sequence, "backup")
 			return "/backup", nil
 		},
@@ -193,8 +264,9 @@ func TestRekordboxPlaylistSyncUseCaseApplyBacksUpBeforeWrite(t *testing.T) {
 	rb.applyResp.FinalContentIDs = []string{"content-1"}
 
 	result, err := useCase.Apply(context.Background(), RekordboxPlaylistSyncApplyRequest{
-		Config: config.DefaultConfig(),
-		Plan:   plan,
+		Config:    config.DefaultConfig(),
+		Plan:      plan,
+		BackupDir: override,
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)

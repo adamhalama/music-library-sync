@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
@@ -59,10 +60,11 @@ type RekordboxPlaylistSyncApplyRequest struct {
 }
 
 type RekordboxPlaylistSyncApplyResult struct {
-	DryRun        bool
-	BackupPath    string
-	Response      bridge.ApplyResponse
-	BatchResponse bridge.ApplyBatchResponse
+	DryRun             bool
+	EffectiveBackupDir string
+	BackupPath         string
+	Response           bridge.ApplyResponse
+	BatchResponse      bridge.ApplyBatchResponse
 }
 
 func (u RekordboxPlaylistSyncUseCase) Plan(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {
@@ -269,6 +271,10 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 	if err := config.ValidateRekordbox(cfg); err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
+	plan := req.Plan
+	if err := playlistsync.ValidatePlanForApply(plan); err != nil {
+		return RekordboxPlaylistSyncApplyResult{}, err
+	}
 	resolved, err := playlistsync.ResolveOptions(cfg, playlistsync.Options{
 		PythonBin:  req.PythonBin,
 		PythonPath: req.PythonPath,
@@ -286,12 +292,12 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 	if err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
-	plan := req.Plan
-	if plan.BackupDir == "" {
-		plan.BackupDir = resolved.BackupDir
-	}
-	if err := playlistsync.ValidatePlanForApply(plan); err != nil {
-		return RekordboxPlaylistSyncApplyResult{}, err
+	effectiveBackupDir := resolved.BackupDir
+	if strings.TrimSpace(req.BackupDir) == "" && strings.TrimSpace(plan.BackupDir) != "" {
+		effectiveBackupDir, err = config.ExpandPath(plan.BackupDir)
+		if err != nil {
+			return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("resolve plan backup dir: %w", err)
+		}
 	}
 	if err := u.checkClosed(ctx, plan.RekordboxDBDir); err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
@@ -305,10 +311,10 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
 	if req.DryRun {
-		return RekordboxPlaylistSyncApplyResult{DryRun: true}, nil
+		return RekordboxPlaylistSyncApplyResult{DryRun: true, EffectiveBackupDir: effectiveBackupDir}, nil
 	}
 
-	backupPath, err := u.createBackup(ctx, plan.RekordboxDBDir, plan.BackupDir, u.now())
+	backupPath, err := u.createBackup(ctx, plan.RekordboxDBDir, effectiveBackupDir, u.now())
 	if err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
@@ -343,7 +349,7 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 				return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist order does not match plan for %q", op.RekordboxPlaylist.Name)
 			}
 		}
-		return RekordboxPlaylistSyncApplyResult{BackupPath: backupPath, BatchResponse: resp}, nil
+		return RekordboxPlaylistSyncApplyResult{EffectiveBackupDir: effectiveBackupDir, BackupPath: backupPath, BatchResponse: resp}, nil
 	}
 
 	resp, err := client.Apply(ctx, bridge.ApplyRequest{
@@ -360,7 +366,7 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 	if !sameStringSlice(resp.FinalContentIDs, plan.FinalContentIDs) {
 		return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist order does not match plan")
 	}
-	return RekordboxPlaylistSyncApplyResult{BackupPath: backupPath, Response: resp}, nil
+	return RekordboxPlaylistSyncApplyResult{EffectiveBackupDir: effectiveBackupDir, BackupPath: backupPath, Response: resp}, nil
 }
 
 func configForSyncConfig(base config.Config, rb syncconfig.Config) config.Config {

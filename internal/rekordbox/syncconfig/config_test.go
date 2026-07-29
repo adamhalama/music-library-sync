@@ -41,6 +41,13 @@ sync:
 	}
 }
 
+func TestDefaultConfigUsesPortableBackupDir(t *testing.T) {
+	cfg := defaultConfig(config.DefaultConfig())
+	if cfg.Defaults.BackupDir != "~/Music/rb-library-export" {
+		t.Fatalf("expected portable backup default, got %q", cfg.Defaults.BackupDir)
+	}
+}
+
 func TestResolveWritePathPrefersExistingProjectConfig(t *testing.T) {
 	tmp := t.TempDir()
 	project := filepath.Join(tmp, ProjectConfigName)

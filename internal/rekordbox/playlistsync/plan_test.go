@@ -1,6 +1,8 @@
 package playlistsync
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,6 +11,20 @@ import (
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
+
+func TestResolveOptionsExpandsPortableDefaultBackupDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	resolved, err := ResolveOptions(config.DefaultConfig(), Options{})
+	if err != nil {
+		t.Fatalf("ResolveOptions: %v", err)
+	}
+	if want := filepath.Join(home, "Music", "rb-library-export"); resolved.BackupDir != want {
+		t.Fatalf("expected portable backup dir %q, got %q", want, resolved.BackupDir)
+	}
+}
 
 func TestBuildPlanMatchesByExactNormalizedPath(t *testing.T) {
 	opts := ResolvedOptions{
@@ -105,6 +121,9 @@ func TestResolveOptionsUsesConfigJobAndEnvStyleOverrides(t *testing.T) {
 	}
 	if resolved.MusicPlaylistID != "music-id" || resolved.RekordboxPlaylistID != "rb-id" {
 		t.Fatalf("unexpected resolved IDs: %+v", resolved)
+	}
+	if resolved.BackupDir != "/backups" {
+		t.Fatalf("expected explicit backup dir to be preserved, got %q", resolved.BackupDir)
 	}
 	if resolved.CreatePlaylist {
 		t.Fatalf("expected job create_playlist=false")

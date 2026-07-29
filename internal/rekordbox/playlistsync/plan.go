@@ -28,7 +28,7 @@ const (
 	DefaultRekordboxPlaylist = "fav_imports"
 	DefaultRekordboxDBDir    = "~/Library/Pioneer/rekordbox"
 	DefaultPythonBin         = "python3"
-	DefaultBackupDir         = "/Users/jaa/Music/rb-library-export"
+	DefaultBackupDir         = "~/Music/rb-library-export"
 	DefaultMode              = "mirror"
 	PlanVersion              = "1"
 	PlanVersionFolder        = "2"

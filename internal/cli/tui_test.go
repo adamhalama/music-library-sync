@@ -790,7 +790,7 @@ func TestTUIRootDoesNotAutoStartGetStartedForRekordboxOnlyConfig(t *testing.T) {
 		"  command_timeout_seconds: 900",
 		"rekordbox:",
 		"  db_dir: ~/Library/Pioneer/rekordbox",
-		"  backup_dir: /Users/jaa/Music/rb-library-export",
+		"  backup_dir: ~/Music/rb-library-export",
 		"  playlist_sync:",
 		"    jobs:",
 		"      - id: apple-favourites",

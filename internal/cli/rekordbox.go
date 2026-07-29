@@ -337,14 +337,6 @@ func newRekordboxPlaylistSyncApplyCommand(app *AppContext) *cobra.Command {
 				return withExitCode(exitcode.InvalidConfig, err)
 			}
 			cfg = configWithRekordboxSyncDefaults(cfg, rbCfg)
-			resolved, err := playlistsync.ResolveOptions(cfg, playlistsync.Options{
-				PythonBin:  flags.PythonBin,
-				PythonPath: flags.PythonPath,
-				BackupDir:  flags.BackupDir,
-			})
-			if err != nil {
-				return withExitCode(exitcode.InvalidUsage, err)
-			}
 
 			plan, err := playlistsync.ReadPlan(flags.PlanFile)
 			if err != nil {
@@ -352,15 +344,6 @@ func newRekordboxPlaylistSyncApplyCommand(app *AppContext) *cobra.Command {
 			}
 			if err := playlistsync.ValidatePlanForApply(plan); err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
-			}
-			if cmd.Flags().Changed("backup-dir") {
-				backupDir, err := config.ExpandPath(flags.BackupDir)
-				if err != nil {
-					return withExitCode(exitcode.InvalidUsage, err)
-				}
-				plan.BackupDir = backupDir
-			} else if strings.TrimSpace(plan.BackupDir) == "" {
-				plan.BackupDir = resolved.BackupDir
 			}
 
 			if !flags.Force && !app.Opts.NoInput {
@@ -391,7 +374,7 @@ func newRekordboxPlaylistSyncApplyCommand(app *AppContext) *cobra.Command {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
 			if result.DryRun {
-				printPlaylistSyncApplyDryRun(app, plan)
+				printPlaylistSyncApplyDryRun(app, plan, result.EffectiveBackupDir)
 				return nil
 			}
 			if plan.Version == playlistsync.PlanVersionFolder {
@@ -560,20 +543,21 @@ func printPlaylistSyncPlan(app *AppContext, plan playlistsync.Plan, path string)
 	}
 }
 
-func printPlaylistSyncApplyDryRun(app *AppContext, plan playlistsync.Plan) {
+func printPlaylistSyncApplyDryRun(app *AppContext, plan playlistsync.Plan, effectiveBackupDir string) {
 	if app.Opts.JSON {
 		payload := map[string]any{
-			"dry_run": true,
-			"plan":    plan,
+			"dry_run":              true,
+			"effective_backup_dir": effectiveBackupDir,
+			"plan":                 plan,
 		}
 		_ = json.NewEncoder(app.IO.Out).Encode(payload)
 		return
 	}
 	if plan.Version == playlistsync.PlanVersionFolder {
-		fmt.Fprintf(app.IO.Out, "Dry run: validated plan for folder %s; no backup or DB changes written.\n", plan.RekordboxFolder.Name)
+		fmt.Fprintf(app.IO.Out, "Dry run: validated plan for folder %s; backup would be written under %s; no backup or DB changes written.\n", plan.RekordboxFolder.Name, effectiveBackupDir)
 		return
 	}
-	fmt.Fprintf(app.IO.Out, "Dry run: validated plan for %s; no backup or DB changes written.\n", plan.RekordboxPlaylist.Name)
+	fmt.Fprintf(app.IO.Out, "Dry run: validated plan for %s; backup would be written under %s; no backup or DB changes written.\n", plan.RekordboxPlaylist.Name, effectiveBackupDir)
 }
 
 func printPlaylistSyncApplyResult(app *AppContext, plan playlistsync.Plan, resp bridge.ApplyResponse, backupPath string) {

@@ -19,8 +19,8 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 | Phase | Status | Exit condition |
 | --- | --- | --- |
 | 0. Update from `master` | Done | Merge complete and both providers registered |
-| 1. Portability and plan integrity | In progress | Defaults and backup override fixed |
-| 2. Validation and snapshot correctness | Not started | Invalid jobs and duplicates covered |
+| 1. Portability and plan integrity | Done | Defaults and backup override fixed |
+| 2. Validation and snapshot correctness | In progress | Invalid jobs and duplicates covered |
 | 3. CLI and TUI completion | Not started | Blockers visible and 80×24 useful |
 | 4. Documentation and packaging | Not started | Public behavior and dependencies documented |
 | 5. Final validation | Not started | Full test matrix and CI pass |
@@ -42,16 +42,16 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 
 ## Phase 1 — Portability and Plan Integrity
 
-**Status:** In progress
+**Status:** Done
 
 ### Portable Rekordbox backup defaults
 
-- [ ] Replace the hard-coded `/Users/jaa/Music/rb-library-export` default with a portable `~/Music/rb-library-export` default.
-- [ ] Resolve `~` at runtime using the current user's home directory.
-- [ ] Update the config default, generated template, runtime planning path, and test expectations together.
-- [ ] Preserve explicitly configured backup directories.
-- [ ] Do not silently rewrite existing user configuration files.
-- [ ] Add tests for default expansion and explicit-path preservation.
+- [x] Replace the hard-coded `/Users/jaa/Music/rb-library-export` default with a portable `~/Music/rb-library-export` default.
+- [x] Resolve `~` at runtime using the current user's home directory.
+- [x] Update the config default, generated template, runtime planning path, and test expectations together.
+- [x] Preserve explicitly configured backup directories.
+- [x] Do not silently rewrite existing user configuration files.
+- [x] Add tests for default expansion and explicit-path preservation.
 
 Likely files:
 
@@ -62,26 +62,26 @@ Likely files:
 
 ### Make `--backup-dir` a real apply-time override
 
-- [ ] Reproduce the current checksum mismatch with a valid stored plan and `apply --backup-dir`.
-- [ ] Keep the loaded plan immutable while validating its checksum.
-- [ ] Validate the original plan before calculating runtime overrides.
-- [ ] Calculate the effective backup directory with this precedence:
+- [x] Reproduce the current checksum mismatch with a valid stored plan and `apply --backup-dir`.
+- [x] Keep the loaded plan immutable while validating its checksum.
+- [x] Validate the original plan before calculating runtime overrides.
+- [x] Calculate the effective backup directory with this precedence:
   1. CLI `--backup-dir`
   2. Backup directory stored in the plan
   3. Resolved config/default backup directory
-- [ ] Use the effective directory when creating the backup without writing it back into the plan.
-- [ ] Ensure dry-run reports the effective path without modifying the database.
-- [ ] Add regression tests for the override, checksum validation, and precedence rules.
+- [x] Use the effective directory when creating the backup without writing it back into the plan.
+- [x] Ensure dry-run reports the effective path without modifying the database.
+- [x] Add regression tests for the override, checksum validation, and precedence rules.
 
 ### Correct integrity terminology
 
-- [ ] Replace user-facing “signed plan” wording with “checksummed plan” or “integrity-checked plan.”
-- [ ] Keep SHA-256 checksum verification behavior unchanged unless a separately reviewed authentication design is introduced.
-- [ ] Update CLI help, TUI copy, errors, and documentation consistently.
+- [x] Replace user-facing “signed plan” wording with “checksummed plan” or “integrity-checked plan.”
+- [x] Keep SHA-256 checksum verification behavior unchanged unless a separately reviewed authentication design is introduced.
+- [x] Update CLI help, TUI copy, errors, and documentation consistently.
 
 ## Phase 2 — Validation and Snapshot Correctness
 
-**Status:** Not started
+**Status:** In progress
 
 ### Strengthen standalone Rekordbox configuration validation
 
@@ -237,3 +237,11 @@ These checks describe the branch before the finishing implementation begins:
   - `go test ./internal/engine/...`
   - `go test ./internal/cli ./internal/rekordbox/...`
 - Started Phase 1.
+- Replaced all runtime, standalone-config, generated-template, and test defaults that contained a user-specific Rekordbox backup directory.
+- Changed apply so checksum validation happens against the original plan before any runtime override is resolved.
+- Added `EffectiveBackupDir` to the apply result so dry-run and callers can report the effective CLI/plan/config choice without mutating the plan.
+- Confirmed precedence with regression tests: CLI override, then plan backup directory, then configured/default directory.
+- Updated user-facing TUI wording from “signed plan” to “checksummed plan”; no remaining user-facing “signed plan” text was found.
+- Phase 1 validation:
+  - `go test ./internal/app ./internal/cli ./internal/config ./internal/rekordbox/playlistsync ./internal/rekordbox/syncconfig`
+- Started Phase 2.

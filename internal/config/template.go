@@ -70,7 +70,7 @@ sources:
 #   # UDL manages a private pyrekordbox venv under defaults.state_dir.
 #   python_bin: ""
 #   python_path: ""
-#   backup_dir: "/Users/jaa/Music/rb-library-export"
+#   backup_dir: "~/Music/rb-library-export"
 #   playlist_sync:
 #     jobs:
 #       - id: "apple-favourites"

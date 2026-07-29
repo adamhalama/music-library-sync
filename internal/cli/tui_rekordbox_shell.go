@@ -205,7 +205,7 @@ func (m tuiRekordboxModel) shellBody(layout tuiShellLayout) string {
 	case tuiRekordboxPhaseSetupSaving:
 		return renderPlanSection("Saving", []string{"Writing Rekordbox sync config atomically.", "Main udl.yaml is not modified."}, width)
 	case tuiRekordboxPhasePlanning:
-		return renderPlanSection("Planning", []string{"Checking Rekordbox is closed.", "Reading Music.app playlist.", "Inspecting Rekordbox collection.", "Building signed plan."}, width)
+		return renderPlanSection("Planning", []string{"Checking Rekordbox is closed.", "Reading Music.app playlist.", "Inspecting Rekordbox collection.", "Building checksummed plan."}, width)
 	case tuiRekordboxPhaseReview, tuiRekordboxPhaseConfirm:
 		return strings.Join([]string{
 			renderPlanSection("Plan Summary", m.planSummaryLines(), width),
@@ -235,7 +235,7 @@ func (m tuiRekordboxModel) readyLines() []string {
 		if m.runtimeStatus.Healthy {
 			lines = append(lines, "Runtime: "+m.runtimeStatus.Message)
 		}
-		lines = append(lines, "j/k: choose destination  enter: generate signed plan")
+		lines = append(lines, "j/k: choose destination  enter: generate checksummed plan")
 		return lines
 	}
 	if mapping, ok := m.selectedFolderMapping(); ok {

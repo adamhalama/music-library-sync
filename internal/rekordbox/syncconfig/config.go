@@ -319,7 +319,7 @@ func defaultConfig(base config.Config) Config {
 		Version: Version,
 		Defaults: Defaults{
 			DBDir:           "~/Library/Pioneer/rekordbox",
-			BackupDir:       "/Users/jaa/Music/rb-library-export",
+			BackupDir:       "~/Music/rb-library-export",
 			Mode:            "mirror",
 			CreateFolders:   true,
 			CreatePlaylists: true,
