@@ -283,3 +283,5 @@ These checks describe the branch before the finishing implementation begins:
 - Manual TUI checks passed for cache-only open, explicit refresh progress/success, 80×24, 120×40, FreeDL selection, and Rekordbox blocker review.
 - Validation caveat discovered: naming the temporary executable with `rekordbox` triggered the process safety guard; rebuilding it as `udl-validation` correctly allowed read-only planning. Added this to `AGENTS.md`.
 - Final local audit found no temporary fixture source, plan artifacts, database backups, credentials, private keys, or new user-specific backup defaults in the worktree diff.
+- Inspected `.github/workflows/ci.yml` against final committed HEAD. In addition to `go test ./...`, CI runs `./.github/scripts/check_preflight_bench.sh`; the benchmark guard passed locally for every 1k/5k/10k parse, scan, and full-plan budget.
+- Push remains pending explicit authorization for `git@github.com:adamhalama/music-library-sync.git`; remote CI cannot start until that approval is provided.
