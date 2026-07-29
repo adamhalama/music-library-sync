@@ -1,6 +1,6 @@
 # FreeDL, Playlist, and Rekordbox TUI Implementation Tracker
 
-**Overall status:** In progress  
+**Overall status:** Done
 **Branch:** `feature/freedl-rekordbox-tui`  
 **Last updated:** 2026-07-29
 
@@ -23,7 +23,7 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 | 2. Validation and snapshot correctness | Done | Invalid jobs and duplicates covered |
 | 3. CLI and TUI completion | Done | Blockers visible and 80×24 useful |
 | 4. Documentation and packaging | Done | Public behavior and dependencies documented |
-| 5. Final validation | In progress | Full test matrix and CI pass |
+| 5. Final validation | Done | Full test matrix and CI pass |
 
 ## Phase 0 — Update from `master`
 
@@ -156,7 +156,7 @@ Current real-data example:
 
 ## Phase 5 — Final Validation
 
-**Status:** In progress
+**Status:** Done
 
 ### Automated checks
 
@@ -190,9 +190,9 @@ Use temporary output and backup locations. Do not apply to a live Rekordbox data
 
 - [x] Review the final diff for unrelated or user-specific paths.
 - [x] Confirm no secrets, tokens, keys, or live database backups are included.
-- [ ] Push `feature/freedl-rekordbox-tui`.
-- [ ] Verify all CI checks pass.
-- [ ] Record CI links and any platform-specific results in the pull request.
+- [x] Push `feature/freedl-rekordbox-tui`.
+- [x] Verify all CI checks pass.
+- [x] Record CI links and any platform-specific results in the pull request.
 
 ## Baseline Evidence
 
@@ -284,4 +284,6 @@ These checks describe the branch before the finishing implementation begins:
 - Validation caveat discovered: naming the temporary executable with `rekordbox` triggered the process safety guard; rebuilding it as `udl-validation` correctly allowed read-only planning. Added this to `AGENTS.md`.
 - Final local audit found no temporary fixture source, plan artifacts, database backups, credentials, private keys, or new user-specific backup defaults in the worktree diff.
 - Inspected `.github/workflows/ci.yml` against final committed HEAD. In addition to `go test ./...`, CI runs `./.github/scripts/check_preflight_bench.sh`; the benchmark guard passed locally for every 1k/5k/10k parse, scan, and full-plan budget.
-- Push remains pending explicit authorization for `git@github.com:adamhalama/music-library-sync.git`; remote CI cannot start until that approval is provided.
+- Received explicit authorization to publish the branch, then pushed `feature/freedl-rekordbox-tui` to `git@github.com:adamhalama/music-library-sync.git`.
+- Opened draft PR [#23 — feat: complete FreeDL and Rekordbox TUI workflows](https://github.com/adamhalama/music-library-sync/pull/23) against `master`.
+- GitHub Actions [CI run 120](https://github.com/adamhalama/music-library-sync/actions/runs/30492498803) passed both `go test ./...` and the preflight benchmark budget guard.
