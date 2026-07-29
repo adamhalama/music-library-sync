@@ -180,10 +180,13 @@ func Validate(cfg Config) error {
 	if cfg.Version != Version {
 		problems = append(problems, "version must be 1")
 	}
+	problems = append(problems, validateAbsolutePath("defaults.db_dir", cfg.Defaults.DBDir, true)...)
+	problems = append(problems, validateAbsolutePath("defaults.backup_dir", cfg.Defaults.BackupDir, true)...)
+	problems = append(problems, validateAbsolutePath("defaults.python_path", cfg.Defaults.PythonPath, false)...)
 	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != "mirror" {
 		problems = append(problems, fmt.Sprintf("defaults.mode %q is unsupported", cfg.Defaults.Mode))
 	}
-	seen := map[string]struct{}{}
+	seenFolders := map[string]struct{}{}
 	for _, mapping := range cfg.Sync.Folders {
 		if strings.TrimSpace(mapping.ID) == "" {
 			problems = append(problems, "sync.folders[].id must not be empty")
@@ -191,10 +194,10 @@ func Validate(cfg Config) error {
 			if !idPattern.MatchString(mapping.ID) {
 				problems = append(problems, fmt.Sprintf("folder mapping %q has invalid id format", mapping.ID))
 			}
-			if _, exists := seen[mapping.ID]; exists {
+			if _, exists := seenFolders[mapping.ID]; exists {
 				problems = append(problems, fmt.Sprintf("duplicate Rekordbox sync mapping id %q", mapping.ID))
 			}
-			seen[mapping.ID] = struct{}{}
+			seenFolders[mapping.ID] = struct{}{}
 		}
 		if strings.TrimSpace(mapping.MusicFolder) == "" && strings.TrimSpace(mapping.MusicFolderID) == "" {
 			problems = append(problems, fmt.Sprintf("folder mapping %q must set music_folder or music_folder_id", mapping.ID))
@@ -205,9 +208,53 @@ func Validate(cfg Config) error {
 		if mapping.OnMissingTracks != "" && mapping.OnMissingTracks != DefaultMissingTracks {
 			problems = append(problems, fmt.Sprintf("folder mapping %q has unsupported on_missing_tracks %q", mapping.ID, mapping.OnMissingTracks))
 		}
+		for source, target := range mapping.PlaylistNameMap {
+			if strings.TrimSpace(source) == "" || strings.TrimSpace(target) == "" {
+				problems = append(problems, fmt.Sprintf("folder mapping %q playlist_name_map entries must have non-empty source and target names", mapping.ID))
+				break
+			}
+		}
+	}
+	seenJobs := map[string]struct{}{}
+	for _, job := range cfg.Sync.Jobs {
+		if strings.TrimSpace(job.ID) == "" {
+			problems = append(problems, "sync.jobs[].id must not be empty")
+		} else {
+			if !idPattern.MatchString(job.ID) {
+				problems = append(problems, fmt.Sprintf("playlist job %q has invalid id format", job.ID))
+			}
+			if _, exists := seenJobs[job.ID]; exists {
+				problems = append(problems, fmt.Sprintf("duplicate Rekordbox playlist job id %q", job.ID))
+			}
+			seenJobs[job.ID] = struct{}{}
+		}
+		if strings.TrimSpace(job.RekordboxPlaylist) == "" && strings.TrimSpace(job.RekordboxPlaylistID) == "" {
+			problems = append(problems, fmt.Sprintf("playlist job %q must set rekordbox_playlist or rekordbox_playlist_id", job.ID))
+		}
+		if job.Mode != "" && job.Mode != "mirror" {
+			problems = append(problems, fmt.Sprintf("playlist job %q has unsupported mode %q", job.ID, job.Mode))
+		}
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid Rekordbox sync config: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func validateAbsolutePath(field, value string, required bool) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		if required {
+			return []string{field + " must not be empty"}
+		}
+		return nil
+	}
+	expanded, err := config.ExpandPath(value)
+	if err != nil {
+		return []string{field + " is invalid"}
+	}
+	if !filepath.IsAbs(expanded) {
+		return []string{field + " must resolve to an absolute path"}
 	}
 	return nil
 }

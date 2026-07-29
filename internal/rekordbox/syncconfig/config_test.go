@@ -134,3 +134,113 @@ func TestLoadTranslatesLegacyInlineJobs(t *testing.T) {
 		t.Fatalf("expected legacy warning")
 	}
 }
+
+func TestValidateRejectsInvalidStandaloneConfig(t *testing.T) {
+	valid := defaultConfig(config.DefaultConfig())
+	valid.Sync.Folders = []FolderMapping{{
+		ID:              "phone",
+		MusicFolder:     "Phone",
+		RekordboxFolder: "Phone RB",
+		OnMissingTracks: DefaultMissingTracks,
+	}}
+	valid.Sync.Jobs = []PlaylistJob{{
+		ID:                "favorites",
+		RekordboxPlaylist: "fav_imports",
+		Mode:              "mirror",
+	}}
+
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{
+			name: "relative database path",
+			mutate: func(cfg *Config) {
+				cfg.Defaults.DBDir = "relative/rekordbox"
+			},
+			want: "defaults.db_dir must resolve to an absolute path",
+		},
+		{
+			name: "empty backup path",
+			mutate: func(cfg *Config) {
+				cfg.Defaults.BackupDir = ""
+			},
+			want: "defaults.backup_dir must not be empty",
+		},
+		{
+			name: "relative python path",
+			mutate: func(cfg *Config) {
+				cfg.Defaults.PythonPath = "relative/site-packages"
+			},
+			want: "defaults.python_path must resolve to an absolute path",
+		},
+		{
+			name: "empty folder source selector",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Folders[0].MusicFolder = ""
+			},
+			want: `folder mapping "phone" must set music_folder or music_folder_id`,
+		},
+		{
+			name: "empty folder target selector",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Folders[0].RekordboxFolder = ""
+			},
+			want: `folder mapping "phone" must set rekordbox_folder or rekordbox_folder_id`,
+		},
+		{
+			name: "invalid name mapping",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Folders[0].PlaylistNameMap = map[string]string{"Favourites": ""}
+			},
+			want: "playlist_name_map entries must have non-empty source and target names",
+		},
+		{
+			name: "duplicate folder id",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Folders = append(cfg.Sync.Folders, cfg.Sync.Folders[0])
+			},
+			want: `duplicate Rekordbox sync mapping id "phone"`,
+		},
+		{
+			name: "empty playlist target",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Jobs[0].RekordboxPlaylist = ""
+			},
+			want: `playlist job "favorites" must set rekordbox_playlist or rekordbox_playlist_id`,
+		},
+		{
+			name: "duplicate playlist job id",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Jobs = append(cfg.Sync.Jobs, cfg.Sync.Jobs[0])
+			},
+			want: `duplicate Rekordbox playlist job id "favorites"`,
+		},
+		{
+			name: "invalid playlist job id",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Jobs[0].ID = "not valid"
+			},
+			want: `playlist job "not valid" has invalid id format`,
+		},
+		{
+			name: "unsupported playlist job mode",
+			mutate: func(cfg *Config) {
+				cfg.Sync.Jobs[0].Mode = "append"
+			},
+			want: `playlist job "favorites" has unsupported mode "append"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Clone(valid)
+			tt.mutate(&cfg)
+			err := Validate(cfg)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}

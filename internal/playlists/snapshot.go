@@ -129,21 +129,23 @@ func ValidateSnapshot(snapshot Snapshot) error {
 }
 
 func CompareSnapshots(previous, next Snapshot) Changes {
-	oldKeys := map[string]struct{}{}
+	oldCounts := map[string]int{}
 	for _, track := range previous.Tracks {
-		oldKeys[trackIdentity(track)] = struct{}{}
+		oldCounts[trackIdentity(track)]++
 	}
 	changes := Changes{}
 	for _, track := range next.Tracks {
 		key := trackIdentity(track)
-		if _, exists := oldKeys[key]; exists {
+		if oldCounts[key] > 0 {
 			changes.Kept++
-			delete(oldKeys, key)
+			oldCounts[key]--
 		} else {
 			changes.Added++
 		}
 	}
-	changes.Removed = len(oldKeys)
+	for _, count := range oldCounts {
+		changes.Removed += count
+	}
 	return changes
 }
 

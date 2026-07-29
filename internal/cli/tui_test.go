@@ -493,6 +493,8 @@ func TestTUIRekordboxDeleteMappingWritesConfig(t *testing.T) {
 		rbCfg: syncconfig.Config{
 			Version: syncconfig.Version,
 			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
 				Mode:            "mirror",
 				CreateFolders:   true,
 				CreatePlaylists: true,

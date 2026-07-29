@@ -20,8 +20,8 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 | --- | --- | --- |
 | 0. Update from `master` | Done | Merge complete and both providers registered |
 | 1. Portability and plan integrity | Done | Defaults and backup override fixed |
-| 2. Validation and snapshot correctness | In progress | Invalid jobs and duplicates covered |
-| 3. CLI and TUI completion | Not started | Blockers visible and 80×24 useful |
+| 2. Validation and snapshot correctness | Done | Invalid jobs and duplicates covered |
+| 3. CLI and TUI completion | In progress | Blockers visible and 80×24 useful |
 | 4. Documentation and packaging | Not started | Public behavior and dependencies documented |
 | 5. Final validation | Not started | Full test matrix and CI pass |
 
@@ -81,25 +81,25 @@ Likely files:
 
 ## Phase 2 — Validation and Snapshot Correctness
 
-**Status:** In progress
+**Status:** Done
 
 ### Strengthen standalone Rekordbox configuration validation
 
-- [ ] Validate required database, backup, and playlist-related paths.
-- [ ] Validate job identifiers and reject empty or duplicate IDs.
-- [ ] Validate source and target playlist selectors.
-- [ ] Validate mirror mode and other enumerated values.
-- [ ] Reject structurally incomplete jobs before planning begins.
-- [ ] Produce errors that identify the invalid job and field.
-- [ ] Add table-driven tests for valid and invalid standalone configurations.
-- [ ] Confirm legacy valid configurations continue to load.
+- [x] Validate required database, backup, and playlist-related paths.
+- [x] Validate job identifiers and reject empty or duplicate IDs.
+- [x] Validate folder source/target selectors and standalone job target selectors.
+- [x] Validate mirror mode and other enumerated values.
+- [x] Reject structurally incomplete jobs before planning begins.
+- [x] Produce errors that identify the invalid job and field.
+- [x] Add table-driven tests for valid and invalid standalone configurations.
+- [x] Confirm legacy valid configurations continue to load.
 
 ### Compare snapshots as multisets
 
-- [ ] Replace set-only snapshot comparison with count-aware comparison.
-- [ ] Report added and removed occurrences correctly when a playlist contains duplicates.
-- [ ] Preserve deterministic output ordering.
-- [ ] Add tests covering:
+- [x] Replace set-only snapshot comparison with count-aware comparison.
+- [x] Report added and removed occurrences correctly when a playlist contains duplicates.
+- [x] Preserve deterministic output ordering.
+- [x] Add tests covering:
   - identical snapshots with duplicates
   - one duplicate occurrence added
   - one duplicate occurrence removed
@@ -107,7 +107,7 @@ Likely files:
 
 ## Phase 3 — CLI and TUI Completion
 
-**Status:** Not started
+**Status:** In progress
 
 ### Expose incomplete-plan blockers
 
@@ -245,3 +245,10 @@ These checks describe the branch before the finishing implementation begins:
 - Phase 1 validation:
   - `go test ./internal/app ./internal/cli ./internal/config ./internal/rekordbox/playlistsync ./internal/rekordbox/syncconfig`
 - Started Phase 2.
+- Strengthened standalone config validation for absolute/resolvable defaults, folder selectors, playlist-name mappings, job identifiers, job targets, and supported modes.
+- Clarified the selector requirement while implementing: standalone playlist jobs are destinations and receive their source from the selected snapshot, so they require a Rekordbox target but not a duplicate Music source selector. Folder mappings still require both source and target selectors.
+- The stricter validation exposed one synthetic TUI test fixture that omitted the defaults supplied by every real config load; updated the fixture rather than weakening production validation.
+- Replaced set-based snapshot comparison with occurrence counts so duplicate additions and removals are accurate.
+- Phase 2 validation:
+  - `go test ./internal/playlists ./internal/rekordbox/syncconfig ./internal/cli`
+- Started Phase 3.
