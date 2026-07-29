@@ -22,8 +22,8 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 | 1. Portability and plan integrity | Done | Defaults and backup override fixed |
 | 2. Validation and snapshot correctness | Done | Invalid jobs and duplicates covered |
 | 3. CLI and TUI completion | Done | Blockers visible and 80×24 useful |
-| 4. Documentation and packaging | In progress | Public behavior and dependencies documented |
-| 5. Final validation | Not started | Full test matrix and CI pass |
+| 4. Documentation and packaging | Done | Public behavior and dependencies documented |
+| 5. Final validation | In progress | Full test matrix and CI pass |
 
 ## Phase 0 — Update from `master`
 
@@ -140,7 +140,7 @@ Current real-data example:
 
 ## Phase 4 — Documentation and Packaging
 
-**Status:** In progress
+**Status:** Done
 
 - [x] Update the README command overview to include `playlist` and `rekordbox`.
 - [x] Document playlist cache creation, explicit refresh, comparison, and offline/cache-first behavior.
@@ -152,44 +152,44 @@ Current real-data example:
 - [x] Add a short TUI workflow section with expected compact and full-size behavior.
 - [x] Confirm Homebrew checks and instructions use the supported `python@3.12` dependency.
 - [x] Review generated config examples and CLI help for consistency.
-- [ ] Add exact validation commands and representative terminal output to the eventual pull request.
+- [x] Record exact validation commands and representative terminal output for the eventual pull request.
 
 ## Phase 5 — Final Validation
 
-**Status:** Not started
+**Status:** In progress
 
 ### Automated checks
 
-- [ ] `go test ./...`
-- [ ] `go vet ./...`
-- [ ] `go test -race ./...`
-- [ ] Run any focused integration tests added for playlist snapshots and Rekordbox planning.
+- [x] `go test ./...`
+- [x] `go vet ./...`
+- [x] `go test -race ./...`
+- [x] Run focused integration tests added for playlist snapshots and Rekordbox planning.
 
 ### Isolated real-data checks
 
 Use temporary output and backup locations. Do not apply to a live Rekordbox database.
 
-- [ ] Refresh an Apple Music playlist snapshot into an isolated temporary directory.
-- [ ] Validate the generated snapshot checksum and track count.
-- [ ] Generate a read-only Rekordbox plan against the local music library.
-- [ ] Confirm missing tracks are named in CLI output.
-- [ ] Confirm a plan with missing tracks is blocked during dry-run apply.
-- [ ] Generate or fixture a valid complete plan and verify `--backup-dir` works without a checksum mismatch.
-- [ ] Confirm the chosen backup path is the requested override.
+- [x] Refresh an Apple Music playlist snapshot into an isolated temporary directory.
+- [x] Validate the generated snapshot checksum and track count.
+- [x] Generate a read-only Rekordbox plan against the local music library.
+- [x] Confirm missing tracks are named in CLI output.
+- [x] Confirm a plan with missing tracks is blocked during dry-run apply.
+- [x] Generate or fixture a valid complete plan and verify `--backup-dir` works without a checksum mismatch.
+- [x] Confirm the chosen backup path is the requested override.
 
 ### Manual TUI checks
 
-- [ ] Open the TUI without network access and confirm it uses cached playlist data.
-- [ ] Trigger an explicit refresh and confirm progress and errors are understandable.
-- [ ] Validate playlist detail at 80×24.
-- [ ] Validate playlist detail at 120×40.
-- [ ] Validate Rekordbox blocker presentation.
-- [ ] Validate FreeDL selection/filter presentation after the merge from `master`.
+- [x] Open the TUI without network access and confirm it uses cached playlist data.
+- [x] Trigger an explicit refresh and confirm progress and errors are understandable.
+- [x] Validate playlist detail at 80×24.
+- [x] Validate playlist detail at 120×40.
+- [x] Validate Rekordbox blocker presentation.
+- [x] Validate FreeDL selection/filter presentation after the merge from `master`.
 
 ### Branch and CI
 
-- [ ] Review the final diff for unrelated or user-specific paths.
-- [ ] Confirm no secrets, tokens, keys, or live database backups are included.
+- [x] Review the final diff for unrelated or user-specific paths.
+- [x] Confirm no secrets, tokens, keys, or live database backups are included.
 - [ ] Push `feature/freedl-rekordbox-tui`.
 - [ ] Verify all CI checks pass.
 - [ ] Record CI links and any platform-specific results in the pull request.
@@ -271,3 +271,15 @@ These checks describe the branch before the finishing implementation begins:
   - `go test ./internal/cli/...`
   - Confirmed both the formula template and renderer declare `depends_on "python@3.12"`.
   - Confirmed active README/TUI/release/config documentation contains no user-specific backup default or “signed plan” wording.
+- Full automated validation passed:
+  - `go test ./...`
+  - `go vet ./...`
+  - `go test -race ./...`
+- Isolated Apple Music refresh wrote a checksummed 139-track snapshot under `/private/tmp/udl-freedl-rekordbox-validation-state`; the TUI refresh showed `+0 -0 unchanged=139` on the repeat run.
+- Read-only Rekordbox planning produced 139 total tracks, 138 matched, one missing, current target 96, and final target 138.
+- CLI and TUI both named the blocker as `Netherworld — Atalantis` with `/Users/jaa/Music/downloaded/spotify-technicko/Netherworld - Atalantis.mp3`.
+- Dry-run apply with `--backup-dir` refused the incomplete plan for missing tracks, not for a checksum mismatch.
+- A temporary checksummed 138-track complete fixture passed dry-run apply and reported `/private/tmp/udl-freedl-rekordbox-override-backups` as the effective backup directory; no backup or database write occurred.
+- Manual TUI checks passed for cache-only open, explicit refresh progress/success, 80×24, 120×40, FreeDL selection, and Rekordbox blocker review.
+- Validation caveat discovered: naming the temporary executable with `rekordbox` triggered the process safety guard; rebuilding it as `udl-validation` correctly allowed read-only planning. Added this to `AGENTS.md`.
+- Final local audit found no temporary fixture source, plan artifacts, database backups, credentials, private keys, or new user-specific backup defaults in the worktree diff.
