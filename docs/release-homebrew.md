@@ -4,7 +4,7 @@ This repo now treats the public macOS release as:
 
 - GitHub Release assets for `darwin-amd64` and `darwin-arm64`
 - tarballs that contain `udl` only
-- a rendered Homebrew formula that installs `udl` and depends on external `scdl` and `yt-dlp` formulas
+- a rendered Homebrew formula that installs `udl` and depends on `python@3.12`, `scdl`, and `yt-dlp`
 
 ## Required GitHub Variables
 

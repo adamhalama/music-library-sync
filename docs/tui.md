@@ -1,10 +1,13 @@
 # UDL TUI Guide
 
 `udl tui` launches an interactive Bubble Tea interface for the main workflows:
+- `Run Sync`
+- `Playlists`
+- `SoundCloud Free DL`
+- `Rekordbox Sync`
 - `Get Started`
 - `Credentials`
 - `Check System`
-- `Run Sync`
 - `Advanced Config`
 
 The TUI is additive. Existing CLI commands (`udl sync`, `udl doctor`, etc.) remain unchanged.
@@ -224,6 +227,38 @@ Config behavior:
 - `./udl.freedl.yaml` remains a runtime override; the setup screen warns when that project file exists while editing the user config
 - the starter job is not saveable until `source_url` is set
 - macOS HypeEdit handoff opens Helium by default; `UDL_FREEDL_BROWSER_APP` overrides the browser app
+
+## Playlists Workflow
+
+`Playlists` manages reusable Apple Music snapshots backed by a separate `playlists.yaml` feature config.
+
+- Opening the workflow reads only configuration and saved checksummed snapshots.
+- `enter` opens the selected cached playlist.
+- `j/k` moves between playlists or tracks.
+- `r` is the explicit Apple Music refresh action.
+- A failed or canceled refresh leaves the previous valid snapshot active.
+- `f` opens the selected snapshot in the FreeDL workflow.
+- `b` opens the selected snapshot in the Rekordbox workflow.
+- At 80×24, detail uses a one-line summary and reserves room for the selected track and path. At 110 columns and above, the full sidebar and extended metadata layout are used.
+
+The feature config can be selected with `--playlists-config` or `UDL_PLAYLISTS_CONFIG`; otherwise user and project config locations are merged according to the CLI config rules.
+
+## Rekordbox Sync Workflow
+
+`Rekordbox Sync` creates and reviews a checksummed Music.app-to-Rekordbox mirror plan before any database write.
+
+- Rekordbox must remain closed while planning or applying.
+- `udl` uses a private managed Python environment; the dependency screen can install or repair `pyrekordbox`.
+- Plans match tracks by normalized local path and retain every source row for review.
+- Missing or ambiguous rows appear in an `Apply Blockers` section with playlist, artist, title, and path.
+- Incomplete plans are fail-closed and cannot write a partial mirror.
+- `d` toggles dry-run from review/done states.
+- `enter` advances only when the plan passes apply validation.
+- A real apply revalidates the unchanged plan and current Rekordbox state, writes a full backup, and then replaces membership.
+- The default backup root is `~/Music/rb-library-export`. CLI apply precedence is `--backup-dir`, plan value, then config/default.
+- The SHA-256 plan checksum detects plan modification; it does not authenticate who created the plan.
+
+Folder mappings and reusable destinations live in the separate `rekordbox.yaml` feature config selected by `--rekordbox-config` or `UDL_REKORDBOX_CONFIG`. The TUI can create, edit, and delete folder mappings atomically without rewriting `udl.yaml`.
 
 ## Current Limitations
 

@@ -24,9 +24,10 @@ The legacy script remains available during migration: `bin/update-downloads`.
 Runtime tools:
 - SoundCloud sync requires external `scdl` + `yt-dlp`
 - Spotify still relies on external `deemix` or `spotdl` plus credentials
+- Rekordbox sync uses a private Python environment managed by `udl rekordbox deps`; Homebrew supplies `python@3.12`
 
 Dependency policy:
-- Homebrew installs `udl` with `scdl` and `yt-dlp` as formula dependencies.
+- Homebrew installs `udl` with `python@3.12`, `scdl`, and `yt-dlp` as formula dependencies.
 - Tarball installs require `scdl` and `yt-dlp` to be installed separately.
 - `udl doctor` verifies compatibility for the active external tools.
 - See `docs/dependency-matrix.md` for the current matrix and `docs/release-homebrew.md` for the macOS release flow.
@@ -48,7 +49,7 @@ brew tap adamhalama/udl
 brew install udl
 ```
 
-The Homebrew formula installs `udl` and depends on external `scdl` and `yt-dlp` formulas for the recommended SoundCloud path.
+The Homebrew formula installs `udl` and depends on `python@3.12`, `scdl`, and `yt-dlp`. Rekordbox Python packages are installed into UDL's private environment rather than the global Homebrew Python environment.
 
 Local development install:
 
@@ -85,6 +86,10 @@ udl doctor
 udl sync --dry-run
 udl sync
 udl validate
+udl playlist list
+udl playlist show favorites
+udl rekordbox deps status
+udl rekordbox playlist-sync plan
 ```
 
 ## Command Surface
@@ -99,6 +104,8 @@ Commands:
   validate
   init
   promote-freedl
+  playlist
+  rekordbox
   version
   help
 ```
@@ -106,6 +113,8 @@ Commands:
 Global flags:
 - `-c, --config <path>`
 - `--freedl-config <path>` (SoundCloud Free DL feature config; also `UDL_FREEDL_CONFIG`)
+- `--playlists-config <path>` (standalone playlist config; also `UDL_PLAYLISTS_CONFIG`)
+- `--rekordbox-config <path>` (Rekordbox sync config; also `UDL_REKORDBOX_CONFIG`)
 - `--json`
 - `-q, --quiet`
 - `-v, --verbose`
@@ -128,11 +137,33 @@ Global flags:
 
 `tui`:
 - Launch with `udl tui`
-- Public home screen actions are `Run Sync`, `SoundCloud Free DL`, `Get Started`, `Credentials`, `Check System`, and `Advanced Config`
+- Public home screen actions include `Run Sync`, `Playlists`, `SoundCloud Free DL`, `Rekordbox Sync`, `Get Started`, `Credentials`, `Check System`, and `Advanced Config`
 - First-run startup enters `Get Started` automatically when config is missing, invalid, or has zero sources
 - `SoundCloud Free DL` can create and edit its separate `freedl.yaml` feature config natively from the workflow screen
 - See `docs/tui.md` for keybindings, onboarding flow, sync options, and known limitations
 - Release packaging notes live in `docs/release-homebrew.md`
+
+`playlist` commands:
+
+- `udl playlist list`: list configured standalone playlists and cached snapshot status.
+- `udl playlist show <id>`: inspect a saved snapshot without contacting Apple Music.
+- `udl playlist refresh <id>`: explicitly read Apple Music and atomically replace the saved snapshot after a successful refresh.
+- `udl playlist config path|show`: inspect the selected standalone playlist configuration.
+- Opening the TUI playlist screen is cache-only. Failed or canceled refreshes preserve the last valid checksummed snapshot.
+- Snapshot comparison counts duplicate track occurrences, so repeated playlist items are not collapsed.
+
+`rekordbox` commands:
+
+- `udl rekordbox config path|show`: inspect the standalone Rekordbox configuration.
+- `udl rekordbox deps status|ensure|reset`: inspect, create/repair, or remove UDL's private `pyrekordbox` environment.
+- `udl rekordbox playlist-sync plan [flags]`: create a checksummed, read-only mirror plan.
+- `udl rekordbox playlist-sync show --plan-file <path>`: verify and display a saved plan.
+- `udl rekordbox playlist-sync apply --plan-file <path> [--backup-dir <path>] [--force]`: validate the unchanged plan, recheck the database, write a full backup, and then apply.
+- Planning flags include Music/Rekordbox name or ID selectors, `--mapping`, `--mode mirror`, `--out`, runtime overrides, and `--create-playlist`.
+- Apply is fail-closed: missing or ambiguous tracks are listed with artist, title, and path, and no partial mirror is written.
+- Plan SHA-256 values are integrity checks, not cryptographic signatures.
+- Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
+- Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)
@@ -167,6 +198,8 @@ Precedence (highest to lowest):
 Supported config env overrides:
 - `UDL_CONFIG`
 - `UDL_FREEDL_CONFIG`
+- `UDL_PLAYLISTS_CONFIG`
+- `UDL_REKORDBOX_CONFIG`
 - `UDL_STATE_DIR`
 - `UDL_ARCHIVE_FILE`
 - `UDL_THREADS`
@@ -183,6 +216,10 @@ Supported config env overrides:
 - `.env.local` is intended for developer-machine overrides (for example `UDL_DEEMIX_BIN=/Users/you/.local/bin/deemix-bambanah`).
 - Existing process env vars still win (dotenv files do not override already-set variables).
 - Keep secrets out of committed files; `.env.local` is gitignored in this repo.
+
+Standalone playlist definitions live in `playlists.yaml` (user), `./udl.playlists.yaml` (project), or the explicit `--playlists-config` path. They map a stable UDL playlist ID to an Apple Music playlist name or persistent ID and may define default FreeDL and Rekordbox destinations.
+
+Rekordbox mappings live in `rekordbox.yaml` (user), `./udl.rekordbox.yaml` (project), or the explicit `--rekordbox-config` path. New configurations default to `~/Library/Pioneer/rekordbox` and `~/Music/rb-library-export`; `~` is resolved for the current user at runtime. Existing files and explicit paths are preserved.
 
 Example:
 

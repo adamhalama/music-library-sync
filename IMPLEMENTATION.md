@@ -142,16 +142,16 @@ Current real-data example:
 
 **Status:** In progress
 
-- [ ] Update the README command overview to include `playlist` and `rekordbox`.
-- [ ] Document playlist cache creation, explicit refresh, comparison, and offline/cache-first behavior.
-- [ ] Document FreeDL filtering and its relationship to normal source planning.
-- [ ] Document Rekordbox dependency checks, plan generation, dry-run, backup-first apply, and fail-closed behavior.
-- [ ] Document the effective `--backup-dir` precedence.
-- [ ] Document portable default paths and how `~` is resolved.
-- [ ] Document plan checksum semantics without implying authentication.
-- [ ] Add a short TUI workflow section with expected compact and full-size behavior.
-- [ ] Confirm Homebrew checks and instructions use the supported `python@3.12` dependency.
-- [ ] Review generated config examples and CLI help for consistency.
+- [x] Update the README command overview to include `playlist` and `rekordbox`.
+- [x] Document playlist cache creation, explicit refresh, comparison, and offline/cache-first behavior.
+- [x] Document FreeDL filtering and its relationship to normal source planning.
+- [x] Document Rekordbox dependency checks, plan generation, dry-run, backup-first apply, and fail-closed behavior.
+- [x] Document the effective `--backup-dir` precedence.
+- [x] Document portable default paths and how `~` is resolved.
+- [x] Document plan checksum semantics without implying authentication.
+- [x] Add a short TUI workflow section with expected compact and full-size behavior.
+- [x] Confirm Homebrew checks and instructions use the supported `python@3.12` dependency.
+- [x] Review generated config examples and CLI help for consistency.
 - [ ] Add exact validation commands and representative terminal output to the eventual pull request.
 
 ## Phase 5 — Final Validation
@@ -264,3 +264,10 @@ These checks describe the branch before the finishing implementation begins:
   - 120×40: full metadata summary and 13 track rows rendered.
   - Opening the screen used the saved snapshot and did not refresh Apple Music.
 - Started Phase 4.
+- Expanded `readme.md` with the actual `playlist` and `rekordbox` command families, feature-config flags, cache semantics, blocker behavior, backup precedence, integrity terminology, and portable defaults.
+- Added dedicated Playlists and Rekordbox TUI workflow guidance, including 80×24 behavior and fail-closed plan review.
+- Corrected the release guide summary to list the already-declared `python@3.12` Homebrew dependency alongside `scdl` and `yt-dlp`.
+- Documentation validation:
+  - `go test ./internal/cli/...`
+  - Confirmed both the formula template and renderer declare `depends_on "python@3.12"`.
+  - Confirmed active README/TUI/release/config documentation contains no user-specific backup default or “signed plan” wording.
