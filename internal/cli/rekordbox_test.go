@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 )
 
 func TestRekordboxPlaylistSyncCommandRegistered(t *testing.T) {
@@ -35,6 +37,45 @@ func TestRekordboxPlaylistSyncApplyNoInputRequiresForce(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--force is required with --no-input") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrintPlaylistSyncPlanNamesBlockingTracks(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	app := &AppContext{IO: IOStreams{Out: &out, ErrOut: &errOut}}
+	plan := playlistsync.Plan{
+		Version:       playlistsync.PlanVersion,
+		MusicPlaylist: playlistsync.PlanMusicPlaylist{Name: "Favourites", TrackCount: 1},
+		RekordboxPlaylist: playlistsync.PlanRekordboxPlaylist{
+			Name: "fav_imports",
+		},
+		Summary: playlistsync.PlanSummary{MusicTotal: 2, MissingInRekordbox: 2},
+		Rows: []playlistsync.PlanRow{
+			{
+				MusicIndex:  1,
+				Artist:      "Netherworld",
+				Title:       "Atalantis",
+				Path:        "/Music/Netherworld/Atalantis.m4a",
+				MatchStatus: "missing",
+			},
+			{
+				MusicIndex:  2,
+				Artist:      "Second Artist",
+				Title:       "Second Track",
+				Path:        "/Music/Second Track.m4a",
+				MatchStatus: "missing",
+			},
+		},
+	}
+
+	printPlaylistSyncPlan(app, plan, "/tmp/plan.json")
+
+	blockers := errOut.String()
+	for _, want := range []string{"Apply blockers:", "Netherworld — Atalantis", "/Music/Netherworld/Atalantis.m4a", "Second Artist — Second Track", "/Music/Second Track.m4a"} {
+		if !strings.Contains(blockers, want) {
+			t.Fatalf("expected blocker output to contain %q:\n%s", want, blockers)
+		}
 	}
 }
 

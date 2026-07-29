@@ -21,8 +21,8 @@ This file is the working implementation checklist for [PLAN.md](./PLAN.md). Upda
 | 0. Update from `master` | Done | Merge complete and both providers registered |
 | 1. Portability and plan integrity | Done | Defaults and backup override fixed |
 | 2. Validation and snapshot correctness | Done | Invalid jobs and duplicates covered |
-| 3. CLI and TUI completion | In progress | Blockers visible and 80×24 useful |
-| 4. Documentation and packaging | Not started | Public behavior and dependencies documented |
+| 3. CLI and TUI completion | Done | Blockers visible and 80×24 useful |
+| 4. Documentation and packaging | In progress | Public behavior and dependencies documented |
 | 5. Final validation | Not started | Full test matrix and CI pass |
 
 ## Phase 0 — Update from `master`
@@ -107,19 +107,19 @@ Likely files:
 
 ## Phase 3 — CLI and TUI Completion
 
-**Status:** In progress
+**Status:** Done
 
 ### Expose incomplete-plan blockers
 
-- [ ] Keep incomplete plans blocked from apply.
-- [ ] Preserve the full planned mirror rather than silently reducing it to matched tracks.
-- [ ] Add structured blocker information sufficient to render artist, title, and expected local path.
-- [ ] Show blocker rows in CLI plan and apply error output.
-- [ ] Show blocker rows in the TUI plan review/error state.
-- [ ] Keep summary counts visible: total, matched, and missing.
-- [ ] Ensure long paths are truncated or wrapped without hiding track identity.
-- [ ] Add tests for single and multiple missing tracks.
-- [ ] Add a test proving the blocked plan cannot produce a partial mirror.
+- [x] Keep incomplete plans blocked from apply.
+- [x] Preserve the full planned mirror rather than silently reducing it to matched tracks.
+- [x] Add structured blocker information sufficient to render artist, title, and expected local path.
+- [x] Show blocker rows in CLI plan and apply error output.
+- [x] Show blocker rows in the TUI plan review/error state.
+- [x] Keep summary counts visible: total, matched, and missing.
+- [x] Ensure long paths are truncated or wrapped without hiding track identity.
+- [x] Add tests for single and multiple missing tracks.
+- [x] Add a test proving the blocked plan cannot produce a partial mirror.
 
 Current real-data example:
 
@@ -130,17 +130,17 @@ Current real-data example:
 
 ### Make playlist detail useful at 80×24
 
-- [ ] Reproduce the compact-terminal layout where the Tracks header is visible but track rows are not.
-- [ ] Reduce the vertical footprint of the playlist summary to one concise line where possible.
-- [ ] Reserve enough height for at least the selected track row at 80×24.
-- [ ] Keep the selected track's resolved path visible through truncation, wrapping, or a compact detail line.
-- [ ] Preserve the richer layout at 120×40 and larger sizes.
-- [ ] Add layout/model tests for 80×24 and a larger terminal.
-- [ ] Manually inspect navigation, selection, scrolling, empty states, and refresh feedback at both sizes.
+- [x] Reproduce the compact-terminal layout where the Tracks header is visible but track rows are not.
+- [x] Reduce the vertical footprint of the playlist summary to one concise line where possible.
+- [x] Reserve enough height for at least the selected track row at 80×24.
+- [x] Keep the selected track's resolved path visible through truncation, wrapping, or a compact detail line.
+- [x] Preserve the richer layout at 120×40 and larger sizes.
+- [x] Add layout/model tests for 80×24 and a larger terminal.
+- [x] Manually inspect navigation, selection, scrolling, empty states, and refresh feedback at both sizes.
 
 ## Phase 4 — Documentation and Packaging
 
-**Status:** Not started
+**Status:** In progress
 
 - [ ] Update the README command overview to include `playlist` and `rekordbox`.
 - [ ] Document playlist cache creation, explicit refresh, comparison, and offline/cache-first behavior.
@@ -252,3 +252,15 @@ These checks describe the branch before the finishing implementation begins:
 - Phase 2 validation:
   - `go test ./internal/playlists ./internal/rekordbox/syncconfig ./internal/cli`
 - Started Phase 3.
+- Added reusable blocker extraction from existing plan rows without changing the checksummed plan schema.
+- Human and JSON CLI apply failures now include the blocking rows; plan/show output continues to expose the complete rows.
+- Added an Apply Blockers TUI section with playlist, status, artist, title, and path, while retaining summary counts and fail-closed apply validation.
+- Added regression coverage for multiple CLI blockers, TUI blocker rendering, and preserving the full blocked plan while refusing partial apply.
+- Reworked compact playlist detail to a one-line summary with a height-budgeted track window.
+- Phase 3 validation:
+  - `go test ./internal/cli ./internal/rekordbox/playlistsync`
+- Manual PTY validation with the existing cached 96-track snapshot:
+  - 80×24: selected track and path remained visible; moving selection updated the path.
+  - 120×40: full metadata summary and 13 track rows rendered.
+  - Opening the screen used the saved snapshot and did not refresh Apple Music.
+- Started Phase 4.

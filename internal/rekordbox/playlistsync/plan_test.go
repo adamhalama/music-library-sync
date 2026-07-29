@@ -3,6 +3,7 @@ package playlistsync
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,41 @@ func TestBuildPlanFlagsAmbiguousPath(t *testing.T) {
 	}
 	if err := ValidatePlanForApply(plan); err == nil {
 		t.Fatalf("expected apply validation to reject ambiguous plan")
+	}
+}
+
+func TestValidatePlanForApplyRejectsMissingTrackWithoutPartialMirror(t *testing.T) {
+	opts := ResolvedOptions{
+		MusicPlaylist:     "Favourites",
+		RekordboxPlaylist: "fav_imports",
+		RekordboxDBDir:    "/tmp/rb",
+		BackupDir:         "/tmp/backups",
+		Mode:              DefaultMode,
+		CreatePlaylist:    true,
+	}
+	plan, err := BuildPlan(BuildRequest{
+		Options:       opts,
+		MusicPlaylist: music.Playlist{Name: "Favourites", TrackCount: 2},
+		MusicTracks: []music.Track{
+			{Index: 1, Artist: "Artist", Title: "Matched", Path: "/Music/Matched.mp3"},
+			{Index: 2, Artist: "Netherworld", Title: "Atalantis", Path: "/Music/Atalantis.mp3"},
+		},
+		Inspect: bridge.InspectResponse{
+			Playlists: []bridge.Playlist{{ID: "p1", Name: "fav_imports", Attribute: 0}},
+			Contents:  []bridge.Content{{ID: "c1", Title: "Matched", FolderPath: "/Music/Matched.mp3"}},
+		},
+	}, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.Summary.MissingInRekordbox != 1 || len(plan.Rows) != 2 {
+		t.Fatalf("expected full two-row blocked plan, got summary=%+v rows=%+v", plan.Summary, plan.Rows)
+	}
+	if len(plan.FinalContentIDs) != 1 {
+		t.Fatalf("expected only matched content ID in unapplied final membership, got %v", plan.FinalContentIDs)
+	}
+	if err := ValidatePlanForApply(plan); err == nil || !strings.Contains(err.Error(), "refuses partial mirror apply") {
+		t.Fatalf("expected partial mirror refusal, got %v", err)
 	}
 }
 

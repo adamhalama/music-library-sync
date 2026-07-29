@@ -343,6 +343,7 @@ func newRekordboxPlaylistSyncApplyCommand(app *AppContext) *cobra.Command {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
 			if err := playlistsync.ValidatePlanForApply(plan); err != nil {
+				printPlaylistSyncBlockers(app, plan)
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
 
@@ -520,6 +521,7 @@ func printPlaylistSyncPlan(app *AppContext, plan playlistsync.Plan, path string)
 		if path != "" {
 			fmt.Fprintf(app.IO.Out, "Plan written: %s\n", path)
 		}
+		printPlaylistSyncBlockers(app, plan)
 		for _, warning := range plan.Warnings {
 			fmt.Fprintf(app.IO.ErrOut, "WARN: %s\n", warning)
 		}
@@ -538,8 +540,64 @@ func printPlaylistSyncPlan(app *AppContext, plan playlistsync.Plan, path string)
 	if path != "" {
 		fmt.Fprintf(app.IO.Out, "Plan written: %s\n", path)
 	}
+	printPlaylistSyncBlockers(app, plan)
 	for _, warning := range plan.Warnings {
 		fmt.Fprintf(app.IO.ErrOut, "WARN: %s\n", warning)
+	}
+}
+
+type playlistSyncBlocker struct {
+	Playlist    string `json:"playlist,omitempty"`
+	Artist      string `json:"artist,omitempty"`
+	Title       string `json:"title"`
+	Path        string `json:"path,omitempty"`
+	MatchStatus string `json:"match_status"`
+}
+
+func playlistSyncBlockers(plan playlistsync.Plan) []playlistSyncBlocker {
+	blockers := []playlistSyncBlocker{}
+	appendRows := func(playlist string, rows []playlistsync.PlanRow) {
+		for _, row := range rows {
+			if row.MatchStatus == "matched_path" {
+				continue
+			}
+			blockers = append(blockers, playlistSyncBlocker{
+				Playlist:    playlist,
+				Artist:      strings.TrimSpace(row.Artist),
+				Title:       firstNonEmpty(row.Title, row.RekordboxTitle, "(untitled track)"),
+				Path:        strings.TrimSpace(row.Path),
+				MatchStatus: firstNonEmpty(row.MatchStatus, "blocked"),
+			})
+		}
+	}
+	if plan.Version == playlistsync.PlanVersionFolder {
+		for _, op := range plan.Operations {
+			appendRows(op.MusicPlaylist.Name, op.Rows)
+		}
+		return blockers
+	}
+	appendRows("", plan.Rows)
+	return blockers
+}
+
+func printPlaylistSyncBlockers(app *AppContext, plan playlistsync.Plan) {
+	blockers := playlistSyncBlockers(plan)
+	if len(blockers) == 0 {
+		return
+	}
+	if app.Opts.JSON {
+		_ = json.NewEncoder(app.IO.ErrOut).Encode(map[string]any{"apply_blockers": blockers})
+		return
+	}
+	fmt.Fprintln(app.IO.ErrOut, "Apply blockers:")
+	for _, blocker := range blockers {
+		playlist := ""
+		if blocker.Playlist != "" {
+			playlist = blocker.Playlist + ": "
+		}
+		identity := strings.TrimSpace(strings.TrimSpace(blocker.Artist) + " — " + strings.TrimSpace(blocker.Title))
+		fmt.Fprintf(app.IO.ErrOut, "- [%s] %s%s\n", blocker.MatchStatus, playlist, identity)
+		fmt.Fprintf(app.IO.ErrOut, "  path: %s\n", firstNonEmpty(blocker.Path, "(no local path)"))
 	}
 }
 

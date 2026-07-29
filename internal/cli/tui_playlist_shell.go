@@ -124,7 +124,7 @@ func (m tuiPlaylistModel) shellBody(layout tuiShellLayout) string {
 	case tuiPlaylistPhaseList:
 		return renderPlanSection("Playlists", m.listLines(), width)
 	case tuiPlaylistPhaseDetail, tuiPlaylistPhaseRefreshing:
-		return m.detailBody(width, layout.Compact || layout.Height < 32)
+		return m.detailBody(width, layout)
 	case tuiPlaylistPhaseFailed:
 		return renderPlanSection("Failed", append([]string{"Playlist Hub could not load."}, tuiSplitDetailLines(m.err.Error())...), width)
 	default:
@@ -175,35 +175,35 @@ func (m tuiPlaylistModel) listLines() []string {
 	return lines
 }
 
-func (m tuiPlaylistModel) detailBody(width int, compact bool) string {
+func (m tuiPlaylistModel) detailBody(width int, layout tuiShellLayout) string {
 	definition, ok := m.currentDefinition()
 	if !ok {
 		return renderPlanSection("Playlist", []string{"No playlist selected."}, width)
 	}
-	summary := []string{
-		"Name: " + definition.Name,
-		"Source: Apple Music / " + firstNonEmpty(definition.ProviderPlaylist, definition.ProviderPlaylistID),
-	}
-	if compact {
-		summary = append(summary, "Defaults: FreeDL="+firstNonEmpty(definition.DefaultFreeDLJob, "choose")+" · Rekordbox="+firstNonEmpty(definition.DefaultRekordboxTarget, "choose"))
-	} else {
-		summary = append(summary,
-			"Default FreeDL job: "+firstNonEmpty(definition.DefaultFreeDLJob, "choose at run time"),
-			"Default Rekordbox target: "+firstNonEmpty(definition.DefaultRekordboxTarget, "choose at run time"),
-		)
-	}
+	compact := layout.Compact || layout.Height < 32
 	snapshot, hasSnapshot := m.currentSnapshot()
 	if !hasSnapshot {
-		summary = append(summary,
-			"Snapshot: not created",
-			"Press r to explicitly read Apple Music and create the first snapshot.",
-		)
+		summary := []string{"Name: " + definition.Name, "Snapshot: not created", "Press r to explicitly read Apple Music and create the first snapshot."}
+		if !compact {
+			summary = append(summary, "Source: Apple Music / "+firstNonEmpty(definition.ProviderPlaylist, definition.ProviderPlaylistID))
+		}
 		return renderPlanSection("Playlist", summary, width)
 	}
+	summary := []string{}
 	if compact {
-		summary = append(summary, fmt.Sprintf("Snapshot: %d tracks · refreshed %s", len(snapshot.Tracks), snapshotAge(snapshot.RefreshedAt)))
+		summary = append(summary, truncateForWidth(fmt.Sprintf(
+			"%s · Apple Music/%s · %d tracks · %s",
+			definition.Name,
+			firstNonEmpty(definition.ProviderPlaylist, definition.ProviderPlaylistID),
+			len(snapshot.Tracks),
+			snapshotAge(snapshot.RefreshedAt),
+		), width-4))
 	} else {
 		summary = append(summary,
+			"Name: "+definition.Name,
+			"Source: Apple Music / "+firstNonEmpty(definition.ProviderPlaylist, definition.ProviderPlaylistID),
+			"Default FreeDL job: "+firstNonEmpty(definition.DefaultFreeDLJob, "choose at run time"),
+			"Default Rekordbox target: "+firstNonEmpty(definition.DefaultRekordboxTarget, "choose at run time"),
 			fmt.Sprintf("Snapshot tracks: %d", len(snapshot.Tracks)),
 			"Last refreshed: "+snapshot.RefreshedAt.Format("2006-01-02 15:04:05 MST"),
 			"Freshness: "+snapshotAge(snapshot.RefreshedAt),
@@ -212,18 +212,24 @@ func (m tuiPlaylistModel) detailBody(width int, compact bool) string {
 	if m.phase == tuiPlaylistPhaseRefreshing {
 		summary = append(summary, "Refreshing from Apple Music… The saved snapshot remains active until the refresh succeeds.")
 	}
+	maxTracks := 15
+	if layout.Height < 32 {
+		maxTracks = 1
+	} else if available := layout.Height - 27; available < maxTracks {
+		maxTracks = maxInt(1, available)
+	}
 	return strings.Join([]string{
 		renderPlanSection("Playlist", summary, width),
-		renderPlanSection("Tracks", m.trackLines(snapshot, width), width),
+		renderPlanSection("Tracks", m.trackLines(snapshot, width, maxTracks), width),
 	}, "\n")
 }
 
-func (m tuiPlaylistModel) trackLines(snapshot playlists.Snapshot, width int) []string {
+func (m tuiPlaylistModel) trackLines(snapshot playlists.Snapshot, width, maxTracks int) []string {
 	if len(snapshot.Tracks) == 0 {
 		return []string{"Snapshot contains no tracks."}
 	}
 	lines := []string{"#    LOCAL       ARTIST — TITLE"}
-	start, end := visibleWindow(m.trackCursor, len(snapshot.Tracks), 15)
+	start, end := visibleWindow(m.trackCursor, len(snapshot.Tracks), maxInt(1, maxTracks))
 	for idx := start; idx < end; idx++ {
 		track := snapshot.Tracks[idx]
 		cursor := " "

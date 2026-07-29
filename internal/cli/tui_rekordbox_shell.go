@@ -207,10 +207,14 @@ func (m tuiRekordboxModel) shellBody(layout tuiShellLayout) string {
 	case tuiRekordboxPhasePlanning:
 		return renderPlanSection("Planning", []string{"Checking Rekordbox is closed.", "Reading Music.app playlist.", "Inspecting Rekordbox collection.", "Building checksummed plan."}, width)
 	case tuiRekordboxPhaseReview, tuiRekordboxPhaseConfirm:
-		return strings.Join([]string{
+		sections := []string{
 			renderPlanSection("Plan Summary", m.planSummaryLines(), width),
-			renderPlanSection("Tracks", m.trackLines(layout, width), width),
-		}, "\n")
+		}
+		if blockers := m.blockerLines(width); len(blockers) > 0 {
+			sections = append(sections, renderPlanSection("Apply Blockers", blockers, width))
+		}
+		sections = append(sections, renderPlanSection("Tracks", m.trackLines(layout, width), width))
+		return strings.Join(sections, "\n")
 	case tuiRekordboxPhaseApplying:
 		return renderPlanSection("Applying", []string{"Rechecking Rekordbox is closed.", "Validating plan preconditions.", "Creating backup before any DB write.", "Replacing target playlist membership."}, width)
 	case tuiRekordboxPhaseDone:
@@ -516,6 +520,32 @@ func (m tuiRekordboxModel) trackLines(layout tuiShellLayout, width int) []string
 			line = fmt.Sprintf("%3d  %-14s  %s", row.MusicIndex, row.MatchStatus, title)
 		}
 		lines = append(lines, ansi.Truncate(line, width-4, ""))
+	}
+	return lines
+}
+
+func (m tuiRekordboxModel) blockerLines(width int) []string {
+	if m.plan == nil {
+		return nil
+	}
+	blockers := playlistSyncBlockers(*m.plan)
+	if len(blockers) == 0 {
+		return nil
+	}
+	const maxVisible = 6
+	end := minInt(len(blockers), maxVisible)
+	lines := make([]string, 0, end*2+1)
+	for _, blocker := range blockers[:end] {
+		playlist := ""
+		if blocker.Playlist != "" {
+			playlist = blocker.Playlist + " · "
+		}
+		identity := strings.TrimSpace(strings.TrimSpace(blocker.Artist) + " — " + strings.TrimSpace(blocker.Title))
+		lines = append(lines, truncateForWidth(blocker.MatchStatus+" · "+playlist+identity, width-4))
+		lines = append(lines, truncateForWidth("path: "+firstNonEmpty(blocker.Path, "(no local path)"), width-4))
+	}
+	if len(blockers) > end {
+		lines = append(lines, fmt.Sprintf("… and %d more blocker(s)", len(blockers)-end))
 	}
 	return lines
 }

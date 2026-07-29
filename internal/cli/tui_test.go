@@ -19,6 +19,7 @@ import (
 	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/output"
 	"github.com/jaa/update-downloads/internal/playlists"
+	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
@@ -150,7 +151,7 @@ func TestTUIPlaylistDetailRendersAtNarrowAndWideSizes(t *testing.T) {
 	for _, size := range []struct {
 		width  int
 		height int
-	}{{80, 28}, {150, 42}} {
+	}{{80, 24}, {150, 42}} {
 		root := newMenuRootModelForTest()
 		root.width = size.width
 		root.height = size.height
@@ -160,8 +161,37 @@ func TestTUIPlaylistDetailRendersAtNarrowAndWideSizes(t *testing.T) {
 		root.playlistModel.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}}
 		root.playlistModel.snapshots["favorites"] = snapshot
 		view := root.View()
-		if !strings.Contains(view, "Standalone Playlists") || !strings.Contains(view, "Artist") {
+		if !strings.Contains(view, "Standalone Playlists") || !strings.Contains(view, "Artist") || !strings.Contains(view, "/Music/Track.m4a") {
 			t.Fatalf("expected playlist detail at %dx%d, got: %s", size.width, size.height, view)
+		}
+	}
+}
+
+func TestTUIRekordboxReviewNamesBlockingTrackAndPath(t *testing.T) {
+	model := tuiRekordboxModel{
+		phase: tuiRekordboxPhaseReview,
+		plan: &playlistsync.Plan{
+			Version: playlistsync.PlanVersion,
+			MusicPlaylist: playlistsync.PlanMusicPlaylist{
+				Name: "Favourites",
+			},
+			RekordboxPlaylist: playlistsync.PlanRekordboxPlaylist{
+				Name: "fav_imports",
+			},
+			Summary: playlistsync.PlanSummary{MusicTotal: 1, MissingInRekordbox: 1},
+			Rows: []playlistsync.PlanRow{{
+				MusicIndex:  1,
+				Artist:      "Netherworld",
+				Title:       "Atalantis",
+				Path:        "/Music/Netherworld/Atalantis.m4a",
+				MatchStatus: "missing",
+			}},
+		},
+	}
+	view := model.shellBody(newTUIShellLayout(120, 40))
+	for _, want := range []string{"Apply Blockers", "Netherworld — Atalantis", "/Music/Netherworld/Atalantis.m4a"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected Rekordbox blocker view to contain %q:\n%s", want, view)
 		}
 	}
 }
