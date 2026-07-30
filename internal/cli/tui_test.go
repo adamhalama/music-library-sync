@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -193,6 +194,57 @@ func TestTUIRekordboxReviewNamesBlockingTrackAndPath(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected Rekordbox blocker view to contain %q:\n%s", want, view)
 		}
+	}
+}
+
+// A config load failure must stay on the model: resolveSelectedJob used to clear
+// it, leaving the failure screen showing "Unknown failure." with no reason.
+func TestTUIRekordboxConfigLoadFailureKeepsReason(t *testing.T) {
+	model := tuiRekordboxModel{phase: tuiRekordboxPhaseLoading}
+	next, _ := model.Update(tuiRekordboxConfigLoadedMsg{
+		Config: config.DefaultConfig(),
+		Err:    errors.New("invalid config: rekordbox.db_dir must resolve to an absolute path"),
+	})
+
+	if next.phase != tuiRekordboxPhaseFailed {
+		t.Fatalf("expected failed phase, got %q", next.phase)
+	}
+	if next.err == nil {
+		t.Fatalf("expected config load error to be preserved")
+	}
+	failed := strings.Join(next.failedLines(), "\n")
+	if strings.Contains(failed, "Unknown failure") {
+		t.Fatalf("expected the failure reason instead of a placeholder:\n%s", failed)
+	}
+	if !strings.Contains(failed, "rekordbox.db_dir") {
+		t.Fatalf("expected failure detail to name the config problem:\n%s", failed)
+	}
+	banner := next.shellBanner()
+	if banner == nil || !strings.Contains(banner.Text, "rekordbox.db_dir") {
+		t.Fatalf("expected failure banner to state the reason, got %+v", banner)
+	}
+}
+
+// A resolve error must clear once the selection resolves cleanly, so switching
+// jobs recovers instead of pinning a stale error.
+func TestTUIRekordboxResolveErrorClearsOnNextValidSelection(t *testing.T) {
+	model := tuiRekordboxModel{
+		cfg: config.DefaultConfig(),
+		jobs: []tuiRekordboxJobState{
+			{Label: "broken", Options: playlistsync.Options{Mode: "two-way"}},
+			{Label: "ok", Options: playlistsync.Options{RekordboxPlaylist: "fav_imports"}},
+		},
+	}
+
+	model.resolveSelectedJob()
+	if model.err == nil {
+		t.Fatalf("expected unsupported mode to produce a resolve error")
+	}
+
+	model.jobCursor = 1
+	model.resolveSelectedJob()
+	if model.err != nil {
+		t.Fatalf("expected resolve error to clear on a valid job, got %v", model.err)
 	}
 }
 

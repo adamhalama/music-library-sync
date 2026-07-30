@@ -160,7 +160,7 @@ Global flags:
 - `udl rekordbox playlist-sync show --plan-file <path>`: verify and display a saved plan.
 - `udl rekordbox playlist-sync apply --plan-file <path> [--backup-dir <path>] [--force]`: validate the unchanged plan, recheck the database, write a full backup, and then apply.
 - Planning flags include Music/Rekordbox name or ID selectors, `--mapping`, `--mode mirror`, `--out`, runtime overrides, and `--create-playlist`.
-- Apply is fail-closed: missing or ambiguous tracks are listed with artist, title, and path, and no partial mirror is written.
+- Apply is fail-closed: missing, ambiguous, and duplicated tracks are listed with artist, title, and path, and no partial mirror is written.
 - Plan SHA-256 values are integrity checks, not cryptographic signatures.
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.

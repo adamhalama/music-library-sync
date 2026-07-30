@@ -51,6 +51,20 @@ func TestIsHypedditPurchaseURL(t *testing.T) {
 	if isHypedditPurchaseURL("https://example.com/track/abc") {
 		t.Fatalf("did not expect non-hypeddit host to be detected")
 	}
+	// The URL is handed to the OS URL handler, so the host allowlist is not
+	// enough on its own: only plain web schemes may pass.
+	for _, raw := range []string{
+		"ftp://hypeddit.com/track/abc",
+		"file://hypeddit.com/track/abc",
+		"javascript:alert(1)",
+	} {
+		if isHypedditPurchaseURL(raw) {
+			t.Fatalf("did not expect %q to be treated as a purchase URL", raw)
+		}
+	}
+	if !isHypedditPurchaseURL("HTTP://hypeddit.com/track/abc") {
+		t.Fatalf("expected scheme comparison to be case-insensitive")
+	}
 }
 
 func TestSelectBrowserDownloadCandidatePrefersMetadataMatch(t *testing.T) {

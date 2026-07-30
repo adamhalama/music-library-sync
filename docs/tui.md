@@ -250,7 +250,8 @@ The feature config can be selected with `--playlists-config` or `UDL_PLAYLISTS_C
 - Rekordbox must remain closed while planning or applying.
 - `udl` uses a private managed Python environment; the dependency screen can install or repair `pyrekordbox`.
 - Plans match tracks by normalized local path and retain every source row for review.
-- Missing or ambiguous rows appear in an `Apply Blockers` section with playlist, artist, title, and path.
+- Missing, ambiguous, and duplicate rows appear in an `Apply Blockers` section with playlist, artist, title, and path.
+- A track listed twice in the same source playlist is reported as `duplicate_path`; v1 mirrors each track once and refuses the plan instead.
 - Incomplete plans are fail-closed and cannot write a partial mirror.
 - `d` toggles dry-run from review/done states.
 - `enter` advances only when the plan passes apply validation.

@@ -78,6 +78,7 @@ type tuiRekordboxModel struct {
 	planPath           string
 	resolved           playlistsync.ResolvedOptions
 	err                error
+	resolveErr         bool
 	backupPath         string
 	applyResp          bridge.ApplyResponse
 	applyBatchResp     bridge.ApplyBatchResponse
@@ -178,7 +179,7 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		m.cfgErr = typed.Err
 		m.runtimeStatus = typed.RuntimeStatus
 		m.jobs = tuiRekordboxJobsForConfig(typed.Config, typed.SyncConfig)
-		if m.playlistSnapshot != nil {
+		if m.playlistSnapshot != nil && m.playlistDefinition != nil {
 			m.jobs = tuiRekordboxJobsForPlaylist(typed.SyncConfig, *m.playlistDefinition)
 		}
 		if len(m.jobs) == 0 {
@@ -197,7 +198,7 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		}
 		return m, nil
 	case tuiRekordboxDepsDoneMsg:
-		m.runCancel = nil
+		m.finishRun()
 		m.runtimeStatus = typed.Status
 		if typed.Err != nil {
 			m.phase = tuiRekordboxPhaseFailed
@@ -214,7 +215,7 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		m.resolveSelectedJob()
 		return m, nil
 	case tuiRekordboxPlanDoneMsg:
-		m.runCancel = nil
+		m.finishRun()
 		if typed.Err != nil {
 			m.phase = tuiRekordboxPhaseFailed
 			m.err = typed.Err
@@ -228,7 +229,7 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		m.phase = tuiRekordboxPhaseReview
 		return m, nil
 	case tuiRekordboxApplyDoneMsg:
-		m.runCancel = nil
+		m.finishRun()
 		if typed.Err != nil {
 			m.phase = tuiRekordboxPhaseFailed
 			m.err = typed.Err
@@ -242,7 +243,7 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		m.phase = tuiRekordboxPhaseDone
 		return m, nil
 	case tuiRekordboxSetupDiscoveredMsg:
-		m.runCancel = nil
+		m.finishRun()
 		m.setup.ConfigPath = typed.ConfigPath
 		m.setup.ConfigKind = typed.ConfigKind
 		m.setup.ConfigExists = typed.ConfigExists
@@ -252,7 +253,7 @@ func (m tuiRekordboxModel) Update(msg tea.Msg) (tuiRekordboxModel, tea.Cmd) {
 		m.phase = tuiRekordboxPhaseSetupList
 		return m, nil
 	case tuiRekordboxSetupSavedMsg:
-		m.runCancel = nil
+		m.finishRun()
 		if typed.Err != nil {
 			m.setup.SaveErr = typed.Err
 			m.phase = tuiRekordboxPhaseSetupReview
@@ -824,6 +825,9 @@ func (m tuiRekordboxModel) startApply() (tuiRekordboxModel, tea.Cmd) {
 	}
 }
 
+// resolveSelectedJob refreshes the resolved options for the highlighted job. It
+// only owns errors it produced itself: clearing m.err unconditionally used to
+// discard a config-load failure and leave the failure screen with no reason.
 func (m *tuiRekordboxModel) resolveSelectedJob() {
 	if len(m.jobs) == 0 || m.jobCursor < 0 || m.jobCursor >= len(m.jobs) {
 		return
@@ -831,10 +835,14 @@ func (m *tuiRekordboxModel) resolveSelectedJob() {
 	resolved, err := playlistsync.ResolveOptions(m.cfg, m.jobs[m.jobCursor].Options)
 	if err != nil {
 		m.err = err
+		m.resolveErr = true
 		return
 	}
 	m.resolved = resolved
-	m.err = nil
+	if m.resolveErr {
+		m.err = nil
+		m.resolveErr = false
+	}
 }
 
 func (m tuiRekordboxModel) selectedJobOptions() playlistsync.Options {
@@ -849,6 +857,15 @@ func (m tuiRekordboxModel) selectedJobLabel() string {
 		return "default"
 	}
 	return m.jobs[m.jobCursor].Label
+}
+
+// finishRun releases the context created for a background run. Dropping the
+// cancel func instead of calling it leaks the context for the session's life.
+func (m *tuiRekordboxModel) finishRun() {
+	if m.runCancel != nil {
+		m.runCancel()
+		m.runCancel = nil
+	}
 }
 
 func (m tuiRekordboxModel) isRunning() bool {

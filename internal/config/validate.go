@@ -21,15 +21,28 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("invalid config: %s", strings.Join(e.Problems, "; "))
 }
 
+// validateScope selects which sections of a config a validation pass covers.
+// Defaults are always checked.
+type validateScope struct {
+	RequireSources bool
+	Sources        bool
+	Rekordbox      bool
+}
+
+// Validate checks a full config: defaults, sources, and the optional rekordbox
+// block. An invalid rekordbox block is a config error like any other, so it
+// surfaces at load rather than on first use of a rekordbox command.
 func Validate(cfg Config) error {
-	return validate(cfg, true, true, false)
+	return validate(cfg, validateScope{RequireSources: true, Sources: true, Rekordbox: true})
 }
 
+// ValidateRekordbox checks only the rekordbox block and shared defaults, for
+// rekordbox commands that must run even when no download sources exist.
 func ValidateRekordbox(cfg Config) error {
-	return validate(cfg, false, false, true)
+	return validate(cfg, validateScope{Rekordbox: true})
 }
 
-func validate(cfg Config, requireSources bool, validateSources bool, validateRekordbox bool) error {
+func validate(cfg Config, scope validateScope) error {
 	problems := []string{}
 
 	if cfg.Version != 1 {
@@ -53,11 +66,11 @@ func validate(cfg Config, requireSources bool, validateSources bool, validateRek
 		problems = append(problems, "defaults.command_timeout_seconds must be > 0")
 	}
 
-	if requireSources && len(cfg.Sources) == 0 {
+	if scope.RequireSources && len(cfg.Sources) == 0 {
 		problems = append(problems, "at least one source must be configured")
 	}
 
-	if validateSources {
+	if scope.Sources {
 		seenIDs := map[string]struct{}{}
 		for _, source := range cfg.Sources {
 			if strings.TrimSpace(source.ID) == "" {
@@ -136,7 +149,7 @@ func validate(cfg Config, requireSources bool, validateSources bool, validateRek
 		}
 	}
 
-	if validateRekordbox {
+	if scope.Rekordbox {
 		problems = append(problems, validateRekordboxConfig(cfg.Rekordbox)...)
 	}
 

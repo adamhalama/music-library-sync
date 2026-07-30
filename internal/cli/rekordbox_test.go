@@ -79,6 +79,48 @@ func TestPrintPlaylistSyncPlanNamesBlockingTracks(t *testing.T) {
 	}
 }
 
+func TestPrintPlaylistSyncPlanNamesDuplicateTrack(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	app := &AppContext{IO: IOStreams{Out: &out, ErrOut: &errOut}}
+	plan := playlistsync.Plan{
+		Version:           playlistsync.PlanVersion,
+		MusicPlaylist:     playlistsync.PlanMusicPlaylist{Name: "Favourites", TrackCount: 2},
+		RekordboxPlaylist: playlistsync.PlanRekordboxPlaylist{ID: "p1", Name: "fav_imports"},
+		Summary:           playlistsync.PlanSummary{MusicTotal: 2, MatchedByPath: 1, DuplicateInPlaylist: 1},
+		Rows: []playlistsync.PlanRow{
+			{
+				MusicIndex:         1,
+				Artist:             "Netherworld",
+				Title:              "Atalantis",
+				Path:               "/Music/Netherworld/Atalantis.aiff",
+				RekordboxContentID: "c1",
+				MatchStatus:        "matched_path",
+			},
+			{
+				MusicIndex:         2,
+				Artist:             "Netherworld",
+				Title:              "Atalantis",
+				Path:               "/Music/Netherworld/Atalantis.aiff",
+				RekordboxContentID: "c1",
+				MatchStatus:        "duplicate_path",
+			},
+		},
+	}
+
+	printPlaylistSyncPlan(app, plan, "/tmp/plan.json")
+
+	blockers := errOut.String()
+	for _, want := range []string{"Apply blockers:", "[duplicate_path]", "Netherworld — Atalantis", "/Music/Netherworld/Atalantis.aiff"} {
+		if !strings.Contains(blockers, want) {
+			t.Fatalf("expected blocker output to contain %q:\n%s", want, blockers)
+		}
+	}
+	if strings.Count(blockers, "[duplicate_path]") != 1 {
+		t.Fatalf("expected only the duplicate row to be listed as a blocker:\n%s", blockers)
+	}
+}
+
 func TestRekordboxConfigPathCommandUsesExplicitPath(t *testing.T) {
 	var out bytes.Buffer
 	app := &AppContext{

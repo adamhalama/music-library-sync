@@ -52,75 +52,110 @@ def inspect_db(db_dir_raw: str) -> Dict[str, Any]:
         db.close()
 
 
-def apply_playlist(req: Dict[str, Any]) -> Dict[str, Any]:
-    db_dir = Path(str(req["db_dir"])).expanduser().resolve()
-    db_path = db_dir / "master.db"
+def resolve_target_playlist(
+    db: Rekordbox6Database,
+    target_id: str,
+    target_name: str,
+    target_parent_id: str,
+    create_if_missing: bool,
+):
+    """Resolve the playlist a plan targets, returning (playlist, created, current).
+
+    An explicit target ID that no longer exists is an error, never a create: the
+    plan was built against that playlist, so creating a fresh one under the same
+    name would silently mirror into the wrong place. Only the name lookup may
+    fall through to creation.
+    """
+    if target_id:
+        playlist = db.get_playlist(ID=target_id)
+        if playlist is None:
+            raise RuntimeError(f"Rekordbox playlist ID {target_id!r} not found")
+    else:
+        matches = db.get_playlist(Name=target_name).all()
+        if target_parent_id:
+            matches = [row for row in matches if str(row.ParentID or "") == target_parent_id]
+        if len(matches) > 1:
+            raise RuntimeError(f"Multiple Rekordbox playlists named {target_name!r}; use playlist ID")
+        playlist = matches[0] if matches else None
+
+    if playlist is None:
+        if not create_if_missing:
+            raise RuntimeError(f"Rekordbox playlist {target_name!r} not found")
+        return db.create_playlist(target_name, parent=(target_parent_id or None)), True, []
+
+    if int(playlist.Attribute or 0) != 0:
+        raise RuntimeError(f"Target playlist {playlist.Name!r} is not a normal playlist")
+    if target_parent_id and str(playlist.ParentID or "") != target_parent_id:
+        raise RuntimeError(f"Target playlist {playlist.Name!r} is not under the planned folder")
+    return playlist, False, playlist_content_ids(db, str(playlist.ID))
+
+
+def rewrite_playlist(db: Rekordbox6Database, req: Dict[str, Any]):
+    """Replace one playlist's contents with final_content_ids.
+
+    Validates preconditions, then stages the rewrite. Does not commit, so the
+    caller controls transaction scope for both single and batch applies.
+    """
     target_id = str(req.get("target_playlist_id") or "")
     target_name = str(req.get("target_playlist_name") or "")
-    create_if_missing = bool(req.get("create_playlist_if_missing"))
     target_parent_id = str(req.get("target_parent_id") or "")
+    create_if_missing = bool(req.get("create_playlist_if_missing"))
     expected_current = [str(x) for x in req.get("expected_current_content_ids") or []]
     final_content_ids = [str(x) for x in req.get("final_content_ids") or []]
 
+    playlist, created, current = resolve_target_playlist(
+        db, target_id, target_name, target_parent_id, create_if_missing
+    )
+
+    if current != expected_current:
+        raise RuntimeError(f"Target playlist {target_name!r} membership changed since plan generation")
+
+    missing_content = []
+    for content_id in final_content_ids:
+        if db.get_content(ID=content_id) is None:
+            missing_content.append(content_id)
+    if missing_content:
+        raise RuntimeError(f"Planned content IDs no longer exist: {', '.join(missing_content)}")
+
+    existing_songs = (
+        db.get_playlist_songs(PlaylistID=str(playlist.ID))
+        .order_by(tables.DjmdSongPlaylist.TrackNo)
+        .all()
+    )
+    for song in existing_songs:
+        db.delete(song)
+    db.flush()
+
+    for content_id in final_content_ids:
+        db.add_to_playlist(playlist, content_id)
+
+    playlist.updated_at = datetime.datetime.now()
+    return playlist, created
+
+
+def playlist_response(db: Rekordbox6Database, playlist, created: bool) -> Dict[str, Any]:
+    """Report a playlist's contents. Call only after commit, so the caller's
+    post-apply verification compares committed state and not session state."""
+    final = playlist_content_ids(db, str(playlist.ID))
+    return {
+        "playlist_id": str(playlist.ID),
+        "playlist_name": str(playlist.Name or ""),
+        "parent_id": str(playlist.ParentID or ""),
+        "final_content_ids": final,
+        "final_track_count": len(final),
+        "created_playlist": created,
+    }
+
+
+def apply_playlist(req: Dict[str, Any]) -> Dict[str, Any]:
+    db_dir = Path(str(req["db_dir"])).expanduser().resolve()
+    db_path = db_dir / "master.db"
+
     db = Rekordbox6Database(path=db_path, db_dir=db_dir)
-    created = False
     try:
-        if target_id:
-            playlist = db.get_playlist(ID=target_id)
-        else:
-            matches = db.get_playlist(Name=target_name).all()
-            if target_parent_id:
-                matches = [row for row in matches if str(row.ParentID or "") == target_parent_id]
-            if len(matches) > 1:
-                raise RuntimeError(f"Multiple Rekordbox playlists named {target_name!r}; use playlist ID")
-            playlist = matches[0] if matches else None
-
-        if playlist is None:
-            if not create_if_missing:
-                raise RuntimeError(f"Rekordbox playlist {target_name!r} not found")
-            parent = target_parent_id or None
-            playlist = db.create_playlist(target_name, parent=parent)
-            created = True
-            current = []
-        else:
-            if int(playlist.Attribute or 0) != 0:
-                raise RuntimeError(f"Target playlist {playlist.Name!r} is not a normal playlist")
-            current = playlist_content_ids(db, str(playlist.ID))
-
-        if current != expected_current:
-            raise RuntimeError("Target playlist membership changed since plan generation")
-
-        missing_content = []
-        for content_id in final_content_ids:
-            if db.get_content(ID=content_id) is None:
-                missing_content.append(content_id)
-        if missing_content:
-            raise RuntimeError(f"Planned content IDs no longer exist: {', '.join(missing_content)}")
-
-        existing_songs = (
-            db.get_playlist_songs(PlaylistID=str(playlist.ID))
-            .order_by(tables.DjmdSongPlaylist.TrackNo)
-            .all()
-        )
-        for song in existing_songs:
-            db.delete(song)
-        db.flush()
-
-        for content_id in final_content_ids:
-            db.add_to_playlist(playlist, content_id)
-
-        playlist.updated_at = datetime.datetime.now()
+        playlist, created = rewrite_playlist(db, req)
         db.commit(autoinc=True)
-
-        final = playlist_content_ids(db, str(playlist.ID))
-        return {
-            "playlist_id": str(playlist.ID),
-            "playlist_name": str(playlist.Name or ""),
-            "parent_id": str(playlist.ParentID or ""),
-            "final_content_ids": final,
-            "final_track_count": len(final),
-            "created_playlist": created,
-        }
+        return playlist_response(db, playlist, created)
     except Exception:
         db.rollback()
         raise
@@ -150,92 +185,26 @@ def resolve_folder(db: Rekordbox6Database, folder_id: str, folder_name: str, cre
     return folder, created
 
 
-def apply_playlist_in_open_db(db: Rekordbox6Database, req: Dict[str, Any]) -> Dict[str, Any]:
-    target_id = str(req.get("target_playlist_id") or "")
-    target_name = str(req.get("target_playlist_name") or "")
-    target_parent_id = str(req.get("target_parent_id") or "")
-    create_if_missing = bool(req.get("create_playlist_if_missing"))
-    expected_current = [str(x) for x in req.get("expected_current_content_ids") or []]
-    final_content_ids = [str(x) for x in req.get("final_content_ids") or []]
-
-    if target_id:
-        playlist = db.get_playlist(ID=target_id)
-    else:
-        matches = db.get_playlist(Name=target_name).all()
-        if target_parent_id:
-            matches = [row for row in matches if str(row.ParentID or "") == target_parent_id]
-        if len(matches) > 1:
-            raise RuntimeError(f"Multiple Rekordbox playlists named {target_name!r}; use playlist ID")
-        playlist = matches[0] if matches else None
-
-    created = False
-    if playlist is None:
-        if not create_if_missing:
-            raise RuntimeError(f"Rekordbox playlist {target_name!r} not found")
-        playlist = db.create_playlist(target_name, parent=(target_parent_id or None))
-        created = True
-        current = []
-    else:
-        if int(playlist.Attribute or 0) != 0:
-            raise RuntimeError(f"Target playlist {playlist.Name!r} is not a normal playlist")
-        if target_parent_id and str(playlist.ParentID or "") != target_parent_id:
-            raise RuntimeError(f"Target playlist {playlist.Name!r} is not under the planned folder")
-        current = playlist_content_ids(db, str(playlist.ID))
-
-    if current != expected_current:
-        raise RuntimeError(f"Target playlist {target_name!r} membership changed since plan generation")
-
-    missing_content = []
-    for content_id in final_content_ids:
-        if db.get_content(ID=content_id) is None:
-            missing_content.append(content_id)
-    if missing_content:
-        raise RuntimeError(f"Planned content IDs no longer exist: {', '.join(missing_content)}")
-
-    existing_songs = (
-        db.get_playlist_songs(PlaylistID=str(playlist.ID))
-        .order_by(tables.DjmdSongPlaylist.TrackNo)
-        .all()
-    )
-    for song in existing_songs:
-        db.delete(song)
-    db.flush()
-
-    for content_id in final_content_ids:
-        db.add_to_playlist(playlist, content_id)
-
-    playlist.updated_at = datetime.datetime.now()
-    final = playlist_content_ids(db, str(playlist.ID))
-    return {
-        "playlist_id": str(playlist.ID),
-        "playlist_name": str(playlist.Name or ""),
-        "parent_id": str(playlist.ParentID or ""),
-        "final_content_ids": final,
-        "final_track_count": len(final),
-        "created_playlist": created,
-    }
-
-
 def apply_batch(req: Dict[str, Any]) -> Dict[str, Any]:
     db_dir = Path(str(req["db_dir"])).expanduser().resolve()
     db_path = db_dir / "master.db"
     folder_id = str(req.get("target_folder_id") or "")
     folder_name = str(req.get("target_folder_name") or "")
     create_folder = bool(req.get("create_folder_if_missing"))
-    create_playlist = bool(req.get("create_playlist_if_missing"))
     operations = list(req.get("operations") or [])
 
     db = Rekordbox6Database(path=db_path, db_dir=db_dir)
     created_folder = False
     try:
         folder, created_folder = resolve_folder(db, folder_id, folder_name, create_folder)
-        responses = []
+        applied = []
         for op in operations:
             op["target_parent_id"] = str(folder.ID)
-            if "create_playlist_if_missing" not in op:
-                op["create_playlist_if_missing"] = create_playlist
-            responses.append(apply_playlist_in_open_db(db, op))
+            applied.append(rewrite_playlist(db, op))
         db.commit(autoinc=True)
+        # Read every playlist back only after the commit so the reported order is
+        # what actually landed in the database.
+        responses = [playlist_response(db, playlist, created) for playlist, created in applied]
         return {
             "folder_id": str(folder.ID),
             "folder_name": str(folder.Name or ""),

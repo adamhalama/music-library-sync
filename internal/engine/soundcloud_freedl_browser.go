@@ -37,6 +37,13 @@ func isHypedditPurchaseURL(raw string) bool {
 	if err != nil {
 		return false
 	}
+	// The host allowlist alone is not enough: this URL is handed to the OS URL
+	// handler, so only plain web schemes may pass.
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return false
+	}
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
 	if host == "hypeddit.com" {
 		return true

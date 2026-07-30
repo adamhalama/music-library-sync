@@ -331,12 +331,11 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 			})
 		}
 		resp, err := client.ApplyBatch(ctx, bridge.ApplyBatchRequest{
-			DBDir:                   plan.RekordboxDBDir,
-			TargetFolderID:          plan.RekordboxFolder.ID,
-			TargetFolderName:        plan.RekordboxFolder.Name,
-			CreateFolderIfMissing:   plan.RekordboxFolder.CreatePlanned,
-			CreatePlaylistIfMissing: true,
-			Operations:              ops,
+			DBDir:                 plan.RekordboxDBDir,
+			TargetFolderID:        plan.RekordboxFolder.ID,
+			TargetFolderName:      plan.RekordboxFolder.Name,
+			CreateFolderIfMissing: plan.RekordboxFolder.CreatePlanned,
+			Operations:            ops,
 		})
 		if err != nil {
 			return RekordboxPlaylistSyncApplyResult{}, err
@@ -345,7 +344,7 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 			return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist count does not match plan")
 		}
 		for idx, op := range plan.Operations {
-			if !sameStringSlice(resp.Responses[idx].FinalContentIDs, op.FinalContentIDs) {
+			if !playlistsync.SameStrings(resp.Responses[idx].FinalContentIDs, op.FinalContentIDs) {
 				return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist order does not match plan for %q", op.RekordboxPlaylist.Name)
 			}
 		}
@@ -363,7 +362,7 @@ func (u RekordboxPlaylistSyncUseCase) Apply(ctx context.Context, req RekordboxPl
 	if err != nil {
 		return RekordboxPlaylistSyncApplyResult{}, err
 	}
-	if !sameStringSlice(resp.FinalContentIDs, plan.FinalContentIDs) {
+	if !playlistsync.SameStrings(resp.FinalContentIDs, plan.FinalContentIDs) {
 		return RekordboxPlaylistSyncApplyResult{}, fmt.Errorf("post-apply verification failed: final playlist order does not match plan")
 	}
 	return RekordboxPlaylistSyncApplyResult{EffectiveBackupDir: effectiveBackupDir, BackupPath: backupPath, Response: resp}, nil
@@ -435,16 +434,4 @@ func (u RekordboxPlaylistSyncUseCase) createBackup(ctx context.Context, dbDir, b
 		return u.CreateBackup(ctx, dbDir, backupRoot, now)
 	}
 	return playlistsync.CreateBackup(ctx, dbDir, backupRoot, now)
-}
-
-func sameStringSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

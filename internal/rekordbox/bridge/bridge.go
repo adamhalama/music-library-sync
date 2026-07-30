@@ -49,13 +49,15 @@ type ApplyRequest struct {
 	FinalContentIDs           []string `json:"final_content_ids"`
 }
 
+// ApplyBatchRequest carries folder-level settings only. Whether an individual
+// playlist may be created is decided per operation, so there is deliberately no
+// batch-wide create flag here.
 type ApplyBatchRequest struct {
-	DBDir                   string         `json:"db_dir"`
-	TargetFolderID          string         `json:"target_folder_id,omitempty"`
-	TargetFolderName        string         `json:"target_folder_name,omitempty"`
-	CreateFolderIfMissing   bool           `json:"create_folder_if_missing"`
-	CreatePlaylistIfMissing bool           `json:"create_playlist_if_missing"`
-	Operations              []ApplyRequest `json:"operations"`
+	DBDir                 string         `json:"db_dir"`
+	TargetFolderID        string         `json:"target_folder_id,omitempty"`
+	TargetFolderName      string         `json:"target_folder_name,omitempty"`
+	CreateFolderIfMissing bool           `json:"create_folder_if_missing"`
+	Operations            []ApplyRequest `json:"operations"`
 }
 
 type ApplyResponse struct {
