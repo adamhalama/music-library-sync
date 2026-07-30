@@ -69,13 +69,13 @@ type PlanApplyOptions struct {
 }
 
 type SyncResult struct {
-	Total              int
-	Attempted          int
-	Succeeded          int
-	Failed             int
-	Skipped            int
-	DependencyFailures int
-	Interrupted        bool
+	Total              int  `json:"total"`
+	Attempted          int  `json:"attempted"`
+	Succeeded          int  `json:"succeeded"`
+	Failed             int  `json:"failed"`
+	Skipped            int  `json:"skipped"`
+	DependencyFailures int  `json:"dependency_failures"`
+	Interrupted        bool `json:"interrupted"`
 }
 
 type SoundCloudMode string
@@ -86,13 +86,13 @@ const (
 )
 
 type SoundCloudPreflight struct {
-	RemoteTotal          int
-	KnownCount           int
-	ArchiveGapCount      int
-	KnownGapCount        int
-	FirstExistingIndex   int
-	PlannedDownloadCount int
-	Mode                 SoundCloudMode
+	RemoteTotal          int            `json:"remote_total"`
+	KnownCount           int            `json:"known_count"`
+	ArchiveGapCount      int            `json:"archive_gap_count"`
+	KnownGapCount        int            `json:"known_gap_count"`
+	FirstExistingIndex   int            `json:"first_existing_index"`
+	PlannedDownloadCount int            `json:"planned_download_count"`
+	Mode                 SoundCloudMode `json:"mode"`
 }
 
 type TrackStatusMode string
@@ -112,11 +112,11 @@ const (
 )
 
 type PlanRow struct {
-	Index             int
-	RemoteID          string
-	RemoteURL         string
-	Title             string
-	Status            PlanRowStatus
-	Toggleable        bool
-	SelectedByDefault bool
+	Index             int           `json:"index"`
+	RemoteID          string        `json:"remote_id"`
+	RemoteURL         string        `json:"remote_url"`
+	Title             string        `json:"title"`
+	Status            PlanRowStatus `json:"status"`
+	Toggleable        bool          `json:"toggleable"`
+	SelectedByDefault bool          `json:"selected_by_default"`
 }

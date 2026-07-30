@@ -1162,9 +1162,13 @@ func rekordboxProcesses(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect running processes: %w", err)
 	}
+	return rekordboxProcessNames(string(out)), nil
+}
+
+func rekordboxProcessNames(output string) []string {
 	found := []string{}
 	seen := map[string]struct{}{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(output, "\n") {
 		lower := strings.ToLower(line)
 		if strings.Contains(lower, "rekordbox") {
 			name := strings.TrimSpace(filepath.Base(line))
@@ -1178,7 +1182,7 @@ func rekordboxProcesses(ctx context.Context) ([]string, error) {
 		}
 	}
 	sort.Strings(found)
-	return found, nil
+	return found
 }
 
 func copyDir(src, dest string) error {

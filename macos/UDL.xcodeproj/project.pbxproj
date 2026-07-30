@@ -1,0 +1,358 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* UDLApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* UDLApp.swift */; };
+		A10000000000000000000002 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* JSONValue.swift */; };
+		A10000000000000000000003 /* WireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* WireModels.swift */; };
+		A10000000000000000000004 /* JSONRPCConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* JSONRPCConnection.swift */; };
+		A10000000000000000000005 /* AgentProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* AgentProcess.swift */; };
+		A10000000000000000000006 /* UDLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* UDLClient.swift */; };
+		A10000000000000000000007 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* AppState.swift */; };
+		A10000000000000000000008 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* DashboardView.swift */; };
+		A10000000000000000000009 /* PendingPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* PendingPromptView.swift */; };
+		A1000000000000000000000A /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* DoctorView.swift */; };
+		A1000000000000000000000B /* CredentialsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* CredentialsView.swift */; };
+		A1000000000000000000000C /* JSONRPCConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* JSONRPCConnectionTests.swift */; };
+		A1000000000000000000000D /* WireModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* WireModelTests.swift */; };
+		A1000000000000000000000E /* AgentProcessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* AgentProcessTests.swift */; };
+		A10000000000000000000011 /* SyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* SyncModels.swift */; };
+		A10000000000000000000012 /* SyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* SyncView.swift */; };
+		A10000000000000000000013 /* PlaylistModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* PlaylistModels.swift */; };
+		A10000000000000000000014 /* PlaylistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* PlaylistsView.swift */; };
+		A10000000000000000000015 /* FreeDLModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* FreeDLModels.swift */; };
+		A10000000000000000000016 /* FreeDLView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* FreeDLView.swift */; };
+		A10000000000000000000017 /* RekordboxModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000017 /* RekordboxModels.swift */; };
+		A10000000000000000000018 /* RekordboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* RekordboxView.swift */; };
+		A10000000000000000000019 /* ConfigModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* ConfigModels.swift */; };
+		A1000000000000000000001A /* ConfigEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* ConfigEditorView.swift */; };
+		A1000000000000000000001B /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001B /* OnboardingView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C10000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D10000000000000000000002;
+			remoteInfo = UDL;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		B10000000000000000000001 /* UDLApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDLApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/JSONValue.swift; sourceTree = "<group>"; };
+		B10000000000000000000003 /* WireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/Wire/WireModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* JSONRPCConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/JSONRPCConnection.swift; sourceTree = "<group>"; };
+		B10000000000000000000005 /* AgentProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/AgentProcess.swift; sourceTree = "<group>"; };
+		B10000000000000000000006 /* UDLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/UDLClient.swift; sourceTree = "<group>"; };
+		B10000000000000000000007 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState.swift; sourceTree = "<group>"; };
+		B10000000000000000000008 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/DashboardView.swift; sourceTree = "<group>"; };
+		B10000000000000000000009 /* PendingPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/PendingPromptView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000A /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Doctor/DoctorView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000B /* CredentialsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Credentials/CredentialsView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000C /* JSONRPCConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCConnectionTests.swift; sourceTree = "<group>"; };
+		B1000000000000000000000D /* WireModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireModelTests.swift; sourceTree = "<group>"; };
+		B1000000000000000000000E /* AgentProcessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProcessTests.swift; sourceTree = "<group>"; };
+		B1000000000000000000000F /* UDL.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UDL.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000010 /* UDLTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UDLTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000011 /* SyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Sync/SyncModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000012 /* SyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Sync/SyncView.swift; sourceTree = "<group>"; };
+		B10000000000000000000013 /* PlaylistModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Playlists/PlaylistModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000014 /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Playlists/PlaylistsView.swift; sourceTree = "<group>"; };
+		B10000000000000000000015 /* FreeDLModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/FreeDL/FreeDLModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000016 /* FreeDLView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/FreeDL/FreeDLView.swift; sourceTree = "<group>"; };
+		B10000000000000000000017 /* RekordboxModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Rekordbox/RekordboxModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000018 /* RekordboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Rekordbox/RekordboxView.swift; sourceTree = "<group>"; };
+		B10000000000000000000019 /* ConfigModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigModels.swift; sourceTree = "<group>"; };
+		B1000000000000000000001A /* ConfigEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigEditorView.swift; sourceTree = "<group>"; };
+		B1000000000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Onboarding/OnboardingView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E10000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		E10000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		F10000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000002 /* UDL */,
+				F10000000000000000000003 /* UDLTests */,
+				F10000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F10000000000000000000002 /* UDL */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000001 /* UDLApp.swift */,
+				B10000000000000000000002 /* JSONValue.swift */,
+				B10000000000000000000003 /* WireModels.swift */,
+				B10000000000000000000004 /* JSONRPCConnection.swift */,
+				B10000000000000000000005 /* AgentProcess.swift */,
+				B10000000000000000000006 /* UDLClient.swift */,
+				B10000000000000000000007 /* AppState.swift */,
+				B10000000000000000000008 /* DashboardView.swift */,
+				B10000000000000000000009 /* PendingPromptView.swift */,
+				B1000000000000000000000A /* DoctorView.swift */,
+				B1000000000000000000000B /* CredentialsView.swift */,
+				B10000000000000000000011 /* SyncModels.swift */,
+				B10000000000000000000012 /* SyncView.swift */,
+				B10000000000000000000013 /* PlaylistModels.swift */,
+				B10000000000000000000014 /* PlaylistsView.swift */,
+				B10000000000000000000015 /* FreeDLModels.swift */,
+				B10000000000000000000016 /* FreeDLView.swift */,
+				B10000000000000000000017 /* RekordboxModels.swift */,
+				B10000000000000000000018 /* RekordboxView.swift */,
+				B10000000000000000000019 /* ConfigModels.swift */,
+				B1000000000000000000001A /* ConfigEditorView.swift */,
+				B1000000000000000000001B /* OnboardingView.swift */,
+			);
+			path = UDL;
+			sourceTree = "<group>";
+		};
+		F10000000000000000000003 /* UDLTests */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000C /* JSONRPCConnectionTests.swift */,
+				B1000000000000000000000D /* WireModelTests.swift */,
+				B1000000000000000000000E /* AgentProcessTests.swift */,
+			);
+			path = UDLTests;
+			sourceTree = "<group>";
+		};
+		F10000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000F /* UDL.app */,
+				B10000000000000000000010 /* UDLTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		D10000000000000000000002 /* UDL */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D10000000000000000000006 /* Build configuration list for PBXNativeTarget "UDL" */;
+			buildPhases = (
+				E10000000000000000000003 /* Sources */,
+				E10000000000000000000001 /* Frameworks */,
+				E10000000000000000000005 /* Resources */,
+				E10000000000000000000007 /* Embed udl backend */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = UDL;
+			productName = UDL;
+			productReference = B1000000000000000000000F /* UDL.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D10000000000000000000003 /* UDLTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D10000000000000000000007 /* Build configuration list for PBXNativeTarget "UDLTests" */;
+			buildPhases = (
+				E10000000000000000000004 /* Sources */,
+				E10000000000000000000002 /* Frameworks */,
+				E10000000000000000000006 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = (
+				C10000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = UDLTests;
+			productName = UDLTests;
+			productReference = B10000000000000000000010 /* UDLTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					D10000000000000000000002 = { CreatedOnToolsVersion = 26.0; };
+					D10000000000000000000003 = { CreatedOnToolsVersion = 26.0; TestTargetID = D10000000000000000000002; };
+				};
+			};
+			buildConfigurationList = D10000000000000000000005 /* Build configuration list for PBXProject "UDL" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = F10000000000000000000001;
+			productRefGroup = F10000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D10000000000000000000002 /* UDL */,
+				D10000000000000000000003 /* UDLTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E10000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		E10000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E10000000000000000000007 /* Embed udl backend */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Embed udl backend";
+			outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/udl");
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nsource_bin=\"${UDL_EMBEDDED_BINARY:-${PROJECT_DIR}/../bin/udl}\"\nif [ ! -x \"$source_bin\" ]; then\n  echo \"error: build udl first or set UDL_EMBEDDED_BINARY\" >&2\n  exit 1\nfi\ndestination=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/udl\"\nmkdir -p \"$(dirname \"$destination\")\"\ncp \"$source_bin\" \"$destination\"\nchmod 755 \"$destination\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* UDLApp.swift in Sources */,
+				A10000000000000000000002 /* JSONValue.swift in Sources */,
+				A10000000000000000000003 /* WireModels.swift in Sources */,
+				A10000000000000000000004 /* JSONRPCConnection.swift in Sources */,
+				A10000000000000000000005 /* AgentProcess.swift in Sources */,
+				A10000000000000000000006 /* UDLClient.swift in Sources */,
+				A10000000000000000000007 /* AppState.swift in Sources */,
+				A10000000000000000000008 /* DashboardView.swift in Sources */,
+				A10000000000000000000009 /* PendingPromptView.swift in Sources */,
+				A1000000000000000000000A /* DoctorView.swift in Sources */,
+				A1000000000000000000000B /* CredentialsView.swift in Sources */,
+				A10000000000000000000011 /* SyncModels.swift in Sources */,
+				A10000000000000000000012 /* SyncView.swift in Sources */,
+				A10000000000000000000013 /* PlaylistModels.swift in Sources */,
+				A10000000000000000000014 /* PlaylistsView.swift in Sources */,
+				A10000000000000000000015 /* FreeDLModels.swift in Sources */,
+				A10000000000000000000016 /* FreeDLView.swift in Sources */,
+				A10000000000000000000017 /* RekordboxModels.swift in Sources */,
+				A10000000000000000000018 /* RekordboxView.swift in Sources */,
+				A10000000000000000000019 /* ConfigModels.swift in Sources */,
+				A1000000000000000000001A /* ConfigEditorView.swift in Sources */,
+				A1000000000000000000001B /* OnboardingView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E10000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000C /* JSONRPCConnectionTests.swift in Sources */,
+				A1000000000000000000000D /* WireModelTests.swift in Sources */,
+				A1000000000000000000000E /* AgentProcessTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C10000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = D10000000000000000000002 /* UDL */; targetProxy = C10000000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		D10000000000000000000010 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_VERSION = 5.0; }; name = Debug; };
+		D10000000000000000000011 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_VERSION = 5.0; }; name = Release; };
+		D10000000000000000000012 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = UDL/UDL.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = UDL/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jaa.udl;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D10000000000000000000013 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = UDL/UDL.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = UDL/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jaa.udl;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		D10000000000000000000014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jaa.udl.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UDL.app/Contents/MacOS/UDL";
+			};
+			name = Debug;
+		};
+		D10000000000000000000015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jaa.udl.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UDL.app/Contents/MacOS/UDL";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		D10000000000000000000005 /* Build configuration list for PBXProject "UDL" */ = {isa = XCConfigurationList; buildConfigurations = (D10000000000000000000010 /* Debug */, D10000000000000000000011 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		D10000000000000000000006 /* Build configuration list for PBXNativeTarget "UDL" */ = {isa = XCConfigurationList; buildConfigurations = (D10000000000000000000012 /* Debug */, D10000000000000000000013 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		D10000000000000000000007 /* Build configuration list for PBXNativeTarget "UDLTests" */ = {isa = XCConfigurationList; buildConfigurations = (D10000000000000000000014 /* Debug */, D10000000000000000000015 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = D10000000000000000000001 /* Project object */;
+}

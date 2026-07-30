@@ -1,6 +1,11 @@
 package music
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestParsePlaylistTracks(t *testing.T) {
 	raw := "PLAYLIST\t70C641CA78BB0F3C\tFavourites\ttrue\t2\n" +
@@ -26,5 +31,17 @@ func TestParsePlaylistListRejectsMalformedRows(t *testing.T) {
 	_, err := ParsePlaylistList("only\tthree\tcolumns")
 	if err == nil {
 		t.Fatalf("expected malformed playlist row error")
+	}
+}
+
+func TestReaderExplainsMusicAutomationDenial(t *testing.T) {
+	reader := Reader{
+		RunAppleScript: func(context.Context, string) (string, error) {
+			return "", errors.New("Not authorized to send Apple events. (-1743)")
+		},
+	}
+	_, err := reader.ListPlaylists(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "System Settings > Privacy & Security > Automation") {
+		t.Fatalf("expected actionable automation denial, got %v", err)
 	}
 }

@@ -62,7 +62,11 @@ func (r Reader) ReadPlaylist(ctx context.Context, selector PlaylistSelector) (Pl
 
 func (r Reader) run(ctx context.Context, script string) (string, error) {
 	if r.RunAppleScript != nil {
-		return r.RunAppleScript(ctx, script)
+		out, err := r.RunAppleScript(ctx, script)
+		if err != nil {
+			return "", actionableMusicAutomationError(err)
+		}
+		return out, nil
 	}
 	cmd := exec.CommandContext(ctx, "osascript")
 	cmd.Stdin = strings.NewReader(script)
@@ -76,15 +80,31 @@ func (r Reader) run(ctx context.Context, script string) (string, error) {
 			detail = strings.TrimSpace(stdout.String())
 		}
 		if detail == "" {
-			return "", fmt.Errorf("run osascript: %w", err)
+			return "", actionableMusicAutomationError(fmt.Errorf("run osascript: %w", err))
 		}
-		return "", fmt.Errorf("run osascript: %w: %s", err, detail)
+		return "", actionableMusicAutomationError(fmt.Errorf("run osascript: %w: %s", err, detail))
 	}
 	out := strings.TrimRight(stdout.String(), "\r\n")
 	if strings.HasPrefix(out, "ERROR ") {
 		return "", fmt.Errorf("Music AppleScript failed: %s", out)
 	}
 	return out, nil
+}
+
+func actionableMusicAutomationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"-1743", "not authorized", "not permitted", "automation permission"} {
+		if strings.Contains(text, marker) {
+			return fmt.Errorf(
+				"Music automation permission denied; allow UDL in System Settings > Privacy & Security > Automation: %w",
+				err,
+			)
+		}
+	}
+	return err
 }
 
 func ParsePlaylistList(raw string) ([]Playlist, error) {

@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>udl — Option 1 · Inspector</title>
+<script src="plan-data.js"></script>
+<style>
+:root{
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --accent: #0a64d6;
+  --accent-fill: #0a64d6;
+  --win: #ffffff;
+  --sidebar: #f2f1f6;
+  --chrome: #ecebf0;
+  --sep: rgba(0,0,0,.11);
+  --sep-strong: rgba(0,0,0,.18);
+  --text: #1c1c1e;
+  --text-2: #6c6c70;
+  --text-3: #9a9aa0;
+  --row-alt: #f7f7fa;
+  --sel: #d5e4f8;
+  --new: #1c7c3c;
+  --gap: #a1600a;
+  --have: #6c6c70;
+  --shadow: 0 12px 40px rgba(0,0,0,.18), 0 0 0 .5px rgba(0,0,0,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --accent:#3f8cf5; --accent-fill:#2f7bef;
+    --win:#1e1e20; --sidebar:#242427; --chrome:#2a2a2d;
+    --sep:rgba(255,255,255,.1); --sep-strong:rgba(255,255,255,.16);
+    --text:#f2f2f4; --text-2:#9d9da3; --text-3:#6f6f75;
+    --row-alt:#232326; --sel:#284978;
+    --new:#4cc26a; --gap:#e0a13a; --have:#8c8c92;
+    --shadow: 0 16px 50px rgba(0,0,0,.6), 0 0 0 .5px rgba(255,255,255,.1);
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; font-family:var(--font); font-size:13px; color:var(--text);
+  background:
+    radial-gradient(1200px 700px at 20% -10%, #cfd6e6 0%, transparent 60%),
+    radial-gradient(900px 600px at 90% 110%, #e3d7e8 0%, transparent 55%),
+    #d9dbe2;
+  display:flex; align-items:center; justify-content:center; padding:28px;
+  -webkit-font-smoothing:antialiased;
+}
+@media (prefers-color-scheme: dark){
+  body{background:
+    radial-gradient(1200px 700px at 20% -10%, #23293a 0%, transparent 60%),
+    radial-gradient(900px 600px at 90% 110%, #2c2333 0%, transparent 55%),
+    #131316;}
+}
+
+/* ---------- window ---------- */
+.window{
+  width:min(1220px, 100%); height:min(760px, 100%);
+  background:var(--win); border-radius:11px; box-shadow:var(--shadow);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.titlebar{
+  height:52px; flex:0 0 52px; background:var(--chrome);
+  border-bottom:.5px solid var(--sep); display:flex; align-items:center;
+  gap:10px; padding:0 14px;
+}
+.lights{display:flex; gap:8px; margin-right:6px}
+.light{width:12px;height:12px;border-radius:50%}
+.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
+
+.tb-btn{
+  height:24px; min-width:28px; padding:0 8px; border-radius:6px; border:none;
+  background:transparent; color:var(--text-2); font:inherit; font-size:13px;
+  display:inline-flex; align-items:center; justify-content:center; gap:5px; cursor:default;
+}
+.tb-btn:hover{background:rgba(120,120,128,.14)}
+.tb-btn.on{background:rgba(120,120,128,.2); color:var(--text)}
+.tb-title{font-weight:600; font-size:13.5px; letter-spacing:-.01em}
+.tb-sub{color:var(--text-3); font-size:11.5px}
+.spacer{flex:1}
+
+.seg{display:inline-flex; background:rgba(120,120,128,.13); border-radius:7px; padding:2px; gap:2px}
+.seg button{
+  border:none; background:transparent; font:inherit; font-size:12px; color:var(--text);
+  padding:3px 11px; border-radius:5px; cursor:default; white-space:nowrap;
+}
+.seg button[aria-pressed="true"]{background:var(--win); box-shadow:0 .5px 2px rgba(0,0,0,.2), 0 0 0 .5px rgba(0,0,0,.06); font-weight:500}
+.seg button .n{color:var(--text-3); margin-left:5px; font-variant-numeric:tabular-nums}
+
+.search{
+  display:flex; align-items:center; gap:6px; width:170px; height:24px;
+  background:rgba(120,120,128,.12); border-radius:6px; padding:0 8px; color:var(--text-3);
+}
+.search input{border:none; background:transparent; font:inherit; font-size:12px; color:var(--text); width:100%; outline:none}
+
+/* ---------- body split ---------- */
+.split{flex:1; display:flex; min-height:0}
+.sidebar{
+  width:214px; flex:0 0 214px; background:var(--sidebar);
+  border-right:.5px solid var(--sep); padding:10px 8px; overflow:auto;
+}
+.sb-head{
+  font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase;
+  letter-spacing:.05em; padding:8px 8px 5px;
+}
+.src{
+  display:grid; grid-template-columns:16px 1fr auto; align-items:center; gap:8px;
+  padding:6px 8px; border-radius:6px; cursor:default; margin-bottom:1px;
+}
+.src:hover{background:rgba(120,120,128,.11)}
+.src.active{background:var(--accent-fill); color:#fff}
+.src.active .src-meta,.src.active .badge{color:rgba(255,255,255,.75)}
+.src.active .badge{background:rgba(255,255,255,.2)}
+.src-name{font-size:12.5px; font-weight:500; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.src-meta{font-size:10.5px; color:var(--text-3); font-family:var(--mono)}
+.badge{
+  font-size:10.5px; font-variant-numeric:tabular-nums; color:var(--text-2);
+  background:rgba(120,120,128,.18); border-radius:9px; padding:1px 6px; min-width:20px; text-align:center;
+}
+.src.off .src-name,.src.off .src-meta{opacity:.45}
+.glyph{
+  width:16px;height:16px;border-radius:4px; display:grid; place-items:center;
+  font-size:9px; font-weight:700; color:#fff; letter-spacing:-.03em;
+}
+.glyph.sc{background:linear-gradient(180deg,#ff8a3d,#f2580c)}
+.glyph.sp{background:linear-gradient(180deg,#2ecf62,#16a44a)}
+
+/* ---------- table ---------- */
+.center{flex:1; min-width:0; display:flex; flex-direction:column; background:var(--win)}
+.thead{
+  display:grid; grid-template-columns:30px 44px 1fr 128px 118px 62px;
+  align-items:center; height:24px; flex:0 0 24px;
+  border-bottom:.5px solid var(--sep); background:var(--chrome);
+  font-size:11px; color:var(--text-2); position:sticky; top:0;
+}
+.thead > div{padding:0 8px; border-right:.5px solid var(--sep); height:100%; display:flex; align-items:center; gap:4px; cursor:default}
+.thead > div:last-child{border-right:none}
+.thead > div:hover{background:rgba(120,120,128,.1)}
+.thead .sortmark{font-size:8px; color:var(--text-3)}
+.tbody{flex:1; overflow:auto; outline:none}
+.row{
+  display:grid; grid-template-columns:30px 44px 1fr 128px 118px 62px;
+  align-items:center; height:26px; font-size:12.5px; cursor:default;
+  border-bottom:.5px solid transparent;
+}
+.row:nth-child(even){background:var(--row-alt)}
+.row.cursor{box-shadow:inset 0 0 0 2px var(--accent); border-radius:3px}
+.row.locked .title{color:var(--text-3)}
+.row > div{padding:0 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.row .idx{color:var(--text-3); font-variant-numeric:tabular-nums; font-family:var(--mono); font-size:11px; text-align:right}
+.row .title{font-weight:450}
+.row .title .artist{color:var(--text-2)}
+.row .rid{font-family:var(--mono); font-size:11px; color:var(--text-3)}
+.row .dur{font-family:var(--mono); font-size:11px; color:var(--text-3); text-align:right}
+.row.on{background:var(--sel)}
+.row.on:nth-child(even){background:var(--sel)}
+
+input[type=checkbox]{
+  appearance:none; width:14px;height:14px;border-radius:3.5px; margin:0;
+  border:.5px solid var(--sep-strong); background:var(--win);
+  box-shadow:0 .5px 1px rgba(0,0,0,.06); display:grid; place-items:center; cursor:default;
+}
+input[type=checkbox]:checked{background:var(--accent-fill); border-color:transparent}
+input[type=checkbox]:checked::after{content:"✓"; color:#fff; font-size:10px; font-weight:800; line-height:1}
+input[type=checkbox]:disabled{opacity:.4}
+input[type=checkbox].mixed{background:var(--accent-fill); border-color:transparent}
+input[type=checkbox].mixed::after{content:"–"; color:#fff; font-size:11px; font-weight:800}
+
+.pill{
+  display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:500;
+  padding:1px 7px 1px 5px; border-radius:5px; background:rgba(120,120,128,.14); color:var(--text-2);
+}
+.dot{width:6px;height:6px;border-radius:50%}
+.pill.new{color:var(--new)} .pill.new .dot{background:var(--new)}
+.pill.gap{color:var(--gap)} .pill.gap .dot{background:var(--gap)}
+.pill.have{color:var(--have)} .pill.have .dot{background:var(--have)}
+
+/* ---------- inspector ---------- */
+.inspector{
+  width:262px; flex:0 0 262px; background:var(--sidebar);
+  border-left:.5px solid var(--sep); overflow:auto; padding:12px 14px 20px;
+}
+.inspector.hidden{display:none}
+.ins-sec{margin-bottom:18px}
+.ins-title{
+  font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase;
+  letter-spacing:.05em; margin-bottom:8px;
+}
+.field{display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:26px; margin-bottom:6px}
+.field label{color:var(--text-2); font-size:12px}
+.field .val{font-size:12px; font-variant-numeric:tabular-nums}
+
+.stepper{display:flex; align-items:center; gap:0}
+.stepper input{
+  width:52px; height:22px; text-align:right; font:inherit; font-size:12px;
+  font-family:var(--mono); border:.5px solid var(--sep-strong); border-radius:5px 0 0 5px;
+  background:var(--win); color:var(--text); padding:0 6px; outline:none; border-right:none;
+}
+.stepper input:focus{box-shadow:0 0 0 3px rgba(10,100,214,.28); position:relative; z-index:1}
+.stepper .arrows{display:flex; flex-direction:column; border:.5px solid var(--sep-strong); border-radius:0 5px 5px 0; overflow:hidden}
+.stepper .arrows button{
+  width:16px; height:11px; border:none; background:var(--chrome); color:var(--text-2);
+  font-size:7px; line-height:1; cursor:default; padding:0;
+}
+.stepper .arrows button:active{background:var(--accent-fill); color:#fff}
+.stepper .arrows button:first-child{border-bottom:.5px solid var(--sep)}
+
+.switch{
+  width:34px;height:20px;border-radius:10px;background:rgba(120,120,128,.32);
+  position:relative; cursor:default; transition:background .16s ease; flex:0 0 auto;
+}
+.switch::after{
+  content:""; position:absolute; top:2px; left:2px; width:16px;height:16px;border-radius:50%;
+  background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.28); transition:transform .16s ease;
+}
+.switch[aria-checked="true"]{background:#2ac052}
+.switch[aria-checked="true"]::after{transform:translateX(14px)}
+
+.seg.small button{font-size:11.5px; padding:2px 9px}
+.path{
+  font-family:var(--mono); font-size:10.5px; color:var(--text-2); background:var(--win);
+  border:.5px solid var(--sep); border-radius:5px; padding:5px 7px; margin-bottom:6px;
+  word-break:break-all; line-height:1.45;
+}
+.path b{display:block; font-family:var(--font); font-size:10px; color:var(--text-3); font-weight:600;
+  text-transform:uppercase; letter-spacing:.04em; margin-bottom:2px}
+.note{font-size:11px; color:var(--text-3); line-height:1.5; margin-top:4px}
+
+/* ---------- status bar ---------- */
+.statusbar{
+  flex:0 0 46px; height:46px; background:var(--chrome); border-top:.5px solid var(--sep);
+  display:flex; align-items:center; gap:12px; padding:0 14px;
+}
+.summary{font-size:12px; color:var(--text-2)}
+.summary b{color:var(--text); font-weight:600; font-variant-numeric:tabular-nums}
+.btn{
+  height:26px; padding:0 14px; border-radius:6px; font:inherit; font-size:12.5px; font-weight:500;
+  border:.5px solid var(--sep-strong); background:var(--win); color:var(--text); cursor:default;
+  box-shadow:0 .5px 1.5px rgba(0,0,0,.08);
+}
+.btn:hover{background:rgba(120,120,128,.08)}
+.btn.primary{
+  background:linear-gradient(180deg, color-mix(in srgb, var(--accent-fill) 92%, white), var(--accent-fill));
+  color:#fff; border-color:transparent; box-shadow:0 .5px 2px rgba(10,100,214,.4);
+  padding:0 18px; font-weight:550;
+}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.42}
+.kbd{font-family:var(--mono); font-size:10.5px; color:var(--text-3); background:rgba(120,120,128,.14);
+  border-radius:4px; padding:1px 5px}
+
+/* ---------- swift mapping drawer ---------- */
+.drawer{
+  position:fixed; right:0; top:0; height:100%; width:340px; background:var(--win);
+  border-left:.5px solid var(--sep-strong); box-shadow:-20px 0 60px rgba(0,0,0,.25);
+  transform:translateX(100%); transition:transform .26s cubic-bezier(.32,.72,0,1);
+  padding:22px 22px 30px; overflow:auto; z-index:40;
+}
+.drawer.open{transform:none}
+.drawer h3{margin:0 0 4px; font-size:15px}
+.drawer p{color:var(--text-2); font-size:12px; line-height:1.6}
+.drawer dt{font-family:var(--mono); font-size:11.5px; color:var(--accent); margin-top:14px}
+.drawer dd{margin:2px 0 0; font-size:12px; color:var(--text-2); line-height:1.55}
+.drawer .close{position:absolute; top:14px; right:16px}
+.toast{
+  position:fixed; left:50%; bottom:38px; transform:translate(-50%, 20px);
+  background:rgba(28,28,30,.94); color:#fff; font-size:12.5px; padding:10px 16px;
+  border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.35); opacity:0;
+  transition:.22s ease; pointer-events:none; backdrop-filter:blur(20px); z-index:50;
+}
+.toast.show{opacity:1; transform:translate(-50%,0)}
+.toast code{font-family:var(--mono); color:#7fc0ff}
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" title="Toggle sidebar">▤</button>
+    <div>
+      <div class="tb-title">Sync Plan</div>
+      <div class="tb-sub" id="tbSub">SoundCloud Likes · scdl</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" id="filter">
+      <button aria-pressed="true" data-f="all">All <span class="n" id="fAll">18</span></button>
+      <button aria-pressed="false" data-f="missing_new">New <span class="n" id="fNew">11</span></button>
+      <button aria-pressed="false" data-f="missing_known_gap">Gaps <span class="n" id="fGap">3</span></button>
+      <button aria-pressed="false" data-f="already_downloaded">Have <span class="n" id="fHave">4</span></button>
+    </div>
+    <div class="search">⌕<input placeholder="Filter tracks" id="q" /></div>
+    <button class="tb-btn on" id="insToggle" title="Hide inspector">◧</button>
+    <button class="tb-btn" id="swiftBtn" title="Swift component mapping">ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar">
+      <div class="sb-head">Sources in this run</div>
+      <div id="srcList"></div>
+      <div class="note" style="padding:6px 8px">Checkbox includes the source in the run. Click the name to inspect its plan.</div>
+    </aside>
+
+    <main class="center">
+      <div class="thead">
+        <div><input type="checkbox" id="selAll" title="Select all toggleable" /></div>
+        <div style="justify-content:flex-end">#</div>
+        <div>Title <span class="sortmark">▲</span></div>
+        <div>Status</div>
+        <div>Remote ID</div>
+        <div style="justify-content:flex-end">Time</div>
+      </div>
+      <div class="tbody" id="tbody" tabindex="0"></div>
+    </main>
+
+    <aside class="inspector" id="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">Plan</div>
+        <div class="field">
+          <label for="limit">Track limit</label>
+          <div class="stepper">
+            <input id="limit" value="25" />
+            <div class="arrows"><button id="limUp">▲</button><button id="limDown">▼</button></div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="unlimited">Unlimited</label>
+          <div class="switch" id="unlimited" role="switch" aria-checked="false" tabindex="0"></div>
+        </div>
+        <div class="field" id="windowField">
+          <label>Window</label>
+          <div class="seg small" id="window">
+            <button aria-pressed="true" data-w="latest">Latest</button>
+            <button aria-pressed="false" data-w="first">First</button>
+          </div>
+        </div>
+        <div class="note" id="windowNote">Spotify + deemix only. <code>scdl</code> has no window switch, so the control is disabled for SoundCloud sources.</div>
+      </div>
+
+      <div class="ins-sec">
+        <div class="ins-title">Run</div>
+        <div class="field">
+          <label for="dry">Dry run</label>
+          <div class="switch" id="dry" role="switch" aria-checked="true" tabindex="0"></div>
+        </div>
+        <div class="field">
+          <label for="timeout">Timeout</label>
+          <div class="stepper"><input id="timeout" value="10m" style="border-radius:5px; border-right:.5px solid var(--sep-strong); width:62px" /></div>
+        </div>
+        <div class="note">Dry run resolves and reports every selected track without writing files or touching the state file.</div>
+      </div>
+
+      <div class="ins-sec">
+        <div class="ins-title">Destination</div>
+        <div class="path"><b>Target dir</b><span id="pTarget"></span></div>
+        <div class="path"><b>State file</b><span id="pState"></span></div>
+        <div class="path"><b>Source URL</b><span id="pURL"></span></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <span class="kbd">space</span><span class="summary" style="margin-left:-6px">toggle</span>
+    <span class="kbd">⌘A</span><span class="summary" style="margin-left:-6px">all</span>
+    <button class="btn" id="reset">Reset to defaults</button>
+    <button class="btn primary" id="run">Start Dry Run</button>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn close" id="drawerClose">✕</button>
+  <h3>Option 1 — Inspector</h3>
+  <p>The Xcode/Finder shape. Everything is on screen at once: what runs, what's selected, and under what settings. Best when you tune options and re-scan often.</p>
+  <dl>
+    <dt>NavigationSplitView</dt><dd>Three columns: sources sidebar, plan table, inspector. Column widths persist per-user for free.</dd>
+    <dt>Table + TableColumn</dt><dd>Native sortable multi-column table with <code>Set&lt;PlanRow.ID&gt;</code> selection. Row height 26pt, alternating backgrounds via <code>.alternatingRowBackgrounds()</code>.</dd>
+    <dt>Toggle(.checkbox) / Toggle(.switch)</dt><dd>Row checkboxes are checkbox style; run settings use switch style, matching System Settings.</dd>
+    <dt>Picker(.segmented)</dt><dd>Status filter and plan window. Window picker gets <code>.disabled(!source.supportsWindow)</code>.</dd>
+    <dt>Stepper + TextField</dt><dd>Plan limit — typed or nudged, exactly like the TUI's <code>[</code>/<code>]</code>/<code>l</code> bindings.</dd>
+    <dt>.safeAreaInset(edge:.bottom)</dt><dd>The status bar with counts and the primary action, always pinned.</dd>
+    <dt>.inspector(isPresented:)</dt><dd>macOS 14 inspector modifier — the toolbar button collapses it on narrow windows.</dd>
+  </dl>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const S = {
+  sourceId: "sc-favorites",
+  enabled: new Set(["sc-favorites","sc-dnb-crate","sp-liked"]),
+  selected: {},      // sourceId -> Set of index
+  filter: "all",
+  query: "",
+  cursor: 0,
+  limit: 25, unlimited:false, window:"latest", dry:true,
+};
+
+UDL.sources.forEach(s=>{
+  S.selected[s.id] = new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index));
+});
+
+const $ = id => document.getElementById(id);
+const src = () => UDL.sources.find(s=>s.id===S.sourceId);
+const allRows = () => UDL.rows[S.sourceId];
+const visRows = () => allRows().filter(r=>{
+  if (S.filter!=="all" && r.status!==S.filter) return false;
+  if (S.query && !(r.title+" "+r.artist).toLowerCase().includes(S.query.toLowerCase())) return false;
+  return true;
+});
+
+function renderSources(){
+  $("srcList").innerHTML = UDL.sources.map(s=>{
+    const c = UDL.counts(UDL.rows[s.id]);
+    const sel = S.selected[s.id].size;
+    return `<div class="src ${s.id===S.sourceId?"active":""} ${S.enabled.has(s.id)?"":"off"}" data-id="${s.id}">
+      <input type="checkbox" ${S.enabled.has(s.id)?"checked":""} data-en="${s.id}" />
+      <div>
+        <div class="src-name">${s.label}</div>
+        <div class="src-meta">${s.type} · ${s.adapter}</div>
+      </div>
+      <span class="badge">${S.enabled.has(s.id)? sel : "—"}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderRows(){
+  const rows = visRows();
+  const sel = S.selected[S.sourceId];
+  $("tbody").innerHTML = rows.map((r,i)=>{
+    const st = UDL.statusMeta[r.status];
+    const cls = r.status===UDL.STATUS.NEW?"new":r.status===UDL.STATUS.GAP?"gap":"have";
+    return `<div class="row ${sel.has(r.index)?"on":""} ${r.toggleable?"":"locked"} ${i===S.cursor?"cursor":""}" data-i="${r.index}">
+      <div><input type="checkbox" ${sel.has(r.index)?"checked":""} ${r.toggleable?"":"disabled"} data-row="${r.index}" /></div>
+      <div class="idx">${r.index}</div>
+      <div class="title">${r.title} <span class="artist">— ${r.artist}</span></div>
+      <div><span class="pill ${cls}" title="${st.hint}"><i class="dot"></i>${st.label}</span></div>
+      <div class="rid">${r.remoteId}</div>
+      <div class="dur">${r.duration}</div>
+    </div>`;
+  }).join("") || `<div style="padding:40px; text-align:center; color:var(--text-3)">No tracks match this filter.</div>`;
+
+  const tog = allRows().filter(r=>r.toggleable);
+  const on = tog.filter(r=>sel.has(r.index)).length;
+  const box = $("selAll");
+  box.checked = on>0; box.classList.toggle("mixed", on>0 && on<tog.length);
+}
+
+function renderCounts(){
+  const c = UDL.counts(allRows());
+  $("fAll").textContent = allRows().length;
+  $("fNew").textContent = c.missing_new;
+  $("fGap").textContent = c.missing_known_gap;
+  $("fHave").textContent = c.already_downloaded;
+}
+
+function renderInspector(){
+  const s = src();
+  $("tbSub").textContent = `${s.label} · ${s.adapter}`;
+  $("pTarget").textContent = s.targetDir;
+  $("pState").textContent = s.stateFile;
+  $("pURL").textContent = s.url;
+  $("windowField").style.opacity = s.supportsWindow ? 1 : .4;
+  $("windowField").style.pointerEvents = s.supportsWindow ? "auto" : "none";
+  $("windowNote").style.display = s.supportsWindow ? "none" : "block";
+  $("limit").value = S.unlimited ? "∞" : S.limit;
+  $("limit").disabled = S.unlimited;
+  $("dry").setAttribute("aria-checked", S.dry);
+  $("unlimited").setAttribute("aria-checked", S.unlimited);
+  $("run").textContent = S.dry ? "Start Dry Run" : "Start Sync";
+}
+
+function renderSummary(){
+  let totalSel=0, totalGap=0, srcCount=0;
+  S.enabled.forEach(id=>{
+    srcCount++;
+    totalSel += S.selected[id].size;
+    totalGap += UDL.rows[id].filter(r=>r.status===UDL.STATUS.GAP && !S.selected[id].has(r.index)).length;
+  });
+  const lim = S.unlimited ? "unlimited" : S.limit;
+  $("summary").innerHTML = `<b>${totalSel}</b> tracks queued across <b>${srcCount}</b> sources · <b>${totalGap}</b> known gaps left out · limit <b>${lim}</b>`;
+  $("run").disabled = totalSel===0;
+}
+
+function renderAll(){ renderSources(); renderRows(); renderCounts(); renderInspector(); renderSummary(); }
+
+/* events */
+$("srcList").addEventListener("click", e=>{
+  const en = e.target.closest("[data-en]");
+  if (en){ const id=en.dataset.en; S.enabled.has(id)?S.enabled.delete(id):S.enabled.add(id); renderAll(); return; }
+  const row = e.target.closest(".src");
+  if (row){ S.sourceId = row.dataset.id; S.cursor=0; renderAll(); }
+});
+$("tbody").addEventListener("click", e=>{
+  const row = e.target.closest(".row"); if(!row) return;
+  const i = +row.dataset.i;
+  const r = allRows().find(x=>x.index===i);
+  S.cursor = visRows().findIndex(x=>x.index===i);
+  if (r.toggleable){
+    const sel = S.selected[S.sourceId];
+    sel.has(i)?sel.delete(i):sel.add(i);
+  } else if (e.target.tagName!=="INPUT") {
+    toast(`<code>${r.title}</code> is already in the state file — nothing to download.`);
+  }
+  renderRows(); renderSources(); renderSummary();
+});
+$("selAll").addEventListener("click", ()=>{
+  const sel = S.selected[S.sourceId];
+  const tog = visRows().filter(r=>r.toggleable);
+  const allOn = tog.every(r=>sel.has(r.index));
+  tog.forEach(r=> allOn ? sel.delete(r.index) : sel.add(r.index));
+  renderRows(); renderSources(); renderSummary();
+});
+$("filter").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  S.filter = b.dataset.f; S.cursor = 0;
+  [...$("filter").children].forEach(x=>x.setAttribute("aria-pressed", x===b));
+  renderRows();
+});
+$("window").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  S.window = b.dataset.w;
+  [...$("window").children].forEach(x=>x.setAttribute("aria-pressed", x===b));
+  toast(`Plan window <code>${S.window}</code> — rebuilding rows from Spotify <code>added_at</code>.`);
+});
+$("q").addEventListener("input", e=>{ S.query = e.target.value; S.cursor=0; renderRows(); });
+$("limUp").onclick = ()=>{ if(!S.unlimited){S.limit+=5; renderInspector(); renderSummary();} };
+$("limDown").onclick = ()=>{ if(!S.unlimited){S.limit=Math.max(0,S.limit-5); renderInspector(); renderSummary();} };
+$("unlimited").onclick = ()=>{ S.unlimited=!S.unlimited; renderInspector(); renderSummary(); };
+$("dry").onclick = ()=>{ S.dry=!S.dry; renderInspector(); };
+$("insToggle").onclick = e=>{ $("inspector").classList.toggle("hidden"); e.currentTarget.classList.toggle("on"); };
+$("reset").onclick = ()=>{
+  UDL.sources.forEach(s=>{ S.selected[s.id]=new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index)); });
+  S.limit=25; S.unlimited=false; S.dry=true; renderAll(); toast("Selection reset to plan defaults — new tracks only.");
+};
+$("run").onclick = ()=>{
+  const n = [...S.enabled].reduce((a,id)=>a+S.selected[id].size,0);
+  toast(`${S.dry?"Dry run":"Sync"} started — <code>${n}</code> tracks, ${S.enabled.size} sources.`);
+};
+$("swiftBtn").onclick = ()=> $("drawer").classList.add("open");
+$("drawerClose").onclick = ()=> $("drawer").classList.remove("open");
+
+$("tbody").addEventListener("keydown", e=>{
+  const rows = visRows();
+  if (e.key==="ArrowDown"||e.key==="j"){ S.cursor=Math.min(rows.length-1,S.cursor+1); renderRows(); e.preventDefault(); }
+  if (e.key==="ArrowUp"||e.key==="k"){ S.cursor=Math.max(0,S.cursor-1); renderRows(); e.preventDefault(); }
+  if (e.key===" "){ const r=rows[S.cursor]; if(r?.toggleable){ const s=S.selected[S.sourceId]; s.has(r.index)?s.delete(r.index):s.add(r.index); renderRows(); renderSources(); renderSummary(); } e.preventDefault(); }
+  if ((e.metaKey||e.ctrlKey) && e.key==="a"){ $("selAll").click(); e.preventDefault(); }
+});
+
+let tid;
+function toast(html){
+  const t=$("toast"); t.innerHTML=html; t.classList.add("show");
+  clearTimeout(tid); tid=setTimeout(()=>t.classList.remove("show"), 2600);
+}
+
+renderAll();
+$("tbody").focus();
+</script>
+</body>
+</html>

@@ -39,6 +39,9 @@ Environment:
 
 Build tooling:
 - Go 1.22+
+- Apple Command Line Tools with Swift 6 for `make app-dev`
+- Full Xcode only for the Xcode project, XCTest/TSan, and universal Swift
+  release build
 
 ## Install
 
@@ -51,11 +54,28 @@ brew install udl
 
 The Homebrew formula installs `udl` and depends on `python@3.12`, `scdl`, and `yt-dlp`. Rekordbox Python packages are installed into UDL's private environment rather than the global Homebrew Python environment.
 
+Native SwiftUI releases are also published as universal macOS ZIPs. They use a
+free ad-hoc signature rather than Apple Developer ID/notarization, so macOS
+requires a one-time unidentified-developer approval. Verify the release
+checksum and follow [the macOS app install guide](docs/install-macos-app.md).
+The app and Homebrew CLI coexist but are installed separately.
+
 Local development install:
 
 ```bash
 make install
 ```
+
+Build and open the native development app without full Xcode:
+
+```bash
+make app-dev-open
+```
+
+This writes an ad-hoc-signed, current-architecture app to
+`dist/dev/UDL-Dev.app`. See
+[the macOS app release guide](docs/release-macos-app.md) for Spotlight
+installation and the optional full-Xcode workflow.
 
 Legacy script install (optional during migration):
 
@@ -99,6 +119,7 @@ udl [global flags] <command>
 
 Commands:
   tui
+  agent
   doctor
   sync
   validate
@@ -109,6 +130,10 @@ Commands:
   version
   help
 ```
+
+`agent` runs the persistent JSON-RPC backend for the native macOS frontend.
+Its stdin/stdout are protocol-only NDJSON; diagnostics are written to stderr.
+Use `--working-dir <path>` to select the project/config discovery directory.
 
 Global flags:
 - `-c, --config <path>`
@@ -164,6 +189,9 @@ Global flags:
 - Plan SHA-256 values are integrity checks, not cryptographic signatures.
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
+- Recovery from the reported full-directory backup is documented in
+  [`docs/rekordbox-recovery.md`](docs/rekordbox-recovery.md); validate the
+  procedure on an isolated copy, never the live library.
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)

@@ -1,4 +1,4 @@
-> Historical planning note: the branch implemented the staged `sync --plan` work and later landed part of the normalization follow-up. Treat this file as design history, not the current source of truth.
+> Archived planning note: the branch implemented the staged `sync --plan` work and later landed part of the normalization follow-up. Treat this file as design history, not the current source of truth.
 
 ### Architecture Sequencing for `sync --plan` vs Refactor
 

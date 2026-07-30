@@ -17,10 +17,10 @@ const (
 )
 
 type SoundCloudFreeDLProbe struct {
-	Status      SoundCloudFreeDLStatus
-	PurchaseURL string
-	Host        string
-	Err         string
+	Status      SoundCloudFreeDLStatus `json:"status"`
+	PurchaseURL string                 `json:"purchase_url,omitempty"`
+	Host        string                 `json:"host,omitempty"`
+	Err         string                 `json:"error,omitempty"`
 }
 
 func ProbeSoundCloudFreeDL(ctx context.Context, row PlanRow) SoundCloudFreeDLProbe {

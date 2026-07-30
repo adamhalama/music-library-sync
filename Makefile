@@ -1,4 +1,4 @@
-.PHONY: build test smoke-main smoke-freedl smoke-all install uninstall clean legacy-install legacy-uninstall
+.PHONY: build app-dev app-dev-open test smoke-main smoke-freedl smoke-all install uninstall clean legacy-install legacy-uninstall
 
 GO ?= go
 PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /usr/local)
@@ -19,6 +19,12 @@ build:
 	@mkdir -p "$(CURDIR)/bin"
 	@$(GO) build -ldflags "$(LDFLAGS)" -o "$(OUT)" $(CMD)
 	@echo "Built -> $(OUT)"
+
+app-dev: build
+	@bash packaging/dev/build_macos_app.sh
+
+app-dev-open: app-dev
+	@open "$(CURDIR)/dist/dev/UDL-Dev.app"
 
 test:
 	@$(GO) test ./...

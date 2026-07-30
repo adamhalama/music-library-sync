@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,6 +278,33 @@ func TestRekordboxPlaylistSyncUseCaseApplyBacksUpBeforeWrite(t *testing.T) {
 	}
 	if len(sequence) != 2 || sequence[0] != "backup" || sequence[1] != "apply" {
 		t.Fatalf("expected backup before apply, got %v", sequence)
+	}
+}
+
+func TestRekordboxPlaylistSyncUseCaseBackupFailurePreventsWrite(t *testing.T) {
+	plan := testRekordboxApplyPlan(t)
+	rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
+		Playlists: []bridge.Playlist{{ID: "3150438241", Name: "fav_imports", Attribute: 0}},
+		Contents:  []bridge.Content{{ID: "content-1", Title: "Track", FolderPath: "/Music/Track.mp3"}},
+	}}
+	useCase := RekordboxPlaylistSyncUseCase{
+		Bridge: rb,
+		CheckClosed: func(context.Context, string) error {
+			return nil
+		},
+		CreateBackup: func(context.Context, string, string, time.Time) (string, error) {
+			return "", errors.New("backup volume unavailable")
+		},
+	}
+	_, err := useCase.Apply(context.Background(), RekordboxPlaylistSyncApplyRequest{
+		Config: config.DefaultConfig(),
+		Plan:   plan,
+	})
+	if err == nil || !strings.Contains(err.Error(), "backup volume unavailable") {
+		t.Fatalf("expected backup failure, got %v", err)
+	}
+	if rb.applyCalls != 0 {
+		t.Fatalf("database apply ran after backup failure: %d calls", rb.applyCalls)
 	}
 }
 

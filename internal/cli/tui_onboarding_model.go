@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
@@ -23,22 +24,15 @@ const (
 	tuiOnboardingPhaseDone        tuiOnboardingPhase = "done"
 )
 
-type tuiOnboardingReason string
+type tuiOnboardingReason = workflows.OnboardingReason
 
 const (
-	tuiOnboardingReasonFirstRun      tuiOnboardingReason = "first_run"
-	tuiOnboardingReasonNoSources     tuiOnboardingReason = "no_sources"
-	tuiOnboardingReasonInvalidConfig tuiOnboardingReason = "invalid_config"
+	tuiOnboardingReasonFirstRun      = workflows.OnboardingReasonFirstRun
+	tuiOnboardingReasonNoSources     = workflows.OnboardingReasonNoSources
+	tuiOnboardingReasonInvalidConfig = workflows.OnboardingReasonInvalidConfig
 )
 
-type tuiOnboardingStartupState struct {
-	Reason             tuiOnboardingReason
-	AutoStarted        bool
-	ConfigPath         string
-	ConfigContextLabel string
-	DetailLines        []string
-	Defaults           config.Defaults
-}
+type tuiOnboardingStartupState = workflows.OnboardingState
 
 type tuiOnboardingInlineEditState struct {
 	Field         string

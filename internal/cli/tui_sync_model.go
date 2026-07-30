@@ -19,6 +19,7 @@ import (
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
 	compactstate "github.com/jaa/update-downloads/internal/output/compact"
+	"github.com/jaa/update-downloads/internal/runstate"
 )
 
 func newTUISyncModel(app *AppContext, mode tuiSyncWorkflowMode) tuiSyncModel {
@@ -1226,31 +1227,7 @@ func tuiIndentedTailLines(raw string) []string {
 }
 
 func tuiFailureStateFromEvent(event output.Event) *tuiSyncFailureState {
-	if event.Event != output.EventSourceFailed || event.Level != output.LevelError {
-		return nil
-	}
-	failure := &tuiSyncFailureState{
-		SourceID:       strings.TrimSpace(event.SourceID),
-		Message:        strings.TrimSpace(event.Message),
-		TimedOut:       tuiDetailBool(event.Details, "timed_out"),
-		Interrupted:    tuiDetailBool(event.Details, "interrupted"),
-		StdoutTail:     strings.TrimSpace(tuiDetailString(event.Details, "stdout_tail")),
-		StderrTail:     strings.TrimSpace(tuiDetailString(event.Details, "stderr_tail")),
-		FailureLogPath: strings.TrimSpace(tuiDetailString(event.Details, "failure_log_path")),
-	}
-	if message := strings.TrimSpace(tuiDetailString(event.Details, "failure_message")); message != "" {
-		failure.Message = message
-	}
-	if sourceID := strings.TrimSpace(tuiDetailString(event.Details, "source_id")); sourceID != "" {
-		failure.SourceID = sourceID
-	}
-	if failure.SourceID == "" {
-		failure.SourceID = "sync"
-	}
-	if exitCode, ok := tuiDetailInt(event.Details, "exit_code"); ok {
-		failure.ExitCode = &exitCode
-	}
-	return failure
+	return runstate.FailureStateFromEvent(event)
 }
 
 func (m *tuiSyncModel) appendEventHistoryLine(line string) {
@@ -1269,102 +1246,19 @@ func (m *tuiSyncModel) appendEventHistoryLine(line string) {
 }
 
 func tuiDetailString(details map[string]any, key string) string {
-	if details == nil {
-		return ""
-	}
-	raw, ok := details[key]
-	if !ok {
-		return ""
-	}
-	switch value := raw.(type) {
-	case string:
-		return strings.TrimSpace(value)
-	default:
-		return strings.TrimSpace(fmt.Sprintf("%v", value))
-	}
+	return runstate.DetailString(details, key)
 }
 
 func tuiDetailInt(details map[string]any, key string) (int, bool) {
-	if details == nil {
-		return 0, false
-	}
-	raw, ok := details[key]
-	if !ok {
-		return 0, false
-	}
-	switch value := raw.(type) {
-	case int:
-		return value, true
-	case int64:
-		return int(value), true
-	case float64:
-		return int(value), true
-	case string:
-		parsed, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			return 0, false
-		}
-		return parsed, true
-	default:
-		return 0, false
-	}
+	return runstate.DetailInt(details, key)
 }
 
 func tuiDetailFloat(details map[string]any, key string) (float64, bool) {
-	if details == nil {
-		return 0, false
-	}
-	raw, ok := details[key]
-	if !ok {
-		return 0, false
-	}
-	switch value := raw.(type) {
-	case float64:
-		return value, true
-	case float32:
-		return float64(value), true
-	case int:
-		return float64(value), true
-	case int64:
-		return float64(value), true
-	case string:
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		if err != nil {
-			return 0, false
-		}
-		return parsed, true
-	default:
-		return 0, false
-	}
+	return runstate.DetailFloat(details, key)
 }
 
 func tuiDetailBool(details map[string]any, key string) bool {
-	if details == nil {
-		return false
-	}
-	raw, ok := details[key]
-	if !ok {
-		return false
-	}
-	switch value := raw.(type) {
-	case bool:
-		return value
-	case string:
-		switch strings.TrimSpace(strings.ToLower(value)) {
-		case "1", "true", "yes":
-			return true
-		default:
-			return false
-		}
-	case int:
-		return value != 0
-	case int64:
-		return value != 0
-	case float64:
-		return value != 0
-	default:
-		return false
-	}
+	return runstate.DetailBool(details, key)
 }
 
 func validateTUISyncOptions(m tuiSyncModel) string {

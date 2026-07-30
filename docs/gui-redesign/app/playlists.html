@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Playlists</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.snapshot-head{padding:15px 18px 13px;border-bottom:.5px solid var(--sep);display:flex;align-items:flex-end;gap:14px}
+.snapshot-head h2{font-family:var(--display);font-size:17px;letter-spacing:-.02em;margin:0 0 3px}
+.snapshot-head p{margin:0;font-size:11.5px;color:var(--text-3)}
+.thead,.row{grid-template-columns:38px 150px 1fr 132px 58px 92px}
+.row.missing{color:var(--text-3)}
+.track-main{min-width:0}.track-main b{display:block;font-weight:540;overflow:hidden;text-overflow:ellipsis}
+.track-main span{display:block;color:var(--text-3);font-size:10.5px;margin-top:1px;overflow:hidden;text-overflow:ellipsis}
+.handoff{display:grid;grid-template-columns:22px 1fr auto;gap:9px;align-items:center;padding:8px 0;border-bottom:.5px solid var(--sep)}
+.handoff:last-child{border-bottom:0}.handoff .g{color:var(--accent);font-size:14px;text-align:center}
+.handoff b{display:block;font-size:12px;font-weight:580}.handoff small{color:var(--text-3);font-size:10.5px}
+.refreshing .refresh-icon{display:inline-block;animation:spin .7s linear infinite}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">Playlists</div><div class="tb-sub">cache-first Apple Music snapshots · refresh is always explicit</div></div>
+    <div class="spacer"></div>
+    <div class="search">⌕ <input id="search" aria-label="Filter tracks" placeholder="Filter tracks" /></div>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="center">
+      <div class="snapshot-head">
+        <div><h2 id="title"></h2><p id="sub"></p></div>
+        <div class="spacer"></div>
+        <div class="seg sm" id="filter" data-seg>
+          <button aria-pressed="true" data-v="all">All</button>
+          <button aria-pressed="false" data-v="missing">Missing</button>
+        </div>
+      </div>
+      <div class="thead">
+        <div class="num">#</div><div>Artist</div><div>Track / local path</div><div>Album</div>
+        <div class="num">Time</div><div>Status</div>
+      </div>
+      <div class="tbody" id="rows"></div>
+    </main>
+    <aside class="inspector">
+      <div class="ins-sec"><div class="ins-title">Snapshot</div><div id="detail"></div></div>
+      <div class="ins-sec">
+        <div class="ins-title">Send snapshot to</div>
+        <div id="handoffs"></div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Feature config</div>
+        <div class="path"><b>File</b>~/.config/udl/playlists.yaml</div>
+        <button class="btn sm" id="editCfg" style="width:100%;justify-content:center">Edit playlist definition…</button>
+      </div>
+    </aside>
+  </div>
+  <div class="statusbar">
+    <div class="summary" id="summary"></div><div class="spacer"></div>
+    <button class="btn" id="export">Export snapshot…</button>
+    <button class="btn primary" id="refresh"><span class="refresh-icon">↻</span> Refresh from Music</button>
+  </div>
+</div>
+
+<div class="backdrop" id="mRefresh">
+  <div class="modal">
+    <h4>Refresh this snapshot?</h4>
+    <p>udl will read the current Apple Music playlist and replace the cached snapshot only after the complete result validates. A failed or cancelled refresh keeps the existing cache.</p>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-close id="refreshOK">Refresh</button></div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Playlists</h3>
+  <p>A cached browser for Apple Music playlists. Opening a playlist never touches Music.app; refresh is a deliberate operation with atomic replacement, so a good snapshot cannot be lost to a transient automation failure.</p>
+  <dl>
+    <dt>NavigationSplitView + Table</dt><dd>Definitions live in the sidebar; snapshot tracks stay dense, sortable, and searchable in the content column.</dd>
+    <dt>Cache-first lifecycle</dt><dd><code>.task</code> loads disk state only. Refresh is a separate button and swaps the file after validation.</dd>
+    <dt>Contextual handoff</dt><dd>The inspector exposes configured Free DL and Rekordbox destinations without duplicating either workflow.</dd>
+    <dt>Atomic write</dt><dd>Refresh writes a sibling temporary file, validates count and checksum, then renames it over the old snapshot.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let selected=0, filter="all", query="", refreshed=false;
+
+function sidebarHTML(){
+  return UDL.playlists.map((p,i)=>`<div class="sb-item ${i===selected?"on":""}" data-i="${i}">
+    <span class="g">${p.refreshed==="never"?"○":"♫"}</span>
+    <span><span class="nm">${p.name}</span><span class="sb-sub">${p.refreshed==="never"?"never refreshed":p.tracks+" tracks"}</span></span>
+    <span class="badge ${p.refreshed==="never"?"warn":p.missingLocal?"warn":"ok"}">${p.refreshed==="never"?"!":p.missingLocal||"✓"}</span>
+  </div>`).join("")+`<div class="sb-item" data-add><span class="g">+</span><span class="nm">Add playlist…</span><span></span></div>`;
+}
+function tracks(){
+  if(selected===3) return [];
+  return UDL.playlistTracks.filter(t=>(filter!=="missing"||t.missing)&&
+    (!query||`${t.artist} ${t.title} ${t.album}`.toLowerCase().includes(query)));
+}
+function render(){
+  const p=UDL.playlists[selected], list=tracks();
+  $("title").textContent=p.name;
+  $("sub").textContent=`Apple Music · ${p.providerPlaylist} · ${p.refreshed==="never"?"no cached snapshot":`refreshed ${refreshed?"just now":p.refreshed}`}`;
+  $("rows").innerHTML=list.length?list.map(t=>`<div class="row ${t.missing?"missing":""}">
+    <div class="idx">${t.index}</div><div>${t.artist}</div>
+    <div class="track-main"><b>${t.title}</b><span class="mono">${t.path||"local file not found"}</span></div>
+    <div class="sub">${t.album}</div><div class="num">${t.duration}</div>
+    <div><span class="pill ${t.missing?"err":"ok"}"><i class="dot"></i>${t.missing?"Missing":"On disk"}</span></div>
+  </div>`).join(""):`<div class="empty"><div class="big">${p.refreshed==="never"?"♫":"⌕"}</div><h4>${p.refreshed==="never"?"No snapshot yet":"No matching tracks"}</h4><p>${p.refreshed==="never"?"Refresh once to cache this Apple Music playlist.":"Try another search or show all tracks."}</p></div>`;
+  $("detail").innerHTML=`<div class="field"><label>Tracks</label><span class="val">${p.refreshed==="never"?0:(refreshed?43:p.tracks)}</span></div>
+    <div class="field"><label>Missing locally</label><span class="pill ${p.missingLocal?"warn":"ok"}">${p.missingLocal}</span></div>
+    <div class="field"><label>Last refreshed</label><span class="val mono">${refreshed?"just now":p.refreshed}</span></div>
+    <div class="path"><b>Checksum</b>${refreshed?"a184…7cd2":p.checksum}</div>
+    <div class="hint">Opening this view read only the cached JSON snapshot. Music.app has not been contacted.</div>`;
+  $("handoffs").innerHTML=`<div class="handoff"><span class="g">✦</span><div><b>SoundCloud Free DL</b><small>${p.freedlJob||"No job mapped"}</small></div>
+      ${p.freedlJob?`<a class="btn sm" href="freedl.html">Open</a>`:`<button class="btn sm" data-map="freedl">Map…</button>`}</div>
+    <div class="handoff"><span class="g">▤</span><div><b>Rekordbox Sync</b><small>${p.rbTarget||"No target mapped"}</small></div>
+      ${p.rbTarget?`<a class="btn sm" href="rekordbox.html">Plan</a>`:`<button class="btn sm" data-map="rekordbox">Map…</button>`}</div>`;
+  $("summary").innerHTML=p.refreshed==="never"?`<span class="warn">No cached snapshot</span> · refresh required`:
+    `<b>${p.tracks}</b> tracks · <span class="${p.missingLocal?"warn":"ok"}">${p.missingLocal} missing locally</span> · cache intact`;
+  $("export").disabled=p.refreshed==="never";
+  const sb=$("sbContext");if(sb)sb.innerHTML=sidebarHTML();
+}
+Shell.init({page:"playlists",contextual:{title:"Snapshots",html:sidebarHTML()},
+  note:"Snapshots never refresh on open. Failed and cancelled refreshes preserve the last valid cache."});
+Shell.wireDismiss();
+$("sidebar").addEventListener("click",e=>{const r=e.target.closest("[data-i]");if(!r)return;selected=+r.dataset.i;query="";$("search").value="";render();});
+$("filter").addEventListener("picked",e=>{filter=e.detail;render();});
+$("search").oninput=e=>{query=e.target.value.trim().toLowerCase();render();};
+$("refresh").onclick=()=>Shell.open("mRefresh");
+$("refreshOK").onclick=()=>{$("refresh").classList.add("refreshing");$("refresh").disabled=true;
+  setTimeout(()=>{refreshed=true;$("refresh").classList.remove("refreshing");$("refresh").disabled=false;render();Shell.toast("Snapshot validated and replaced atomically. Previous cache removed after success.");},900);};
+$("export").onclick=()=>Shell.toast("Exported snapshot to <code>~/Downloads/friday-warmup.json</code>.");
+$("editCfg").onclick=()=>Shell.toast("Editing <code>playlists.yaml</code> for the selected definition.");
+$("handoffs").onclick=e=>{if(e.target.closest("[data-map]"))Shell.toast("Add a workflow mapping in <code>playlists.yaml</code>.");};
+render();
+</script>
+</body>
+</html>

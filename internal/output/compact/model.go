@@ -23,27 +23,27 @@ const (
 )
 
 type SourceProgress struct {
-	ID           string
-	Lifecycle    SourceLifecycle
-	PlannedTotal int
-	ItemTotal    int
-	ItemIndex    int
-	Completed    int
+	ID           string          `json:"id"`
+	Lifecycle    SourceLifecycle `json:"lifecycle"`
+	PlannedTotal int             `json:"planned_total"`
+	ItemTotal    int             `json:"item_total"`
+	ItemIndex    int             `json:"item_index"`
+	Completed    int             `json:"completed"`
 }
 
 type TrackProgress struct {
-	Name            string
-	Lifecycle       TrackLifecycle
-	ProgressPercent float64
+	Name            string         `json:"name"`
+	Lifecycle       TrackLifecycle `json:"lifecycle"`
+	ProgressPercent float64        `json:"progress_percent"`
 }
 
 type GlobalProgress struct {
-	Total     int
-	Completed int
+	Total     int `json:"total"`
+	Completed int `json:"completed"`
 }
 
 type ProgressModel struct {
-	Source SourceProgress
-	Track  TrackProgress
-	Global GlobalProgress
+	Source SourceProgress `json:"source"`
+	Track  TrackProgress  `json:"track"`
+	Global GlobalProgress `json:"global"`
 }

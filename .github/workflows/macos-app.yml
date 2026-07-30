@@ -1,0 +1,67 @@
+name: macos-app
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22.x"
+
+      - name: Select pinned Xcode toolchain
+        run: sudo xcode-select --switch /Applications/Xcode_16.4.app
+
+      - name: Verify Go
+        run: |
+          go test ./...
+          go vet ./...
+          go test -race ./...
+
+      - name: Build development backend
+        run: make build
+
+      - name: Build Swift app
+        run: |
+          xcodebuild \
+            -project macos/UDL.xcodeproj \
+            -scheme UDL \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath dist/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            UDL_EMBEDDED_BINARY="$PWD/bin/udl" \
+            build
+
+      - name: Test Swift app
+        run: |
+          xcodebuild \
+            -project macos/UDL.xcodeproj \
+            -scheme UDLTests \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath dist/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            UDL_EMBEDDED_BINARY="$PWD/bin/udl" \
+            test
+
+      - name: Build and inspect universal backend
+        env:
+          VERSION: ci
+          OUTPUT: dist/udl-universal
+        run: |
+          bash packaging/release/build_universal_backend.sh
+          lipo -info dist/udl-universal | grep -q arm64
+          lipo -info dist/udl-universal | grep -q x86_64
+
+      - name: Smoke embedded backend
+        run: |
+          test -x dist/DerivedData/Build/Products/Debug/UDL.app/Contents/Resources/udl
+          dist/DerivedData/Build/Products/Debug/UDL.app/Contents/Resources/udl version

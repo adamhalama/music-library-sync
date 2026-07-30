@@ -1,3 +1,5 @@
+> Archived 2026-07-30: the redesign landed in `master` via commit `2d8a9c7`.
+
 # UDL TUI Redesign Plan
 
 ## Summary

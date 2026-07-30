@@ -8,10 +8,10 @@ import (
 )
 
 type StructuredTrackState struct {
-	Name            string
-	ProgressKnown   bool
-	ProgressPercent float64
-	Lifecycle       compactstate.TrackLifecycle
+	Name            string                      `json:"name"`
+	ProgressKnown   bool                        `json:"progress_known"`
+	ProgressPercent float64                     `json:"progress_percent"`
+	Lifecycle       compactstate.TrackLifecycle `json:"lifecycle"`
 }
 
 type StructuredTrackOutcomeKind string
@@ -23,17 +23,17 @@ const (
 )
 
 type StructuredTrackOutcome struct {
-	Kind      StructuredTrackOutcomeKind
-	Name      string
-	Reason    string
-	Completed int
-	Total     int
+	Kind      StructuredTrackOutcomeKind `json:"kind"`
+	Name      string                     `json:"name"`
+	Reason    string                     `json:"reason"`
+	Completed int                        `json:"completed"`
+	Total     int                        `json:"total"`
 }
 
 type StructuredProgressSnapshot struct {
-	Progress              compactstate.ProgressModel
-	Track                 StructuredTrackState
-	StructuredTrackEvents bool
+	Progress              compactstate.ProgressModel `json:"progress"`
+	Track                 StructuredTrackState       `json:"track"`
+	StructuredTrackEvents bool                       `json:"structured_track_events"`
 }
 
 type StructuredProgressTracker struct {

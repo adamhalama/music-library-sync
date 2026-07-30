@@ -23,18 +23,18 @@ const (
 var definitionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 type Config struct {
-	Version   int          `yaml:"version"`
-	Playlists []Definition `yaml:"playlists"`
+	Version   int          `yaml:"version" json:"version"`
+	Playlists []Definition `yaml:"playlists" json:"playlists"`
 }
 
 type Definition struct {
-	ID                     string `yaml:"id"`
-	Name                   string `yaml:"name"`
-	Provider               string `yaml:"provider"`
-	ProviderPlaylist       string `yaml:"provider_playlist,omitempty"`
-	ProviderPlaylistID     string `yaml:"provider_playlist_id,omitempty"`
-	DefaultFreeDLJob       string `yaml:"default_freedl_job,omitempty"`
-	DefaultRekordboxTarget string `yaml:"default_rekordbox_target,omitempty"`
+	ID                     string `yaml:"id" json:"id"`
+	Name                   string `yaml:"name" json:"name"`
+	Provider               string `yaml:"provider" json:"provider"`
+	ProviderPlaylist       string `yaml:"provider_playlist,omitempty" json:"provider_playlist,omitempty"`
+	ProviderPlaylistID     string `yaml:"provider_playlist_id,omitempty" json:"provider_playlist_id,omitempty"`
+	DefaultFreeDLJob       string `yaml:"default_freedl_job,omitempty" json:"default_freedl_job,omitempty"`
+	DefaultRekordboxTarget string `yaml:"default_rekordbox_target,omitempty" json:"default_rekordbox_target,omitempty"`
 }
 
 type LoadOptions struct {

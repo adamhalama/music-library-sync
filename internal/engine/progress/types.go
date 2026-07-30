@@ -11,13 +11,13 @@ const (
 )
 
 type TrackEvent struct {
-	SourceID    string
-	AdapterKind string
-	TrackID     string
-	TrackName   string
-	Index       int
-	Total       int
-	Percent     float64
-	Reason      string
-	Kind        TrackEventKind
+	SourceID    string         `json:"source_id"`
+	AdapterKind string         `json:"adapter_kind"`
+	TrackID     string         `json:"track_id"`
+	TrackName   string         `json:"track_name"`
+	Index       int            `json:"index"`
+	Total       int            `json:"total"`
+	Percent     float64        `json:"percent"`
+	Reason      string         `json:"reason"`
+	Kind        TrackEventKind `json:"kind"`
 }

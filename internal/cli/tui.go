@@ -71,17 +71,6 @@ type tuiSyncModel struct {
 	runFinishedAt         time.Time
 }
 
-type tuiSyncFailureState struct {
-	SourceID       string
-	Message        string
-	ExitCode       *int
-	TimedOut       bool
-	Interrupted    bool
-	StdoutTail     string
-	StderrTail     string
-	FailureLogPath string
-}
-
 type tuiStandardSyncSourceLifecycle string
 
 const (
@@ -156,16 +145,6 @@ const (
 	tuiInteractivePhaseDone      tuiInteractiveSyncPhase = "done"
 )
 
-type tuiInteractiveSourceLifecycle string
-
-const (
-	tuiSourceLifecycleIdle      tuiInteractiveSourceLifecycle = "idle"
-	tuiSourceLifecyclePreflight tuiInteractiveSourceLifecycle = "preflight"
-	tuiSourceLifecycleRunning   tuiInteractiveSourceLifecycle = "running"
-	tuiSourceLifecycleFinished  tuiInteractiveSourceLifecycle = "finished"
-	tuiSourceLifecycleFailed    tuiInteractiveSourceLifecycle = "failed"
-)
-
 type tuiPromptRequestMsg struct {
 	Kind       tuiPromptKind
 	SourceID   string
@@ -190,86 +169,6 @@ type tuiInteractionPromptState struct {
 	maskInput  bool
 	input      string
 	reply      chan tuiPromptResult
-}
-
-type tuiStatusFilter string
-
-const (
-	tuiTrackFilterAll         tuiStatusFilter = "all"
-	tuiTrackFilterWillSync    tuiStatusFilter = "will_sync"
-	tuiTrackFilterMissingNew  tuiStatusFilter = "missing_new"
-	tuiTrackFilterKnownGap    tuiStatusFilter = "known_gap"
-	tuiTrackFilterAlreadyHave tuiStatusFilter = "already_have"
-	tuiTrackFilterInRun       tuiStatusFilter = "in_run"
-	tuiTrackFilterRemaining   tuiStatusFilter = "remaining"
-	tuiTrackFilterDownloaded  tuiStatusFilter = "downloaded"
-	tuiTrackFilterSkipped     tuiStatusFilter = "skipped"
-	tuiTrackFilterFailed      tuiStatusFilter = "failed"
-)
-
-type tuiTrackPlanClass string
-
-const (
-	tuiTrackPlanClassNew         tuiTrackPlanClass = "new"
-	tuiTrackPlanClassKnownGap    tuiTrackPlanClass = "known_gap"
-	tuiTrackPlanClassAlreadyHave tuiTrackPlanClass = "already_have"
-)
-
-type tuiTrackRunScope string
-
-const (
-	tuiTrackRunScopeIncluded tuiTrackRunScope = "included"
-	tuiTrackRunScopeExcluded tuiTrackRunScope = "excluded"
-	tuiTrackRunScopeLocked   tuiTrackRunScope = "locked"
-)
-
-type tuiPlanTrackRow struct {
-	SourceID          string
-	SourceLabel       string
-	RemoteID          string
-	Title             string
-	Index             int
-	Toggleable        bool
-	PlanStatus        engine.PlanRowStatus
-	PlanClass         tuiTrackPlanClass
-	SelectedByDefault bool
-}
-
-type tuiTrackRowState struct {
-	SourceID        string
-	SourceLabel     string
-	RemoteID        string
-	Title           string
-	Index           int
-	ExecutionSlot   int
-	Toggleable      bool
-	PlanStatus      engine.PlanRowStatus
-	PlanClass       tuiTrackPlanClass
-	Selected        bool
-	RunScope        tuiTrackRunScope
-	RuntimeStatus   tuiTrackRuntimeStatus
-	StatusLabel     string
-	FailureDetail   string
-	ProgressKnown   bool
-	ProgressPercent float64
-}
-
-type tuiTrackRuntimeStatus string
-
-const (
-	tuiTrackStatusIdle        tuiTrackRuntimeStatus = "idle"
-	tuiTrackStatusQueued      tuiTrackRuntimeStatus = "queued"
-	tuiTrackStatusDownloading tuiTrackRuntimeStatus = "downloading"
-	tuiTrackStatusDownloaded  tuiTrackRuntimeStatus = "downloaded"
-	tuiTrackStatusSkipped     tuiTrackRuntimeStatus = "skipped"
-	tuiTrackStatusFailed      tuiTrackRuntimeStatus = "failed"
-)
-
-type tuiActivityEntry struct {
-	Timestamp time.Time
-	Level     output.Level
-	Message   string
-	SourceID  string
 }
 
 type tuiInteractiveDisplayState struct {

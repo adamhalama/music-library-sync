@@ -1,0 +1,4 @@
+{"id":"c-1","jsonrpc":"2.0","method":"session.initialize","params":{"protocol_version":1}}
+{"id":"c-2","jsonrpc":"2.0","method":"run.cancel","params":{"run_id":"run-example"}}
+{"id":"c-3","jsonrpc":"2.0","method":"sync.start","params":{"plan":true,"source_ids":["source-a"],"track_status":"none"}}
+{"id":"c-4","jsonrpc":"2.0","method":"credentials.clear","params":{"kind":"deemix_arl"}}

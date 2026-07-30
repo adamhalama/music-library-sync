@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Sync Plan</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.thead,.row{grid-template-columns:30px 44px 1fr 128px 116px 58px}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">Sync Plan</div><div class="tb-sub" id="tbSub"></div></div>
+    <div class="spacer"></div>
+    <div class="seg" id="filter">
+      <button aria-pressed="true" data-f="all">All <span class="n" id="fAll"></span></button>
+      <button aria-pressed="false" data-f="missing_new">New <span class="n" id="fNew"></span></button>
+      <button aria-pressed="false" data-f="missing_known_gap">Gaps <span class="n" id="fGap"></span></button>
+      <button aria-pressed="false" data-f="already_downloaded">Have <span class="n" id="fHave"></span></button>
+    </div>
+    <div class="search">⌕<input placeholder="Filter tracks" id="q" /></div>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="center">
+      <div class="thead">
+        <div><input type="checkbox" id="selAll" title="Select all toggleable rows" /></div>
+        <div class="num" data-sort="index">#</div>
+        <div data-sort="title">Title <span class="dim" style="font-size:8px">▲</span></div>
+        <div data-sort="status">Status</div>
+        <div data-sort="remoteId">Remote ID</div>
+        <div class="num" data-sort="duration">Time</div>
+      </div>
+      <div class="tbody" id="tbody" tabindex="0"></div>
+    </main>
+
+    <aside class="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">Plan</div>
+        <div class="field"><label for="limit">Track limit</label>
+          <div class="stepper"><input class="txt num" id="limit" value="25" />
+            <div class="arrows"><button id="limUp">▲</button><button id="limDown">▼</button></div></div></div>
+        <div class="field"><label>Unlimited</label><div class="switch" id="unlimited" role="switch" aria-checked="false"></div></div>
+        <div class="field" id="windowField"><label>Window</label>
+          <div class="seg sm" id="window"><button aria-pressed="true" data-w="latest">Latest</button><button aria-pressed="false" data-w="first">First</button></div></div>
+        <div class="hint" id="windowNote">Spotify + deemix only. <code>scdl</code> has no first/latest window, so this stays disabled for SoundCloud sources.</div>
+      </div>
+
+      <div class="ins-sec">
+        <div class="ins-title">Run</div>
+        <div class="field"><label>Dry run</label><div class="switch" id="dry" role="switch" aria-checked="true"></div></div>
+        <div class="field"><label for="timeout">Timeout</label><input class="txt mono" id="timeout" value="10m" style="width:64px;text-align:right" /></div>
+        <div class="hint">A dry run resolves every selected track and reports the outcome without writing files or updating the state file.</div>
+      </div>
+
+      <div class="ins-sec">
+        <div class="ins-title">Source</div>
+        <div class="path"><b>Target dir</b><span id="pTarget"></span></div>
+        <div class="path"><b>State file</b><span id="pState"></span></div>
+        <div class="path"><b>URL</b><span id="pURL"></span></div>
+        <div class="field"><label>Break on existing</label><span class="val mono" id="pBreak"></span></div>
+        <div class="field"><label>Ask on existing</label><span class="val mono" id="pAsk"></span></div>
+        <a class="btn sm plain" style="padding-left:0" href="config.html">Edit this source…</a>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <span class="kbd">space</span><span class="summary" style="margin-left:-4px">toggle</span>
+    <span class="kbd">⌘A</span><span class="summary" style="margin-left:-4px">all</span>
+    <button class="btn" id="reset">Reset to defaults</button>
+    <a class="btn primary" id="run" href="sync-run.html">Start Dry Run</a>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Sync Plan</h3>
+  <p>The screen that replaces <code>udl sync --plan</code>'s per-source terminal selector. Sources stay in the sidebar, the plan is a real table, and every run option is visible without leaving the screen.</p>
+  <dl>
+    <dt>Table(of: PlanRow.self, selection:)</dt><dd>Sortable columns, <code>Set&lt;PlanRow.ID&gt;</code> selection, alternating row backgrounds. 26pt rows.</dd>
+    <dt>Toggle(.checkbox)</dt><dd>Row checkbox is disabled when <code>!row.toggleable</code> — <code>already_downloaded</code> rows can never be queued.</dd>
+    <dt>Picker(.segmented)</dt><dd>Status filter in the toolbar; plan window in the inspector with <code>.disabled(!source.supportsWindow)</code>.</dd>
+    <dt>Stepper + TextField</dt><dd>Plan limit, mirroring the TUI <code>[</code> / <code>]</code> / <code>l</code> / <code>u</code> bindings.</dd>
+    <dt>.searchable(placement:.toolbar)</dt><dd>Title/artist filter.</dd>
+    <dt>.safeAreaInset(.bottom)</dt><dd>Status bar totals across every enabled source, not just the visible one.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+const S={sourceId:"soundcloud-likes",enabled:new Set(UDL.sources.filter(s=>s.enabled).map(s=>s.id)),
+  selected:{},filter:"all",query:"",cursor:0,limit:25,unlimited:false,window:"latest",dry:true};
+UDL.sources.forEach(s=>S.selected[s.id]=new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index)));
+const $=id=>document.getElementById(id);
+const src=()=>UDL.sources.find(s=>s.id===S.sourceId);
+const allRows=()=>UDL.rows[S.sourceId];
+const visRows=()=>allRows().filter(r=>{
+  if(S.filter!=="all"&&r.status!==S.filter)return false;
+  if(S.query&&!(r.title+" "+r.artist).toLowerCase().includes(S.query.toLowerCase()))return false;
+  return true;});
+
+function sidebarHTML(){
+  return UDL.sources.map(s=>`<div class="sb-item ${s.id===S.sourceId?"on":""} ${S.enabled.has(s.id)?"":"dim"}" data-id="${s.id}">
+    <input type="checkbox" ${S.enabled.has(s.id)?"checked":""} data-en="${s.id}" />
+    <span><span class="nm">${s.label}</span><span class="sb-sub">${s.type} · ${s.adapter}</span></span>
+    <span class="badge">${S.enabled.has(s.id)?S.selected[s.id].size:"—"}</span></div>`).join("");
+}
+function renderSidebar(){
+  const c=document.getElementById("sbContext"); if(c) c.innerHTML=sidebarHTML();
+}
+function renderRows(){
+  const rows=visRows(),sel=S.selected[S.sourceId];
+  $("tbody").innerHTML=rows.map((r,i)=>{
+    const m=UDL.statusMeta[r.status];
+    const k=r.status===UDL.STATUS.NEW?"ok":r.status===UDL.STATUS.GAP?"warn":"";
+    return `<div class="row ${sel.has(r.index)?"on":""} ${r.toggleable?"":"locked"} ${i===S.cursor?"cursor":""}" data-i="${r.index}">
+      <div><input type="checkbox" ${sel.has(r.index)?"checked":""} ${r.toggleable?"":"disabled"} /></div>
+      <div class="idx">${r.index}</div>
+      <div>${r.title} <span class="sub">— ${r.artist}</span></div>
+      <div><span class="pill ${k}" title="${m.hint}"><i class="dot"></i>${m.label}</span></div>
+      <div class="mono">${r.remoteId}</div>
+      <div class="num">${r.duration}</div></div>`;
+  }).join("")||`<div class="empty"><div class="big">⌕</div><h4>No tracks match</h4><p>Clear the filter or search field to see the full plan for this source.</p></div>`;
+  const tog=allRows().filter(r=>r.toggleable),on=tog.filter(r=>sel.has(r.index)).length;
+  $("selAll").checked=on>0; $("selAll").classList.toggle("mixed",on>0&&on<tog.length);
+}
+function renderCounts(){
+  const c=UDL.counts(allRows());
+  $("fAll").textContent=allRows().length; $("fNew").textContent=c.missing_new;
+  $("fGap").textContent=c.missing_known_gap; $("fHave").textContent=c.already_downloaded;
+}
+function renderInspector(){
+  const s=src();
+  $("tbSub").innerHTML=`${s.label} · <span class="mono">${s.adapter}</span>`;
+  $("pTarget").textContent=s.targetDir; $("pState").textContent=s.stateFile; $("pURL").textContent=s.url;
+  $("pBreak").textContent=s.sync.breakOnExisting; $("pAsk").textContent=s.sync.askOnExisting;
+  $("windowField").style.opacity=s.supportsWindow?1:.4;
+  $("windowField").style.pointerEvents=s.supportsWindow?"auto":"none";
+  $("windowNote").style.display=s.supportsWindow?"none":"block";
+  $("limit").value=S.unlimited?"∞":S.limit; $("limit").disabled=S.unlimited;
+  $("unlimited").setAttribute("aria-checked",S.unlimited);
+  $("dry").setAttribute("aria-checked",S.dry);
+  $("run").textContent=S.dry?"Start Dry Run":"Start Sync";
+}
+function renderSummary(){
+  let sel=0,gaps=0,n=0;
+  S.enabled.forEach(id=>{n++;sel+=S.selected[id].size;
+    gaps+=UDL.rows[id].filter(r=>r.status===UDL.STATUS.GAP&&!S.selected[id].has(r.index)).length;});
+  $("summary").innerHTML=`<b>${sel}</b> tracks queued across <b>${n}</b> sources · <b>${gaps}</b> known gaps left out · limit <b>${S.unlimited?"unlimited":S.limit}</b>`;
+  $("run").classList.toggle("disabled",sel===0);
+}
+function render(){renderSidebar();renderRows();renderCounts();renderInspector();renderSummary();}
+
+Shell.init({page:"sync-plan",contextual:{title:"Sources in this run",html:sidebarHTML()},
+  note:"Checkbox includes a source in the run. Click a name to inspect its plan."});
+
+document.getElementById("sidebar").addEventListener("click",e=>{
+  const en=e.target.closest("[data-en]");
+  if(en){const id=en.dataset.en;S.enabled.has(id)?S.enabled.delete(id):S.enabled.add(id);render();return;}
+  const it=e.target.closest("[data-id]");
+  if(it){S.sourceId=it.dataset.id;S.cursor=0;render();}
+});
+$("tbody").addEventListener("click",e=>{
+  const row=e.target.closest(".row");if(!row)return;
+  const i=+row.dataset.i,r=allRows().find(x=>x.index===i);
+  S.cursor=visRows().findIndex(x=>x.index===i);
+  if(r.toggleable){const sel=S.selected[S.sourceId];sel.has(i)?sel.delete(i):sel.add(i);}
+  else Shell.toast(`<code>${r.title}</code> is recorded in the state file — udl will not download it again.`);
+  renderRows();renderSidebar();renderSummary();
+});
+$("selAll").addEventListener("click",()=>{
+  const sel=S.selected[S.sourceId],tog=visRows().filter(r=>r.toggleable);
+  const allOn=tog.every(r=>sel.has(r.index));
+  tog.forEach(r=>allOn?sel.delete(r.index):sel.add(r.index));
+  renderRows();renderSidebar();renderSummary();
+});
+$("filter").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+  S.filter=b.dataset.f;S.cursor=0;[...$("filter").children].forEach(x=>x.setAttribute("aria-pressed",x===b));renderRows();});
+$("window").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.window=b.dataset.w;
+  [...$("window").children].forEach(x=>x.setAttribute("aria-pressed",x===b));
+  Shell.toast(`Rebuilding rows from the <code>${S.window}</code> end of the playlist.`);});
+$("q").addEventListener("input",e=>{S.query=e.target.value;S.cursor=0;renderRows();});
+$("limUp").onclick=()=>{if(!S.unlimited){S.limit+=5;renderInspector();renderSummary();}};
+$("limDown").onclick=()=>{if(!S.unlimited){S.limit=Math.max(0,S.limit-5);renderInspector();renderSummary();}};
+$("unlimited").onclick=()=>{S.unlimited=!S.unlimited;renderInspector();renderSummary();};
+$("dry").onclick=()=>{S.dry=!S.dry;renderInspector();};
+$("reset").onclick=()=>{UDL.sources.forEach(s=>S.selected[s.id]=new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index)));
+  S.limit=25;S.unlimited=false;S.dry=true;render();Shell.toast("Selection reset to plan defaults — new tracks only.");};
+$("tbody").addEventListener("keydown",e=>{
+  const rows=visRows();
+  if(e.key==="ArrowDown"||e.key==="j"){S.cursor=Math.min(rows.length-1,S.cursor+1);renderRows();e.preventDefault();}
+  if(e.key==="ArrowUp"||e.key==="k"){S.cursor=Math.max(0,S.cursor-1);renderRows();e.preventDefault();}
+  if(e.key===" "){const r=rows[S.cursor];if(r&&r.toggleable){const s=S.selected[S.sourceId];
+    s.has(r.index)?s.delete(r.index):s.add(r.index);renderRows();renderSidebar();renderSummary();}e.preventDefault();}
+  if((e.metaKey||e.ctrlKey)&&e.key==="a"){$("selAll").click();e.preventDefault();}
+});
+render();$("tbody").focus();
+</script>
+</body>
+</html>

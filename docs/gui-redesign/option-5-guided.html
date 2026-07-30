@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>udl — Option 5 · Guided</title>
+<script src="plan-data.js"></script>
+<style>
+:root{
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --bg:#f6f6f8; --card:#ffffff; --chrome:#ededf1;
+  --line:rgba(0,0,0,.09); --line-2:rgba(0,0,0,.16);
+  --text:#141416; --text-2:#5c5c66; --text-3:#96969f;
+  --accent:#0a6cf0; --accent-soft:#e9f1ff;
+  --new:#12703a; --new-soft:#e4f4ea;
+  --gap:#8d5507; --gap-soft:#fbeed8;
+  --have:#8a8a93; --have-soft:#f0f0f3;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#141416; --card:#1e1e21; --chrome:#252529;
+    --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.17);
+    --text:#f3f3f6; --text-2:#a4a4ad; --text-3:#70707a;
+    --accent:#4d97ff; --accent-soft:rgba(77,151,255,.15);
+    --new:#5cd085; --new-soft:rgba(92,208,133,.14);
+    --gap:#e8ae4e; --gap-soft:rgba(232,174,78,.14);
+    --have:#8a8a93; --have-soft:rgba(138,138,147,.14);
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:var(--font);font-size:14px;color:var(--text);background:#b9bcc4;
+  display:flex;align-items:center;justify-content:center;padding:26px;-webkit-font-smoothing:antialiased}
+@media (prefers-color-scheme: dark){body{background:#0a0a0c}}
+
+.window{width:min(940px,100%);height:min(790px,100%);background:var(--bg);border-radius:12px;overflow:hidden;
+  display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.35),0 0 0 .5px var(--line-2)}
+.titlebar{flex:0 0 46px;height:46px;background:var(--chrome);border-bottom:.5px solid var(--line);
+  display:flex;align-items:center;gap:11px;padding:0 15px}
+.lights{display:flex;gap:8px}
+.light{width:12px;height:12px;border-radius:50%}
+.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
+.spacer{flex:1}
+.tbtn{height:26px;padding:0 11px;border-radius:6px;border:none;background:transparent;color:var(--text-2);
+  font:inherit;font-size:12.5px;cursor:default}
+.tbtn:hover{background:rgba(120,120,128,.15);color:var(--text)}
+
+/* stepper */
+.steps{flex:0 0 62px;height:62px;display:flex;align-items:center;justify-content:center;gap:0;
+  background:var(--chrome);border-bottom:.5px solid var(--line)}
+.step{display:flex;align-items:center;gap:9px;color:var(--text-3);font-size:12.5px;cursor:default}
+.step .b{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;
+  font-size:11px;font-weight:650;color:var(--text-3)}
+.step.done .b{background:var(--accent);border-color:transparent;color:#fff}
+.step.done{color:var(--text-2)}
+.step.now .b{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 3.5px var(--accent-soft)}
+.step.now{color:var(--text);font-weight:600}
+.bar{width:44px;height:1.5px;background:var(--line-2);margin:0 13px}
+.bar.fill{background:var(--accent)}
+
+/* content */
+.scroll{flex:1;overflow:auto;padding:26px 0 16px}
+.pane{width:min(660px,100%);margin:0 auto;padding:0 22px}
+.pager{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.pager .dots{display:flex;gap:6px;margin-left:auto}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--line-2);cursor:default}
+.dot.on{background:var(--accent);transform:scale(1.25)}
+.dot.done{background:color-mix(in srgb,var(--accent) 45%,transparent)}
+.pager .lbl{font-size:12px;color:var(--text-3);font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+
+.srchead{display:flex;align-items:flex-start;gap:14px;margin-bottom:6px}
+.g{width:44px;height:44px;border-radius:11px;display:grid;place-items:center;font-size:13px;font-weight:800;color:#fff;flex:0 0 44px;
+  box-shadow:0 3px 10px rgba(0,0,0,.18)}
+.g.sc{background:linear-gradient(155deg,#ff9c4b,#ea4f06)}
+.g.sp{background:linear-gradient(155deg,#3fe07a,#0f9647)}
+h1{font-family:var(--display);font-size:24px;font-weight:680;letter-spacing:-.025em;margin:0 0 4px;line-height:1.2}
+.sub{font-size:13px;color:var(--text-2);margin:0;line-height:1.5}
+.sub code{font-family:var(--mono);font-size:11.5px;background:var(--chrome);padding:1.5px 6px;border-radius:5px}
+
+.chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:18px 0 14px}
+.chip{height:30px;padding:0 13px;border-radius:15px;border:.5px solid var(--line-2);background:var(--card);
+  color:var(--text);font:inherit;font-size:12.5px;cursor:default;display:inline-flex;align-items:center;gap:7px;
+  box-shadow:0 .5px 1.5px rgba(0,0,0,.05)}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip .k{color:var(--text-3);font-size:11.5px}
+.chip.set{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:550}
+.chip .v{font-family:var(--mono);font-size:11.5px}
+.chip .car{font-size:8px;color:var(--text-3)}
+.sep{width:1px;height:20px;background:var(--line);margin:0 3px}
+
+.list{background:var(--card);border:.5px solid var(--line);border-radius:12px;overflow:hidden;
+  box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.li{display:grid;grid-template-columns:24px 1fr auto auto;align-items:center;gap:14px;padding:12px 16px;cursor:default}
+.li+.li{border-top:.5px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.li:hover{background:color-mix(in srgb,var(--chrome) 55%,transparent)}
+.li.on{background:var(--accent-soft)}
+.li.locked{opacity:.62}
+.cb{width:22px;height:22px;border-radius:7px;border:1.5px solid var(--line-2);display:grid;place-items:center;
+  color:transparent;font-size:12px;font-weight:900;transition:.12s;background:var(--bg)}
+.li.on .cb{background:var(--accent);border-color:transparent;color:#fff}
+.li.locked .cb{border:none;background:none;color:var(--text-3);font-weight:700}
+.li.locked .cb::after{content:"✓"}
+.t1{font-size:14px;font-weight:520;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.t2{font-size:12px;color:var(--text-3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:11px;font-weight:640;padding:3px 9px;border-radius:20px}
+.tag.new{color:var(--new);background:var(--new-soft)}
+.tag.gap{color:var(--gap);background:var(--gap-soft)}
+.tag.have{color:var(--have);background:var(--have-soft)}
+.dur{font-family:var(--mono);font-size:11.5px;color:var(--text-3);width:38px;text-align:right}
+
+.hint{display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:12.5px;color:var(--text-2);line-height:1.55}
+.hint .i{width:18px;height:18px;border-radius:50%;background:var(--gap-soft);color:var(--gap);display:grid;place-items:center;
+  font-size:11px;font-weight:800;flex:0 0 18px;margin-top:1px}
+.hint button{background:none;border:none;font:inherit;font-size:12.5px;color:var(--accent);font-weight:600;cursor:default;padding:0}
+.hint button:hover{text-decoration:underline}
+
+/* popover */
+.pop{position:absolute;z-index:40;width:250px;background:var(--card);border:.5px solid var(--line-2);border-radius:11px;
+  box-shadow:0 16px 44px rgba(0,0,0,.24);padding:13px;opacity:0;transform:translateY(-6px) scale(.97);
+  pointer-events:none;transition:.15s cubic-bezier(.32,.72,0,1);transform-origin:top center}
+.pop.open{opacity:1;transform:none;pointer-events:auto}
+.pop h4{margin:0 0 3px;font-size:13px}
+.pop p{margin:0 0 11px;font-size:11.5px;color:var(--text-3);line-height:1.45}
+.pf{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0}
+.num{width:70px;height:26px;border-radius:6px;border:.5px solid var(--line-2);background:var(--bg);color:var(--text);
+  font:inherit;font-family:var(--mono);font-size:12.5px;text-align:right;padding:0 8px;outline:none}
+.num:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.seg{display:inline-flex;background:rgba(120,120,128,.14);border-radius:7px;padding:2px;gap:2px}
+.seg button{border:none;background:transparent;color:var(--text-2);font:inherit;font-size:12px;padding:3px 11px;border-radius:5px;cursor:default}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--text);font-weight:600;box-shadow:0 .5px 2px rgba(0,0,0,.15)}
+.sw{width:34px;height:20px;border-radius:10px;background:rgba(120,120,128,.34);position:relative;transition:.16s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 2.5px rgba(0,0,0,.3);transition:transform .16s}
+.sw[aria-checked="true"]{background:#2ac052}
+.sw[aria-checked="true"]::after{transform:translateX(14px)}
+
+/* footer */
+.foot{flex:0 0 68px;height:68px;background:var(--chrome);border-top:.5px solid var(--line);
+  display:flex;align-items:center;gap:14px;padding:0 22px}
+.prog{font-size:13px;color:var(--text-2)}
+.prog b{color:var(--text);font-weight:620}
+.track{width:150px;height:5px;border-radius:3px;background:var(--line-2);overflow:hidden;margin-top:6px}
+.track i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .3s cubic-bezier(.32,.72,0,1)}
+.btn{height:34px;padding:0 17px;border-radius:8px;border:.5px solid var(--line-2);background:var(--card);color:var(--text);
+  font:inherit;font-size:13.5px;cursor:default;box-shadow:0 .5px 1.5px rgba(0,0,0,.07)}
+.btn:hover{background:var(--bg)}
+.btn.primary{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 90%,white),var(--accent));color:#fff;
+  border-color:transparent;font-weight:600;padding:0 22px;box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 42%,transparent)}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.4}
+
+.toast{position:fixed;left:50%;bottom:38px;transform:translate(-50%,16px);opacity:0;background:rgba(20,20,22,.95);
+  color:#fff;padding:11px 17px;border-radius:10px;font-size:13px;box-shadow:0 14px 40px rgba(0,0,0,.4);transition:.2s;z-index:60;pointer-events:none}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast code{font-family:var(--mono);color:#8fc9ff}
+.drawer{position:fixed;right:0;top:0;height:100%;width:344px;background:var(--bg);z-index:70;border-left:.5px solid var(--line-2);
+  box-shadow:-22px 0 60px rgba(0,0,0,.28);transform:translateX(100%);transition:transform .26s cubic-bezier(.32,.72,0,1);padding:22px;overflow:auto}
+.drawer.open{transform:none}
+.drawer h3{font-family:var(--display);margin:0 0 6px;font-size:17px;font-weight:680}
+.drawer p{color:var(--text-2);font-size:12.5px;line-height:1.6}
+.drawer dt{font-family:var(--mono);font-size:11.5px;color:var(--accent);margin-top:15px}
+.drawer dd{margin:3px 0 0;font-size:12px;color:var(--text-2);line-height:1.55}
+.drawer .x{position:absolute;top:14px;right:16px}
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <div class="spacer"></div>
+    <button class="tbtn" id="swiftBtn">ⓘ Swift mapping</button>
+    <button class="tbtn" id="skip">Skip review, take defaults</button>
+  </div>
+
+  <div class="steps">
+    <div class="step done"><span class="b">✓</span>Sources</div><div class="bar fill"></div>
+    <div class="step done"><span class="b">✓</span>Settings</div><div class="bar fill"></div>
+    <div class="step now"><span class="b">3</span>Review tracks</div><div class="bar"></div>
+    <div class="step"><span class="b">4</span>Download</div>
+  </div>
+
+  <div class="scroll">
+    <div class="pane">
+      <div class="pager">
+        <span class="lbl" id="pagerLbl"></span>
+        <div class="dots" id="dots"></div>
+      </div>
+
+      <div class="srchead">
+        <div class="g" id="srcGlyph"></div>
+        <div style="min-width:0">
+          <h1 id="h1"></h1>
+          <p class="sub" id="sub"></p>
+        </div>
+      </div>
+
+      <div class="chips">
+        <button class="chip" id="cAllNew"></button>
+        <button class="chip" id="cGaps"></button>
+        <button class="chip" id="cNone">Clear all</button>
+        <span class="sep"></span>
+        <button class="chip set" id="cLimit"><span class="k">Limit</span><span class="v" id="vLimit">25</span><span class="car">▾</span></button>
+        <button class="chip set" id="cWin"><span class="k">Window</span><span class="v" id="vWin">latest</span><span class="car">▾</span></button>
+        <button class="chip" id="cDry"><span class="k">Mode</span><span class="v" id="vDry">dry run</span><span class="car">▾</span></button>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <div class="hint" id="hint">
+        <span class="i">!</span>
+        <div><span id="hintN"></span> <button id="addGaps">Include known gaps</button></div>
+      </div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div>
+      <div class="prog" id="prog"></div>
+      <div class="track"><i id="progBar" style="width:0%"></i></div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" id="back">‹ Back</button>
+    <button class="btn primary" id="next"></button>
+  </div>
+</div>
+
+<div class="pop" id="popLimit">
+  <h4>Track limit</h4>
+  <p>How many tracks udl pulls from this source before planning. <code>0</code> means everything.</p>
+  <div class="pf"><label>Limit</label><input class="num" id="limitInput" value="25" /></div>
+  <div class="pf"><label>Unlimited</label><div class="sw" id="unlimited" role="switch" aria-checked="false"></div></div>
+</div>
+<div class="pop" id="popWin">
+  <h4>Plan window</h4>
+  <p id="winHelp">Which end of the playlist to read. Spotify + deemix only — <code>scdl</code> has no window switch.</p>
+  <div class="pf"><label>Read from</label>
+    <div class="seg" id="win"><button aria-pressed="true" data-w="latest">Latest</button><button aria-pressed="false" data-w="first">First</button></div>
+  </div>
+</div>
+<div class="pop" id="popDry">
+  <h4>Run mode</h4>
+  <p>A dry run resolves every selected track and reports what would happen, without writing files or updating state.</p>
+  <div class="pf"><label>Dry run</label><div class="sw" id="dry" role="switch" aria-checked="true"></div></div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tbtn x" id="drawerClose">✕</button>
+  <h3>Option 5 — Guided</h3>
+  <p>Reviews one source at a time, the same way <code>udl sync --plan</code> actually runs. Fewest decisions on screen at once; best for occasional use and for the first run after setup. Slowest for a five-source library.</p>
+  <dl>
+    <dt>NavigationStack + path</dt><dd>Each step is a pushed view; the step bar is a custom header bound to <code>path.count</code>. Back is free.</dd>
+    <dt>TabView(.page) for sources</dt><dd>Per-source review pages with the dot indicator — swipe or Continue moves to the next source. Mirrors the CLI's per-source selector loop.</dd>
+    <dt>.popover on chips</dt><dd>Settings are shown as their values, not their controls; tapping a chip opens a small popover to change one thing.</dd>
+    <dt>List(.insetGrouped-ish)</dt><dd>Rounded card list, 48pt rows, generous hit targets. <code>Toggle</code> per row with <code>.toggleStyle(.checkbox)</code>.</dd>
+    <dt>ProgressView(value:)</dt><dd>Footer shows how far through the sources you are — the review itself has visible progress.</dd>
+    <dt>.defaultAction / .keyboardShortcut(.return)</dt><dd>Continue is the default button; ⏎ advances all the way to the run.</dd>
+  </dl>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const IDS=["sc-favorites","sc-dnb-crate","sp-liked"];
+const S={i:0,selected:{},limit:25,unlimited:false,window:"latest",dry:true,reviewed:new Set()};
+UDL.sources.forEach(s=>S.selected[s.id]=new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index)));
+const $=id=>document.getElementById(id);
+const cur=()=>UDL.sources.find(s=>s.id===IDS[S.i]);
+
+function render(){
+  const s=cur(), rows=UDL.rows[s.id], sel=S.selected[s.id];
+  const c=UDL.counts(rows), tog=c.missing_new+c.missing_known_gap;
+
+  $("pagerLbl").textContent=`Source ${S.i+1} of ${IDS.length}`;
+  $("dots").innerHTML=IDS.map((id,i)=>`<span class="dot ${i===S.i?"on":S.reviewed.has(id)?"done":""}" data-i="${i}"></span>`).join("");
+  $("srcGlyph").className="g "+(s.type==="spotify"?"sp":"sc");
+  $("srcGlyph").textContent=s.type==="spotify"?"S":"SC";
+  $("h1").textContent=`What should udl take from ${s.label}?`;
+  $("sub").innerHTML=`<code>${s.adapter}</code> · ${tog} downloadable, ${c.already_downloaded} already on disk · saves to <code>${s.targetDir}</code>`;
+
+  $("cAllNew").innerHTML=`Select all new <span class="k">${c.missing_new}</span>`;
+  $("cGaps").innerHTML=`Retry known gaps <span class="k">${c.missing_known_gap}</span>`;
+  $("cGaps").style.display=c.missing_known_gap?"inline-flex":"none";
+  $("vLimit").textContent=S.unlimited?"unlimited":S.limit;
+  $("vWin").textContent=s.supportsWindow?S.window:"n/a";
+  $("cWin").style.opacity=s.supportsWindow?1:.45;
+  $("vDry").textContent=S.dry?"dry run":"download";
+  $("cDry").classList.toggle("set",!S.dry);
+
+  $("list").innerHTML=rows.map(r=>{
+    const k=r.status===UDL.STATUS.NEW?"new":r.status===UDL.STATUS.GAP?"gap":"have";
+    return `<div class="li ${sel.has(r.index)?"on":""} ${r.toggleable?"":"locked"}" data-i="${r.index}">
+      <div class="cb">✓</div>
+      <div style="min-width:0"><div class="t1">${r.title}</div><div class="t2">${r.artist} · added ${r.addedAt}</div></div>
+      <span class="tag ${k}">${UDL.statusMeta[r.status].label}</span>
+      <span class="dur">${r.duration}</span>
+    </div>`;
+  }).join("");
+
+  const gapsOut=rows.filter(r=>r.status===UDL.STATUS.GAP&&!sel.has(r.index)).length;
+  $("hint").style.display=gapsOut?"flex":"none";
+  $("hintN").textContent=`${gapsOut} track${gapsOut===1?"":"s"} here failed to download before and ${gapsOut===1?"is":"are"} left out by default.`;
+
+  let total=0; IDS.forEach(id=>total+=S.selected[id].size);
+  $("prog").innerHTML=`<b>${sel.size}</b> selected here · <b>${total}</b> queued in total`;
+  $("progBar").style.width=((S.i+1)/IDS.length*100)+"%";
+  $("back").disabled=S.i===0;
+  const last=S.i===IDS.length-1;
+  $("next").textContent=last?(S.dry?`Start dry run (${total})`:`Download ${total} tracks`):`Continue to ${UDL.sources.find(x=>x.id===IDS[S.i+1]).label} ›`;
+  $("next").disabled=last&&total===0;
+}
+
+$("list").addEventListener("click",e=>{
+  const li=e.target.closest(".li"); if(!li)return;
+  const s=cur(), r=UDL.rows[s.id].find(x=>x.index===+li.dataset.i);
+  if(!r.toggleable){toast(`<code>${r.title}</code> is already downloaded — udl skips it.`);return;}
+  const sel=S.selected[s.id]; sel.has(r.index)?sel.delete(r.index):sel.add(r.index);
+  render();
+});
+$("dots").addEventListener("click",e=>{const d=e.target.closest(".dot");if(!d)return;S.i=+d.dataset.i;render();});
+$("cAllNew").onclick=()=>{UDL.rows[cur().id].filter(r=>r.status===UDL.STATUS.NEW).forEach(r=>S.selected[cur().id].add(r.index));render();};
+$("cGaps").onclick=$("addGaps").onclick=()=>{UDL.rows[cur().id].filter(r=>r.status===UDL.STATUS.GAP).forEach(r=>S.selected[cur().id].add(r.index));render();};
+$("cNone").onclick=()=>{S.selected[cur().id].clear();render();};
+
+function popAt(pop,anchor){
+  document.querySelectorAll(".pop").forEach(p=>{if(p!==pop)p.classList.remove("open")});
+  const r=anchor.getBoundingClientRect();
+  pop.style.left=Math.min(r.left, window.innerWidth-270)+"px";
+  pop.style.top=(r.bottom+8)+"px";
+  pop.classList.toggle("open");
+}
+$("cLimit").onclick=e=>{e.stopPropagation();popAt($("popLimit"),e.currentTarget)};
+$("cWin").onclick=e=>{if(!cur().supportsWindow){toast("<code>scdl</code> has no first/latest window — this only applies to Spotify sources.");return;}
+  e.stopPropagation();popAt($("popWin"),e.currentTarget)};
+$("cDry").onclick=e=>{e.stopPropagation();popAt($("popDry"),e.currentTarget)};
+document.addEventListener("click",e=>{if(!e.target.closest(".pop"))document.querySelectorAll(".pop").forEach(p=>p.classList.remove("open"))});
+$("limitInput").onchange=e=>{S.limit=Math.max(0,parseInt(e.target.value)||0);render();};
+$("unlimited").onclick=()=>{S.unlimited=!S.unlimited;$("unlimited").setAttribute("aria-checked",S.unlimited);
+  $("limitInput").disabled=S.unlimited;render();};
+$("win").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.window=b.dataset.w;
+  [...$("win").children].forEach(x=>x.setAttribute("aria-pressed",x===b));render();});
+$("dry").onclick=()=>{S.dry=!S.dry;$("dry").setAttribute("aria-checked",S.dry);render();};
+
+$("back").onclick=()=>{if(S.i>0){S.i--;render();}};
+$("next").onclick=()=>{
+  S.reviewed.add(IDS[S.i]);
+  if(S.i<IDS.length-1){S.i++;render();}
+  else{let t=0;IDS.forEach(id=>t+=S.selected[id].size);toast(`${S.dry?"Dry run":"Download"} started — <code>${t}</code> tracks across ${IDS.length} sources.`);}
+};
+$("skip").onclick=()=>{let t=0;IDS.forEach(id=>t+=S.selected[id].size);toast(`Using plan defaults — <code>${t}</code> new tracks, gaps excluded.`);};
+$("swiftBtn").onclick=()=>$("drawer").classList.add("open");
+$("drawerClose").onclick=()=>$("drawer").classList.remove("open");
+document.addEventListener("keydown",e=>{
+  if(e.target.tagName==="INPUT")return;
+  if(e.key==="Enter")$("next").click();
+  if(e.key==="ArrowRight"&&S.i<IDS.length-1){S.i++;render();}
+  if(e.key==="ArrowLeft"&&S.i>0){S.i--;render();}
+});
+let tid;function toast(h){const t=$("toast");t.innerHTML=h;t.classList.add("show");clearTimeout(tid);tid=setTimeout(()=>t.classList.remove("show"),2800);}
+render();
+</script>
+</body>
+</html>

@@ -44,9 +44,9 @@ type RekordboxPlaylistSyncPlanRequest struct {
 }
 
 type RekordboxPlaylistSyncPlanResult struct {
-	Resolved playlistsync.ResolvedOptions
-	Plan     playlistsync.Plan
-	PlanPath string
+	Resolved playlistsync.ResolvedOptions `json:"resolved"`
+	Plan     playlistsync.Plan            `json:"plan"`
+	PlanPath string                       `json:"plan_path"`
 }
 
 type RekordboxPlaylistSyncApplyRequest struct {
@@ -60,11 +60,11 @@ type RekordboxPlaylistSyncApplyRequest struct {
 }
 
 type RekordboxPlaylistSyncApplyResult struct {
-	DryRun             bool
-	EffectiveBackupDir string
-	BackupPath         string
-	Response           bridge.ApplyResponse
-	BatchResponse      bridge.ApplyBatchResponse
+	DryRun             bool                      `json:"dry_run"`
+	EffectiveBackupDir string                    `json:"effective_backup_dir"`
+	BackupPath         string                    `json:"backup_path,omitempty"`
+	Response           bridge.ApplyResponse      `json:"response,omitempty"`
+	BatchResponse      bridge.ApplyBatchResponse `json:"batch_response,omitempty"`
 }
 
 func (u RekordboxPlaylistSyncUseCase) Plan(ctx context.Context, req RekordboxPlaylistSyncPlanRequest) (RekordboxPlaylistSyncPlanResult, error) {

@@ -21,37 +21,37 @@ const (
 )
 
 type Config struct {
-	Version  int      `yaml:"version"`
-	Defaults Defaults `yaml:"defaults"`
-	Jobs     []Job    `yaml:"jobs"`
+	Version  int      `yaml:"version" json:"version"`
+	Defaults Defaults `yaml:"defaults" json:"defaults"`
+	Jobs     []Job    `yaml:"jobs" json:"jobs"`
 }
 
 type Defaults struct {
-	PlanLimit         int    `yaml:"plan_limit"`
-	DownloadOrder     string `yaml:"download_order"`
-	TargetFormat      string `yaml:"target_format"`
-	MinMatchScore     int    `yaml:"min_match_score"`
-	AmbiguityGap      int    `yaml:"ambiguity_gap"`
-	ReplaceLimit      int    `yaml:"replace_limit"`
-	CommandTimeoutSec int    `yaml:"command_timeout_seconds"`
+	PlanLimit         int    `yaml:"plan_limit" json:"plan_limit"`
+	DownloadOrder     string `yaml:"download_order" json:"download_order"`
+	TargetFormat      string `yaml:"target_format" json:"target_format"`
+	MinMatchScore     int    `yaml:"min_match_score" json:"min_match_score"`
+	AmbiguityGap      int    `yaml:"ambiguity_gap" json:"ambiguity_gap"`
+	ReplaceLimit      int    `yaml:"replace_limit" json:"replace_limit"`
+	CommandTimeoutSec int    `yaml:"command_timeout_seconds" json:"command_timeout_seconds"`
 }
 
 type Job struct {
-	ID              string `yaml:"id"`
-	Enabled         bool   `yaml:"enabled"`
-	SourceURL       string `yaml:"source_url"`
-	LibraryDir      string `yaml:"library_dir"`
-	BufferDir       string `yaml:"buffer_dir"`
-	BackupDir       string `yaml:"backup_dir"`
-	LogDir          string `yaml:"log_dir"`
-	StateFile       string `yaml:"state_file"`
-	PlanLimit       int    `yaml:"plan_limit"`
-	DownloadOrder   string `yaml:"download_order"`
-	TargetFormat    string `yaml:"target_format"`
-	MinMatchScore   int    `yaml:"min_match_score"`
-	AmbiguityGap    int    `yaml:"ambiguity_gap"`
-	ReplaceLimit    int    `yaml:"replace_limit"`
-	ApplyPromotions bool   `yaml:"apply_promotions"`
+	ID              string `yaml:"id" json:"id"`
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	SourceURL       string `yaml:"source_url" json:"source_url"`
+	LibraryDir      string `yaml:"library_dir" json:"library_dir"`
+	BufferDir       string `yaml:"buffer_dir" json:"buffer_dir"`
+	BackupDir       string `yaml:"backup_dir" json:"backup_dir"`
+	LogDir          string `yaml:"log_dir" json:"log_dir"`
+	StateFile       string `yaml:"state_file" json:"state_file"`
+	PlanLimit       int    `yaml:"plan_limit" json:"plan_limit"`
+	DownloadOrder   string `yaml:"download_order" json:"download_order"`
+	TargetFormat    string `yaml:"target_format" json:"target_format"`
+	MinMatchScore   int    `yaml:"min_match_score" json:"min_match_score"`
+	AmbiguityGap    int    `yaml:"ambiguity_gap" json:"ambiguity_gap"`
+	ReplaceLimit    int    `yaml:"replace_limit" json:"replace_limit"`
+	ApplyPromotions bool   `yaml:"apply_promotions" json:"apply_promotions"`
 }
 
 type LoadOptions struct {

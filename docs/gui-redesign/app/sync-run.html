@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Run</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.runhead{padding:16px 20px 14px;border-bottom:.5px solid var(--sep)}
+.runhead h2{font-family:var(--display);font-size:17px;font-weight:660;letter-spacing:-.02em;margin:0 0 3px}
+.runhead .now{font-size:12.5px;color:var(--text-2);margin-bottom:11px}
+.pline{display:grid;grid-template-columns:74px 1fr 78px;gap:10px;align-items:center;margin-bottom:7px;font-size:11.5px;color:var(--text-2)}
+.pline .v{text-align:right;font-family:var(--mono);font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.thead,.row{grid-template-columns:110px 1fr 84px 56px 56px 56px}
+.srcpanel{border-bottom:.5px solid var(--sep)}
+.actbar{display:flex;align-items:center;gap:9px;padding:7px 14px;background:var(--sunken);
+  border-bottom:.5px solid var(--sep);font-size:12px;font-weight:600;color:var(--text-2);cursor:default}
+.actbar:hover{background:var(--hover)}
+.tri{font-size:9px;color:var(--text-3);transition:transform .18s;display:inline-block}
+.tri.open{transform:rotate(90deg)}
+.logwrap{flex:1;overflow:auto;background:var(--win)}
+.logrow{display:grid;grid-template-columns:66px 52px 1fr;gap:10px;padding:3px 14px;font-family:var(--mono);font-size:11px;align-items:baseline}
+.logrow:hover{background:var(--hover)}
+.logrow .k{font-weight:700}
+.logrow .k.done{color:var(--ok)}.logrow .k.skip{color:var(--text-3)}.logrow .k.fail{color:var(--err)}
+.logrow .m{font-family:var(--font);font-size:12px}
+.logrow .d{color:var(--text-3);font-size:10.5px}
+.pinned{margin:10px 14px;border:.5px solid color-mix(in srgb,var(--err) 34%,transparent);background:var(--err-bg);
+  border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5}
+.pinned .t{font-weight:650;color:var(--err);margin-bottom:3px}
+.pinned code{font-family:var(--mono);font-size:11px}
+.statebadge{font-size:11px}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title" id="tbTitle">Running Sync</div><div class="tb-sub" id="tbSub"></div></div>
+    <div class="spacer"></div>
+    <span class="summary dim" style="font-size:11px">Preview</span>
+    <div class="seg sm" id="phase">
+      <button aria-pressed="true" data-p="running">Running</button>
+      <button aria-pressed="false" data-p="done">Finished</button>
+    </div>
+    <button class="tb-btn" id="promptBtn">Show prompt</button>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="center">
+      <div class="runhead">
+        <h2 id="headline"></h2>
+        <div class="now" id="nowline"></div>
+        <div class="pline"><span id="curLabel">Current track</span><div class="bar"><i id="curBar" style="width:0%"></i></div><span class="v" id="curVal"></span></div>
+        <div class="pline"><span>Whole run</span><div class="bar"><i id="allBar" style="width:0%"></i></div><span class="v" id="allVal"></span></div>
+      </div>
+
+      <div class="srcpanel">
+        <div class="thead">
+          <div>Source</div><div>Latest track</div><div>State</div>
+          <div class="num">Done</div><div class="num">Skip</div><div class="num">Fail</div>
+        </div>
+        <div id="srcRows"></div>
+      </div>
+
+      <div class="actbar" id="actToggle"><span class="tri open">▶</span>Activity
+        <span class="spacer"></span><span class="dim" style="font-weight:400" id="actCount"></span></div>
+      <div class="logwrap" id="logWrap">
+        <div id="pinned"></div>
+        <div id="log"></div>
+      </div>
+    </main>
+
+    <aside class="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">This run</div>
+        <div class="field"><label>Mode</label><span class="val" id="iMode">Sync</span></div>
+        <div class="field"><label>Sources</label><span class="val">3 enabled</span></div>
+        <div class="field"><label>Plan limit</label><span class="val">25</span></div>
+        <div class="field"><label>Plan window</label><span class="val mono">latest</span></div>
+        <div class="field"><label>Timeout</label><span class="val mono">10m</span></div>
+        <div class="field"><label>Started</label><span class="val mono">14:19:04</span></div>
+        <div class="field"><label>Elapsed</label><span class="val mono" id="iElapsed">03:41</span></div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Throughput</div>
+        <div class="field"><label>Downloaded</label><span class="val" id="iBytes">612 MB</span></div>
+        <div class="field"><label>Average</label><span class="val">2.8 MB/s</span></div>
+        <div class="field"><label>Est. remaining</label><span class="val" id="iEta">04:10</span></div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Output</div>
+        <div class="path"><b>Writing to</b><span id="iDir">~/Music/downloaded/dnb-crate</span></div>
+        <div class="path"><b>Run log</b>~/.local/state/udl/runs/2026-07-30-1419.json</div>
+        <button class="btn sm" id="revealBtn">Reveal in Finder</button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <div id="actions"></div>
+  </div>
+</div>
+
+<!-- confirm prompt -->
+<div class="backdrop" id="mConfirm">
+  <div class="modal">
+    <h4>File already exists</h4>
+    <p><b>Kites — Etherwood.mp3</b> is already in <span class="mono">~/Music/downloaded/sc-likes</span>.
+       Overwrite it with the new download?</p>
+    <div class="actions">
+      <button class="btn" data-close>Skip</button>
+      <button class="btn" data-close>Skip all</button>
+      <button class="btn primary" data-close>Overwrite</button>
+    </div>
+  </div>
+</div>
+
+<!-- masked input prompt -->
+<div class="backdrop" id="mInput">
+  <div class="modal">
+    <h4>Deezer ARL required</h4>
+    <p>Spotify sources download through deemix. Paste the ARL cookie value —
+       it is written to macOS Keychain, never to <span class="mono">config.yaml</span>.</p>
+    <input class="txt mono" type="password" value="••••••••••••••••••••" style="width:100%;height:28px;margin-bottom:8px" />
+    <div class="field" style="justify-content:flex-start;gap:8px"><input type="checkbox" checked id="saveKeychain" /><label for="saveKeychain">Save to Keychain for future runs</label></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn" data-close>Skip this source</button>
+      <button class="btn primary" data-close>Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- cancel confirm -->
+<div class="backdrop" id="mCancel">
+  <div class="modal">
+    <h4>Stop this run?</h4>
+    <p>The track being downloaded now is discarded. Tracks already finished stay on disk and
+       stay recorded in the state file, so a later run resumes from here.</p>
+    <div class="actions">
+      <button class="btn" data-close>Keep running</button>
+      <button class="btn destructive" data-close id="confirmCancel">Stop run</button>
+    </div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Run &amp; Report</h3>
+  <p>One view for the whole lifecycle: running, cancelled and finished are states of the same screen, not separate pages. The same shape is reused by Free DL capture and Rekordbox apply.</p>
+  <dl>
+    <dt>ProgressView(value:total:)</dt><dd>Two determinate bars — current track and whole run — plus indeterminate spinners in the source table.</dd>
+    <dt>Table of source lifecycle</dt><dd>Rows come from the existing per-source tracker (<code>planned/done/skipped/failed/latest</code>), so the CLI and GUI report identical numbers.</dd>
+    <dt>DisclosureGroup "Activity"</dt><dd>Expanded on wide windows, collapsed on narrow ones — matching the TUI's activity panel rule.</dd>
+    <dt>.alert / .sheet for prompts</dt><dd>Confirm and masked-input prompts become real modals. <code>SecureField</code> for the ARL, never echoed to the log.</dd>
+    <dt>.confirmationDialog on cancel</dt><dd>⌘. or the Stop button asks once, then requests cancellation on the run context.</dd>
+    <dt>.toolbar(.status)</dt><dd>Failures stay pinned above the log so they survive scrollback.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+let phase="running", pct=42, cur=63, elapsed=221;
+const $=id=>document.getElementById(id);
+
+function sidebarHTML(){
+  return UDL.runSources.map(s=>{
+    const k=s.state==="done"?"ok":s.state==="running"?"":"dim";
+    const b=s.state==="running"?`<span class="badge">${s.done}/${s.planned}</span>`:
+            s.state==="done"?`<span class="badge ${s.failed?"err":"ok"}">${s.done}</span>`:`<span class="badge">—</span>`;
+    return `<div class="sb-item ${s.state==="pending"?"dim":""}">
+      <span class="g">${s.state==="running"?'<span class="spin"></span>':s.state==="done"?"✓":"·"}</span>
+      <span><span class="nm">${s.label}</span><span class="sb-sub">${s.state}</span></span>${b}</div>`;
+  }).join("");
+}
+
+function renderSources(){
+  $("srcRows").innerHTML=UDL.runSources.map(s=>{
+    const pill=s.state==="running"?`<span class="pill run"><i class="dot"></i>Running</span>`
+      :s.state==="done"?`<span class="pill ${s.failed?"warn":"ok"}"><i class="dot"></i>${s.failed?"1 failed":"Done"}</span>`
+      :`<span class="pill"><i class="dot"></i>Pending</span>`;
+    return `<div class="row">
+      <div class="nowrap">${s.label}</div>
+      <div class="sub nowrap">${s.latest||"—"}</div>
+      <div>${pill}</div>
+      <div class="num">${s.done}</div><div class="num">${s.skipped}</div>
+      <div class="num" style="${s.failed?"color:var(--err)":""}">${s.failed}</div></div>`;
+  }).join("");
+}
+
+function renderLog(){
+  $("log").innerHTML=UDL.activity.map(a=>`<div class="logrow">
+    <span class="t">${a.t}</span><span class="k ${a.k}">[${a.k}]</span>
+    <span><span class="m">${a.m}</span>${a.d?` <span class="d">— ${a.d}</span>`:""}</span></div>`).join("");
+  $("actCount").textContent=`${UDL.activity.length} events · 1 failure`;
+  $("pinned").innerHTML=`<div class="pinned">
+    <div class="t">✕ 1 failure pinned</div>
+    <div><b>Last Train Home — Technimatic</b> · soundcloud-likes<br />
+    <code>scdl exit 1: HTTP 403 on media URL</code> — the track is likely private or region-locked now.
+    It stays out of the state file, so the next run will retry it as a known gap.</div></div>`;
+}
+
+function renderPhase(){
+  const running=phase==="running";
+  $("tbTitle").textContent=running?"Running Sync":"Sync Report";
+  $("tbSub").innerHTML=running?`started 14:19 · <span class="mono">3 sources</span>`:`30 Jul 14:19–14:27 · <span class="mono">3 sources</span>`;
+  if(running){
+    $("headline").innerHTML=`DnB Crate — downloading <b>Gemini — Klax</b>`;
+    $("nowline").innerHTML=`Source 2 of 3 · <span class="mono">scdl</span> · writing to <span class="mono">~/Music/downloaded/dnb-crate</span>`;
+    $("curLabel").textContent="Current track";
+    $("summary").innerHTML=`<b>12</b> done · <b>1</b> skipped · <span class="err">1 failed</span> · <b>10</b> remaining`;
+    $("actions").innerHTML=`<button class="btn" id="pauseBtn">Pause after track</button>
+      <button class="btn destructive" id="cancelBtn">Stop run <span class="kbd" style="margin-left:4px">⌘.</span></button>`;
+    $("iMode").textContent="Sync";
+  }else{
+    $("headline").innerHTML=`Finished — <b>24 downloaded</b>, 1 skipped, 1 failed`;
+    $("nowline").innerHTML=`8m 04s · 1.9 GB written · state files updated for 3 sources`;
+    $("curLabel").textContent="Succeeded";
+    $("summary").innerHTML=`<span class="ok">24 downloaded</span> · <b>1</b> skipped · <span class="err">1 failed</span> · 1.9 GB`;
+    $("actions").innerHTML=`<button class="btn" id="revealBtn2">Reveal in Finder</button>
+      <button class="btn" id="logBtn">Save run log…</button>
+      <button class="btn primary" id="retryBtn">Retry 1 failed track</button>`;
+    $("iMode").textContent="Sync (completed)";
+    cur=100;pct=100;
+  }
+  $("curBar").style.width=cur+"%"; $("curVal").textContent=running?"3.1 / 4.9 MB":"24 tracks";
+  $("allBar").style.width=pct+"%"; $("allVal").textContent=running?"12 / 24":"24 / 24";
+  $("curBar").className=running?"":"ok"; $("allBar").className=running?"":"ok";
+  wire();
+}
+
+function wire(){
+  $("cancelBtn")&&($("cancelBtn").onclick=()=>Shell.open("mCancel"));
+  $("pauseBtn")&&($("pauseBtn").onclick=()=>Shell.toast("Pausing after the current track finishes…"));
+  $("retryBtn")&&($("retryBtn").onclick=()=>Shell.toast("Retrying <code>Last Train Home — Technimatic</code>"));
+  $("logBtn")&&($("logBtn").onclick=()=>Shell.toast("Run log saved to <code>~/Downloads/udl-run-2026-07-30.json</code>"));
+  $("revealBtn2")&&($("revealBtn2").onclick=()=>Shell.toast("Revealing <code>~/Music/downloaded</code> in Finder"));
+}
+
+Shell.init({page:"sync-run",contextual:{title:"Run progress",html:sidebarHTML()}});
+Shell.wireDismiss();
+renderSources();renderLog();renderPhase();
+
+$("phase").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+  phase=b.dataset.p;[...$("phase").children].forEach(x=>x.setAttribute("aria-pressed",x===b));renderPhase();});
+$("promptBtn").onclick=()=>Shell.open(Math.random()>.5?"mConfirm":"mInput");
+$("confirmCancel").onclick=()=>{phase="done";[...$("phase").children].forEach(x=>x.setAttribute("aria-pressed",x.dataset.p==="done"));
+  renderPhase();Shell.toast("Run cancelled — finished tracks were kept.");};
+$("revealBtn").onclick=()=>Shell.toast("Revealing <code>~/Music/downloaded/dnb-crate</code> in Finder");
+$("actToggle").onclick=()=>{const w=$("logWrap"),t=$("actToggle").querySelector(".tri");
+  const open=w.style.display!=="none";w.style.display=open?"none":"block";t.classList.toggle("open",!open);};
+document.addEventListener("keydown",e=>{if((e.metaKey||e.ctrlKey)&&e.key===".")Shell.open("mCancel");});
+
+setInterval(()=>{
+  if(phase!=="running")return;
+  cur=(cur+3)%100; if(cur<3){pct=Math.min(96,pct+2);}
+  elapsed++;
+  $("curBar").style.width=cur+"%";
+  $("allBar").style.width=pct+"%";
+  $("iElapsed").textContent=String(Math.floor(elapsed/60)).padStart(2,"0")+":"+String(elapsed%60).padStart(2,"0");
+},420);
+</script>
+</body>
+</html>

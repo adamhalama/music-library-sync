@@ -74,6 +74,7 @@ Start here:
 	})
 
 	root.AddCommand(newTUICommand(app))
+	root.AddCommand(newAgentCommand(app))
 	root.AddCommand(newDoctorCommand(app))
 	root.AddCommand(newSyncCommand(app))
 	root.AddCommand(newValidateCommand(app))

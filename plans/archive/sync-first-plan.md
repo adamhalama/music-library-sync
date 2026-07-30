@@ -1,4 +1,4 @@
-> Historical planning note: `sync --plan` shipped on this branch. Treat this file as design history; use the CLI help, README, and tests for the current contract.
+> Archived planning note: `sync --plan` shipped on this branch. Treat this file as design history; use the CLI help, README, and tests for the current contract.
 
 ### Interactive `sync --plan` Mode (SCDL v1)
 

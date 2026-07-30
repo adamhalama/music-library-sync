@@ -296,7 +296,7 @@ run_cmd "02-promote-preview" \
     -v || fail "promote preview failed"
 assert_log_contains "$LOG_DIR/02-promote-preview.log" 'mode=preview'
 assert_log_contains "$LOG_DIR/02-promote-preview.log" '\[plan\]'
-assert_log_contains "$LOG_DIR/02-promote-preview.log" 'PICHI - BO FUNK \[FREE DL\].m4a <= MASTER BOFUNK'
+assert_log_contains "$LOG_DIR/02-promote-preview.log" 'MASTER BOFUNK.m4a <= PICHI - BO FUNK \[FREE DL\].m4a'
 
 run_cmd "03-promote-ambiguous" \
   go run ./cmd/udl promote-freedl \
