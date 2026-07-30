@@ -19,9 +19,10 @@ type LoadOptions struct {
 }
 
 type fileConfig struct {
-	Version  *int          `yaml:"version"`
-	Defaults fileDefaults  `yaml:"defaults"`
-	Sources  *[]fileSource `yaml:"sources"`
+	Version   *int                 `yaml:"version"`
+	Defaults  fileDefaults         `yaml:"defaults"`
+	Sources   *[]fileSource        `yaml:"sources"`
+	Rekordbox *fileRekordboxConfig `yaml:"rekordbox"`
 }
 
 type fileDefaults struct {
@@ -53,6 +54,28 @@ type fileAdapterSpec struct {
 	Kind       string   `yaml:"kind"`
 	ExtraArgs  []string `yaml:"extra_args"`
 	MinVersion string   `yaml:"min_version"`
+}
+
+type fileRekordboxConfig struct {
+	DBDir        string                        `yaml:"db_dir"`
+	PythonBin    string                        `yaml:"python_bin"`
+	PythonPath   string                        `yaml:"python_path"`
+	BackupDir    string                        `yaml:"backup_dir"`
+	PlaylistSync fileRekordboxPlaylistSyncConf `yaml:"playlist_sync"`
+}
+
+type fileRekordboxPlaylistSyncConf struct {
+	Jobs []fileRekordboxPlaylistSyncJob `yaml:"jobs"`
+}
+
+type fileRekordboxPlaylistSyncJob struct {
+	ID                  string `yaml:"id"`
+	MusicPlaylist       string `yaml:"music_playlist"`
+	MusicPlaylistID     string `yaml:"music_playlist_id"`
+	RekordboxPlaylist   string `yaml:"rekordbox_playlist"`
+	RekordboxPlaylistID string `yaml:"rekordbox_playlist_id"`
+	Mode                string `yaml:"mode"`
+	CreatePlaylist      *bool  `yaml:"create_playlist"`
 }
 
 func Load(opts LoadOptions) (Config, error) {
@@ -181,6 +204,30 @@ func applyFileConfig(cfg *Config, fc fileConfig) {
 			cfg.Sources = append(cfg.Sources, source)
 		}
 	}
+
+	if fc.Rekordbox != nil {
+		rb := &RekordboxConfig{
+			DBDir:      strings.TrimSpace(fc.Rekordbox.DBDir),
+			PythonBin:  strings.TrimSpace(fc.Rekordbox.PythonBin),
+			PythonPath: strings.TrimSpace(fc.Rekordbox.PythonPath),
+			BackupDir:  strings.TrimSpace(fc.Rekordbox.BackupDir),
+		}
+		if len(fc.Rekordbox.PlaylistSync.Jobs) > 0 {
+			rb.PlaylistSync.Jobs = make([]RekordboxPlaylistSyncJob, 0, len(fc.Rekordbox.PlaylistSync.Jobs))
+			for _, fj := range fc.Rekordbox.PlaylistSync.Jobs {
+				rb.PlaylistSync.Jobs = append(rb.PlaylistSync.Jobs, RekordboxPlaylistSyncJob{
+					ID:                  strings.TrimSpace(fj.ID),
+					MusicPlaylist:       strings.TrimSpace(fj.MusicPlaylist),
+					MusicPlaylistID:     strings.TrimSpace(fj.MusicPlaylistID),
+					RekordboxPlaylist:   strings.TrimSpace(fj.RekordboxPlaylist),
+					RekordboxPlaylistID: strings.TrimSpace(fj.RekordboxPlaylistID),
+					Mode:                strings.TrimSpace(fj.Mode),
+					CreatePlaylist:      copyBoolPtr(fj.CreatePlaylist),
+				})
+			}
+		}
+		cfg.Rekordbox = rb
+	}
 }
 
 func applyEnvOverrides(cfg *Config, env map[string]string) error {
@@ -211,6 +258,18 @@ func applyEnvOverrides(cfg *Config, env map[string]string) error {
 		}
 		cfg.Defaults.CommandTimeoutSeconds = parsed
 	}
+	if value := strings.TrimSpace(env["UDL_REKORDBOX_DB_DIR"]); value != "" {
+		ensureRekordboxConfig(cfg).DBDir = value
+	}
+	if value := strings.TrimSpace(env["UDL_REKORDBOX_PYTHON_BIN"]); value != "" {
+		ensureRekordboxConfig(cfg).PythonBin = value
+	}
+	if value := strings.TrimSpace(env["UDL_REKORDBOX_PYTHONPATH"]); value != "" {
+		ensureRekordboxConfig(cfg).PythonPath = value
+	}
+	if value := strings.TrimSpace(env["UDL_REKORDBOX_BACKUP_DIR"]); value != "" {
+		ensureRekordboxConfig(cfg).BackupDir = value
+	}
 	return nil
 }
 
@@ -237,6 +296,13 @@ func normalize(cfg *Config) {
 			}
 		}
 	}
+}
+
+func ensureRekordboxConfig(cfg *Config) *RekordboxConfig {
+	if cfg.Rekordbox == nil {
+		cfg.Rekordbox = &RekordboxConfig{}
+	}
+	return cfg.Rekordbox
 }
 
 func defaultAdapterKind(sourceType SourceType) string {

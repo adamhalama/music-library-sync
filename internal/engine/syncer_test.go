@@ -184,6 +184,15 @@ func (a fakeDeemixAdapter) BuildExecSpec(source config.Source, defaults config.D
 	}, nil
 }
 
+func TestNewSyncerRegistersBuiltInPlanProviders(t *testing.T) {
+	syncer := NewSyncer(nil, noOpRunner{}, nil)
+	for _, adapterKind := range []string{"scdl", "scdl-freedl", "deemix"} {
+		if provider := syncer.PlanRegistry.ProviderFor(adapterKind); provider == nil {
+			t.Errorf("expected plan provider for %q", adapterKind)
+		}
+	}
+}
+
 func TestSyncerSpotifyDeemixBackfillsLocalTrackWithoutRunningCommand(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")

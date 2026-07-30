@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +17,11 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/output"
+	"github.com/jaa/update-downloads/internal/playlists"
+	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
+	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
 
 func TestTUICommandHelp(t *testing.T) {
@@ -66,11 +71,17 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	if root.menuItems[0] != "Run Sync" {
 		t.Fatalf("expected Run Sync first, got %v", root.menuItems)
 	}
-	if root.menuItems[1] != "Get Started" {
-		t.Fatalf("expected Get Started second, got %v", root.menuItems)
+	if root.menuItems[1] != "Playlists" {
+		t.Fatalf("expected Playlists second, got %v", root.menuItems)
 	}
-	if root.menuItems[2] != "Credentials" {
-		t.Fatalf("expected Credentials third, got %v", root.menuItems)
+	if root.menuItems[2] != "SoundCloud Free DL" {
+		t.Fatalf("expected SoundCloud Free DL third, got %v", root.menuItems)
+	}
+	if root.menuItems[3] != "Rekordbox Sync" {
+		t.Fatalf("expected Rekordbox Sync fourth, got %v", root.menuItems)
+	}
+	if root.menuItems[4] != "Get Started" {
+		t.Fatalf("expected Get Started fifth, got %v", root.menuItems)
 	}
 	view := root.View()
 	if !strings.Contains(view, "UDL · HOME") {
@@ -84,6 +95,385 @@ func TestTUIRootMenuShowsRunSyncFirst(t *testing.T) {
 	}
 }
 
+func TestTUIPlaylistOpeningUsesSavedSnapshotWithoutRefresh(t *testing.T) {
+	snapshot := playlists.Snapshot{
+		Version: playlists.SnapshotVersion, PlaylistID: "favorites", Name: "Favorites",
+		Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+		RefreshedAt: time.Now(), Tracks: []playlists.Track{{Index: 1, Title: "Track"}},
+		ChecksumSHA256: "test",
+	}
+	model := newTUIPlaylistModel(&AppContext{})
+	model.phase = tuiPlaylistPhaseList
+	model.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+	}}}
+	model.snapshots["favorites"] = snapshot
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("opening a saved playlist must not start background work")
+	}
+	if next.phase != tuiPlaylistPhaseDetail {
+		t.Fatalf("expected detail phase, got %s", next.phase)
+	}
+	if next.refreshCancel != nil {
+		t.Fatal("opening a saved playlist must not start refresh")
+	}
+}
+
+func TestTUIPlaylistDetailLaunchesFreeDLWithSnapshot(t *testing.T) {
+	definition := playlists.Definition{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+	}
+	snapshot := playlists.Snapshot{PlaylistID: "favorites", Name: "Favorites"}
+	model := newTUIPlaylistModel(&AppContext{})
+	model.phase = tuiPlaylistPhaseDetail
+	model.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}}
+	model.snapshots["favorites"] = snapshot
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if cmd == nil {
+		t.Fatal("expected FreeDL launch command")
+	}
+	msg := cmd()
+	if _, ok := msg.(tuiPlaylistOpenFreeDLMsg); !ok {
+		t.Fatalf("unexpected launch message %T", msg)
+	}
+}
+
+func TestTUIPlaylistDetailRendersAtNarrowAndWideSizes(t *testing.T) {
+	definition := playlists.Definition{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favourites",
+	}
+	snapshot := playlists.Snapshot{
+		PlaylistID: "favorites", Name: "Favorites", RefreshedAt: time.Now(),
+		Tracks: []playlists.Track{{Index: 1, Artist: "Artist", Title: "Track", Path: "/Music/Track.m4a"}},
+	}
+	for _, size := range []struct {
+		width  int
+		height int
+	}{{80, 24}, {150, 42}} {
+		root := newMenuRootModelForTest()
+		root.width = size.width
+		root.height = size.height
+		root.screen = tuiScreenPlaylists
+		root.playlistModel = newTUIPlaylistModel(&AppContext{})
+		root.playlistModel.phase = tuiPlaylistPhaseDetail
+		root.playlistModel.cfg = playlists.Config{Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}}
+		root.playlistModel.snapshots["favorites"] = snapshot
+		view := root.View()
+		if !strings.Contains(view, "Standalone Playlists") || !strings.Contains(view, "Artist") || !strings.Contains(view, "/Music/Track.m4a") {
+			t.Fatalf("expected playlist detail at %dx%d, got: %s", size.width, size.height, view)
+		}
+	}
+}
+
+func TestTUIRekordboxReviewNamesBlockingTrackAndPath(t *testing.T) {
+	model := tuiRekordboxModel{
+		phase: tuiRekordboxPhaseReview,
+		plan: &playlistsync.Plan{
+			Version: playlistsync.PlanVersion,
+			MusicPlaylist: playlistsync.PlanMusicPlaylist{
+				Name: "Favourites",
+			},
+			RekordboxPlaylist: playlistsync.PlanRekordboxPlaylist{
+				Name: "fav_imports",
+			},
+			Summary: playlistsync.PlanSummary{MusicTotal: 1, MissingInRekordbox: 1},
+			Rows: []playlistsync.PlanRow{{
+				MusicIndex:  1,
+				Artist:      "Netherworld",
+				Title:       "Atalantis",
+				Path:        "/Music/Netherworld/Atalantis.m4a",
+				MatchStatus: "missing",
+			}},
+		},
+	}
+	view := model.shellBody(newTUIShellLayout(120, 40))
+	for _, want := range []string{"Apply Blockers", "Netherworld — Atalantis", "/Music/Netherworld/Atalantis.m4a"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected Rekordbox blocker view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
+// A config load failure must stay on the model: resolveSelectedJob used to clear
+// it, leaving the failure screen showing "Unknown failure." with no reason.
+func TestTUIRekordboxConfigLoadFailureKeepsReason(t *testing.T) {
+	model := tuiRekordboxModel{phase: tuiRekordboxPhaseLoading}
+	next, _ := model.Update(tuiRekordboxConfigLoadedMsg{
+		Config: config.DefaultConfig(),
+		Err:    errors.New("invalid config: rekordbox.db_dir must resolve to an absolute path"),
+	})
+
+	if next.phase != tuiRekordboxPhaseFailed {
+		t.Fatalf("expected failed phase, got %q", next.phase)
+	}
+	if next.err == nil {
+		t.Fatalf("expected config load error to be preserved")
+	}
+	failed := strings.Join(next.failedLines(), "\n")
+	if strings.Contains(failed, "Unknown failure") {
+		t.Fatalf("expected the failure reason instead of a placeholder:\n%s", failed)
+	}
+	if !strings.Contains(failed, "rekordbox.db_dir") {
+		t.Fatalf("expected failure detail to name the config problem:\n%s", failed)
+	}
+	banner := next.shellBanner()
+	if banner == nil || !strings.Contains(banner.Text, "rekordbox.db_dir") {
+		t.Fatalf("expected failure banner to state the reason, got %+v", banner)
+	}
+}
+
+// A resolve error must clear once the selection resolves cleanly, so switching
+// jobs recovers instead of pinning a stale error.
+func TestTUIRekordboxResolveErrorClearsOnNextValidSelection(t *testing.T) {
+	model := tuiRekordboxModel{
+		cfg: config.DefaultConfig(),
+		jobs: []tuiRekordboxJobState{
+			{Label: "broken", Options: playlistsync.Options{Mode: "two-way"}},
+			{Label: "ok", Options: playlistsync.Options{RekordboxPlaylist: "fav_imports"}},
+		},
+	}
+
+	model.resolveSelectedJob()
+	if model.err == nil {
+		t.Fatalf("expected unsupported mode to produce a resolve error")
+	}
+
+	model.jobCursor = 1
+	model.resolveSelectedJob()
+	if model.err != nil {
+		t.Fatalf("expected resolve error to clear on a valid job, got %v", model.err)
+	}
+}
+
+func TestTUIRootEnterOpensFreeDLWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "SoundCloud Free DL")
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenFreeDL {
+		t.Fatalf("expected Free DL workflow, got %v", next.screen)
+	}
+	if next.freeDLModel.phase != tuiFreeDLPhaseLoading {
+		t.Fatalf("expected Free DL model to start loading, got %s", next.freeDLModel.phase)
+	}
+}
+
+func TestTUIFreeDLModelPlanLimitControls(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhaseSelect
+	m.jobs = []freedl.Job{{ID: "upgrades", PlanLimit: 12}}
+	m.planLimit = m.jobPlanLimit()
+
+	if m.planLimit != 12 {
+		t.Fatalf("expected job plan limit 12, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	if m.planLimit != 13 {
+		t.Fatalf("expected incremented plan limit, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	if m.planLimit != 12 {
+		t.Fatalf("expected decremented plan limit, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if m.planLimit != 0 {
+		t.Fatalf("expected unlimited plan limit, got %d", m.planLimit)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if m.planLimit != 12 {
+		t.Fatalf("expected job plan limit after disabling unlimited, got %d", m.planLimit)
+	}
+}
+
+func TestTUIFreeDLModelPlanLimitTypedEntry(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhaseSelect
+	m.jobs = []freedl.Job{{ID: "upgrades", PlanLimit: 12}}
+	m.planLimit = 12
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if !m.limitEditing {
+		t.Fatalf("expected limit editing to be active")
+	}
+	if m.allowBack() {
+		t.Fatalf("expected esc/back to stay inside Free DL limit input")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.planLimit != 25 {
+		t.Fatalf("expected typed plan limit 25, got %d", m.planLimit)
+	}
+	if m.limitEditing {
+		t.Fatalf("expected limit editing to close after apply")
+	}
+}
+
+func TestTUIFreeDLModelNoJobsOpensSetup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freedl.yaml")
+	m := newTUIFreeDLModel(&AppContext{Opts: GlobalOptions{FreeDLConfigPath: path}})
+	main := config.DefaultConfig()
+
+	next, _ := m.Update(tuiFreeDLLoadedMsg{Main: main, Cfg: freedl.Config{Version: 1}, Jobs: nil})
+
+	if next.phase != tuiFreeDLPhaseConfig {
+		t.Fatalf("expected setup config phase, got %s", next.phase)
+	}
+	if len(next.configCfg.Jobs) != 1 {
+		t.Fatalf("expected one starter job, got %d", len(next.configCfg.Jobs))
+	}
+	if next.configCfg.Jobs[0].SourceURL != "" {
+		t.Fatalf("expected starter job to require source_url edit, got %q", next.configCfg.Jobs[0].SourceURL)
+	}
+}
+
+func TestTUIFreeDLConfigSaveBlocksInvalidStarterJob(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freedl.yaml")
+	m := newTUIFreeDLModel(&AppContext{Opts: GlobalOptions{FreeDLConfigPath: path}})
+	m.mainConfig = config.DefaultConfig()
+	m.cfg = freedl.Config{Version: 1, Defaults: freedl.DefaultConfig(m.mainConfig).Defaults}
+	m.openConfigEditor(true)
+
+	next := m.saveConfig()
+
+	if next.configSaved {
+		t.Fatalf("expected invalid starter job not to save")
+	}
+	if next.configErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected no config file, got err=%v", err)
+	}
+}
+
+func TestTUIFreeDLConfigSaveWritesAndReloadsJobs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freedl.yaml")
+	m := newTUIFreeDLModel(&AppContext{Opts: GlobalOptions{FreeDLConfigPath: path}})
+	m.mainConfig = config.DefaultConfig()
+	m.cfg = freedl.Config{Version: 1, Defaults: freedl.DefaultConfig(m.mainConfig).Defaults}
+	m.openConfigEditor(true)
+	m.configCfg.Jobs[0].SourceURL = "https://soundcloud.com/example/likes"
+
+	next := m.saveConfig()
+
+	if !next.configSaved {
+		t.Fatalf("expected config to save, err=%v saveErr=%v validation=%v", next.configErr, next.configSaveErr, next.configValidation)
+	}
+	if len(next.jobs) != 1 || next.jobs[0].ID == "" {
+		t.Fatalf("expected saved enabled job to reload, got %+v", next.jobs)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected saved config file: %v", err)
+	}
+}
+
+func TestTUIFreeDLPlanningRowMergePreservesSelectionOverride(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePlanning
+	m.plan = &freedl.CapturePlan{}
+	m.selectionOverrides = map[string]bool{"track-1": false}
+
+	m.mergePlanRow(freedl.PlanRow{
+		Index:      1,
+		RemoteID:   "track-1",
+		Title:      "Track One",
+		Selectable: true,
+		Selected:   true,
+		FreeDLProbe: engine.SoundCloudFreeDLProbe{
+			Status: engine.SoundCloudFreeDLAvailable,
+		},
+	})
+
+	if len(m.plan.Rows) != 1 {
+		t.Fatalf("expected one merged row, got %d", len(m.plan.Rows))
+	}
+	if m.plan.Rows[0].Selected {
+		t.Fatalf("expected user deselection override to survive async row update")
+	}
+}
+
+func TestTUIFreeDLPlanningViewShowsLockedWaitingState(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePlanning
+	m.planningStages = map[string]string{"playlist": "running: enumerating"}
+	m.plan = &freedl.CapturePlan{Rows: []freedl.PlanRow{{
+		Index:    1,
+		RemoteID: "track-1",
+		Title:    "Waiting Track",
+	}}}
+
+	view := m.shellBody(tuiShellLayout{Width: 120, Height: 30})
+
+	for _, want := range []string{"download locked", "checking", "Waiting Track"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected planning view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTUIFreeDLLocalQualityLabelShowsProgressAndCache(t *testing.T) {
+	tests := []struct {
+		name string
+		row  freedl.PlanRow
+		want string
+	}{
+		{name: "matching", row: freedl.PlanRow{LocalState: freedl.LocalLookupMatching}, want: "matching..."},
+		{name: "not found", row: freedl.PlanRow{LocalState: freedl.LocalLookupNotFound}, want: "not found"},
+		{
+			name: "cached quality",
+			row: freedl.PlanRow{
+				LocalState:   freedl.LocalLookupCached,
+				LocalQuality: freedl.Quality{Codec: "aac", EffectiveBitrate: 256000},
+			},
+			want: "aac 256k · cached",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := localQualityLabel(test.row); got != test.want {
+				t.Fatalf("local quality label: got %q want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTUIFreeDLPromotionLoadingDoesNotShowNoMatchMessage(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePromote
+
+	lines := strings.Join(m.promotionRowLines(120), "\n")
+	if strings.Contains(lines, "No captured files matched the library.") {
+		t.Fatalf("loading promotion view should not show final no-match message: %s", lines)
+	}
+	if !strings.Contains(lines, "Matching captured downloads") {
+		t.Fatalf("expected loading promotion view to explain matching state, got: %s", lines)
+	}
+}
+
+func TestTUIFreeDLPromotionCompletedEmptyPlanShowsNoMatchMessage(t *testing.T) {
+	m := newTUIFreeDLModel(&AppContext{})
+	m.phase = tuiFreeDLPhasePromote
+	m.promoPlan = &freedl.PromotionPlan{}
+
+	lines := strings.Join(m.promotionRowLines(120), "\n")
+	if !strings.Contains(lines, "No captured files matched the library.") {
+		t.Fatalf("completed empty promotion plan should show no-match message, got: %s", lines)
+	}
+}
+
 func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
 	root := newMenuRootModelForTest()
 
@@ -94,6 +484,131 @@ func TestTUIRootDefaultEnterOpensRunSyncWorkflow(t *testing.T) {
 	}
 	if next.screen != tuiScreenInteractiveSync {
 		t.Fatalf("expected default enter to open interactive sync, got %v", next.screen)
+	}
+}
+
+func TestTUIRootEnterOpensRekordboxSyncWorkflow(t *testing.T) {
+	root := newMenuRootModelForTest()
+	setMenuCursorForTest(t, &root, "Rekordbox Sync")
+
+	nextModel, _ := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, ok := nextModel.(tuiRootModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", nextModel)
+	}
+	if next.screen != tuiScreenRekordboxSync {
+		t.Fatalf("expected rekordbox sync screen, got %v", next.screen)
+	}
+	if next.rekordboxModel.phase != tuiRekordboxPhaseLoading {
+		t.Fatalf("expected loading rekordbox phase, got %q", next.rekordboxModel.phase)
+	}
+}
+
+func TestTUIRekordboxSetupSaveWritesMappingConfig(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "rekordbox.yaml")
+	model := tuiRekordboxModel{
+		app: &AppContext{Opts: GlobalOptions{RekordboxConfigPath: path}},
+		cfg: configWithRekordboxSyncDefaults(config.DefaultConfig(), syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+		}),
+		rbCfg: syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+		},
+		setup: tuiRekordboxSetupState{
+			ConfigPath: path,
+			EditIndex:  -1,
+			Mapping: syncconfig.FolderMapping{
+				ID:              "phone",
+				MusicFolder:     "Phone",
+				RekordboxFolder: "Phone RB",
+			},
+		},
+	}
+
+	next, cmd := model.saveSetupMapping()
+	if next.phase != tuiRekordboxPhaseSetupSaving {
+		t.Fatalf("expected saving phase, got %q", next.phase)
+	}
+	raw := cmd()
+	msg, ok := raw.(tuiRekordboxSetupSavedMsg)
+	if !ok {
+		t.Fatalf("expected setup saved msg, got %T", raw)
+	}
+	next, _ = next.Update(msg)
+	if next.phase != tuiRekordboxPhaseReady {
+		t.Fatalf("expected ready after save, got %q err=%v", next.phase, next.setup.SaveErr)
+	}
+	if len(next.rbCfg.Sync.Folders) != 1 || next.rbCfg.Sync.Folders[0].ID != "phone" {
+		t.Fatalf("unexpected saved mappings: %+v", next.rbCfg.Sync.Folders)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(payload), "rekordbox_folder: Phone RB") {
+		t.Fatalf("expected saved mapping in config:\n%s", string(payload))
+	}
+}
+
+func TestTUIRekordboxDeleteMappingWritesConfig(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "rekordbox.yaml")
+	model := tuiRekordboxModel{
+		app:       &AppContext{Opts: GlobalOptions{RekordboxConfigPath: path}},
+		phase:     tuiRekordboxPhaseReady,
+		jobCursor: 0,
+		rbCfg: syncconfig.Config{
+			Version: syncconfig.Version,
+			Defaults: syncconfig.Defaults{
+				DBDir:           "/rb",
+				BackupDir:       "/backups",
+				Mode:            "mirror",
+				CreateFolders:   true,
+				CreatePlaylists: true,
+			},
+			Sync: syncconfig.Sync{Folders: []syncconfig.FolderMapping{{
+				ID:              "phone",
+				MusicFolder:     "Phone",
+				RekordboxFolder: "Phone RB",
+			}}},
+		},
+		setup: tuiRekordboxSetupState{ConfigPath: path},
+	}
+
+	next, cmd := model.deleteSelectedMapping()
+	if next.phase != tuiRekordboxPhaseSetupSaving {
+		t.Fatalf("expected saving phase, got %q", next.phase)
+	}
+	raw := cmd()
+	msg, ok := raw.(tuiRekordboxSetupSavedMsg)
+	if !ok {
+		t.Fatalf("expected setup saved msg, got %T", raw)
+	}
+	next, _ = next.Update(msg)
+	if len(next.rbCfg.Sync.Folders) != 0 {
+		t.Fatalf("expected mapping deletion, got %+v", next.rbCfg.Sync.Folders)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if strings.Contains(string(payload), "id: phone") {
+		t.Fatalf("deleted mapping still present:\n%s", string(payload))
 	}
 }
 
@@ -343,6 +858,38 @@ func TestTUIRootAutoStartsGetStartedWhenNoSourcesConfigured(t *testing.T) {
 	}
 	if root.onboardingModel.startup.Reason != tuiOnboardingReasonNoSources {
 		t.Fatalf("expected no-sources onboarding reason, got %q", root.onboardingModel.startup.Reason)
+	}
+}
+
+func TestTUIRootDoesNotAutoStartGetStartedForRekordboxOnlyConfig(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "udl.yaml")
+	payload := strings.Join([]string{
+		"version: 1",
+		"defaults:",
+		"  state_dir: " + filepath.Join(tmp, "state"),
+		"  archive_file: archive.txt",
+		"  threads: 1",
+		"  continue_on_error: true",
+		"  command_timeout_seconds: 900",
+		"rekordbox:",
+		"  db_dir: ~/Library/Pioneer/rekordbox",
+		"  backup_dir: ~/Music/rb-library-export",
+		"  playlist_sync:",
+		"    jobs:",
+		"      - id: apple-favourites",
+		"        music_playlist: Favourites",
+		"        rekordbox_playlist: fav_imports",
+		"        mode: mirror",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	root := newTUIRootModel(&AppContext{Opts: GlobalOptions{ConfigPath: configPath}}, false)
+	if root.screen != tuiScreenMenu {
+		t.Fatalf("expected menu for rekordbox-only config, got %v", root.screen)
 	}
 }
 
@@ -597,6 +1144,39 @@ func TestTUIConfigEditorDirectSaveFromSourcesWritesConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "config.yaml")); err != nil {
 		t.Fatalf("expected saved config file from sources: %v", err)
+	}
+}
+
+func TestTUIConfigEditorPreservesRekordboxConfig(t *testing.T) {
+	tmp := t.TempDir()
+	model := newTUIConfigEditorModel(&AppContext{Opts: GlobalOptions{ConfigPath: filepath.Join(tmp, "config.yaml")}})
+	cfg := config.DefaultConfig()
+	cfg.Rekordbox = &config.RekordboxConfig{
+		DBDir:      "~/Library/Pioneer/rekordbox",
+		PythonBin:  "python3",
+		PythonPath: "/tmp/site-packages",
+		BackupDir:  "/tmp/rb-backups",
+		PlaylistSync: config.RekordboxPlaylistSyncConfig{Jobs: []config.RekordboxPlaylistSyncJob{{
+			ID:                  "apple-favourites",
+			MusicPlaylist:       "Favourites",
+			MusicPlaylistID:     "70C641CA78BB0F3C",
+			RekordboxPlaylist:   "fav_imports",
+			RekordboxPlaylistID: "3150438241",
+			Mode:                "mirror",
+		}}},
+	}
+	model.applyConfig(cfg, false)
+
+	built := model.buildConfig()
+	if built.Rekordbox == nil || len(built.Rekordbox.PlaylistSync.Jobs) != 1 {
+		t.Fatalf("expected rekordbox config to be preserved: %+v", built.Rekordbox)
+	}
+	if built.Rekordbox.PlaylistSync.Jobs[0].ID != "apple-favourites" {
+		t.Fatalf("unexpected rekordbox job: %+v", built.Rekordbox.PlaylistSync.Jobs[0])
+	}
+	view := model.reviewBody(newTUIShellLayout(180, 36), false)
+	if !strings.Contains(view, "Rekordbox: preserved (1 playlist sync jobs)") {
+		t.Fatalf("expected review to mention preserved rekordbox config, got: %s", view)
 	}
 }
 
@@ -1087,8 +1667,11 @@ func TestTUIRootStandardSyncPromptModalAndFailureDiagnostics(t *testing.T) {
 	if !strings.Contains(view, "Prompt") || !strings.Contains(view, "Retry login?") {
 		t.Fatalf("expected standard sync shell prompt modal, got: %s", view)
 	}
-	if !strings.Contains(view, "last failure:") || !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
+	if !strings.Contains(view, "stdout_tail:") || !strings.Contains(view, "fatal line") {
 		t.Fatalf("expected failure diagnostics to render in activity section, got: %s", view)
+	}
+	if got := lipgloss.Height(view); got > root.height {
+		t.Fatalf("expected modal shell height <= %d, got %d", root.height, got)
 	}
 }
 

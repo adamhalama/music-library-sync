@@ -57,7 +57,11 @@ Start here:
 	}
 
 	defaultConfigPath := os.Getenv("UDL_CONFIG")
+	defaultRekordboxConfigPath := os.Getenv("UDL_REKORDBOX_CONFIG")
 	root.PersistentFlags().StringVarP(&app.Opts.ConfigPath, "config", "c", defaultConfigPath, "Path to config file")
+	root.PersistentFlags().StringVar(&app.Opts.FreeDLConfigPath, "freedl-config", os.Getenv("UDL_FREEDL_CONFIG"), "Path to SoundCloud Free DL feature config")
+	root.PersistentFlags().StringVar(&app.Opts.RekordboxConfigPath, "rekordbox-config", defaultRekordboxConfigPath, "Path to Rekordbox sync feature config")
+	root.PersistentFlags().StringVar(&app.Opts.PlaylistsConfigPath, "playlists-config", os.Getenv("UDL_PLAYLISTS_CONFIG"), "Path to standalone playlists feature config")
 	root.PersistentFlags().BoolVar(&app.Opts.JSON, "json", false, "Emit newline-delimited JSON events")
 	root.PersistentFlags().BoolVarP(&app.Opts.Quiet, "quiet", "q", false, "Reduce output to errors and summary")
 	root.PersistentFlags().BoolVarP(&app.Opts.Verbose, "verbose", "v", false, "Increase diagnostic output")
@@ -75,6 +79,8 @@ Start here:
 	root.AddCommand(newValidateCommand(app))
 	root.AddCommand(newInitCommand(app))
 	root.AddCommand(newPromoteFreeDLCommand(app))
+	root.AddCommand(newRekordboxCommand(app))
+	root.AddCommand(newPlaylistCommand(app))
 	root.AddCommand(newVersionCommand(app))
 
 	return root

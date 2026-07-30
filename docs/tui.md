@@ -1,10 +1,13 @@
 # UDL TUI Guide
 
 `udl tui` launches an interactive Bubble Tea interface for the main workflows:
+- `Run Sync`
+- `Playlists`
+- `SoundCloud Free DL`
+- `Rekordbox Sync`
 - `Get Started`
 - `Credentials`
 - `Check System`
-- `Run Sync`
 - `Advanced Config`
 
 The TUI is additive. Existing CLI commands (`udl sync`, `udl doctor`, etc.) remain unchanged.
@@ -186,9 +189,81 @@ Cancellation also works while waiting in plan selection or prompt dialogs.
 - `s`: save from review or save step
 - `esc`: back, or prompt to discard unsaved changes
 
+## SoundCloud Free DL Workflow
+
+`SoundCloud Free DL` is a guarded capture-and-promote workflow backed by a separate feature config (`--freedl-config`, `UDL_FREEDL_CONFIG`, user `freedl.yaml`, or project `udl.freedl.yaml`).
+
+Flow:
+
+- if no enabled jobs exist, create or enable a Free DL job in the setup screen
+- choose an enabled Free DL job and plan limit
+- build a plan that streams SoundCloud rows first, then fills in local quality and Free DL availability as checks complete
+- select local tracks to fetch into the job buffer directory
+- build a promotion plan from successful downloads
+- choose target quality, select rows to promote, and confirm
+- copy originals to the configured backup directory before replacement
+- write capture, promotion, and result JSON logs under the job log directory
+
+Controls:
+
+- `j/k`: move inside job, setup, plan, and promotion lists
+- `e`: manage Free DL jobs from the job list
+- `a`: add a Free DL job from the job list or setup list
+- `[` / `]`: adjust the pre-plan track limit
+- `l`: type the pre-plan track limit
+- `u`: toggle unlimited pre-plan rows
+- `space`: toggle capture or promotion rows
+- `tab`: switch between Free DL setup list and form panes
+- `r`: review the canonical `freedl.yaml` preview in setup
+- `s`: save Free DL feature config
+- `t`: cycle promotion target format
+- `enter`: advance to plan, capture, confirm, or promote depending on phase
+- `x`: cancel an active planning/capture/promotion phase
+- `esc`: return when no active operation or confirmation is in progress
+
+Config behavior:
+
+- native edits save to `--freedl-config` when set, otherwise to the user `freedl.yaml`
+- `./udl.freedl.yaml` remains a runtime override; the setup screen warns when that project file exists while editing the user config
+- the starter job is not saveable until `source_url` is set
+- macOS HypeEdit handoff opens Helium by default; `UDL_FREEDL_BROWSER_APP` overrides the browser app
+
+## Playlists Workflow
+
+`Playlists` manages reusable Apple Music snapshots backed by a separate `playlists.yaml` feature config.
+
+- Opening the workflow reads only configuration and saved checksummed snapshots.
+- `enter` opens the selected cached playlist.
+- `j/k` moves between playlists or tracks.
+- `r` is the explicit Apple Music refresh action.
+- A failed or canceled refresh leaves the previous valid snapshot active.
+- `f` opens the selected snapshot in the FreeDL workflow.
+- `b` opens the selected snapshot in the Rekordbox workflow.
+- At 80×24, detail uses a one-line summary and reserves room for the selected track and path. At 110 columns and above, the full sidebar and extended metadata layout are used.
+
+The feature config can be selected with `--playlists-config` or `UDL_PLAYLISTS_CONFIG`; otherwise user and project config locations are merged according to the CLI config rules.
+
+## Rekordbox Sync Workflow
+
+`Rekordbox Sync` creates and reviews a checksummed Music.app-to-Rekordbox mirror plan before any database write.
+
+- Rekordbox must remain closed while planning or applying.
+- `udl` uses a private managed Python environment; the dependency screen can install or repair `pyrekordbox`.
+- Plans match tracks by normalized local path and retain every source row for review.
+- Missing, ambiguous, and duplicate rows appear in an `Apply Blockers` section with playlist, artist, title, and path.
+- A track listed twice in the same source playlist is reported as `duplicate_path`; v1 mirrors each track once and refuses the plan instead.
+- Incomplete plans are fail-closed and cannot write a partial mirror.
+- `d` toggles dry-run from review/done states.
+- `enter` advances only when the plan passes apply validation.
+- A real apply revalidates the unchanged plan and current Rekordbox state, writes a full backup, and then replaces membership.
+- The default backup root is `~/Music/rb-library-export`. CLI apply precedence is `--backup-dir`, plan value, then config/default.
+- The SHA-256 plan checksum detects plan modification; it does not authenticate who created the plan.
+
+Folder mappings and reusable destinations live in the separate `rekordbox.yaml` feature config selected by `--rekordbox-config` or `UDL_REKORDBOX_CONFIG`. The TUI can create, edit, and delete folder mappings atomically without rewriting `udl.yaml`.
+
 ## Current Limitations
 
-- `promote-freedl`, `version`, `validate`, and low-level `init` are not exposed on the public TUI home screen.
+- `version`, `validate`, and low-level `init` are not exposed on the public TUI home screen.
 - `sync` output style controls (`progress`, `preflight-summary`, `track-status`) are not currently configurable from TUI.
 - Workflow sidebar/top-nav switching is not active yet; use `esc` to return to the landing screen first.
 - The config editor rewrites canonical YAML; it does not preserve hand-written comments or original layout.

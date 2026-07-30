@@ -313,8 +313,41 @@ func renderTUIModal(base string, state tuiShellState, theme tuiShellTheme, layou
 		boxWidth = 24
 	}
 	box := theme.modalBox.Width(styleContentWidth(boxWidth, theme.modalBox)).Render(strings.Join(lines, "\n"))
-	centered := lipgloss.Place(shellMainSectionWidth(layout, theme), 0, lipgloss.Center, lipgloss.Top, box)
-	return theme.backdrop.Render(base) + "\n\n" + centered
+	return overlayTUIModal(theme.backdrop.Render(base), box, layout)
+}
+
+func overlayTUIModal(base string, box string, layout tuiShellLayout) string {
+	baseLines := strings.Split(base, "\n")
+	if len(baseLines) > layout.Height {
+		baseLines = baseLines[:layout.Height]
+	}
+	for len(baseLines) < layout.Height {
+		baseLines = append(baseLines, "")
+	}
+	boxLines := strings.Split(box, "\n")
+	boxHeight := len(boxLines)
+	boxWidth := lipgloss.Width(box)
+	if boxHeight > layout.Height {
+		boxLines = boxLines[:layout.Height]
+		boxHeight = len(boxLines)
+	}
+	y := (layout.Height - boxHeight) / 2
+	if y < 0 {
+		y = 0
+	}
+	x := (layout.Width - boxWidth) / 2
+	if x < 0 {
+		x = 0
+	}
+	prefix := strings.Repeat(" ", x)
+	for i, boxLine := range boxLines {
+		target := y + i
+		if target >= len(baseLines) {
+			break
+		}
+		baseLines[target] = prefix + boxLine
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
@@ -325,6 +358,12 @@ func (m tuiRootModel) shellState(layout tuiShellLayout) tuiShellState {
 		return buildCredentialsShellState(m, layout)
 	case tuiScreenInteractiveSync, tuiScreenSync:
 		return buildSyncShellState(m, layout)
+	case tuiScreenPlaylists:
+		return buildPlaylistShellState(m, layout)
+	case tuiScreenFreeDL:
+		return buildFreeDLShellState(m, layout)
+	case tuiScreenRekordboxSync:
+		return buildRekordboxShellState(m, layout)
 	case tuiScreenDoctor:
 		return buildDoctorShellState(m, layout)
 	case tuiScreenValidate:
@@ -454,8 +493,14 @@ func workflowNavigationItems(m tuiRootModel) []tuiSidebarSection {
 			active = item == "Credentials"
 		case tuiScreenInteractiveSync:
 			active = item == "Run Sync"
+		case tuiScreenPlaylists:
+			active = item == "Playlists"
+		case tuiScreenFreeDL:
+			active = item == "SoundCloud Free DL"
 		case tuiScreenSync:
 			active = item == "Run Sync"
+		case tuiScreenRekordboxSync:
+			active = item == "Rekordbox Sync"
 		case tuiScreenDoctor:
 			active = item == "Check System"
 		case tuiScreenValidate:
@@ -493,6 +538,12 @@ func landingWorkflowMeta(item string) string {
 		return "checks"
 	case "Run Sync":
 		return "interactive"
+	case "Playlists":
+		return "snapshots"
+	case "SoundCloud Free DL":
+		return "upgrade"
+	case "Rekordbox Sync":
+		return "music to RB"
 	case "Advanced Config":
 		return "editor"
 	case "Quit":
@@ -530,6 +581,12 @@ func landingWorkflowSummary(item string) string {
 		return "Verify tools, credentials, and folder access before syncing."
 	case "Run Sync":
 		return "Review enabled sources, preview the plan, and run a sync."
+	case "Playlists":
+		return "Manage saved playlist snapshots and run focused FreeDL or Rekordbox workflows."
+	case "SoundCloud Free DL":
+		return "Fetch Free DL upgrades into a buffer, back up originals, and promote selected tracks."
+	case "Rekordbox Sync":
+		return "Mirror Music.app favourites into a Rekordbox playlist with backup-first DB writes."
 	case "Advanced Config":
 		return "Open the full config editor for raw source and adapter settings."
 	case "Quit":

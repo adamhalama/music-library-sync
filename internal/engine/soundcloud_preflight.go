@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,8 @@ type soundCloudRemoteTrack struct {
 	Title string
 	URL   string
 }
+
+type SoundCloudRemoteTrack = soundCloudRemoteTrack
 
 type soundCloudSyncEntry struct {
 	RawLine  string
@@ -128,37 +131,96 @@ func enumerateSoundCloudTracksWithLimit(ctx context.Context, source config.Sourc
 	return parseSoundCloudTrackList(output), nil
 }
 
+func StreamSoundCloudTracks(ctx context.Context, source config.Source, limit int, onTrack func(SoundCloudRemoteTrack) error) ([]SoundCloudRemoteTrack, error) {
+	return enumerateSoundCloudTracksWithLimitStreaming(ctx, source, limit, onTrack)
+}
+
+func enumerateSoundCloudTracksWithLimitStreaming(ctx context.Context, source config.Source, limit int, onTrack func(SoundCloudRemoteTrack) error) ([]soundCloudRemoteTrack, error) {
+	listURL := effectiveSoundCloudListURL(source)
+	args := []string{
+		"--flat-playlist",
+		"--print",
+		"%(id)s\t%(title)s\t%(webpage_url)s",
+	}
+	if limit > 0 {
+		args = append(args, "--playlist-end", strconv.Itoa(limit))
+	}
+	args = append(args, listURL)
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("yt-dlp preflight failed for %s: %w", listURL, err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("yt-dlp preflight failed for %s: %w", listURL, err)
+	}
+
+	tracks := []soundCloudRemoteTrack{}
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		track, ok := parseSoundCloudTrackLine(scanner.Text())
+		if !ok {
+			continue
+		}
+		tracks = append(tracks, track)
+		if onTrack != nil {
+			if err := onTrack(track); err != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				return nil, err
+			}
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil && !errors.Is(scanErr, io.EOF) {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("yt-dlp preflight failed for %s: %w", listURL, scanErr)
+	}
+	if err := cmd.Wait(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return nil, fmt.Errorf("yt-dlp preflight failed for %s: %s", listURL, detail)
+		}
+		return nil, fmt.Errorf("yt-dlp preflight failed for %s: %w", listURL, err)
+	}
+	return tracks, nil
+}
+
 func parseSoundCloudTrackList(payload []byte) []soundCloudRemoteTrack {
 	scanner := bufio.NewScanner(bytes.NewReader(payload))
 	tracks := make([]soundCloudRemoteTrack, 0)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+		if track, ok := parseSoundCloudTrackLine(scanner.Text()); ok {
+			tracks = append(tracks, track)
 		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) == 0 {
-			continue
-		}
-		id := strings.TrimSpace(parts[0])
-		if id == "" || id == "NA" {
-			continue
-		}
-		title := ""
-		url := ""
-		if len(parts) > 1 {
-			title = strings.TrimSpace(parts[1])
-		}
-		if len(parts) > 2 {
-			url = strings.TrimSpace(parts[2])
-		}
-		tracks = append(tracks, soundCloudRemoteTrack{
-			ID:    id,
-			Title: title,
-			URL:   url,
-		})
 	}
 	return tracks
+}
+
+func parseSoundCloudTrackLine(raw string) (soundCloudRemoteTrack, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" {
+		return soundCloudRemoteTrack{}, false
+	}
+	parts := strings.SplitN(line, "\t", 3)
+	if len(parts) == 0 {
+		return soundCloudRemoteTrack{}, false
+	}
+	id := strings.TrimSpace(parts[0])
+	if id == "" || id == "NA" {
+		return soundCloudRemoteTrack{}, false
+	}
+	title := ""
+	url := ""
+	if len(parts) > 1 {
+		title = strings.TrimSpace(parts[1])
+	}
+	if len(parts) > 2 {
+		url = strings.TrimSpace(parts[2])
+	}
+	return soundCloudRemoteTrack{ID: id, Title: title, URL: url}, true
 }
 
 func parseSoundCloudSyncState(path string) (soundCloudSyncState, error) {

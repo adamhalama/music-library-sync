@@ -63,6 +63,7 @@ func NewSyncer(registry map[string]Adapter, runner ExecRunner, emitter output.Ev
 	parserRegistry.RegisterFactory("spotdl", adapterlog.NewSpotDLParser)
 	planRegistry := NewPlanRegistry()
 	planRegistry.Register("scdl", NewSCDLPlanProvider())
+	planRegistry.Register("scdl-freedl", NewSCDLPlanProvider())
 	planRegistry.Register("deemix", NewSpotifyDeemixPlanProvider())
 	return &Syncer{
 		Registry:     registry,

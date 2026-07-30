@@ -114,6 +114,7 @@ const (
 type PlanRow struct {
 	Index             int
 	RemoteID          string
+	RemoteURL         string
 	Title             string
 	Status            PlanRowStatus
 	Toggleable        bool

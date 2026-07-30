@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/freedl"
 )
 
 func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool) {
@@ -34,6 +35,9 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 	}
 	if err := config.Validate(cfg); err != nil {
 		if len(cfg.Sources) == 0 {
+			if tuiHasEnabledFreeDLConfig(app, cfg) || tuiHasValidRekordboxConfig(cfg) {
+				return startup, false
+			}
 			startup.Reason = tuiOnboardingReasonNoSources
 			startup.AutoStarted = true
 			startup.DetailLines = []string{"No sources are configured yet. The guided setup will create your first one."}
@@ -45,6 +49,9 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 		return startup, true
 	}
 	if len(cfg.Sources) == 0 {
+		if tuiHasEnabledFreeDLConfig(app, cfg) || tuiHasValidRekordboxConfig(cfg) {
+			return startup, false
+		}
 		startup.Reason = tuiOnboardingReasonNoSources
 		startup.AutoStarted = true
 		startup.DetailLines = []string{"No sources are configured yet. The guided setup will create your first one."}
@@ -54,4 +61,22 @@ func tuiDetectOnboardingState(app *AppContext) (tuiOnboardingStartupState, bool)
 		startup.DetailLines = []string{"The explicit config path does not exist yet, but your runtime config is still resolved elsewhere."}
 	}
 	return startup, false
+}
+
+func tuiHasEnabledFreeDLConfig(app *AppContext, main config.Config) bool {
+	if app == nil {
+		return false
+	}
+	cfg, err := freedl.Load(freedl.LoadOptions{
+		ExplicitPath: app.Opts.FreeDLConfigPath,
+		MainConfig:   main,
+	})
+	if err != nil {
+		return false
+	}
+	return len(freedl.EnabledJobs(cfg)) > 0
+}
+
+func tuiHasValidRekordboxConfig(cfg config.Config) bool {
+	return cfg.Rekordbox != nil && config.ValidateRekordbox(cfg) == nil
 }

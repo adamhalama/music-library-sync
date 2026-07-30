@@ -62,5 +62,22 @@ sources:
   #   adapter:
   #     kind: "spotdl"
   #     extra_args: ["--headless", "--print-errors"]
+
+# Optional Rekordbox playlist sync from Music.app:
+# rekordbox:
+#   db_dir: "~/Library/Pioneer/rekordbox"
+#   # python_bin/python_path are optional advanced overrides. If omitted,
+#   # UDL manages a private pyrekordbox venv under defaults.state_dir.
+#   python_bin: ""
+#   python_path: ""
+#   backup_dir: "~/Music/rb-library-export"
+#   playlist_sync:
+#     jobs:
+#       - id: "apple-favourites"
+#         music_playlist: "Favourites"
+#         music_playlist_id: "70C641CA78BB0F3C"
+#         rekordbox_playlist: "fav_imports"
+#         rekordbox_playlist_id: "3150438241"
+#         mode: "mirror"
 `, defaultStateDir(), "archive.txt", 1, 900)
 }

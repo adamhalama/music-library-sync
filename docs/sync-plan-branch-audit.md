@@ -47,7 +47,8 @@ Implemented behavior:
 - compact live progress plus compact activity history during sync
 
 Scope notes:
-- `promote-freedl` and `version` are still not exposed inside the TUI
+- SoundCloud Free DL capture/promotion is exposed as a dedicated TUI workflow
+- `version` is still not exposed inside the TUI
 - sync output-style knobs are still CLI-only
 
 ### 3. Structured progress/event pipeline

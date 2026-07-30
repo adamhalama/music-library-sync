@@ -8,9 +8,10 @@ const (
 )
 
 type Config struct {
-	Version  int      `yaml:"version"`
-	Defaults Defaults `yaml:"defaults"`
-	Sources  []Source `yaml:"sources"`
+	Version   int              `yaml:"version"`
+	Defaults  Defaults         `yaml:"defaults"`
+	Sources   []Source         `yaml:"sources"`
+	Rekordbox *RekordboxConfig `yaml:"rekordbox,omitempty"`
 }
 
 type Defaults struct {
@@ -49,6 +50,28 @@ type AdapterSpec struct {
 	Kind       string   `yaml:"kind"`
 	ExtraArgs  []string `yaml:"extra_args,omitempty"`
 	MinVersion string   `yaml:"min_version,omitempty"`
+}
+
+type RekordboxConfig struct {
+	DBDir        string                      `yaml:"db_dir,omitempty"`
+	PythonBin    string                      `yaml:"python_bin,omitempty"`
+	PythonPath   string                      `yaml:"python_path,omitempty"`
+	BackupDir    string                      `yaml:"backup_dir,omitempty"`
+	PlaylistSync RekordboxPlaylistSyncConfig `yaml:"playlist_sync,omitempty"`
+}
+
+type RekordboxPlaylistSyncConfig struct {
+	Jobs []RekordboxPlaylistSyncJob `yaml:"jobs,omitempty"`
+}
+
+type RekordboxPlaylistSyncJob struct {
+	ID                  string `yaml:"id"`
+	MusicPlaylist       string `yaml:"music_playlist,omitempty"`
+	MusicPlaylistID     string `yaml:"music_playlist_id,omitempty"`
+	RekordboxPlaylist   string `yaml:"rekordbox_playlist,omitempty"`
+	RekordboxPlaylistID string `yaml:"rekordbox_playlist_id,omitempty"`
+	Mode                string `yaml:"mode,omitempty"`
+	CreatePlaylist      *bool  `yaml:"create_playlist,omitempty"`
 }
 
 func DefaultConfig() Config {

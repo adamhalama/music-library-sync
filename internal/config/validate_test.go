@@ -105,6 +105,89 @@ func TestValidateFailure(t *testing.T) {
 	}
 }
 
+// Validate covers the rekordbox block too, so a malformed one is reported at
+// load instead of surfacing only when a rekordbox command runs.
+func TestValidateRejectsInvalidRekordboxBlock(t *testing.T) {
+	cfg := validRekordboxConfigForTest()
+	cfg.Rekordbox.DBDir = "relative/rekordbox"
+	cfg.Rekordbox.PlaylistSync = RekordboxPlaylistSyncConfig{Jobs: []RekordboxPlaylistSyncJob{
+		{ID: "favourites"},
+		{ID: "favourites"},
+		{ID: "other", Mode: "two-way"},
+	}}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatalf("expected validation error for invalid rekordbox block")
+	}
+	validationErr, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("expected ValidationError, got %T", err)
+	}
+	wants := []string{
+		"rekordbox.db_dir must resolve to an absolute path",
+		`duplicate rekordbox playlist sync job id "favourites"`,
+		`rekordbox playlist sync job "other" has unsupported mode "two-way"`,
+	}
+	for _, want := range wants {
+		found := false
+		for _, problem := range validationErr.Problems {
+			if problem == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected problem %q, got %v", want, validationErr.Problems)
+		}
+	}
+}
+
+func TestValidateAcceptsValidRekordboxBlock(t *testing.T) {
+	cfg := validRekordboxConfigForTest()
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected valid config with rekordbox block, got %v", err)
+	}
+}
+
+// ValidateRekordbox stays usable without any download sources, so rekordbox
+// commands work on a config that only configures rekordbox.
+func TestValidateRekordboxIgnoresMissingSources(t *testing.T) {
+	cfg := validRekordboxConfigForTest()
+	cfg.Sources = nil
+	if err := ValidateRekordbox(cfg); err != nil {
+		t.Fatalf("expected rekordbox-only validation to pass, got %v", err)
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected full validation to still require a source")
+	}
+}
+
+func validRekordboxConfigForTest() Config {
+	return Config{
+		Version: 1,
+		Defaults: Defaults{
+			StateDir:              "/tmp/udl-state",
+			ArchiveFile:           "archive.txt",
+			Threads:               1,
+			CommandTimeoutSeconds: 900,
+		},
+		Sources: []Source{{
+			ID:        "soundcloud-likes",
+			Type:      SourceTypeSoundCloud,
+			Enabled:   true,
+			TargetDir: "/tmp/music-sc",
+			URL:       "https://soundcloud.com/user",
+			StateFile: "soundcloud-likes.sync.scdl",
+			Adapter:   AdapterSpec{Kind: "scdl"},
+		}},
+		Rekordbox: &RekordboxConfig{
+			DBDir:     "/Users/test/Library/Pioneer/rekordbox",
+			BackupDir: "/Users/test/Music/rb-library-export",
+		},
+	}
+}
+
 func testBoolPtr(v bool) *bool {
 	return &v
 }

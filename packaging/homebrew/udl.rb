@@ -2,6 +2,7 @@ class Udl < Formula
   desc "Set up and sync local music libraries from SoundCloud and Spotify sources"
   homepage "https://github.com/adamhalama/music-library-sync"
   version "0.1.0"
+  depends_on "python@3.12"
   depends_on "scdl"
   depends_on "yt-dlp"
 
