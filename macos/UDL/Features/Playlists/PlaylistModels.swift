@@ -47,7 +47,7 @@ struct PlaylistSnapshot: Codable, Sendable {
     let providerPlaylist: String
     let providerPlaylistID: String?
     let refreshedAt: Date
-    let tracks: [PlaylistTrack]
+    @DefaultEmpty var tracks: [PlaylistTrack]
     let checksumSHA256: String
 
     enum CodingKeys: String, CodingKey {
@@ -75,7 +75,7 @@ struct PlaylistListRow: Codable, Sendable, Identifiable {
 }
 
 struct PlaylistListResult: Codable, Sendable {
-    let playlists: [PlaylistListRow]
+    @DefaultEmpty var playlists: [PlaylistListRow]
 }
 
 struct PlaylistShowResult: Codable, Sendable {
@@ -85,7 +85,9 @@ struct PlaylistShowResult: Codable, Sendable {
 
 struct PlaylistConfig: Codable, Sendable {
     let version: Int
-    var playlists: [PlaylistDefinition]
+    // `playlists.config.read` returns null here for anyone who has never
+    // defined a playlist, which is every fresh install.
+    @DefaultEmpty var playlists: [PlaylistDefinition]
 }
 
 struct PlaylistConfigResult: Codable, Sendable {
@@ -131,7 +133,7 @@ struct ProviderPlaylist: Codable, Sendable, Identifiable {
 }
 
 struct ProviderPlaylistListResult: Codable, Sendable {
-    let playlists: [ProviderPlaylist]
+    @DefaultEmpty var playlists: [ProviderPlaylist]
 }
 
 struct PlaylistChanges: Codable, Sendable {

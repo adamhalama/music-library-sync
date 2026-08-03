@@ -1,6 +1,6 @@
 import Foundation
 
-struct MainConfigDefaults: Codable, Sendable {
+struct MainConfigDefaults: Codable, Sendable, Equatable {
     var stateDir: String
     var archiveFile: String
     var threads: Int
@@ -16,7 +16,7 @@ struct MainConfigDefaults: Codable, Sendable {
     }
 }
 
-struct SourceSyncPolicy: Codable, Sendable {
+struct SourceSyncPolicy: Codable, Sendable, Equatable {
     var breakOnExisting: Bool?
     var askOnExisting: Bool?
     var localIndexCache: Bool?
@@ -28,7 +28,7 @@ struct SourceSyncPolicy: Codable, Sendable {
     }
 }
 
-struct SourceAdapter: Codable, Sendable {
+struct SourceAdapter: Codable, Sendable, Equatable {
     var kind: String
     var extraArgs: [String]?
     var minVersion: String?
@@ -40,7 +40,7 @@ struct SourceAdapter: Codable, Sendable {
     }
 }
 
-struct MainConfigSource: Codable, Sendable, Identifiable {
+struct MainConfigSource: Codable, Sendable, Identifiable, Equatable {
     let id: String
     var type: String
     var enabled: Bool
@@ -59,10 +59,12 @@ struct MainConfigSource: Codable, Sendable, Identifiable {
     }
 }
 
-struct MainConfig: Codable, Sendable {
+struct MainConfig: Codable, Sendable, Equatable {
     let version: Int
     var defaults: MainConfigDefaults
-    var sources: [MainConfigSource]
+    // A config whose `sources:` key is absent decodes to no sources, which is
+    // the state onboarding exists to resolve — not a decode failure.
+    @DefaultEmpty var sources: [MainConfigSource]
     let rekordbox: JSONValue?
 }
 
@@ -102,7 +104,7 @@ struct OnboardingState: Codable, Sendable {
     let autoStarted: Bool
     let configPath: String
     let configContextLabel: String
-    let detailLines: [String]
+    @DefaultEmpty var detailLines: [String]
     let defaults: MainConfigDefaults
 
     enum CodingKeys: String, CodingKey {
@@ -134,7 +136,7 @@ struct StartupAttention: Codable, Sendable {
     let severity: String
     let primaryKind: CredentialKind
     let primarySourceID: String
-    let affectedSourceIDs: [String]
+    @DefaultEmpty var affectedSourceIDs: [String]
     let issueCount: Int
     let primaryActionLabel: String
     let headline: String

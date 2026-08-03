@@ -14,7 +14,6 @@
 		A10000000000000000000005 /* AgentProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* AgentProcess.swift */; };
 		A10000000000000000000006 /* UDLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* UDLClient.swift */; };
 		A10000000000000000000007 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* AppState.swift */; };
-		A10000000000000000000008 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* DashboardView.swift */; };
 		A10000000000000000000009 /* PendingPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* PendingPromptView.swift */; };
 		A1000000000000000000000A /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* DoctorView.swift */; };
 		A1000000000000000000000B /* CredentialsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* CredentialsView.swift */; };
@@ -32,6 +31,38 @@
 		A10000000000000000000019 /* ConfigModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* ConfigModels.swift */; };
 		A1000000000000000000001A /* ConfigEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* ConfigEditorView.swift */; };
 		A1000000000000000000001B /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001B /* OnboardingView.swift */; };
+		A10000000000000000000020 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000020 /* Theme.swift */; };
+		A10000000000000000000021 /* Metrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000021 /* Metrics.swift */; };
+		A10000000000000000000022 /* StatusPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* StatusPill.swift */; };
+		A10000000000000000000023 /* SeverityBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023 /* SeverityBadge.swift */; };
+		A10000000000000000000024 /* ConstraintNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* ConstraintNote.swift */; };
+		A10000000000000000000025 /* LifecycleChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* LifecycleChip.swift */; };
+		A10000000000000000000026 /* WaitingBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* WaitingBanner.swift */; };
+		A10000000000000000000027 /* SourceGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027 /* SourceGlyph.swift */; };
+		A10000000000000000000028 /* Callout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000028 /* Callout.swift */; };
+		A10000000000000000000029 /* Cards.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* Cards.swift */; };
+		A1000000000000000000002A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002A /* EmptyStateView.swift */; };
+		A1000000000000000000002B /* PathField.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* PathField.swift */; };
+		A1000000000000000000002C /* StatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002C /* StatusBar.swift */; };
+		A1000000000000000000002D /* ShellChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002D /* ShellChrome.swift */; };
+		A1000000000000000000002E /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002E /* SidebarView.swift */; };
+		A1000000000000000000002F /* AppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002F /* AppShellView.swift */; };
+		A10000000000000000000030 /* ToolbarModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000030 /* ToolbarModifier.swift */; };
+		A10000000000000000000031 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000031 /* SettingsView.swift */; };
+		A10000000000000000000032 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032 /* HomeView.swift */; };
+		A10000000000000000000034 /* SyncRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000034 /* SyncRunView.swift */; };
+		A10000000000000000000033 /* SyncPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000033 /* SyncPlanView.swift */; };
+		A10000000000000000000037 /* BoundedContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* BoundedContent.swift */; };
+		A10000000000000000000036 /* CredentialModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* CredentialModels.swift */; };
+		A10000000000000000000035 /* DoctorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000035 /* DoctorModels.swift */; };
+		A10000000000000000000038 /* FreeDLPhaseBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000038 /* FreeDLPhaseBar.swift */; };
+		A10000000000000000000039 /* FreeDLJobForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000039 /* FreeDLJobForm.swift */; };
+		A1000000000000000000003A /* RekordboxConfigEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003A /* RekordboxConfigEditor.swift */; };
+		A100000000000000000003B /* MusicDuration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003B /* MusicDuration.swift */; };
+		A100000000000000000003C /* PlaylistDefinitionEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003C /* PlaylistDefinitionEditor.swift */; };
+		A100000000000000000003D /* ConfigDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003D /* ConfigDraft.swift */; };
+		A100000000000000000003E /* ConfigSourceForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003E /* ConfigSourceForm.swift */; };
+		A100000000000000000003F /* SourceEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003F /* SourceEditorView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,7 +83,6 @@
 		B10000000000000000000005 /* AgentProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/AgentProcess.swift; sourceTree = "<group>"; };
 		B10000000000000000000006 /* UDLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/UDLClient.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState.swift; sourceTree = "<group>"; };
-		B10000000000000000000008 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/DashboardView.swift; sourceTree = "<group>"; };
 		B10000000000000000000009 /* PendingPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/PendingPromptView.swift; sourceTree = "<group>"; };
 		B1000000000000000000000A /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Doctor/DoctorView.swift; sourceTree = "<group>"; };
 		B1000000000000000000000B /* CredentialsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Credentials/CredentialsView.swift; sourceTree = "<group>"; };
@@ -72,6 +102,38 @@
 		B10000000000000000000019 /* ConfigModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigModels.swift; sourceTree = "<group>"; };
 		B1000000000000000000001A /* ConfigEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigEditorView.swift; sourceTree = "<group>"; };
 		B1000000000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Onboarding/OnboardingView.swift; sourceTree = "<group>"; };
+		B10000000000000000000020 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/Theme.swift; sourceTree = "<group>"; };
+		B10000000000000000000021 /* Metrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/Metrics.swift; sourceTree = "<group>"; };
+		B10000000000000000000022 /* StatusPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/StatusPill.swift; sourceTree = "<group>"; };
+		B10000000000000000000023 /* SeverityBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/SeverityBadge.swift; sourceTree = "<group>"; };
+		B10000000000000000000024 /* ConstraintNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/ConstraintNote.swift; sourceTree = "<group>"; };
+		B10000000000000000000025 /* LifecycleChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/LifecycleChip.swift; sourceTree = "<group>"; };
+		B10000000000000000000026 /* WaitingBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/WaitingBanner.swift; sourceTree = "<group>"; };
+		B10000000000000000000027 /* SourceGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/SourceGlyph.swift; sourceTree = "<group>"; };
+		B10000000000000000000028 /* Callout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/Callout.swift; sourceTree = "<group>"; };
+		B10000000000000000000029 /* Cards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/Cards.swift; sourceTree = "<group>"; };
+		B1000000000000000000002A /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/EmptyStateView.swift; sourceTree = "<group>"; };
+		B1000000000000000000002B /* PathField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/PathField.swift; sourceTree = "<group>"; };
+		B1000000000000000000002C /* StatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/StatusBar.swift; sourceTree = "<group>"; };
+		B1000000000000000000002D /* ShellChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Shell/ShellChrome.swift; sourceTree = "<group>"; };
+		B1000000000000000000002E /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Shell/SidebarView.swift; sourceTree = "<group>"; };
+		B1000000000000000000002F /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Shell/AppShellView.swift; sourceTree = "<group>"; };
+		B10000000000000000000030 /* ToolbarModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Shell/ToolbarModifier.swift; sourceTree = "<group>"; };
+		B10000000000000000000031 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		B10000000000000000000032 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/HomeView.swift; sourceTree = "<group>"; };
+		B10000000000000000000034 /* SyncRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Sync/SyncRunView.swift; sourceTree = "<group>"; };
+		B10000000000000000000033 /* SyncPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Sync/SyncPlanView.swift; sourceTree = "<group>"; };
+		B10000000000000000000037 /* BoundedContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/BoundedContent.swift; sourceTree = "<group>"; };
+		B10000000000000000000036 /* CredentialModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Credentials/CredentialModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000035 /* DoctorModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Doctor/DoctorModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000038 /* FreeDLPhaseBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/FreeDL/FreeDLPhaseBar.swift; sourceTree = "<group>"; };
+		B10000000000000000000039 /* FreeDLJobForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/FreeDL/FreeDLJobForm.swift; sourceTree = "<group>"; };
+		B1000000000000000000003A /* RekordboxConfigEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Rekordbox/RekordboxConfigEditor.swift; sourceTree = "<group>"; };
+		B100000000000000000003B /* MusicDuration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem/MusicDuration.swift; sourceTree = "<group>"; };
+		B100000000000000000003C /* PlaylistDefinitionEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Playlists/PlaylistDefinitionEditor.swift; sourceTree = "<group>"; };
+		B100000000000000000003D /* ConfigDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigDraft.swift; sourceTree = "<group>"; };
+		B100000000000000000003E /* ConfigSourceForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigSourceForm.swift; sourceTree = "<group>"; };
+		B100000000000000000003F /* SourceEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/SourceEditorView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -99,8 +161,7 @@
 				B10000000000000000000005 /* AgentProcess.swift */,
 				B10000000000000000000006 /* UDLClient.swift */,
 				B10000000000000000000007 /* AppState.swift */,
-				B10000000000000000000008 /* DashboardView.swift */,
-				B10000000000000000000009 /* PendingPromptView.swift */,
+						B10000000000000000000009 /* PendingPromptView.swift */,
 				B1000000000000000000000A /* DoctorView.swift */,
 				B1000000000000000000000B /* CredentialsView.swift */,
 				B10000000000000000000011 /* SyncModels.swift */,
@@ -114,6 +175,38 @@
 				B10000000000000000000019 /* ConfigModels.swift */,
 				B1000000000000000000001A /* ConfigEditorView.swift */,
 				B1000000000000000000001B /* OnboardingView.swift */,
+				B10000000000000000000020 /* Theme.swift */,
+				B10000000000000000000021 /* Metrics.swift */,
+				B10000000000000000000022 /* StatusPill.swift */,
+				B10000000000000000000023 /* SeverityBadge.swift */,
+				B10000000000000000000024 /* ConstraintNote.swift */,
+				B10000000000000000000025 /* LifecycleChip.swift */,
+				B10000000000000000000026 /* WaitingBanner.swift */,
+				B10000000000000000000027 /* SourceGlyph.swift */,
+				B10000000000000000000028 /* Callout.swift */,
+				B10000000000000000000029 /* Cards.swift */,
+				B1000000000000000000002A /* EmptyStateView.swift */,
+				B1000000000000000000002B /* PathField.swift */,
+				B1000000000000000000002C /* StatusBar.swift */,
+				B1000000000000000000002D /* ShellChrome.swift */,
+				B1000000000000000000002E /* SidebarView.swift */,
+				B1000000000000000000002F /* AppShellView.swift */,
+				B10000000000000000000030 /* ToolbarModifier.swift */,
+				B10000000000000000000031 /* SettingsView.swift */,
+				B10000000000000000000032 /* HomeView.swift */,
+				B10000000000000000000034 /* SyncRunView.swift */,
+				B10000000000000000000033 /* SyncPlanView.swift */,
+				B10000000000000000000037 /* BoundedContent.swift */,
+				B10000000000000000000036 /* CredentialModels.swift */,
+				B10000000000000000000035 /* DoctorModels.swift */,
+				B10000000000000000000038 /* FreeDLPhaseBar.swift */,
+				B10000000000000000000039 /* FreeDLJobForm.swift */,
+				B1000000000000000000003A /* RekordboxConfigEditor.swift */,
+				B100000000000000000003B /* MusicDuration.swift */,
+				B100000000000000000003C /* PlaylistDefinitionEditor.swift */,
+				B100000000000000000003D /* ConfigDraft.swift */,
+				B100000000000000000003E /* ConfigSourceForm.swift */,
+				B100000000000000000003F /* SourceEditorView.swift */,
 			);
 			path = UDL;
 			sourceTree = "<group>";
@@ -235,7 +328,6 @@
 				A10000000000000000000005 /* AgentProcess.swift in Sources */,
 				A10000000000000000000006 /* UDLClient.swift in Sources */,
 				A10000000000000000000007 /* AppState.swift in Sources */,
-				A10000000000000000000008 /* DashboardView.swift in Sources */,
 				A10000000000000000000009 /* PendingPromptView.swift in Sources */,
 				A1000000000000000000000A /* DoctorView.swift in Sources */,
 				A1000000000000000000000B /* CredentialsView.swift in Sources */,
@@ -250,6 +342,38 @@
 				A10000000000000000000019 /* ConfigModels.swift in Sources */,
 				A1000000000000000000001A /* ConfigEditorView.swift in Sources */,
 				A1000000000000000000001B /* OnboardingView.swift in Sources */,
+				A10000000000000000000020 /* Theme.swift in Sources */,
+				A10000000000000000000021 /* Metrics.swift in Sources */,
+				A10000000000000000000022 /* StatusPill.swift in Sources */,
+				A10000000000000000000023 /* SeverityBadge.swift in Sources */,
+				A10000000000000000000024 /* ConstraintNote.swift in Sources */,
+				A10000000000000000000025 /* LifecycleChip.swift in Sources */,
+				A10000000000000000000026 /* WaitingBanner.swift in Sources */,
+				A10000000000000000000027 /* SourceGlyph.swift in Sources */,
+				A10000000000000000000028 /* Callout.swift in Sources */,
+				A10000000000000000000029 /* Cards.swift in Sources */,
+				A1000000000000000000002A /* EmptyStateView.swift in Sources */,
+				A1000000000000000000002B /* PathField.swift in Sources */,
+				A1000000000000000000002C /* StatusBar.swift in Sources */,
+				A1000000000000000000002D /* ShellChrome.swift in Sources */,
+				A1000000000000000000002E /* SidebarView.swift in Sources */,
+				A1000000000000000000002F /* AppShellView.swift in Sources */,
+				A10000000000000000000030 /* ToolbarModifier.swift in Sources */,
+				A10000000000000000000031 /* SettingsView.swift in Sources */,
+				A10000000000000000000032 /* HomeView.swift in Sources */,
+				A10000000000000000000034 /* SyncRunView.swift in Sources */,
+				A10000000000000000000033 /* SyncPlanView.swift in Sources */,
+				A10000000000000000000037 /* BoundedContent.swift in Sources */,
+				A10000000000000000000036 /* CredentialModels.swift in Sources */,
+				A10000000000000000000035 /* DoctorModels.swift in Sources */,
+				A10000000000000000000038 /* FreeDLPhaseBar.swift in Sources */,
+				A10000000000000000000039 /* FreeDLJobForm.swift in Sources */,
+				A1000000000000000000003A /* RekordboxConfigEditor.swift in Sources */,
+				A100000000000000000003B /* MusicDuration.swift in Sources */,
+				A100000000000000000003C /* PlaylistDefinitionEditor.swift in Sources */,
+				A100000000000000000003D /* ConfigDraft.swift in Sources */,
+				A100000000000000000003E /* ConfigSourceForm.swift in Sources */,
+				A100000000000000000003F /* SourceEditorView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

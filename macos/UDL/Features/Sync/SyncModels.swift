@@ -38,13 +38,76 @@ struct SourceCapability: Codable, Sendable, Identifiable {
 }
 
 struct SourceCapabilitiesResult: Codable, Sendable {
-    let sources: [SourceCapability]
+    @DefaultEmpty var sources: [SourceCapability]
 }
 
 struct SyncSourceOptions: Sendable {
     var selected = true
     var downloadOrder: DownloadOrder
     var planWindow: PlanWindow
+}
+
+/// C17 — `SyncStartParams` carries `ask_on_existing` *and* a separate
+/// `ask_on_existing_set` flag, so "leave the decision to udl" is a third state
+/// rather than a synonym for "never ask". The GUI used to hardcode both to
+/// `false`, silently choosing on the user's behalf.
+enum AskOnExistingPolicy: String, CaseIterable, Identifiable, Sendable {
+    case backendDefault
+    case ask
+    case never
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .backendDefault: "udl decides"
+        case .ask: "Ask me"
+        case .never: "Never ask"
+        }
+    }
+
+    /// The `ask_on_existing_set` flag: false leaves the choice to udl.
+    var isSet: Bool { self != .backendDefault }
+    /// The `ask_on_existing` value, meaningful only when `isSet`.
+    var value: Bool { self == .ask }
+}
+
+/// C17 — `track_status` on the wire. `none` is spelled `off` here so it never
+/// collides with `Optional.none` at a call site.
+enum TrackStatusMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case off = "none"
+    case count
+    case names
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .count: "Count only"
+        case .names: "Track names"
+        }
+    }
+}
+
+/// The one place a sync run's defaults are written. `AppState` initialises its
+/// published properties from here and `resetSyncAdvanced()` returns to here, so
+/// an initialiser and a reset cannot drift apart — which is exactly how
+/// `dryRun` once ended up claiming one default in a comment and another in code.
+enum SyncDefaults {
+    /// C1 — the plan exists only inside a run, so the run the app offers by
+    /// default has to be the reversible one.
+    static let dryRun = true
+    static let unlimited = false
+    static let planLimit = 50
+    static let timeoutSeconds = 0
+    // C17 — these five were hardcoded inside `AppState.startSync()` before the
+    // redesign surfaced them. The values reproduce exactly what it used to send.
+    static let planWindow: PlanWindow = .first
+    static let askOnExisting: AskOnExistingPolicy = .backendDefault
+    static let scanGaps = false
+    static let noPreflight = false
+    static let trackStatus: TrackStatusMode = .off
 }
 
 struct SyncStartParams: Codable, Sendable {
@@ -60,7 +123,7 @@ struct SyncStartParams: Codable, Sendable {
     let askOnExistingSet: Bool
     let scanGaps: Bool
     let noPreflight: Bool
-    let trackStatus: String
+    let trackStatus: TrackStatusMode
 
     enum CodingKeys: String, CodingKey {
         case sourceIDs = "source_ids"
@@ -123,12 +186,71 @@ struct PlanRow: Codable, Sendable, Identifiable {
         case title, status, toggleable
         case selectedByDefault = "selected_by_default"
     }
+
+    /// The short label the plan table and its filter both use.
+    var statusLabel: String {
+        switch status {
+        case "missing_new": "New"
+        case "missing_known_gap": "Gap"
+        case "already_downloaded": "Have"
+        default: status.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    var statusSeverity: Severity {
+        switch status {
+        case "missing_new": .info
+        case "missing_known_gap": .warn
+        case "already_downloaded": .ok
+        default: .idle
+        }
+    }
+
+    /// Why a locked row cannot be queued. Shown when the user clicks the lock
+    /// rather than letting the click do nothing.
+    var lockReason: String {
+        switch status {
+        case "already_downloaded":
+            "Already downloaded — udl will not re-queue a track its state file already records."
+        default:
+            "udl sent this row as not toggleable (status: \(status.replacingOccurrences(of: "_", with: " ")))."
+        }
+    }
+}
+
+/// The plan table's segmented filter, matching `sync-plan.html`.
+enum PlanRowFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case new
+    case gaps
+    case have
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: "All"
+        case .new: "New"
+        case .gaps: "Gaps"
+        case .have: "Have"
+        }
+    }
+
+    func includes(_ row: PlanRow) -> Bool {
+        switch self {
+        case .all: true
+        case .new: row.status == "missing_new"
+        case .gaps: row.status == "missing_known_gap"
+        case .have: row.status == "already_downloaded"
+        }
+    }
 }
 
 struct SelectRowsParams: Codable, Sendable {
     let runID: String
     let sourceID: String
-    let rows: [PlanRow]
+    // A source udl planned to nothing still asks, and sends no rows at all.
+    @DefaultEmpty var rows: [PlanRow]
     let details: PlanSourceDetails
     let downloadOrder: DownloadOrder
     let planWindow: PlanWindow
@@ -211,8 +333,8 @@ struct ActivityEntry: Codable, Sendable, Identifiable {
 struct SourceSnapshot: Codable, Sendable {
     let lifecycle: String
     let confirmed: Bool
-    let rows: [TrackRow]
-    let activity: [ActivityEntry]
+    @DefaultEmpty var rows: [TrackRow]
+    @DefaultEmpty var activity: [ActivityEntry]
 
     var includedCount: Int { rows.filter { $0.runScope == "included" }.count }
     var downloadedCount: Int { rows.filter { $0.runtimeStatus == "downloaded" }.count }
@@ -315,6 +437,10 @@ enum SyncRunPhase: String, Sendable {
 struct SyncRunState: Sendable {
     var runID: String?
     var phase: SyncRunPhase = .idle
+    /// C2 — the sources sent to `sync.start`, in order. udl plans them one at a
+    /// time, so this is the only thing that makes "Source 2 of 4" honest: the
+    /// sources that have not been reached yet emit no events at all.
+    var requestedSourceIDs: [String] = []
     var sources: [String: SourceSnapshot] = [:]
     var activity: [OutputEvent] = []
     var progress: StructuredProgressSnapshot?

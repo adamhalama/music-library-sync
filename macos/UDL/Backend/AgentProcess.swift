@@ -67,14 +67,14 @@ final class AgentProcess: ObservableObject {
         process.terminationHandler = { [weak self] process in
             Task { @MainActor in
                 guard let self else { return }
+                // `stop()` may already have torn this generation down and
+                // launched a replacement. Clearing unconditionally here would
+                // then delete the *new* process, so only the generation that
+                // is still current may act.
+                guard self.process === process else { return }
                 self.stderrPipe?.fileHandleForReading.readabilityHandler = nil
                 await self.connection?.close(reason: "backend exited with status \(process.terminationStatus)")
-                self.process = nil
-                self.client = nil
-                self.connection = nil
-                self.stdinPipe = nil
-                self.stdoutPipe = nil
-                self.stderrPipe = nil
+                self.teardown()
                 if self.stopping {
                     self.state = .stopped
                 } else {
@@ -133,6 +133,27 @@ final class AgentProcess: ObservableObject {
             kill(process.processIdentifier, SIGKILL)
         }
         await connection?.close(reason: "application shutdown")
+        // `terminationHandler` runs on its own queue and hops to the main
+        // actor, so it has usually not run yet. `restart()` calls `launch()`
+        // straight after this, and `launch()` returns the existing client when
+        // `process` is still set — which would hand back the client of the
+        // connection just closed, and the next request would fail with
+        // "connection is closed". Tearing down here makes the stop synchronous
+        // from the caller's point of view.
+        teardown()
+        state = .stopped
+    }
+
+    /// Drops one backend generation. Safe to run twice: the termination
+    /// handler and `stop()` race, and whichever arrives second finds nothing.
+    private func teardown() {
+        stderrPipe?.fileHandleForReading.readabilityHandler = nil
+        process = nil
+        client = nil
+        connection = nil
+        stdinPipe = nil
+        stdoutPipe = nil
+        stderrPipe = nil
     }
 
     private func appendStderr(_ chunk: String) {

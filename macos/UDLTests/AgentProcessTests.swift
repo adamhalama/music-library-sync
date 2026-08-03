@@ -48,6 +48,17 @@ final class AgentProcessTests: XCTestCase {
         XCTAssertEqual(process.state, .running)
         await process.stop()
         XCTAssertEqual(process.state, .stopped)
+
+        // `stop()` used to leave `process` set until the termination handler
+        // hopped to the main actor, so `restart()` handed back the client of
+        // the connection it had just closed and the next request failed with
+        // "connection is closed". Onboarding's Finish Setup hit this every
+        // time. A restarted backend must answer.
+        let restarted = try await process.restart(workingDirectory: directory)
+        let reinitialized = try await restarted.initialize()
+        XCTAssertEqual(reinitialized.build.version, "fixture")
+        XCTAssertEqual(process.state, .running)
+        await process.stop()
     }
 
     func testUnexpectedExitIsRecoverableState() async throws {

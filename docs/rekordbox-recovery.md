@@ -37,7 +37,7 @@ Use an isolated database copy, never the live library:
 4. Verify the intended playlist mutation.
 5. Follow the restore procedure above.
 6. Compare the restored directory with the pre-apply fixture and record the
-   result in `IMPLEMENTATION.md`.
+   result in the active `IMPLEMENTATION.md` tracker.
 
 The validation is incomplete until both the apply and restore have succeeded
 on the isolated copy.

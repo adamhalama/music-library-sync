@@ -15,3 +15,8 @@ Archived work:
 - `tui-redesign-implementation-plan.md` — shared-shell Bubble Tea redesign
 - `freedl-playlist-rekordbox-plan.md` — completed Free DL, playlist, and Rekordbox integration plan
 - `freedl-playlist-rekordbox-implementation.md` — completed implementation record and evidence
+- `native-macos-frontend-plan.md` — completed native SwiftUI frontend and agent-protocol plan
+- `native-macos-frontend-implementation.md` — completed implementation record and evidence for that frontend
+
+The native macOS frontend reached workflow parity with the frozen Bubble Tea TUI; its
+deliberately deferred visual-design pass is the subject of the current root plan.

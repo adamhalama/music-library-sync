@@ -135,6 +135,62 @@ final class JSONRPCConnectionTests: XCTestCase {
         XCTAssertEqual(values, ["prompt", "run"])
     }
 
+    /// Docking the plan out of the sheet must not change the wire ordering:
+    /// a pending `ui.selectRows` is still answered before `run.cancel` goes
+    /// out, otherwise Go stays blocked on a request nobody will ever reply to.
+    func testDockedPlanPromptRepliesBeforeCancelingRun() async throws {
+        actor Recorder {
+            var values: [String] = []
+            func append(_ value: String) { values.append(value) }
+        }
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let connection = JSONRPCConnection(
+            readHandle: inbound.fileHandleForReading,
+            writeHandle: outbound.fileHandleForWriting
+        )
+        await connection.start()
+        try writeJSON([
+            "jsonrpc": "2.0", "id": "plan-1", "method": "ui.selectRows",
+            "params": [
+                "run_id": "run-9",
+                "source_id": "sc-likes",
+                "rows": [],
+                "details": [:],
+                "download_order": "newest_first",
+                "plan_window": "first",
+            ],
+        ], to: inbound.fileHandleForWriting)
+        var requests = connection.uiRequests.makeAsyncIterator()
+        let request = try XCTUnwrap(await requests.next())
+        XCTAssertEqual(request.kind, .selectRows)
+
+        let recorder = Recorder()
+        await performOrderedCancellation(
+            answerPending: {
+                try? await connection.respond(
+                    to: request,
+                    result: .object([
+                        "selected_indices": .array([]),
+                        "download_order": .string("newest_first"),
+                        "canceled": .bool(true),
+                        "rebuild": .bool(false),
+                        "plan_window": .string("first"),
+                    ])
+                )
+                await recorder.append("prompt")
+            },
+            cancelRun: { await recorder.append("run") }
+        )
+
+        let reply = try readJSONObject(from: outbound.fileHandleForReading)
+        XCTAssertEqual(reply["id"] as? String, "plan-1")
+        XCTAssertEqual((reply["result"] as? [String: Any])?["canceled"] as? Bool, true)
+        let values = await recorder.values
+        XCTAssertEqual(values, ["prompt", "run"])
+        await connection.close()
+    }
+
     private func writeJSON(_ object: [String: Any], to handle: FileHandle) throws {
         var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         data.append(0x0A)

@@ -4,16 +4,95 @@ import Foundation
 
 @MainActor
 final class AppState: ObservableObject {
-    enum Destination: String, CaseIterable, Identifiable {
+    enum Destination: String, CaseIterable, Identifiable, Hashable {
         case onboarding = "Welcome"
-        case doctor = "Doctor"
-        case credentials = "Credentials"
-        case sync = "Sync"
+        case home = "Home"
+        case sync = "Run Sync"
+        case freeDL = "SoundCloud Free DL"
+        case rekordbox = "Rekordbox Sync"
         case playlists = "Playlists"
-        case freeDL = "Free DL"
-        case rekordbox = "Rekordbox"
-        case config = "Configuration"
+        case doctor = "Check System"
+        case credentials = "Credentials"
+        case config = "Advanced Config"
         var id: String { rawValue }
+    }
+
+    /// One derived attention value, read by the sidebar badges, Home, and
+    /// Doctor alike, so the same condition is never counted two ways.
+    struct Attention: Equatable {
+        var doctorErrors = 0
+        var doctorWarnings = 0
+        var doctorPassed = 0
+        var unhealthyCredentials = 0
+        var rekordboxBlockers = 0
+        var freeDLSelectable = 0
+        var playlistsWithoutSnapshot = 0
+        var configProblems = 0
+        var syncNeedsYou = false
+        var syncActive = false
+        var syncRemaining = 0
+
+        var hasBlockingWork: Bool { doctorErrors > 0 || unhealthyCredentials > 0 || rekordboxBlockers > 0 }
+    }
+
+    /// C15 — the backend can exit or EOF at any time, and a restart never
+    /// replays mutating requests.
+    struct BackendRecovery: Equatable {
+        var message: String
+        var interrupted: [Destination]
+    }
+
+    /// C14 — `config.writeFile` is guarded by the SHA of the content that was
+    /// read. A mismatch is not a generic save error: nothing was written, and
+    /// the user has two real choices. Keeping it as its own value rather than a
+    /// string means the screen can offer both instead of printing a sentence.
+    struct ConfigConflict: Equatable {
+        var path: String
+        var expectedSHA256: String
+        var actualSHA256: String
+    }
+
+    /// C11 — a refresh that fails or is canceled keeps the previous snapshot,
+    /// and that has to read differently from a refresh that succeeded. The
+    /// message alone cannot carry it; the severity does.
+    struct PlaylistStatus: Equatable {
+        var message: String
+        var severity: Severity
+        /// True while the message describes an outcome that preserved the
+        /// previous snapshot, so the screen can say so without re-deriving it.
+        var preservedPreviousSnapshot = false
+    }
+
+    /// What a workflow last said about itself. A failure caused by an action on
+    /// a screen belongs on that screen, so every workflow reports through one of
+    /// these rather than through `alertMessage`, which `UDLApp` renders as a
+    /// blocking modal and which is reserved for session-level failures no screen
+    /// owns — launch, restart, and a protocol frame the app cannot answer.
+    ///
+    /// `ExpressibleByStringLiteral` keeps the informational assignments reading
+    /// as plain strings; only a failure has to name its severity.
+    struct WorkflowStatus: Equatable, ExpressibleByStringLiteral {
+        var message: String
+        var severity: Severity = .info
+
+        init(message: String, severity: Severity = .info) {
+            self.message = message
+            self.severity = severity
+        }
+
+        init(stringLiteral value: String) {
+            self.init(message: value)
+        }
+
+        static func failure(_ message: String) -> Self {
+            Self(message: message, severity: .error)
+        }
+
+        /// A cancellation is not a failure — nothing went wrong — but it is not
+        /// a success either, and the two must not read alike.
+        static func canceled(_ message: String) -> Self {
+            Self(message: message, severity: .warn)
+        }
     }
 
     struct PendingPrompt: Identifiable {
@@ -23,27 +102,67 @@ final class AppState: ObservableObject {
     }
 
     let backend = AgentProcess()
-    @Published var destination: Destination? = .doctor
+    @Published var destination: Destination? = .home
+    @Published private(set) var backendRecovery: BackendRecovery?
+    /// Workflows that were in flight when the backend went away. They are not
+    /// resumed; the screen says so until the user re-runs them.
+    @Published private(set) var notResumed: Set<Destination> = []
     @Published private(set) var initialization: InitializeResult?
     @Published private(set) var doctor: DoctorResult?
     @Published private(set) var credentials: [CredentialStatus] = []
     @Published private(set) var isLoadingDoctor = false
     @Published private(set) var isLoadingCredentials = false
-    @Published var pendingPrompt: PendingPrompt?
+    /// Doctor and Credentials had no sink of their own, so every failure they
+    /// caused was reported by a modal that named no screen.
+    @Published private(set) var doctorStatus: WorkflowStatus?
+    @Published private(set) var credentialStatus: WorkflowStatus?
+    /// C1/C2 — a decoded `ui.selectRows` request. It is derived once here
+    /// rather than in the view, because the sidebar, the header counter, and
+    /// the status bar all need to know which source udl is blocked on.
+    struct PlanPrompt: Identifiable, Equatable {
+        let id: UUID
+        let request: UIRequest
+        let params: SelectRowsParams
+
+        static func == (lhs: PlanPrompt, rhs: PlanPrompt) -> Bool { lhs.id == rhs.id }
+    }
+
+    @Published var pendingPrompt: PendingPrompt? {
+        didSet { refreshPlanPrompt() }
+    }
+    /// Non-nil only while udl is blocked on a plan selection. The plan surface
+    /// is docked in the Sync workspace, so this never becomes a sheet.
+    @Published private(set) var planPrompt: PlanPrompt?
+    /// The blocking modal `UDLApp` renders, reserved for session-level failures
+    /// no screen owns: the backend failing to launch or restart, a protocol
+    /// frame the app cannot decode, and a reply the app cannot deliver while the
+    /// backend is blocked waiting for it. Everything a screen's own action can
+    /// cause reports through that screen's `WorkflowStatus` instead — a modal
+    /// that names no screen is how a failed first-run write once looked like
+    /// nothing at all having happened.
     @Published var alertMessage: String?
     @Published var projectDirectory: URL
     @Published private(set) var syncSources: [SourceCapability] = []
     @Published var syncSourceOptions: [String: SyncSourceOptions] = [:]
-    @Published var syncDryRun = false
-    @Published var syncUnlimited = false
-    @Published var syncPlanLimit = 50
-    @Published var syncTimeoutSeconds = 0
+    // Every default below comes from `SyncDefaults`, which is the only place
+    // they are written. `startDryRunPlan()` forces dry run on; reaching Run Sync
+    // from the sidebar has to agree with it, and reading one constant is how
+    // these two routes are kept from disagreeing.
+    @Published var syncDryRun = SyncDefaults.dryRun
+    @Published var syncUnlimited = SyncDefaults.unlimited
+    @Published var syncPlanLimit = SyncDefaults.planLimit
+    @Published var syncTimeoutSeconds = SyncDefaults.timeoutSeconds
+    @Published var syncPlanWindow = SyncDefaults.planWindow
+    @Published var syncAskOnExisting = SyncDefaults.askOnExisting
+    @Published var syncScanGaps = SyncDefaults.scanGaps
+    @Published var syncNoPreflight = SyncDefaults.noPreflight
+    @Published var syncTrackStatus = SyncDefaults.trackStatus
     @Published private(set) var syncValidationMessage: String?
     @Published private(set) var syncRun = SyncRunState()
     @Published private(set) var playlists: [PlaylistListRow] = []
     @Published private(set) var playlistConfig: PlaylistConfigResult?
     @Published private(set) var playlistActiveRunID: String?
-    @Published private(set) var playlistStatusMessage: String?
+    @Published private(set) var playlistStatus: PlaylistStatus?
     @Published private(set) var providerPlaylists: [ProviderPlaylist] = []
     @Published private(set) var freeDLConfig: FreeDLConfigResult?
     @Published private(set) var freeDLRunID: String?
@@ -53,8 +172,16 @@ final class AppState: ObservableObject {
     @Published private(set) var freeDLCapturePlan: FreeDLCapturePlan?
     @Published private(set) var freeDLCaptureRunID: String?
     @Published private(set) var freeDLPromotionPlan: FreeDLPromotionPlan?
+    /// Promotion rows carry their own `selected` flag and `ApplyPromotionPlan`
+    /// honours it, so the promotion table needs its own override map rather
+    /// than reusing the capture one keyed by remote ID.
+    @Published var freeDLPromotionOverrides: [String: Bool] = [:]
+    /// C7 — the fourth run. `freedl.promote.apply` returns a result but leaves
+    /// no state a later call can re-read, so the phase stepper needs this to
+    /// tell "applied" from "never run" without inventing either.
+    @Published private(set) var freeDLPromotionApplied = false
     @Published private(set) var freeDLStage: String?
-    @Published private(set) var freeDLStatusMessage: String?
+    @Published private(set) var freeDLStatus: WorkflowStatus?
     @Published private(set) var freeDLCaptureSources: [String: SourceSnapshot] = [:]
     @Published private(set) var freeDLCaptureActivity: [OutputEvent] = []
     @Published private(set) var rekordboxConfig: RekordboxConfigResult?
@@ -63,13 +190,19 @@ final class AppState: ObservableObject {
     @Published private(set) var rekordboxPlan: RekordboxPlanPresentation?
     @Published private(set) var rekordboxRunID: String?
     @Published private(set) var rekordboxOperation: RekordboxOperation?
-    @Published private(set) var rekordboxStatusMessage: String?
+    @Published private(set) var rekordboxStatus: WorkflowStatus?
     @Published private(set) var rekordboxApplyBlockers: [RekordboxPlanRowView] = []
+    /// C10 — the last precondition the backend refused on. The protocol
+    /// reports no process state and no checksum state before an attempt, so
+    /// this is only ever set from a real backend refusal, never guessed.
+    @Published private(set) var rekordboxObstacle: RekordboxObstacle?
     @Published private(set) var onboarding: OnboardingResult?
     @Published private(set) var startupAttention: StartupAttentionResult?
     @Published private(set) var configFile: ConfigFileResult?
     @Published private(set) var configProblems: [String] = []
     @Published private(set) var configStatusMessage: String?
+    /// C14 — set only by a real `-32003` refusal from `config.writeFile`.
+    @Published private(set) var configConflict: ConfigConflict?
 
     private var client: UDLClient?
     private var notificationTask: Task<Void, Never>?
@@ -85,6 +218,120 @@ final class AppState: ObservableObject {
 
     var backendVersion: String {
         initialization?.build.version ?? "—"
+    }
+
+    /// Derived from protocol state only. Nothing here is stored app-side or
+    /// estimated; every field names the response it came from.
+    var attention: Attention {
+        var value = Attention()
+        for check in doctor?.checks ?? [] {
+            switch Severity.forCheck(check) {
+            case .error: value.doctorErrors += 1
+            case .warn: value.doctorWarnings += 1
+            case .ok: value.doctorPassed += 1
+            default: break
+            }
+        }
+        value.unhealthyCredentials = credentials.filter { credentialSeverity($0) == .error }.count
+        value.rekordboxBlockers = rekordboxApplyBlockers.count
+        value.freeDLSelectable = freeDLRows.filter(\.selectable).count
+        value.playlistsWithoutSnapshot = playlists.filter { $0.snapshot == nil || $0.snapshotError != nil }.count
+        value.configProblems = configProblems.count
+        value.syncActive = syncRun.phase.isActive
+        value.syncNeedsYou = pendingPrompt != nil
+        if let progress = syncRun.progress?.progress.global {
+            value.syncRemaining = max(progress.total - progress.completed, 0)
+        }
+        return value
+    }
+
+    /// C1 — only confirm and masked-input prompts stay modal. The plan prompt
+    /// is a workspace, not a sheet, so it must never reach `.sheet(item:)`.
+    var modalPrompt: PendingPrompt? {
+        get { pendingPrompt?.request.kind == .selectRows ? nil : pendingPrompt }
+        set {
+            guard newValue == nil, pendingPrompt?.request.kind != .selectRows else { return }
+            pendingPrompt = nil
+        }
+    }
+
+    private func refreshPlanPrompt() {
+        guard let prompt = pendingPrompt, prompt.request.kind == .selectRows else {
+            planPrompt = nil
+            return
+        }
+        if planPrompt?.id == prompt.id { return }
+        guard let params = try? decode(SelectRowsParams.self, from: prompt.request.params) else {
+            planPrompt = nil
+            alertMessage = "The backend sent an invalid plan-selection request."
+            return
+        }
+        planPrompt = PlanPrompt(id: prompt.id, request: prompt.request, params: params)
+        // The plan is docked, so the workspace holding it has to be on screen
+        // for the "Needs you" state to mean anything.
+        destination = .sync
+    }
+
+    /// The capability record for a source, used to decide whether the plan
+    /// window control is supported (C5) rather than inferring from the adapter.
+    func syncCapability(forSourceID sourceID: String) -> SourceCapability? {
+        syncSources.first { $0.sourceID == sourceID }
+    }
+
+    /// C2 — the source udl is currently working on, if any.
+    var activeSyncSourceID: String? {
+        if let planPrompt { return planPrompt.params.sourceID }
+        let progressSource = syncRun.progress?.progress.source.id ?? ""
+        return progressSource.isEmpty ? nil : progressSource
+    }
+
+    /// C2 — "Source 2 of 4". Nil when the run has not reached a source yet, so
+    /// the header says "Planning…" instead of inventing a position.
+    var syncSourcePosition: (index: Int, total: Int)? {
+        let ids = syncRun.requestedSourceIDs
+        guard !ids.isEmpty,
+              let current = activeSyncSourceID,
+              let index = ids.firstIndex(of: current) else { return nil }
+        return (index + 1, ids.count)
+    }
+
+    /// C2 — exactly one source can read `Needs you`; sources udl has not
+    /// reached yet emit no events, so they read `Queued`, never `Done`.
+    func syncSourceLifecycle(_ sourceID: String) -> Lifecycle {
+        if planPrompt?.params.sourceID == sourceID { return .needsYou }
+        if let snapshot = syncRun.sources[sourceID] { return Lifecycle(wire: snapshot.lifecycle) }
+        if syncRun.progress?.progress.source.id == sourceID { return .planning }
+        // "Queued" is only true while the run is still going. Once it has
+        // ended, a source that never reported was never reached, and saying
+        // "Queued" would imply work that is still coming.
+        guard syncRun.phase.isActive else { return .notRun }
+        return .queued
+    }
+
+    /// C13 — `external_override` is a working credential, but not the one this
+    /// app manages, so it is a warning rather than a pass. Only `.error` feeds
+    /// `unhealthyCredentials`, so this does not inflate the sidebar badge.
+    func credentialSeverity(_ credential: CredentialStatus) -> Severity {
+        switch credential.health {
+        case "available": .ok
+        case "external_override": .warn
+        case "needs_refresh", "missing", "unavailable": .error
+        default: .warn
+        }
+    }
+
+    func dismissBackendRecovery() {
+        backendRecovery = nil
+    }
+
+    /// C15 — the message a workflow screen shows after the backend came back.
+    func notResumedMessage(for destination: Destination) -> String? {
+        guard notResumed.contains(destination) else { return nil }
+        return "Not resumed — the backend restarted and nothing was replayed. Re-run to continue."
+    }
+
+    func clearNotResumed(_ destination: Destination) {
+        notResumed.remove(destination)
     }
 
     var alertOffersAutomationSettings: Bool {
@@ -144,6 +391,9 @@ final class AppState: ObservableObject {
             let client = try await backend.restart(workingDirectory: projectDirectory)
             self.client = client
             initialization = try await client.initialize()
+            // The connection is healthy again, but nothing was replayed:
+            // `notResumed` deliberately survives so each workflow still says so.
+            backendRecovery = nil
             observe(connection: client.connection)
             onboarding = try await client.onboardingState()
             await refreshDoctor()
@@ -178,7 +428,7 @@ final class AppState: ObservableObject {
         do {
             doctor = try await client.runDoctor()
         } catch {
-            alertMessage = "Doctor could not run: \(error.localizedDescription)"
+            doctorStatus = .failure("Doctor could not run: \(error.localizedDescription)")
         }
     }
 
@@ -189,7 +439,7 @@ final class AppState: ObservableObject {
         do {
             credentials = try await client.listCredentials().credentials
         } catch {
-            alertMessage = "Credentials could not load: \(error.localizedDescription)"
+            credentialStatus = .failure("Credentials could not load: \(error.localizedDescription)")
         }
     }
 
@@ -210,7 +460,7 @@ final class AppState: ObservableObject {
             await refreshCredentials()
             return true
         } catch {
-            alertMessage = "Keychain save failed: \(error.localizedDescription)"
+            credentialStatus = .failure("Keychain save failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -221,7 +471,7 @@ final class AppState: ObservableObject {
             _ = try await client.clearCredential(kind)
             await refreshCredentials()
         } catch {
-            alertMessage = "Keychain clear failed: \(error.localizedDescription)"
+            credentialStatus = .failure("Keychain clear failed: \(error.localizedDescription)")
         }
     }
 
@@ -239,7 +489,7 @@ final class AppState: ObservableObject {
             }
             syncSourceOptions = preserved.filter { key, _ in loaded.contains { $0.id == key } }
         } catch {
-            alertMessage = "Sources could not load: \(error.localizedDescription)"
+            syncValidationMessage = "Sources could not load: \(error.localizedDescription)"
         }
     }
 
@@ -273,13 +523,14 @@ final class AppState: ObservableObject {
             return
         }
         syncValidationMessage = nil
+        clearNotResumed(.sync)
         let windows = Dictionary(uniqueKeysWithValues: selected.compactMap { source in
             syncSourceOptions[source.id].map { (source.id, $0.planWindow) }
         })
         let orders = Dictionary(uniqueKeysWithValues: selected.compactMap { source in
             syncSourceOptions[source.id].map { (source.id, $0.downloadOrder) }
         })
-        syncRun = SyncRunState(phase: .starting)
+        syncRun = SyncRunState(phase: .starting, requestedSourceIDs: selected.map(\.id))
         do {
             let started = try await client.startSync(SyncStartParams(
                 sourceIDs: selected.map(\.id),
@@ -287,14 +538,14 @@ final class AppState: ObservableObject {
                 timeoutSeconds: syncTimeoutSeconds,
                 plan: true,
                 planLimit: syncUnlimited ? 0 : syncPlanLimit,
-                planWindow: .first,
+                planWindow: syncPlanWindow,
                 planWindowBySource: windows,
                 downloadOrderBySource: orders,
-                askOnExisting: false,
-                askOnExistingSet: false,
-                scanGaps: false,
-                noPreflight: false,
-                trackStatus: "none"
+                askOnExisting: syncAskOnExisting.value,
+                askOnExistingSet: syncAskOnExisting.isSet,
+                scanGaps: syncScanGaps,
+                noPreflight: syncNoPreflight,
+                trackStatus: syncTrackStatus
             ))
             syncRun.runID = started.runID
             if syncRun.exitCode == nil {
@@ -303,6 +554,45 @@ final class AppState: ObservableObject {
         } catch {
             syncRun.phase = .failed
             syncRun.terminalMessage = error.localizedDescription
+        }
+    }
+
+    /// C1 — there is no plan-preview method. The plan only exists inside a
+    /// run, so the shell's primary action starts a reversible dry run whose
+    /// per-source `ui.selectRows` prompt *is* the plan surface.
+    func startDryRunPlan() async {
+        syncDryRun = true
+        destination = .sync
+        await startSync()
+    }
+
+    var isAnythingRunning: Bool {
+        syncRun.phase.isActive || freeDLRunID != nil || rekordboxRunID != nil || playlistActiveRunID != nil
+    }
+
+    /// The one phrase every control disabled by a live run states, naming the
+    /// run that holds it. Derived from exactly the state `isAnythingRunning`
+    /// reads, so the control and its reason cannot disagree; `nil` means
+    /// nothing is running and nothing needs explaining.
+    var busyReason: String? {
+        if syncRun.phase.isActive { return "A sync run is in progress. Stop it to start other work." }
+        if freeDLRunID != nil { return "A Free DL step is running. Stop it to start other work." }
+        if rekordboxRunID != nil { return "A Rekordbox operation is running. Stop it to start other work." }
+        if playlistActiveRunID != nil { return "A playlist operation is running. Stop it to start other work." }
+        return nil
+    }
+
+    /// ⌘. — cancels whichever run is live, preserving the ordered-cancellation
+    /// invariant in each workflow's own cancel path.
+    func cancelActiveWork() async {
+        if syncRun.phase.isActive {
+            await cancelActiveSync()
+        } else if freeDLRunID != nil {
+            await cancelFreeDLOperation()
+        } else if rekordboxRunID != nil {
+            await cancelRekordboxOperation()
+        } else if playlistActiveRunID != nil {
+            await cancelPlaylistOperation()
         }
     }
 
@@ -326,7 +616,11 @@ final class AppState: ObservableObject {
             playlists = try await rows.playlists
             playlistConfig = try await config
         } catch {
-            alertMessage = "Playlist cache could not load: \(error.localizedDescription)"
+            playlistStatus = PlaylistStatus(
+                message: "Playlist cache could not load: \(error.localizedDescription)",
+                severity: .error,
+                preservedPreviousSnapshot: true
+            )
         }
     }
 
@@ -337,7 +631,11 @@ final class AppState: ObservableObject {
             await loadPlaylists()
             return true
         } catch {
-            alertMessage = "Playlist definition could not save: \(error.localizedDescription)"
+            playlistStatus = PlaylistStatus(
+                message: "Playlist definition could not save: \(error.localizedDescription)",
+                severity: .error,
+                preservedPreviousSnapshot: true
+            )
             return false
         }
     }
@@ -349,28 +647,39 @@ final class AppState: ObservableObject {
             await loadPlaylists()
             return true
         } catch {
-            alertMessage = "Playlist config could not save: \(error.localizedDescription)"
+            playlistStatus = PlaylistStatus(
+                message: "Playlist config could not save: \(error.localizedDescription)",
+                severity: .error,
+                preservedPreviousSnapshot: true
+            )
             return false
         }
     }
 
     func refreshPlaylist(_ playlistID: String) async {
         guard let client, playlistActiveRunID == nil else { return }
-        playlistStatusMessage = "Refreshing from Music… the existing snapshot remains active until success."
+        clearNotResumed(.playlists)
+        playlistStatus = PlaylistStatus(
+            message: "Refreshing from Music… the existing snapshot remains active until success.",
+            severity: .info
+        )
         do {
             let started = try await client.refreshPlaylist(playlistID)
             playlistActiveRunID = started.runID
             playlistOperations[started.runID] = .refresh(playlistID)
             consumeBufferedFinished(started.runID)
         } catch {
-            playlistStatusMessage = "Refresh did not start. The saved snapshot was not changed."
-            alertMessage = error.localizedDescription
+            playlistStatus = PlaylistStatus(
+                message: "Refresh did not start. The saved snapshot was not changed.",
+                severity: .error,
+                preservedPreviousSnapshot: true
+            )
         }
     }
 
     func discoverProviderPlaylists() async {
         guard let client, playlistActiveRunID == nil else { return }
-        playlistStatusMessage = "Requesting playlists from Music…"
+        playlistStatus = PlaylistStatus(message: "Requesting playlists from Music…", severity: .info)
         do {
             let started = try await client.listProviderPlaylists(
                 ProviderPlaylistListParams(provider: "apple_music")
@@ -379,8 +688,11 @@ final class AppState: ObservableObject {
             playlistOperations[started.runID] = .providerList
             consumeBufferedFinished(started.runID)
         } catch {
-            playlistStatusMessage = "Music playlist discovery did not start."
-            alertMessage = error.localizedDescription
+            playlistStatus = PlaylistStatus(
+                message: "Music playlist discovery did not start. No snapshot was touched.",
+                severity: .error,
+                preservedPreviousSnapshot: true
+            )
         }
     }
 
@@ -394,7 +706,7 @@ final class AppState: ObservableObject {
         do {
             freeDLConfig = try await client.readFreeDLConfig()
         } catch {
-            alertMessage = "Free DL config could not load: \(error.localizedDescription)"
+            freeDLStatus = .failure("Free DL config could not load: \(error.localizedDescription)")
         }
     }
 
@@ -404,7 +716,7 @@ final class AppState: ObservableObject {
             freeDLConfig = try await client.writeFreeDLConfig(config)
             return true
         } catch {
-            alertMessage = "Free DL config could not save: \(error.localizedDescription)"
+            freeDLStatus = .failure("Free DL config could not save: \(error.localizedDescription)")
             return false
         }
     }
@@ -412,9 +724,12 @@ final class AppState: ObservableObject {
     func startFreeDLPlan(jobID: String, playlistID: String? = nil) async {
         guard let client, freeDLRunID == nil else { return }
         freeDLOperation = .planning
+        clearNotResumed(.freeDL)
         freeDLRows = []
         freeDLCapturePlan = nil
         freeDLPromotionPlan = nil
+        freeDLPromotionOverrides = [:]
+        freeDLPromotionApplied = false
         freeDLStage = "Starting plan…"
         do {
             let started = try await client.startFreeDLPlan(FreeDLPlanStartParams(
@@ -428,7 +743,7 @@ final class AppState: ObservableObject {
         } catch {
             freeDLOperation = nil
             freeDLStage = nil
-            alertMessage = "Free DL planning did not start: \(error.localizedDescription)"
+            freeDLStatus = .failure("Free DL planning did not start: \(error.localizedDescription)")
         }
     }
 
@@ -442,18 +757,28 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The promotion plan's own selection. `Service.ApplyPromotionPlan` skips
+    /// any row whose `selected` is false or whose action is `skip`, so this
+    /// override has to reach the plan that is sent, not just the table.
+    func setFreeDLPromotionSelection(_ id: String, _ selected: Bool) {
+        freeDLPromotionOverrides[id] = selected
+        guard let index = freeDLPromotionPlan?.rows.firstIndex(where: { $0.id == id }) else { return }
+        let applicable = freeDLPromotionPlan?.rows[index].isApplicable ?? false
+        freeDLPromotionPlan?.rows[index].selected = selected && applicable
+    }
+
     func startFreeDLCapture() async {
         guard let client, var plan = freeDLCapturePlan, freeDLRunID == nil else { return }
         reapplyFreeDLOverrides(to: &plan)
         let selected = plan.rows.filter { $0.selectable && $0.selected }.map(\.remoteID)
         guard !selected.isEmpty else {
-            alertMessage = "Select at least one Free DL row before capture."
+            freeDLStatus = .failure("Select at least one Free DL row before capture.")
             return
         }
         freeDLOperation = .capture
         freeDLCaptureSources = [:]
         freeDLCaptureActivity = []
-        freeDLStatusMessage = "Capturing selected downloads…"
+        freeDLStatus = "Capturing selected downloads…"
         do {
             let started = try await client.startFreeDLCapture(
                 FreeDLCaptureStartParams(plan: plan, selectedRemoteIDs: selected)
@@ -462,7 +787,7 @@ final class AppState: ObservableObject {
             consumeBufferedFinished(started.runID)
         } catch {
             freeDLOperation = nil
-            alertMessage = "Capture did not start: \(error.localizedDescription)"
+            freeDLStatus = .failure("Capture did not start: \(error.localizedDescription)")
         }
     }
 
@@ -480,7 +805,7 @@ final class AppState: ObservableObject {
             consumeBufferedFinished(started.runID)
         } catch {
             freeDLOperation = nil
-            alertMessage = "Promotion planning did not start: \(error.localizedDescription)"
+            freeDLStatus = .failure("Promotion planning did not start: \(error.localizedDescription)")
         }
     }
 
@@ -495,7 +820,7 @@ final class AppState: ObservableObject {
             consumeBufferedFinished(started.runID)
         } catch {
             freeDLOperation = nil
-            alertMessage = "Promotion apply did not start: \(error.localizedDescription)"
+            freeDLStatus = .failure("Promotion apply did not start: \(error.localizedDescription)")
         }
     }
 
@@ -513,7 +838,7 @@ final class AppState: ObservableObject {
             rekordboxConfig = loaded.0
             rekordboxRuntime = loaded.1
         } catch {
-            alertMessage = "Rekordbox setup could not load: \(error.localizedDescription)"
+            rekordboxStatus = .failure("Rekordbox setup could not load: \(error.localizedDescription)")
         }
     }
 
@@ -523,7 +848,7 @@ final class AppState: ObservableObject {
             rekordboxConfig = try await client.writeRekordboxConfig(config)
             return true
         } catch {
-            alertMessage = "Rekordbox config could not save: \(error.localizedDescription)"
+            rekordboxStatus = .failure("Rekordbox config could not save: \(error.localizedDescription)")
             return false
         }
     }
@@ -554,6 +879,9 @@ final class AppState: ObservableObject {
         )
         rekordboxPlan = nil
         rekordboxApplyBlockers = []
+        // A fresh plan re-reads both inputs, so any drift the previous apply
+        // refused on is answered by definition.
+        rekordboxObstacle = nil
         await startRekordboxOperation(.plan) { client in
             try await client.planRekordbox(params)
         }
@@ -562,16 +890,16 @@ final class AppState: ObservableObject {
     func applyRekordbox(dryRun: Bool) async {
         guard let client, let plan = rekordboxPlan else { return }
         guard !plan.checksum.isEmpty else {
-            alertMessage = "The plan has no checksum and cannot be applied."
+            rekordboxStatus = .failure("The plan has no checksum and cannot be applied.")
             return
         }
         guard plan.blockers.isEmpty else {
             rekordboxApplyBlockers = plan.blockers
-            alertMessage = "Resolve every missing or ambiguous track before apply."
+            rekordboxStatus = .failure("Resolve every missing or ambiguous track before apply.")
             return
         }
         rekordboxOperation = .apply(dryRun: dryRun)
-        rekordboxStatusMessage = dryRun ? "Validating dry run…" : "Applying after backend integrity, process, and backup checks…"
+        rekordboxStatus = dryRun ? "Validating dry run…" : "Applying after backend integrity, process, and backup checks…"
         do {
             let started = try await client.applyRekordbox(
                 RekordboxApplyParams(plan: plan.value, dryRun: dryRun)
@@ -581,12 +909,18 @@ final class AppState: ObservableObject {
         } catch JSONRPCConnectionError.remote(_, let message, let data) {
             rekordboxOperation = nil
             rekordboxApplyBlockers = parseRekordboxBlockers(data)
-            alertMessage = message.localizedCaseInsensitiveContains("checksum")
-                ? "Plan integrity check failed: \(message)"
-                : message
+            // C9/C10 — `rekordbox.apply` validates the plan synchronously, so
+            // this is where checksum drift and a refused partial mirror land.
+            rekordboxObstacle = RekordboxObstacle(backendMessage: message)
+            rekordboxStatus = .failure(
+                message.localizedCaseInsensitiveContains("checksum")
+                    ? "Plan integrity check failed: \(message)"
+                    : message
+            )
         } catch {
             rekordboxOperation = nil
-            alertMessage = error.localizedDescription
+            rekordboxObstacle = RekordboxObstacle(backendMessage: error.localizedDescription)
+            rekordboxStatus = .failure(error.localizedDescription)
         }
     }
 
@@ -600,16 +934,16 @@ final class AppState: ObservableObject {
         start: (UDLClient) async throws -> RunIDResult
     ) async {
         guard let client, rekordboxRunID == nil else { return }
+        clearNotResumed(.rekordbox)
         rekordboxOperation = operation
-        rekordboxStatusMessage = "Starting…"
+        rekordboxStatus = "Starting…"
         do {
             let started = try await start(client)
             rekordboxRunID = started.runID
             consumeBufferedFinished(started.runID)
         } catch {
             rekordboxOperation = nil
-            rekordboxStatusMessage = nil
-            alertMessage = error.localizedDescription
+            rekordboxStatus = .failure(error.localizedDescription)
         }
     }
 
@@ -619,13 +953,25 @@ final class AppState: ObservableObject {
             configFile = try await client.readConfigFile()
             configProblems = []
             configStatusMessage = nil
+            // Re-reading is one of C14's two ways out of a conflict: the SHA
+            // the next write sends is now the one on disk.
+            configConflict = nil
         } catch {
             configProblems = validationProblems(from: error)
-            alertMessage = "Configuration could not load: \(error.localizedDescription)"
+            configStatusMessage = "Configuration could not load: \(error.localizedDescription)"
         }
     }
 
-    func saveMainConfig(_ config: MainConfig, path: String? = nil, creating: Bool = false) async -> Bool {
+    /// - Parameter overwritingExternalChanges: C14's second way out. Sending no
+    ///   expected SHA is the only thing that makes `config.writeFile` accept a
+    ///   file that changed on disk, so it is a deliberate, separately named
+    ///   call rather than a retry of the same one.
+    func saveMainConfig(
+        _ config: MainConfig,
+        path: String? = nil,
+        creating: Bool = false,
+        overwritingExternalChanges: Bool = false
+    ) async -> Bool {
         guard let client else { return false }
         configProblems = []
         do {
@@ -633,15 +979,28 @@ final class AppState: ObservableObject {
             let saved = try await client.writeConfigFile(ConfigFileParams(
                 path: path ?? configFile?.path ?? "",
                 config: config,
-                expectedContentSHA256: creating ? nil : configFile?.contentSHA256
+                expectedContentSHA256: (creating || overwritingExternalChanges)
+                    ? nil
+                    : configFile?.contentSHA256
             ))
             configFile = saved
-            configStatusMessage = "Saved canonical configuration."
+            configConflict = nil
+            configStatusMessage = overwritingExternalChanges
+                ? "Saved canonical configuration, replacing the version that had changed on disk."
+                : "Saved canonical configuration."
             return true
         } catch JSONRPCConnectionError.remote(let code, let message, let data) {
             configProblems = validationProblems(from: data)
             if code == -32003 {
-                configStatusMessage = "The file changed outside UDL. Reload it before saving; no content was overwritten."
+                // C14 — nothing was written. This is not a save error; it is a
+                // choice between reloading and deliberately overwriting.
+                configConflict = ConfigConflict(
+                    path: conflictField(in: data, "path") ?? path ?? configFile?.path ?? "",
+                    expectedSHA256: conflictField(in: data, "expected_content_sha256")
+                        ?? configFile?.contentSHA256 ?? "",
+                    actualSHA256: conflictField(in: data, "actual_content_sha256") ?? ""
+                )
+                configStatusMessage = nil
             } else {
                 configStatusMessage = message
             }
@@ -650,6 +1009,11 @@ final class AppState: ObservableObject {
             configStatusMessage = error.localizedDescription
             return false
         }
+    }
+
+    private func conflictField(in data: JSONValue?, _ key: String) -> String? {
+        guard let value = data?.objectValue?[key]?.stringValue, !value.isEmpty else { return nil }
+        return value
     }
 
     func createInitialConfig(source: MainConfigSource) async -> Bool {
@@ -663,7 +1027,7 @@ final class AppState: ObservableObject {
         guard await saveMainConfig(config, path: state.configPath, creating: true) else { return false }
         await restart()
         if onboarding?.needed == false {
-            destination = .doctor
+            destination = .home
             return true
         }
         return false
@@ -721,6 +1085,24 @@ final class AppState: ObservableObject {
         if let cursor {
             planCursorBySource[params.sourceID] = cursor
         }
+    }
+
+    /// "Reset to defaults" on the plan surface: drop this session's remembered
+    /// overrides so the next read of `initialPlanSelection` falls back to the
+    /// backend's own `selected_by_default` for every row.
+    func resetPlanSelection(sourceID: String) {
+        planSelectionOverrides[sourceID] = nil
+        planCursorBySource[sourceID] = nil
+    }
+
+    /// C17 — restores the values the GUI used to hardcode, so "back to how it
+    /// was" is one click rather than five.
+    func resetSyncAdvanced() {
+        syncPlanWindow = SyncDefaults.planWindow
+        syncAskOnExisting = SyncDefaults.askOnExisting
+        syncScanGaps = SyncDefaults.scanGaps
+        syncNoPreflight = SyncDefaults.noPreflight
+        syncTrackStatus = SyncDefaults.trackStatus
     }
 
     func rememberedPlanCursor(sourceID: String, rows: [PlanRow]) -> String? {
@@ -806,8 +1188,7 @@ final class AppState: ObservableObject {
             // unexpected disconnect, even if the process termination handler
             // has already advanced backend.state to `.exited`.
             if !Task.isCancelled {
-                alertMessage = "Backend connection ended. Restart to reconnect; no write operation was replayed."
-                pendingPrompt = nil
+                handleUnexpectedDisconnect()
             }
         }
         promptTask = Task {
@@ -817,6 +1198,46 @@ final class AppState: ObservableObject {
             }
             pendingPrompt = nil
         }
+    }
+
+    /// C15 — an unexpected EOF or backend exit. Nothing is replayed, so every
+    /// in-flight workflow is marked interrupted and its screen says so instead
+    /// of spinning forever on a run that no longer exists.
+    private func handleUnexpectedDisconnect() {
+        var interrupted: [Destination] = []
+        if syncRun.phase.isActive {
+            interrupted.append(.sync)
+            syncRun.phase = .failed
+            syncRun.terminalMessage = "Backend connection ended. The run was not resumed."
+        }
+        if freeDLOperation != nil || freeDLRunID != nil {
+            interrupted.append(.freeDL)
+            freeDLOperation = nil
+            freeDLRunID = nil
+            freeDLStage = nil
+            freeDLStatus = "Backend connection ended. No Free DL step was resumed or replayed."
+        }
+        if rekordboxOperation != nil || rekordboxRunID != nil {
+            interrupted.append(.rekordbox)
+            rekordboxOperation = nil
+            rekordboxRunID = nil
+            rekordboxStatus = "Backend connection ended. No apply was resumed or replayed."
+        }
+        if playlistActiveRunID != nil {
+            interrupted.append(.playlists)
+            playlistActiveRunID = nil
+            playlistStatus = PlaylistStatus(
+                message: "Backend connection ended. The previous valid snapshot was preserved.",
+                severity: .error,
+                preservedPreviousSnapshot: true
+            )
+        }
+        pendingPrompt = nil
+        notResumed.formUnion(interrupted)
+        backendRecovery = BackendRecovery(
+            message: "The backend connection ended. Restart to reconnect; no write operation was replayed.",
+            interrupted: interrupted
+        )
     }
 
     private func clearSessionState() {
@@ -839,8 +1260,10 @@ final class AppState: ObservableObject {
         freeDLCapturePlan = nil
         freeDLCaptureRunID = nil
         freeDLPromotionPlan = nil
+        freeDLPromotionOverrides = [:]
+        freeDLPromotionApplied = false
         freeDLStage = nil
-        freeDLStatusMessage = nil
+        freeDLStatus = nil
         freeDLCaptureSources = [:]
         freeDLCaptureActivity = []
         rekordboxConfig = nil
@@ -849,13 +1272,15 @@ final class AppState: ObservableObject {
         rekordboxPlan = nil
         rekordboxRunID = nil
         rekordboxOperation = nil
-        rekordboxStatusMessage = nil
+        rekordboxStatus = nil
         rekordboxApplyBlockers = []
+        rekordboxObstacle = nil
         onboarding = nil
         startupAttention = nil
         configFile = nil
         configProblems = []
         configStatusMessage = nil
+        configConflict = nil
         playlistOperations = [:]
         bufferedFinished = [:]
         planSelectionOverrides = [:]
@@ -929,21 +1354,37 @@ final class AppState: ObservableObject {
                let result = finished.result,
                let listing = try? decode(ProviderPlaylistListResult.self, from: result) {
                 providerPlaylists = listing.playlists
-                playlistStatusMessage = "Loaded \(listing.playlists.count) playlists from Music."
+                playlistStatus = PlaylistStatus(
+                    message: "Loaded \(listing.playlists.count) playlists from Music.",
+                    severity: .ok
+                )
             } else {
-                playlistStatusMessage = "Provider listing ended without changing any snapshot."
+                playlistStatus = PlaylistStatus(
+                    message: "Provider listing ended without changing any snapshot.",
+                    severity: .warn,
+                    preservedPreviousSnapshot: true
+                )
             }
         case .refresh:
             if finished.exitCode == 0,
                let result = finished.result,
                let refresh = try? decode(PlaylistRefreshResult.self, from: result) {
-                playlistStatusMessage =
-                    "Snapshot refreshed: +\(refresh.changes.added), −\(refresh.changes.removed), \(refresh.changes.kept) unchanged."
+                playlistStatus = PlaylistStatus(
+                    message: "Snapshot refreshed: +\(refresh.changes.added), −\(refresh.changes.removed), \(refresh.changes.kept) unchanged.",
+                    severity: .ok
+                )
                 Task { await loadPlaylists() }
             } else {
-                playlistStatusMessage = finished.exitCode == 130
-                    ? "Refresh canceled. The previous valid snapshot was preserved."
-                    : "Refresh failed. The previous valid snapshot was preserved."
+                // C11 — a failed or canceled refresh never discards the last
+                // valid snapshot, and the message says so rather than reading
+                // as a generic failure.
+                playlistStatus = PlaylistStatus(
+                    message: finished.exitCode == 130
+                        ? "Refresh canceled. The previous valid snapshot was preserved."
+                        : "Refresh failed. The previous valid snapshot was preserved.",
+                    severity: finished.exitCode == 130 ? .warn : .error,
+                    preservedPreviousSnapshot: true
+                )
             }
         }
     }
@@ -973,7 +1414,7 @@ final class AppState: ObservableObject {
             freeDLRows = plan.rows
         }
         if let error = event.error {
-            freeDLStatusMessage = error
+            freeDLStatus = .failure(error)
         }
     }
 
@@ -991,13 +1432,13 @@ final class AppState: ObservableObject {
         freeDLOperation = nil
         freeDLStage = nil
         if finished.exitCode != 0 {
-            freeDLStatusMessage = finished.exitCode == 130
-                ? "Operation canceled; existing buffer and plans were left intact."
-                : (finished.error ?? "Free DL operation failed with exit code \(finished.exitCode).")
+            freeDLStatus = finished.exitCode == 130
+                ? .canceled("Operation canceled; existing buffer and plans were left intact.")
+                : .failure(finished.error ?? "Free DL operation failed with exit code \(finished.exitCode).")
             return
         }
         guard let result = finished.result else {
-            freeDLStatusMessage = "Operation completed."
+            freeDLStatus = "Operation completed."
             return
         }
         switch operation {
@@ -1006,18 +1447,28 @@ final class AppState: ObservableObject {
                 reapplyFreeDLOverrides(to: &plan)
                 freeDLCapturePlan = plan
                 freeDLRows = plan.rows
-                freeDLStatusMessage = "Capture plan ready."
+                freeDLStatus = "Capture plan ready."
             }
         case .capture:
             freeDLCaptureRunID = freeDLCapturePlan?.runID
-            freeDLStatusMessage = "Capture completed. Build a promotion plan when ready."
+            freeDLStatus = "Capture completed. Build a promotion plan when ready."
         case .promotionBuild:
-            freeDLPromotionPlan = try? decode(FreeDLPromotionPlan.self, from: result)
-            freeDLStatusMessage = freeDLPromotionPlan == nil
-                ? "Promotion plan could not be decoded."
-                : "Promotion plan ready for review."
+            if var plan = try? decode(FreeDLPromotionPlan.self, from: result) {
+                for index in plan.rows.indices {
+                    if let selected = freeDLPromotionOverrides[plan.rows[index].id] {
+                        plan.rows[index].selected = selected && plan.rows[index].isApplicable
+                    }
+                }
+                freeDLPromotionPlan = plan
+                freeDLPromotionApplied = false
+                freeDLStatus = "Promotion plan ready for review."
+            } else {
+                freeDLPromotionPlan = nil
+                freeDLStatus = "Promotion plan could not be decoded."
+            }
         case .promotionApply:
-            freeDLStatusMessage = "Promotion apply completed."
+            freeDLPromotionApplied = true
+            freeDLStatus = "Promotion apply completed."
         case nil:
             break
         }
@@ -1028,36 +1479,58 @@ final class AppState: ObservableObject {
         rekordboxRunID = nil
         rekordboxOperation = nil
         if finished.exitCode != 0 {
-            rekordboxStatusMessage = finished.exitCode == 130
-                ? "Operation canceled. No apply was resumed or replayed."
-                : (finished.error ?? "Rekordbox operation failed with exit code \(finished.exitCode).")
+            rekordboxStatus = finished.exitCode == 130
+                ? .canceled("Operation canceled. No apply was resumed or replayed.")
+                : .failure(finished.error ?? "Rekordbox operation failed with exit code \(finished.exitCode).")
+            // C10 — "Rekordbox is running" is only ever reported by a run that
+            // reached `CheckRekordboxClosed`; the protocol exposes no process
+            // state before then. Inspect and apply are the two that reach it,
+            // so their failures are the only honest source for the gate.
+            if finished.exitCode != 130, let message = finished.error {
+                switch operation {
+                case .inspect, .apply:
+                    rekordboxObstacle = RekordboxObstacle(backendMessage: message)
+                default:
+                    break
+                }
+            }
             return
+        }
+        // A step that reached the backend and succeeded proves the process and
+        // integrity gates it passed through, so a stale obstacle is cleared.
+        switch operation {
+        case .inspect, .apply:
+            rekordboxObstacle = nil
+        default:
+            break
         }
         switch operation {
         case .ensure:
-            rekordboxStatusMessage = "Managed runtime is ready."
+            rekordboxStatus = "Managed runtime is ready."
             Task { await loadRekordbox() }
         case .reset:
-            rekordboxStatusMessage = "Managed runtime reset. Ensure it before inspection or planning."
+            rekordboxStatus = "Managed runtime reset. Ensure it before inspection or planning."
             Task { await loadRekordbox() }
         case .inspect:
             if let result = finished.result {
                 rekordboxInspect = try? decode(RekordboxInspectResult.self, from: result)
             }
-            rekordboxStatusMessage = rekordboxInspect.map {
-                "Read-only inspection found \($0.playlists.count) playlists and \($0.contents.count) tracks."
-            } ?? "Inspection result could not be decoded."
+            rekordboxStatus = rekordboxInspect.map {
+                WorkflowStatus(
+                    message: "Read-only inspection found \($0.playlists.count) playlists and \($0.contents.count) tracks."
+                )
+            } ?? .failure("Inspection result could not be decoded.")
         case .plan:
             if let result = finished.result,
                let decoded = try? decode(RekordboxPlanResult.self, from: result) {
                 rekordboxPlan = RekordboxPlanPresentation(decoded.plan)
                 rekordboxApplyBlockers = rekordboxPlan?.blockers ?? []
-                rekordboxStatusMessage = rekordboxPlan == nil
-                    ? "Plan result could not be decoded."
-                    : "Checksummed plan ready at \(decoded.planPath)."
+                rekordboxStatus = rekordboxPlan == nil
+                    ? .failure("Plan result could not be decoded.")
+                    : WorkflowStatus(message: "Checksummed plan ready at \(decoded.planPath).")
             }
         case .apply(let dryRun):
-            rekordboxStatusMessage = dryRun
+            rekordboxStatus = dryRun
                 ? "Dry run completed; no database write was requested."
                 : "Apply completed after backup and post-write verification."
         case nil:

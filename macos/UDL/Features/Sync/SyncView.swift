@@ -1,21 +1,74 @@
 import SwiftUI
 
+/// Sync is three surfaces over one run, not three screens: you configure a
+/// run, udl plans one source at a time and blocks on each (`SyncPlanView`),
+/// then the run executes (`SyncRunView`). The plan surface wins over the run
+/// surface because while a `ui.selectRows` request is open the backend is doing
+/// nothing at all — the plan *is* what is happening.
 struct SyncView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var rowFilter: SyncRowFilter = .all
+
+    var body: some View {
+        if appState.planPrompt != nil {
+            SyncPlanView()
+        } else if appState.syncRun.phase.isActive || appState.syncRun.exitCode != nil {
+            SyncRunView()
+        } else {
+            SyncConfigureView()
+        }
+    }
+}
+
+/// The pre-run surface. C1: there is no plan preview, so the only thing this
+/// screen can do is choose sources and options and start a run.
+struct SyncConfigureView: View {
+    @EnvironmentObject private var appState: AppState
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                header
-                if appState.syncRun.phase.isActive || appState.syncRun.exitCode != nil {
-                    runDetail
-                } else {
-                    configuration
+            VStack(alignment: .leading, spacing: 14) {
+                WorkspaceHeader(
+                    title: "Run Sync",
+                    // C1 — the plan lives inside a run and nowhere else.
+                    lede: "udl has no plan preview. Planning happens inside a run, one source at a time, and the backend waits for your selection at each source. A dry run resolves every track and reports the outcome without writing files or touching the state file."
+                )
+
+                if let notResumed = appState.notResumedMessage(for: .sync) {
+                    // C15 — a restart never replays mutating requests.
+                    Callout(title: notResumed, severity: .warn)
+                }
+
+                Card(title: "Sources", subtitle: "sources.capabilities", flush: true) {
+                    if appState.syncSources.isEmpty {
+                        EmptyStateView(
+                            title: "No sources",
+                            kind: .empty,
+                            detail: "sources.capabilities returned no configured sync sources."
+                        )
+                        .frame(height: 140)
+                    } else {
+                        ForEach(appState.syncSources) { source in
+                            sourceRow(source)
+                        }
+                    }
+                }
+
+                if let validation = appState.syncValidationMessage {
+                    Callout(title: validation, severity: .warn)
                 }
             }
-            .padding(30)
-            .frame(maxWidth: 1100, alignment: .leading)
+            .padding(.horizontal, Metrics.contentPaddingHorizontal)
+            .padding(.vertical, Metrics.contentPadding)
+        }
+        .workspaceToolbar(title: "Run Sync", subtitle: "sync.start · plan: true")
+        .workspaceInspector { inspector }
+        .udlStatusBar {
+            statusSummary
+        } actions: {
+            Button("Check system") { appState.destination = .doctor }
+            Button(startLabel) { Task { await appState.startSync() } }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
         }
         .task {
             // Startup preloads this list. Avoid an immediate duplicate RPC
@@ -26,74 +79,19 @@ struct SyncView: View {
         }
     }
 
-    private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("INTERACTIVE SYNC")
-                    .font(.caption.bold().monospaced())
-                    .foregroundStyle(.orange)
-                Text("Build the run. Keep the signal.")
-                    .font(.largeTitle.bold())
-            }
-            Spacer()
-            if appState.syncRun.phase.isActive {
-                Button("Cancel run", role: .destructive) {
-                    Task { await appState.cancelActiveSync() }
-                }
-            }
-        }
+    /// C1 — the button says which kind of run it starts, and dry run is the
+    /// default, so the plan is always reachable through a reversible action.
+    private var startLabel: String {
+        appState.syncDryRun ? "Start dry run & plan" : "Start sync & plan"
     }
 
-    private var configuration: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            GroupBox("Sources") {
-                VStack(spacing: 0) {
-                    ForEach(appState.syncSources) { source in
-                        sourceRow(source)
-                        if source.id != appState.syncSources.last?.id { Divider() }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            GroupBox("Run controls") {
-                Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 14) {
-                    GridRow {
-                        Toggle("Dry run", isOn: $appState.syncDryRun)
-                        Toggle("Unlimited", isOn: $appState.syncUnlimited)
-                    }
-                    GridRow {
-                        Stepper(
-                            "Plan limit: \(appState.syncUnlimited ? "unlimited" : String(appState.syncPlanLimit))",
-                            value: $appState.syncPlanLimit,
-                            in: 1...10_000
-                        )
-                        TextField("Timeout seconds", value: $appState.syncTimeoutSeconds, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 210)
-                    }
-                }
-                .padding(8)
-            }
-
-            HStack {
-                if let validation = appState.syncValidationMessage {
-                    Label(validation, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                }
-                Spacer()
-                Button("Start sync") {
-                    Task { await appState.startSync() }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(appState.syncRun.phase.isActive)
-            }
-        }
+    private var selectedCount: Int {
+        appState.syncSources.filter { appState.syncSourceOptions[$0.id]?.selected == true }.count
     }
 
     private func sourceRow(_ source: SourceCapability) -> some View {
         let options = appState.syncSourceOptions[source.id]
-        return HStack(spacing: 14) {
+        return HStack(spacing: 12) {
             Toggle(
                 "",
                 isOn: Binding(
@@ -102,173 +100,119 @@ struct SyncView: View {
                 )
             )
             .labelsHidden()
-            VStack(alignment: .leading, spacing: 2) {
-                Text(source.sourceID).font(.headline)
+            SourceGlyph(sourceType: source.sourceType)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(source.sourceID).font(Typography.control).fontWeight(.medium)
                 Text("\(source.sourceType) · \(source.adapter)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(Typography.monoSmall)
+                    .foregroundStyle(Theme.textTertiary)
             }
-            Spacer()
-            if source.supportsPlanWindow {
-                Picker(
-                    "Window",
-                    selection: Binding(
-                        get: { options?.planWindow ?? source.defaultPlanWindow },
-                        set: { appState.setSourcePlanWindow(source.id, $0) }
-                    )
-                ) {
-                    ForEach(PlanWindow.allCases) { Text($0.label).tag($0) }
-                }
-                .frame(width: 150)
-            }
-            if source.supportsDownloadOrder {
-                Picker(
-                    "Order",
-                    selection: Binding(
-                        get: { options?.downloadOrder ?? source.defaultDownloadOrder },
-                        set: { appState.setSourceDownloadOrder(source.id, $0) }
-                    )
-                ) {
-                    ForEach(DownloadOrder.allCases) { Text($0.label).tag($0) }
-                }
-                .frame(width: 190)
-            }
-        }
-        .padding(.vertical, 10)
-    }
+            Spacer(minLength: 8)
 
-    private var runDetail: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Label(appState.syncRun.phase.rawValue.replacingOccurrences(of: "_", with: " ").capitalized,
-                      systemImage: appState.syncRun.phase.isActive ? "waveform" : "checkmark.circle")
-                    .font(.title2.bold())
-                Spacer()
-                Picker("Rows", selection: $rowFilter) {
-                    ForEach(SyncRowFilter.allCases) { Text($0.rawValue.capitalized).tag($0) }
-                }
-                .frame(width: 170)
+            if !source.supportsPlan {
+                // C5 — a source that cannot be planned still runs; it just
+                // never asks. Saying so beats a mystery missing prompt.
+                ConstraintNote(text: "\(source.adapter) has no plan step, so this source never asks.")
             }
 
-            if let progress = appState.syncRun.progress {
-                progressHeader(progress)
-            }
-
-            ForEach(appState.syncRun.sources.keys.sorted(), id: \.self) { sourceID in
-                if let source = appState.syncRun.sources[sourceID] {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text(sourceID).font(.headline)
-                                Spacer()
-                                Text("\(source.downloadedCount) done · \(source.skippedCount) skipped · \(source.failedCount) failed · \(source.includedCount) selected")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                Text(source.lifecycle.uppercased())
-                                    .font(.caption.bold().monospaced())
-                                    .foregroundStyle(.secondary)
-                            }
-                            ForEach(source.rows.filter(rowFilter.includes)) { row in
-                                HStack {
-                                    Image(systemName: icon(for: row.runtimeStatus))
-                                        .foregroundStyle(color(for: row.runtimeStatus))
-                                        .frame(width: 18)
-                                    Text(row.title).lineLimit(1)
-                                    Spacer()
-                                    Text(row.statusLabel)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            GroupBox("Activity") {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(appState.syncRun.activity.suffix(80).enumerated()), id: \.offset) { _, event in
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(event.level.uppercased())
-                                .font(.caption2.bold().monospaced())
-                                .foregroundStyle(event.level == "error" ? .red : .secondary)
-                                .frame(width: 55, alignment: .leading)
-                            Text(event.message).font(.callout.monospaced())
-                        }
-                    }
-                    if appState.syncRun.activity.isEmpty {
-                        Text("Waiting for backend events…").foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if let message = appState.syncRun.terminalMessage {
-                Text(message).foregroundStyle(appState.syncRun.phase == .succeeded ? .green : .orange)
-            }
-            if !appState.syncRun.phase.isActive {
-                Button("Configure another run") { appState.resetSyncRun() }
-            }
-        }
-    }
-
-    private func progressHeader(_ snapshot: StructuredProgressSnapshot) -> some View {
-        let global = snapshot.progress.global
-        let total = max(global.total, 0)
-        let completed = min(max(global.completed, 0), total)
-        let track = snapshot.track
-        return GroupBox("Progress") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(total > 0 ? "\(completed) of \(total) tracks" : "Preparing run…")
-                        .font(.caption.bold().monospaced())
-                    Spacer()
-                    if !snapshot.progress.source.id.isEmpty {
-                        Text(snapshot.progress.source.id)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                ProgressView(
-                    value: total > 0 ? Double(completed) : 0,
-                    total: Double(max(total, 1))
+            // C5 — unsupported controls stay visible, disabled, and explained.
+            Picker(
+                "Window",
+                selection: Binding(
+                    get: { options?.planWindow ?? source.defaultPlanWindow },
+                    set: { appState.setSourcePlanWindow(source.id, $0) }
                 )
-
-                if !track.name.isEmpty {
-                    HStack {
-                        Text(track.name).lineLimit(1)
-                        Spacer()
-                        Text(track.lifecycle.uppercased())
-                            .font(.caption2.bold().monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                    if track.progressKnown {
-                        ProgressView(value: min(max(track.progressPercent, 0), 100), total: 100)
-                            .tint(.orange)
-                    }
-                }
+            ) {
+                ForEach(PlanWindow.allCases) { Text($0.label).tag($0) }
             }
-            .padding(4)
+            .frame(width: 150)
+            .constrained(by: source.supportsPlanWindow ? nil : "\(source.adapter) has no first/latest window.")
+
+            Picker(
+                "Order",
+                selection: Binding(
+                    get: { options?.downloadOrder ?? source.defaultDownloadOrder },
+                    set: { appState.setSourceDownloadOrder(source.id, $0) }
+                )
+            ) {
+                ForEach(DownloadOrder.allCases) { Text($0.label).tag($0) }
+            }
+            .frame(width: 180)
+            .constrained(by: source.supportsDownloadOrder ? nil : "\(source.adapter) fixes the download order.")
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.separator).frame(height: 0.5)
         }
     }
 
-    private func icon(for status: String) -> String {
-        switch status {
-        case "downloaded": "checkmark.circle.fill"
-        case "failed": "xmark.octagon.fill"
-        case "skipped": "forward.circle.fill"
-        case "downloading": "arrow.down.circle.fill"
-        default: "circle"
+    @ViewBuilder private var inspector: some View {
+        InspectorSection(title: "Run") {
+            Toggle("Dry run", isOn: $appState.syncDryRun)
+            Toggle("Unlimited plan", isOn: $appState.syncUnlimited)
+            Stepper(
+                "Plan limit: \(appState.syncUnlimited ? "∞" : String(appState.syncPlanLimit))",
+                value: $appState.syncPlanLimit,
+                in: 1...10_000
+            )
+            .constrained(by: appState.syncUnlimited ? "Unlimited is on, so no limit is sent." : nil)
+            if appState.syncUnlimited {
+                // C6 — unlimited is encoded as plan limit 0 on the wire.
+                ConstraintNote(text: "∞ is sent as plan_limit: 0.")
+            }
+            FieldRow(label: "Timeout") {
+                TextField("", value: $appState.syncTimeoutSeconds, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 76)
+            }
+            ConstraintNote(text: "Timeout is in seconds; 0 means no timeout.")
+        }
+
+        // C17 — every one of these is in SyncStartParams and used to be
+        // hardcoded in AppState.startSync(), which meant the GUI decided
+        // silently on the user's behalf.
+        InspectorSection(title: "Advanced") {
+            Picker("Plan window", selection: $appState.syncPlanWindow) {
+                ForEach(PlanWindow.allCases) { Text($0.label).tag($0) }
+            }
+            ConstraintNote(text: "The run-wide default. A per-source window above overrides it.")
+
+            Picker("On existing files", selection: $appState.syncAskOnExisting) {
+                ForEach(AskOnExistingPolicy.allCases) { Text($0.label).tag($0) }
+            }
+            ConstraintNote(text: "“udl decides” sends ask_on_existing_set: false and leaves the choice to the backend.")
+
+            Toggle("Scan for gaps", isOn: $appState.syncScanGaps)
+            Toggle("Skip preflight", isOn: $appState.syncNoPreflight)
+
+            Picker("Existing-track status", selection: $appState.syncTrackStatus) {
+                ForEach(TrackStatusMode.allCases) { Text($0.label).tag($0) }
+            }
+            ConstraintNote(text: "Spotify + deemix only; other adapters ignore track_status.")
+
+            Button("Reset advanced to udl defaults") { appState.resetSyncAdvanced() }
+                .buttonStyle(.link)
+        }
+
+        InspectorSection(title: "Sources") {
+            FieldRow("Configured", "\(appState.syncSources.count)")
+            FieldRow("Selected", "\(selectedCount)")
+            FieldRow("Plan-capable", "\(appState.syncSources.filter(\.supportsPlan).count)")
+            // C2 — set expectations before the run rather than after it stalls.
+            ConstraintNote(text: "udl plans one source at a time; each source asks for its selection in turn and the backend waits.")
         }
     }
 
-    private func color(for status: String) -> Color {
-        switch status {
-        case "downloaded": .green
-        case "failed": .red
-        case "skipped": .orange
-        case "downloading": .blue
-        default: .secondary
+    private var statusSummary: some View {
+        SummaryLine {
+            SummaryCount(value: selectedCount, noun: "selected", severity: selectedCount > 0 ? .ok : .warn)
+            Text("·")
+            SummaryCount(value: appState.syncSources.count, noun: "configured")
+            Text("·")
+            Text(appState.syncDryRun ? "Dry run — nothing is written" : "Live run — files are written")
+                .foregroundStyle(appState.syncDryRun ? Theme.textSecondary : Theme.warn)
         }
     }
 }

@@ -1,5 +1,66 @@
 import Foundation
 
+/// A collection whose empty value is well defined, so a wire field that arrives
+/// absent or `null` has something unambiguous to decode to.
+protocol EmptyRepresentable {
+    static var emptyValue: Self { get }
+}
+
+extension Array: EmptyRepresentable {
+    static var emptyValue: Self { [] }
+}
+
+extension Dictionary: EmptyRepresentable {
+    static var emptyValue: Self { [:] }
+}
+
+/// Go marshals a nil slice or map as JSON `null`, and the agent builds most of
+/// its collections lazily — so `"playlists": null`, `"checks": null` and
+/// `"resolved_dependencies": null` are all valid protocol values that a
+/// non-optional Swift collection cannot decode. Every wire-inbound collection is
+/// wrapped so an absent or null field decodes to empty, which is what the
+/// backend means by it. A fresh install, where every one of these arrives null
+/// at once, is the case that proves it.
+///
+/// `init(wrappedValue:)` is what keeps each synthesised memberwise initialiser
+/// taking the bare collection, so wrapping a field changes no construction site.
+@propertyWrapper
+struct DefaultEmpty<Value: Codable & Sendable & EmptyRepresentable>: Codable, Sendable {
+    var wrappedValue: Value
+
+    /// This must stay the *only* initialiser callable with no arguments, and
+    /// `wrappedValue` must not have a default. Either one makes Swift synthesise
+    /// memberwise initialisers taking `DefaultEmpty<Value>` instead of the bare
+    /// collection, which would rewrite every construction site in the app.
+    init(wrappedValue: Value) {
+        self.wrappedValue = wrappedValue
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        wrappedValue = container.decodeNil() ? .emptyValue : try container.decode(Value.self)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wrappedValue)
+    }
+}
+
+extension DefaultEmpty: Equatable where Value: Equatable {}
+extension DefaultEmpty: Hashable where Value: Hashable {}
+
+extension KeyedDecodingContainer {
+    /// A missing key says the same thing `null` does: the backend has nothing
+    /// for this field. Synthesised decoding routes through here.
+    func decode<Value>(
+        _ type: DefaultEmpty<Value>.Type,
+        forKey key: Key
+    ) throws -> DefaultEmpty<Value> {
+        try decodeIfPresent(type, forKey: key) ?? DefaultEmpty(wrappedValue: .emptyValue)
+    }
+}
+
 struct ShutdownResult: Codable, Sendable { let shutdown: Bool }
 struct CancelRunResult: Codable, Sendable { let canceled: Bool }
 struct ValidationResult: Codable, Sendable { let valid: Bool }
@@ -63,11 +124,11 @@ struct InitializeParams: Codable, Sendable {
 struct InitializeResult: Codable, Sendable {
     let protocolVersion: Int
     let build: BuildInfo
-    let methods: [String]
+    @DefaultEmpty var methods: [String]
     let workingDir: String
-    let configPaths: [String]
-    let featureConfigPaths: [String: [String]]
-    let capabilities: [String: JSONValue]
+    @DefaultEmpty var configPaths: [String]
+    @DefaultEmpty var featureConfigPaths: [String: [String]]
+    @DefaultEmpty var capabilities: [String: JSONValue]
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
@@ -115,9 +176,9 @@ struct DoctorCheck: Codable, Identifiable, Sendable {
 }
 
 struct DoctorResult: Codable, Sendable {
-    let checks: [DoctorCheck]
+    @DefaultEmpty var checks: [DoctorCheck]
     let effectivePath: String
-    let resolvedDependencies: [String: String]
+    @DefaultEmpty var resolvedDependencies: [String: String]
     let exitCode: Int
 
     enum CodingKeys: String, CodingKey {
@@ -154,7 +215,7 @@ struct CredentialStatus: Codable, Identifiable, Sendable {
 }
 
 struct CredentialsListResult: Codable, Sendable {
-    let credentials: [CredentialStatus]
+    @DefaultEmpty var credentials: [CredentialStatus]
 }
 
 struct CredentialMutationParams: Codable, Sendable {

@@ -2,6 +2,137 @@ import XCTest
 import SwiftUI
 @testable import UDL
 
+/// Rules the redesign states in prose and that nothing else can enforce: a
+/// failure belongs on the screen that caused it, and a disabled control states
+/// its reason. Both are properties of how the sources are written, so they are
+/// checked by reading the sources. Each closed a class of defect that had
+/// already shipped once.
+final class SourceRuleTests: XCTestCase {
+    /// `macos/UDL`, derived from this file's own location so the test works
+    /// from any checkout without a hardcoded path.
+    private var appSourceRoot: URL {
+        URL(fileURLWithPath: #filePath)      // .../macos/UDLTests/WireModelTests.swift
+            .deletingLastPathComponent()     // .../macos/UDLTests
+            .deletingLastPathComponent()     // .../macos
+            .appending(path: "UDL")
+    }
+
+    private func source(_ relativePath: String) throws -> [String] {
+        let url = appSourceRoot.appending(path: relativePath)
+        return try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
+    }
+
+    private func swiftFiles() throws -> [(name: String, lines: [String])] {
+        let keys: [URLResourceKey] = [.isRegularFileKey]
+        guard let walker = FileManager.default.enumerator(
+            at: appSourceRoot,
+            includingPropertiesForKeys: keys
+        ) else { return [] }
+        var files: [(String, [String])] = []
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            files.append((url.lastPathComponent, text.components(separatedBy: "\n")))
+        }
+        return files
+    }
+
+    /// Returns the name of the `func` each matching line sits inside.
+    private func enclosingFunctions(of lines: [String], matching needle: String) -> Set<String> {
+        var current = "<file scope>"
+        var found: Set<String> = []
+        for line in lines {
+            if let name = Self.functionName(in: line) { current = name }
+            if line.contains(needle) { found.insert(current) }
+        }
+        return found
+    }
+
+    private static func functionName(in line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let range = trimmed.range(of: "func ") else { return nil }
+        // Only declarations, not calls: `func` must open the declaration.
+        let prefix = trimmed[trimmed.startIndex..<range.lowerBound]
+        guard prefix.allSatisfy({ $0.isLetter || $0 == " " || $0 == "@" }) else { return nil }
+        let rest = trimmed[range.upperBound...]
+        guard let paren = rest.firstIndex(of: "(") else { return nil }
+        return String(rest[rest.startIndex..<paren])
+    }
+
+    /// The blocking modal is for session-level failures no screen owns. A
+    /// failure a screen's own action caused belongs on that screen — Finish
+    /// Setup once failed with its reason recorded only where the Config screen
+    /// would render it, so onboarding looked untouched.
+    func testOnlySessionLevelFailuresReachTheModalAlert() throws {
+        let allowed: Set<String> = [
+            "refreshPlanPrompt",   // a `ui.selectRows` frame the app cannot decode
+            "start",               // the backend would not launch
+            "restart",             // the backend would not come back
+            "answerPrompt",        // the reply the blocked backend is waiting for
+            "answerPlanSelection", // ditto, when it cannot even be encoded
+        ]
+        let lines = try source("Model/AppState.swift")
+        let actual = enclosingFunctions(of: lines, matching: "alertMessage = ")
+        XCTAssertEqual(
+            actual.subtracting(allowed),
+            [],
+            "These raise a modal but are a screen's own failure; route them to that screen's status."
+        )
+    }
+
+    /// Failure mode 1 in PLAN.md: a `.disabled(true)` with no stated reason is a
+    /// defect, and a `.help(_)` tooltip is not a stated reason. `.constrained(by:)`
+    /// is the sanctioned way to disable a control, because it states the reason
+    /// as part of disabling. A bare `.disabled(` is allowed only where the reason
+    /// is on screen by other means, and each of those is named here.
+    func testEveryDisabledControlStatesItsReasonOnScreen() throws {
+        /// file name → the bare `.disabled(` sites it is allowed to contain, and
+        /// why the reason is visible without a note.
+        let allowed: [String: (count: Int, because: String)] = [
+            // The primitives that implement the rule.
+            "ConstraintNote.swift": (1, "this *is* `.constrained(by:)`"),
+            // The step renders its own unavailability reason as its subtitle.
+            "FreeDLPhaseBar.swift": (1, "the reason is the step's subtitle"),
+            // Menu items cannot host a note; each mirrors an on-screen control
+            // that carries one.
+            "UDLApp.swift": (2, "menu commands mirroring on-screen actions"),
+            // Toolbar buttons that swap their label for a spinner and the word
+            // for what is running — the reason is the label.
+            "DoctorView.swift": (1, "the toolbar button reads “Running checks…”"),
+            "CredentialsView.swift": (1, "the toolbar button reads “Reloading…”"),
+            "HomeView.swift": (1, "the toolbar button reads “Running checks…”"),
+            "PlaylistsView.swift": (1, "toolbar; the run is named in the status bar"),
+            // Move up / move down state their reason in one note under the row.
+            "ConfigSourceForm.swift": (2, "one note under the button row"),
+            // Per-row toggles: one note above the table, not one per row.
+            "FreeDLView.swift": (2, "one note above the table (phase 4 lesson)"),
+            // Buttons in a horizontal row whose shared note sits beside or under
+            // it; `.constrained(by:)` stacks vertically and would break the row.
+            "SourceEditorView.swift": (1, "the missing-requirement note is beside it"),
+            "OnboardingView.swift": (1, "the note is beside it in the status bar"),
+            "FreeDLJobForm.swift": (2, "one “nothing to save” note under the row"),
+            "PlaylistDefinitionEditor.swift": (1, "the ID note is under the field"),
+            "RekordboxView.swift": (3, "one note per strip, not one per button"),
+        ]
+
+        var offenders: [String] = []
+        for file in try swiftFiles() {
+            let bare = file.lines.filter {
+                $0.contains(".disabled(") && !$0.contains("constrained(by:")
+            }.count
+            guard bare > 0 else { continue }
+            let budget = allowed[file.name]?.count ?? 0
+            if bare > budget {
+                offenders.append("\(file.name): \(bare) bare .disabled( sites, \(budget) allowed")
+            }
+        }
+        XCTAssertEqual(
+            offenders.sorted(),
+            [],
+            "Disabling without an adjacent stated reason is failure mode 1. Use .constrained(by:)."
+        )
+    }
+}
+
 final class WireModelTests: XCTestCase {
     func testUnknownFieldsAndEnumValuesDecode() throws {
         let payload = """
@@ -302,5 +433,775 @@ final class WireModelTests: XCTestCase {
             row(4, status: "matched_path", action: "keep"),
         ])
         XCTAssertEqual(multiple.blockers.map(\.title), ["Track 1", "Track 2", "Track 3"])
+    }
+
+    /// C17 — the parameters the GUI used to hardcode now come from AppState.
+    /// This pins the wire spelling, including the `ask_on_existing_set` flag
+    /// that makes "udl decides" distinguishable from "never ask".
+    func testSyncStartParamsEncodeSurfacedAdvancedOptions() throws {
+        let params = SyncStartParams(
+            sourceIDs: ["sc-likes"],
+            dryRun: true,
+            timeoutSeconds: 0,
+            plan: true,
+            planLimit: 0,
+            planWindow: .latest,
+            planWindowBySource: ["sc-likes": .latest],
+            downloadOrderBySource: ["sc-likes": .oldestFirst],
+            askOnExisting: true,
+            askOnExistingSet: true,
+            scanGaps: true,
+            noPreflight: true,
+            trackStatus: .names
+        )
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder.agent.encode(params)
+        ) as? [String: Any]
+        XCTAssertEqual(encoded?["plan_limit"] as? Int, 0)
+        XCTAssertEqual(encoded?["plan_window"] as? String, "latest")
+        XCTAssertEqual(encoded?["ask_on_existing"] as? Bool, true)
+        XCTAssertEqual(encoded?["ask_on_existing_set"] as? Bool, true)
+        XCTAssertEqual(encoded?["scan_gaps"] as? Bool, true)
+        XCTAssertEqual(encoded?["no_preflight"] as? Bool, true)
+        XCTAssertEqual(encoded?["track_status"] as? String, "names")
+    }
+
+    /// `SyncDefaults` is the only place a sync default is written. A second copy
+    /// is how `dryRun` once ended up claiming one value in a comment and another
+    /// in the initialiser, so this pins the constants themselves — including
+    /// C1's `dryRun: true`, without which the sidebar route offers a live run.
+    func testSyncDefaultsAreTheDocumentedC1AndC17Values() throws {
+        XCTAssertTrue(SyncDefaults.dryRun)
+        XCTAssertFalse(SyncDefaults.unlimited)
+        XCTAssertEqual(SyncDefaults.planLimit, 50)
+        XCTAssertEqual(SyncDefaults.timeoutSeconds, 0)
+        XCTAssertEqual(SyncDefaults.planWindow, .first)
+        XCTAssertEqual(SyncDefaults.askOnExisting, .backendDefault)
+        XCTAssertFalse(SyncDefaults.scanGaps)
+        XCTAssertFalse(SyncDefaults.noPreflight)
+        XCTAssertEqual(SyncDefaults.trackStatus, .off)
+
+        // The wire payload a default-state run sends. `ask_on_existing_set:
+        // false` is what leaves the choice to udl, reproducing pre-C17 behaviour.
+        let params = SyncStartParams(
+            sourceIDs: ["sc-likes"],
+            dryRun: SyncDefaults.dryRun,
+            timeoutSeconds: SyncDefaults.timeoutSeconds,
+            plan: true,
+            planLimit: SyncDefaults.unlimited ? 0 : SyncDefaults.planLimit,
+            planWindow: SyncDefaults.planWindow,
+            planWindowBySource: [:],
+            downloadOrderBySource: [:],
+            askOnExisting: SyncDefaults.askOnExisting.value,
+            askOnExistingSet: SyncDefaults.askOnExisting.isSet,
+            scanGaps: SyncDefaults.scanGaps,
+            noPreflight: SyncDefaults.noPreflight,
+            trackStatus: SyncDefaults.trackStatus
+        )
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder.agent.encode(params)
+        ) as? [String: Any]
+        XCTAssertEqual(encoded?["dry_run"] as? Bool, true)
+        XCTAssertEqual(encoded?["plan_limit"] as? Int, 50)
+        XCTAssertEqual(encoded?["plan_window"] as? String, "first")
+        XCTAssertEqual(encoded?["ask_on_existing_set"] as? Bool, false)
+        XCTAssertEqual(encoded?["track_status"] as? String, "none")
+    }
+
+    /// The initialisers and `resetSyncAdvanced()` are two routes to the same
+    /// values; both must read `SyncDefaults` rather than repeating it.
+    @MainActor
+    func testSyncStateStartsAtAndResetsToTheDefaults() {
+        let state = AppState()
+        XCTAssertEqual(state.syncDryRun, SyncDefaults.dryRun)
+        XCTAssertEqual(state.syncUnlimited, SyncDefaults.unlimited)
+        XCTAssertEqual(state.syncPlanLimit, SyncDefaults.planLimit)
+        XCTAssertEqual(state.syncTimeoutSeconds, SyncDefaults.timeoutSeconds)
+        XCTAssertEqual(state.syncPlanWindow, SyncDefaults.planWindow)
+        XCTAssertEqual(state.syncAskOnExisting, SyncDefaults.askOnExisting)
+        XCTAssertEqual(state.syncScanGaps, SyncDefaults.scanGaps)
+        XCTAssertEqual(state.syncNoPreflight, SyncDefaults.noPreflight)
+        XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
+
+        state.syncPlanWindow = .latest
+        state.syncAskOnExisting = .ask
+        state.syncScanGaps = true
+        state.syncNoPreflight = true
+        state.syncTrackStatus = .names
+        state.resetSyncAdvanced()
+        XCTAssertEqual(state.syncPlanWindow, SyncDefaults.planWindow)
+        XCTAssertEqual(state.syncAskOnExisting, SyncDefaults.askOnExisting)
+        XCTAssertEqual(state.syncScanGaps, SyncDefaults.scanGaps)
+        XCTAssertEqual(state.syncNoPreflight, SyncDefaults.noPreflight)
+        XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
+    }
+
+    /// The defaults must reproduce exactly what the GUI sent before C17, so
+    /// surfacing the controls does not silently change behaviour.
+    func testAskOnExistingDefaultMatchesThePreviousHardcodedValues() {
+        XCTAssertEqual(AskOnExistingPolicy.backendDefault.isSet, false)
+        XCTAssertEqual(AskOnExistingPolicy.backendDefault.value, false)
+        XCTAssertEqual(AskOnExistingPolicy.never.isSet, true)
+        XCTAssertEqual(AskOnExistingPolicy.never.value, false)
+        XCTAssertEqual(AskOnExistingPolicy.ask.isSet, true)
+        XCTAssertEqual(AskOnExistingPolicy.ask.value, true)
+        XCTAssertEqual(TrackStatusMode.off.rawValue, "none")
+    }
+
+    /// A locked row must always be able to say why, because the plan surface
+    /// answers the click instead of swallowing it.
+    func testEveryPlanRowStatusHasALabelAndALockReason() throws {
+        for status in ["missing_new", "missing_known_gap", "already_downloaded", "future_status"] {
+            let payload = """
+            {
+              "index": 0,
+              "remote_id": "r1",
+              "remote_url": "https://example.test/1",
+              "title": "Track",
+              "status": "\(status)",
+              "toggleable": false,
+              "selected_by_default": false
+            }
+            """.data(using: .utf8)!
+            let row = try JSONDecoder.agent.decode(PlanRow.self, from: payload)
+            XCTAssertFalse(row.statusLabel.isEmpty)
+            XCTAssertFalse(row.lockReason.isEmpty)
+        }
+    }
+
+    /// Home and Doctor both route a failing check through `DoctorFix`, so the
+    /// same check can never lead to two different screens — and a check with no
+    /// recognisable target falls back to Doctor rather than guessing.
+    func testDoctorFixRoutingIsSharedAndFallsBackToDetails() {
+        func check(_ name: String, _ detail: String, status: String = "warning") -> DoctorCheck {
+            DoctorCheck(name: name, severity: .warn, status: status, detail: detail, remediation: nil)
+        }
+        XCTAssertEqual(DoctorFix(check("auth", "Deezer ARL is missing")), .credentials)
+        XCTAssertEqual(DoctorFix(check("auth", "SoundCloud client ID not in Keychain")), .credentials)
+        XCTAssertEqual(DoctorFix(check("rekordbox", "Rekordbox is running")), .rekordbox)
+        XCTAssertEqual(DoctorFix(check("config", "config.yaml has no sources")), .config)
+        XCTAssertEqual(DoctorFix(check("filesystem", "archive drift detected")), .none)
+        XCTAssertNil(DoctorFix(check("filesystem", "archive drift detected")).destination)
+        XCTAssertEqual(DoctorFix(check("filesystem", "archive drift detected")).shortActionLabel, "Details")
+        // A passing check never offers a fix, whatever words it happens to use.
+        XCTAssertEqual(DoctorFix(check("auth", "Deezer ARL is available", status: "ok")), .none)
+    }
+
+    /// The "Used by" column has no protocol field. It is derived from
+    /// `sources.capabilities` using the same adapter rules `internal/doctor`
+    /// applies when it decides which credential checks to emit.
+    func testCredentialConsumersMirrorTheBackendAdapterRules() {
+        func source(_ id: String, _ type: String, _ adapter: String) -> SourceCapability {
+            SourceCapability(
+                sourceID: id, sourceType: type, adapter: adapter,
+                supportsPlan: true, supportsPlanWindow: false, supportsDownloadOrder: true,
+                defaultPlanWindow: .first, defaultDownloadOrder: .newestFirst
+            )
+        }
+        let sources = [
+            source("sc-likes", "soundcloud", "scdl"),
+            source("sc-free", "soundcloud", "scdl-freedl"),
+            source("sp-deemix", "spotify", "deemix"),
+            source("sp-spotdl", "spotify", "spotdl"),
+        ]
+        XCTAssertEqual(
+            credentialConsumers(.soundCloudClientID, sources: sources),
+            ["sc-likes", "sc-free"]
+        )
+        XCTAssertEqual(credentialConsumers(.deemixARL, sources: sources), ["sp-deemix"])
+        XCTAssertEqual(credentialConsumers(.spotifyApp, sources: sources), ["sp-deemix"])
+        XCTAssertTrue(credentialConsumers(.deemixARL, sources: []).isEmpty)
+    }
+
+    /// C13 — when something outside Keychain supplies the running value, the
+    /// row must never offer a plain "Replace", which would imply that writing
+    /// the Keychain entry changes what the backend uses.
+    func testExternalOverrideIsMarkedAndNeverOfferedAPlainReplace() {
+        func status(health: String, storage: String) -> CredentialStatus {
+            CredentialStatus(
+                kind: .deemixARL, title: "Deezer ARL", health: health,
+                storageSource: storage, summary: "", lastFailureKind: nil, lastFailureMessage: nil
+            )
+        }
+        let env = status(health: "external_override", storage: "env")
+        XCTAssertTrue(env.isExternallyOverridden)
+        XCTAssertEqual(env.actionLabel, "Move to Keychain")
+        XCTAssertEqual(env.storageLabel, "environment variable")
+
+        let spotdl = status(health: "available", storage: "spotdl_config")
+        XCTAssertTrue(spotdl.isExternallyOverridden)
+        XCTAssertEqual(spotdl.actionLabel, "Move to Keychain")
+
+        let keychain = status(health: "available", storage: "keychain")
+        XCTAssertFalse(keychain.isExternallyOverridden)
+        XCTAssertEqual(keychain.actionLabel, "Replace")
+        XCTAssertEqual(keychain.storageLabel, "macOS Keychain")
+
+        let missing = status(health: "missing", storage: "")
+        XCTAssertEqual(missing.actionLabel, "Add…")
+        XCTAssertEqual(missing.storageLabel, "not stored")
+        XCTAssertFalse(missing.environmentVariables.isEmpty)
+    }
+
+    // MARK: - Phase 6: Free DL (C7, C8)
+
+    /// C8 — three different things a Free DL cell can mean. `pending`,
+    /// `matching` and `probing` are "still checking"; `not_found` is a real
+    /// answer. Rendering both as an empty cell is the ambiguity this rules out.
+    func testFreeDLRowDistinguishesStillCheckingFromNothingFound() {
+        func row(local: String?, probe: String?) -> FreeDLPlanRow {
+            var payload: [String: JSONValue] = [
+                "index": .number(0),
+                "remote_id": .string("1"),
+                "title": .string("Track"),
+                "local_quality": .object(["lossless": .bool(false)]),
+                "free_dl_probe": .object(probe.map { ["status": JSONValue.string($0)] } ?? [:]),
+                "selectable": .bool(true),
+                "selected": .bool(true),
+            ]
+            if let local { payload["local_state"] = .string(local) }
+            let data = try! JSONEncoder.agent.encode(JSONValue.object(payload))
+            return try! JSONDecoder.agent.decode(FreeDLPlanRow.self, from: data)
+        }
+        for state in ["pending", "matching", "probing"] {
+            XCTAssertFalse(row(local: state, probe: nil).localResolved, state)
+        }
+        XCTAssertTrue(row(local: "not_found", probe: nil).localResolved)
+        XCTAssertEqual(row(local: "not_found", probe: nil).localLabel, "not in library")
+        XCTAssertFalse(row(local: "matched", probe: nil).freeDLResolved)
+        XCTAssertTrue(row(local: "matched", probe: "no_free_dl").freeDLResolved)
+        XCTAssertEqual(row(local: "matched", probe: "no_free_dl").freeDLLabel, "no free DL")
+    }
+
+    /// C8 — a row is emitted before its probe returns, so `selectable: false`
+    /// on a streaming row means "not decided yet". Calling it Blocked there is
+    /// a claim udl has not made.
+    func testStreamingRowIsCheckingNotBlocked() {
+        func row(selectable: Bool, probe: String?, skip: String?) -> FreeDLPlanRow {
+            var payload: [String: JSONValue] = [
+                "index": .number(0),
+                "remote_id": .string("1"),
+                "title": .string("Track"),
+                "local_quality": .object(["lossless": .bool(false)]),
+                "free_dl_probe": .object(probe.map { ["status": JSONValue.string($0)] } ?? [:]),
+                "selectable": .bool(selectable),
+                "selected": .bool(selectable),
+            ]
+            if let skip { payload["skip_reason"] = .string(skip) }
+            let data = try! JSONEncoder.agent.encode(JSONValue.object(payload))
+            return try! JSONDecoder.agent.decode(FreeDLPlanRow.self, from: data)
+        }
+        let streaming = row(selectable: false, probe: nil, skip: nil)
+        XCTAssertTrue(streaming.isStillResolving)
+        XCTAssertEqual(streaming.statusLabel, "Checking")
+        XCTAssertTrue(streaming.lockReason.contains("not finished checking"))
+
+        // `pending` is the same state, spelled by recomputeSelectable.
+        XCTAssertTrue(row(selectable: false, probe: nil, skip: "pending").isStillResolving)
+        // A probe can land available before the source plan says whether the
+        // row is toggleable. No reason has been written, so nothing is known.
+        XCTAssertTrue(row(selectable: false, probe: "available", skip: nil).isStillResolving)
+
+        let resolved = row(selectable: false, probe: "no_free_dl", skip: "no_free_dl")
+        XCTAssertFalse(resolved.isStillResolving)
+        XCTAssertEqual(resolved.statusLabel, "No free DL")
+        XCTAssertEqual(resolved.lockReason, "This track has no Free DL link on SoundCloud.")
+
+        let have = row(selectable: false, probe: "available", skip: "already-present")
+        XCTAssertEqual(have.statusLabel, "Have")
+        XCTAssertEqual(have.statusSeverity, .idle)
+
+        let upgrade = row(selectable: true, probe: "available", skip: nil)
+        XCTAssertEqual(upgrade.statusLabel, "Upgrade")
+        XCTAssertFalse(upgrade.isStillResolving)
+    }
+
+    /// Quality is the mockup's colour-coded monospace cell. Under 320 kbps is
+    /// the low tint; a probe error says so instead of reading as absent.
+    func testFreeDLQualitySummaryNamesProbeFailureRatherThanRenderingBlank() {
+        func quality(_ payload: [String: JSONValue]) -> FreeDLQuality {
+            let data = try! JSONEncoder.agent.encode(JSONValue.object(payload))
+            return try! JSONDecoder.agent.decode(FreeDLQuality.self, from: data)
+        }
+        let lossless = quality(["codec": .string("flac"), "lossless": .bool(true)])
+        XCTAssertEqual(lossless.summary, "flac lossless")
+        XCTAssertEqual(lossless.severity, .ok)
+        let low = quality(["codec": .string("mp3"), "lossless": .bool(false), "effective_bitrate": .number(192_000)])
+        XCTAssertEqual(low.summary, "mp3 192k")
+        XCTAssertEqual(low.severity, .warn)
+        XCTAssertEqual(quality(["lossless": .bool(false)]).summary, "—")
+        XCTAssertEqual(quality(["lossless": .bool(false), "error": .string("no stream")]).summary, "probe failed")
+    }
+
+    /// C7 — four RPCs, four steps, and a step whose backend prerequisite does
+    /// not exist is never silently clickable.
+    func testFreeDLPhasesNameTheirOwnRPC() {
+        XCTAssertEqual(FreeDLPhase.allCases.count, 4)
+        XCTAssertEqual(FreeDLPhase.plan.method, "freedl.plan.start")
+        XCTAssertEqual(FreeDLPhase.capture.method, "freedl.capture.start")
+        XCTAssertEqual(FreeDLPhase.promotionPlan.method, "freedl.promotionPlan.build")
+        XCTAssertEqual(FreeDLPhase.promote.method, "freedl.promote.apply")
+        XCTAssertEqual(Set(FreeDLPhase.allCases.map(\.method)).count, 4)
+        XCTAssertEqual(FreeDLPhase.allCases.map(\.number), [1, 2, 3, 4])
+    }
+
+    // MARK: - Phase 6: Rekordbox (C9, C10)
+
+    /// C9 — the presentation reads the plan; it never becomes the plan. The
+    /// value handed to `rekordbox.apply` must stay the exact `JSONValue` the
+    /// backend sent, `omitempty` gaps and all.
+    func testRekordboxPlanPresentationKeepsTheSentValueVerbatim() throws {
+        let payload = """
+        {
+          "version": "v1",
+          "generated_at": "2026-08-01T15:04:00Z",
+          "mode": "mirror",
+          "music_playlist": {"name": "Friday Warmup", "track_count": 3},
+          "rekordbox_playlist": {"name": "UDL/Warmup"},
+          "rekordbox_db_dir": "/db",
+          "backup_dir": "/backups",
+          "summary": {"music_total": 3, "matched_by_path": 2, "missing_in_rekordbox": 1, "will_add": 1, "will_move": 1},
+          "rows": [
+            {"music_index": 1, "artist": "A", "title": "One", "duration": "3:20", "path": "/a.aiff", "match_status": "matched", "action": "add"},
+            {"music_index": 2, "artist": "B", "title": "Two", "duration": "4:01", "path": "/b.aiff", "match_status": "missing", "action": "skip"}
+          ],
+          "checksum_sha256": "63be0000000000000000000000000000000000000000000000000000000910ff",
+          "future_field": {"kept": true}
+        }
+        """
+        let value = try JSONDecoder.agent.decode(JSONValue.self, from: Data(payload.utf8))
+        let plan = try XCTUnwrap(RekordboxPlanPresentation(value))
+        // The unknown field survives, because the value is never re-encoded
+        // from the Swift model.
+        XCTAssertEqual(plan.value.objectValue?["future_field"]?.objectValue?["kept"]?.boolValue, true)
+        XCTAssertEqual(plan.title, "Friday Warmup → UDL/Warmup")
+        XCTAssertEqual(plan.missing, 1)
+        XCTAssertEqual(plan.changeCount, 2)
+        XCTAssertEqual(plan.blockers.count, 1)
+        XCTAssertEqual(plan.rows.first?.duration, "3:20")
+        XCTAssertTrue(plan.shortChecksum.hasPrefix("63be"))
+    }
+
+    /// A folder plan carries no top-level summary; its counts are the sum of
+    /// its per-operation summaries rather than a zero it never stated.
+    func testRekordboxFolderPlanSumsPerOperationSummaries() throws {
+        let payload = """
+        {
+          "version": "v1-folder",
+          "operations": [
+            {"summary": {"music_total": 2, "will_add": 1}, "rows": [
+              {"music_index": 1, "title": "One", "match_status": "matched", "action": "add"}]},
+            {"summary": {"music_total": 3, "will_add": 2}, "rows": [
+              {"music_index": 1, "title": "Two", "match_status": "matched", "action": "add"}]}
+          ],
+          "checksum_sha256": "abc"
+        }
+        """
+        let value = try JSONDecoder.agent.decode(JSONValue.self, from: Data(payload.utf8))
+        let plan = try XCTUnwrap(RekordboxPlanPresentation(value))
+        XCTAssertEqual(plan.musicTotal, 5)
+        XCTAssertEqual(plan.willAdd, 3)
+        XCTAssertEqual(plan.rows.count, 2)
+    }
+
+    /// C10 — the primary action always names its blocker, and a blocker the
+    /// protocol cannot report before an attempt is only ever set from a real
+    /// backend refusal.
+    func testRekordboxApplyGateNamesEveryBlocker() throws {
+        func plan(missing: Int, checksum: String = "abc") throws -> RekordboxPlanPresentation {
+            let rows = (0..<missing).map {
+                #"{"music_index": \#($0), "title": "T", "match_status": "missing", "action": "skip"}"#
+            }.joined(separator: ",")
+            let payload = #"{"version":"v1","summary":{"will_add":2},"rows":[\#(rows)],"checksum_sha256":"\#(checksum)"}"#
+            let value = try JSONDecoder.agent.decode(JSONValue.self, from: Data(payload.utf8))
+            return try XCTUnwrap(RekordboxPlanPresentation(value))
+        }
+
+        let noPlan = RekordboxApplyGate(plan: nil, obstacle: nil, isPlanning: false)
+        XCTAssertEqual(noPlan.actionLabel, "Generate plan")
+        XCTAssertEqual(noPlan.action, .generatePlan)
+
+        let blocked = RekordboxApplyGate(plan: try plan(missing: 3), obstacle: nil, isPlanning: false)
+        XCTAssertEqual(blocked.actionLabel, "3 tracks missing — resolve to apply")
+        XCTAssertEqual(blocked.action, .showBlockedRows)
+        XCTAssertTrue(blocked.blocksDryRun)
+        XCTAssertNotNil(blocked.reason)
+
+        let noChecksum = RekordboxApplyGate(plan: try plan(missing: 0, checksum: ""), obstacle: nil, isPlanning: false)
+        XCTAssertEqual(noChecksum.actionLabel, "Regenerate plan — no checksum")
+        XCTAssertEqual(noChecksum.action, .generatePlan)
+
+        let ready = RekordboxApplyGate(plan: try plan(missing: 0), obstacle: nil, isPlanning: false)
+        XCTAssertEqual(ready.actionLabel, "Apply 2 changes…")
+        XCTAssertEqual(ready.action, .confirmApply)
+        XCTAssertFalse(ready.blocksDryRun)
+        XCTAssertNil(ready.reason)
+
+        // A live refusal outranks the plan's own arithmetic.
+        let running = RekordboxApplyGate(
+            plan: try plan(missing: 0),
+            obstacle: RekordboxObstacle(backendMessage: "Rekordbox is running; close Rekordbox before using this command (rekordbox)"),
+            isPlanning: false
+        )
+        XCTAssertEqual(running.actionLabel, "Rekordbox is open — quit it to apply")
+        XCTAssertEqual(running.action, .confirmApply)
+
+        let drift = RekordboxApplyGate(
+            plan: try plan(missing: 0),
+            obstacle: RekordboxObstacle(backendMessage: "plan checksum mismatch"),
+            isPlanning: false
+        )
+        XCTAssertEqual(drift.actionLabel, "Regenerate plan")
+        XCTAssertEqual(drift.action, .generatePlan)
+        XCTAssertEqual(drift.pillTitle, "Plan drifted")
+    }
+
+    /// The obstacle classifier reads the real backend sentences, not invented
+    /// ones. These strings come from `internal/rekordbox/playlistsync/plan.go`.
+    func testRekordboxObstacleClassifiesRealBackendMessages() {
+        XCTAssertEqual(
+            RekordboxObstacle(backendMessage: "Rekordbox is running; close Rekordbox before using this command (rekordbox)"),
+            .rekordboxRunning("Rekordbox is running; close Rekordbox before using this command (rekordbox)")
+        )
+        if case .rekordboxRunning = RekordboxObstacle(backendMessage: "Rekordbox database sidecar exists while RB should be closed: /db/master.db-wal") {} else {
+            XCTFail("a stale sidecar is the same blocker as a running process")
+        }
+        XCTAssertTrue(RekordboxObstacle(backendMessage: "plan checksum mismatch").requiresRegeneration)
+        if case .partialMirrorRefused = RekordboxObstacle(backendMessage: "plan has 3 missing Rekordbox tracks; v1 refuses partial mirror apply") {} else {
+            XCTFail("a refused partial mirror is not a generic failure")
+        }
+        // An unrecognised message never invents an action label.
+        XCTAssertNil(RekordboxObstacle(backendMessage: "python bridge exited 1").actionLabel)
+    }
+
+    // MARK: Phase 7 — Playlists and Config
+
+    /// `missing_local` is `omitempty` on the wire, so a track udl found on disk
+    /// arrives with the key absent. Treating absent as "unknown" would put a
+    /// warning pill on every healthy row.
+    func testAbsentMissingLocalMeansTheFileWasFound() throws {
+        let payload = """
+        {
+          "version": 1,
+          "playlist_id": "friday",
+          "name": "Friday warmup",
+          "provider": "apple_music",
+          "provider_playlist": "Friday warmup",
+          "refreshed_at": "2026-08-01T10:00:00Z",
+          "checksum_sha256": "abc123",
+          "tracks": [
+            {"index": 1, "title": "Present", "path": "/music/present.aiff"},
+            {"index": 2, "title": "Gone", "missing_local": true}
+          ]
+        }
+        """.data(using: .utf8)!
+        let snapshot = try JSONDecoder.agent.decode(PlaylistSnapshot.self, from: payload)
+        XCTAssertFalse(snapshot.tracks[0].isMissingLocally)
+        XCTAssertTrue(snapshot.tracks[1].isMissingLocally)
+        XCTAssertEqual(snapshot.missingLocally, 1)
+    }
+
+    /// The duration field is `duration of t as text` from Music.app's
+    /// AppleScript: seconds as a real in the *system* locale. Playlists and
+    /// Rekordbox read the same field, so they share one parser, and an
+    /// unparseable value falls back to the raw string rather than to a number
+    /// udl never reported.
+    func testMusicDurationIsSharedAndNeverInventsATime() {
+        XCTAssertEqual(MusicDuration.label("266.029"), "4:26")
+        XCTAssertEqual(MusicDuration.label("266,029"), "4:26")
+        XCTAssertEqual(MusicDuration.label("59"), "0:59")
+        XCTAssertEqual(MusicDuration.label(nil), "—")
+        XCTAssertEqual(MusicDuration.label(""), "—")
+        XCTAssertEqual(MusicDuration.label("unknown"), "unknown")
+        // The Rekordbox row must resolve through the same helper.
+        let row = RekordboxPlanRowView(.object([
+            "music_index": .number(3),
+            "title": .string("Atalantis"),
+            "duration": .string("266,029"),
+            "match_status": .string("matched"),
+            "action": .string("add")
+        ]))
+        XCTAssertEqual(row?.durationLabel, MusicDuration.label("266,029"))
+    }
+
+    /// C11 — a refresh that fails or is canceled must be visually distinct from
+    /// one that succeeded, and must say the previous snapshot survived. The
+    /// message alone cannot carry that; the severity and the flag do.
+    func testPlaylistStatusMarksEveryOutcomeThatPreservedTheSnapshot() {
+        let refreshed = AppState.PlaylistStatus(message: "Snapshot refreshed: +2, −0, 41 unchanged.", severity: .ok)
+        XCTAssertFalse(refreshed.preservedPreviousSnapshot)
+
+        let canceled = AppState.PlaylistStatus(
+            message: "Refresh canceled. The previous valid snapshot was preserved.",
+            severity: .warn,
+            preservedPreviousSnapshot: true
+        )
+        let failed = AppState.PlaylistStatus(
+            message: "Refresh failed. The previous valid snapshot was preserved.",
+            severity: .error,
+            preservedPreviousSnapshot: true
+        )
+        XCTAssertNotEqual(canceled.severity, failed.severity, "cancel and failure are not the same outcome")
+        for status in [canceled, failed] {
+            XCTAssertTrue(status.preservedPreviousSnapshot)
+            XCTAssertTrue(status.message.contains("preserved"))
+        }
+    }
+
+    /// C14 — a `*bool` policy field has three states on the wire. A `Toggle`
+    /// would turn every unset key into an explicit `false` on the first save.
+    func testTriStateBoolRoundTripsUnsetSeparatelyFromFalse() throws {
+        XCTAssertEqual(TriStateBool(nil), .unset)
+        XCTAssertEqual(TriStateBool(false), .no)
+        XCTAssertEqual(TriStateBool(true), .yes)
+        XCTAssertNil(TriStateBool.unset.value)
+        XCTAssertEqual(TriStateBool.no.value, false)
+
+        // And unset must stay absent through an encode, not become `false`.
+        let policy = SourceSyncPolicy(breakOnExisting: true, askOnExisting: nil, localIndexCache: false)
+        let encoded = try JSONEncoder.agent.encode(policy)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["break_on_existing"] as? Bool, true)
+        XCTAssertEqual(object["local_index_cache"] as? Bool, false)
+        XCTAssertNil(object["ask_on_existing"], "unset must not be written as false")
+    }
+
+    /// The local checks exist to block Save and to attribute a problem to one
+    /// sidebar row before a save is attempted. They must attribute, not just
+    /// list.
+    func testConfigValidationAttributesProblemsToTheirSource() {
+        let config = MainConfig(
+            version: 1,
+            defaults: MainConfigDefaults(
+                stateDir: "", archiveFile: "archive.txt", threads: 1,
+                continueOnError: true, commandTimeoutSeconds: 900
+            ),
+            sources: [
+                source(id: "likes", url: "https://soundcloud.com/x/likes", targetDir: "/music"),
+                source(id: "likes", url: "https://soundcloud.com/y/likes", targetDir: "/music"),
+                source(id: "spot", url: "", targetDir: "")
+            ],
+            rekordbox: nil
+        )
+        let issues = ConfigValidation.issues(in: config)
+        XCTAssertTrue(issues.contains { $0.message.contains("state_dir") && $0.sourceID == nil })
+        XCTAssertTrue(issues.contains { $0.message.contains("Duplicate source id") && $0.sourceID == "likes" })
+        XCTAssertTrue(issues.contains { $0.message.contains("no url") && $0.sourceID == "spot" })
+        XCTAssertTrue(issues.contains { $0.message.contains("no target_dir") && $0.sourceID == "spot" })
+        XCTAssertTrue(issues.allSatisfy { $0.origin == .local })
+
+        let clean = MainConfig(
+            version: 1,
+            defaults: MainConfigDefaults(
+                stateDir: "/state", archiveFile: "archive.txt", threads: 1,
+                continueOnError: true, commandTimeoutSeconds: 900
+            ),
+            sources: [source(id: "likes", url: "https://soundcloud.com/x/likes", targetDir: "/music")],
+            rekordbox: nil
+        )
+        XCTAssertTrue(ConfigValidation.issues(in: clean).isEmpty)
+    }
+
+    /// `config.Validate` requires `state_file` for both source types the editor
+    /// can create. Without this rule the first Finish Setup was refused by the
+    /// backend with a message no screen rendered.
+    func testASourceWithoutAStateFileIsRejectedBeforeItIsSent() {
+        let config = MainConfig(
+            version: 1,
+            defaults: MainConfigDefaults(
+                stateDir: "/state", archiveFile: "archive.txt", threads: 1,
+                continueOnError: true, commandTimeoutSeconds: 900
+            ),
+            sources: [
+                source(id: "likes", url: "https://soundcloud.com/x/likes", targetDir: "/music", stateFile: nil),
+                source(id: "blank", url: "https://soundcloud.com/y/likes", targetDir: "/music", stateFile: "  ")
+            ],
+            rekordbox: nil
+        )
+        let issues = ConfigValidation.issues(in: config)
+        XCTAssertTrue(issues.contains { $0.message.contains("state_file") && $0.sourceID == "likes" })
+        XCTAssertTrue(issues.contains { $0.message.contains("state_file") && $0.sourceID == "blank" })
+    }
+
+    /// Go marshals a nil slice or map as `null`. `DefaultEmpty` is the one place
+    /// that is handled, so this pins its three behaviours: null decodes empty, a
+    /// present value still decodes, and encoding emits a bare collection so a
+    /// wrapped field is invisible on the way back out.
+    func testDefaultEmptyDecodesNullAndEncodesABareCollection() throws {
+        struct Probe: Codable, Equatable {
+            let name: String
+            @DefaultEmpty var rows: [String]
+            @DefaultEmpty var index: [String: Int]
+        }
+
+        let null = try JSONDecoder.agent.decode(
+            Probe.self,
+            from: #"{"name": "n", "rows": null, "index": null}"#.data(using: .utf8)!
+        )
+        XCTAssertTrue(null.rows.isEmpty)
+        XCTAssertTrue(null.index.isEmpty)
+
+        let absent = try JSONDecoder.agent.decode(
+            Probe.self,
+            from: #"{"name": "n"}"#.data(using: .utf8)!
+        )
+        XCTAssertTrue(absent.rows.isEmpty)
+        XCTAssertTrue(absent.index.isEmpty)
+
+        let present = try JSONDecoder.agent.decode(
+            Probe.self,
+            from: #"{"name": "n", "rows": ["a"], "index": {"a": 1}}"#.data(using: .utf8)!
+        )
+        XCTAssertEqual(present.rows, ["a"])
+        XCTAssertEqual(present.index, ["a": 1])
+
+        // The memberwise initialiser must still take the bare collection, or
+        // wrapping a field would rewrite every construction site.
+        let built = Probe(name: "n", rows: ["a"], index: ["a": 1])
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder.agent.encode(built)
+        ) as? [String: Any]
+        XCTAssertEqual(encoded?["rows"] as? [String], ["a"])
+        XCTAssertEqual(encoded?["index"] as? [String: Int], ["a": 1])
+    }
+
+    /// The fresh-install case: every collection the app reads at startup arrives
+    /// `null` at once. Before `DefaultEmpty`, `playlists.config.read` alone was
+    /// enough to raise a modal "playlist cache could not load" on first launch.
+    func testEveryStartupResultDecodesWithAllCollectionsNull() throws {
+        func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+            try JSONDecoder.agent.decode(type, from: json.data(using: .utf8)!)
+        }
+
+        let initialize = try decode(InitializeResult.self, """
+        {"protocol_version": 1,
+         "build": {"version": "dev", "commit": "abc", "date": "now"},
+         "methods": null, "working_dir": "/tmp", "config_paths": null,
+         "feature_config_paths": null, "capabilities": null}
+        """)
+        XCTAssertTrue(initialize.methods.isEmpty)
+        XCTAssertTrue(initialize.configPaths.isEmpty)
+        XCTAssertTrue(initialize.featureConfigPaths.isEmpty)
+        XCTAssertTrue(initialize.capabilities.isEmpty)
+
+        let doctor = try decode(DoctorResult.self, """
+        {"checks": null, "effective_path": "/usr/bin",
+         "resolved_dependencies": null, "exit_code": 0}
+        """)
+        XCTAssertTrue(doctor.checks.isEmpty)
+        XCTAssertTrue(doctor.resolvedDependencies.isEmpty)
+
+        let credentials = try decode(CredentialsListResult.self, #"{"credentials": null}"#)
+        let sources = try decode(SourceCapabilitiesResult.self, #"{"sources": null}"#)
+        let playlistList = try decode(PlaylistListResult.self, #"{"playlists": null}"#)
+        let providerList = try decode(ProviderPlaylistListResult.self, #"{"playlists": null}"#)
+        let playlistConfig = try decode(PlaylistConfig.self, #"{"version": 1, "playlists": null}"#)
+        XCTAssertTrue(credentials.credentials.isEmpty)
+        XCTAssertTrue(sources.sources.isEmpty)
+        XCTAssertTrue(playlistList.playlists.isEmpty)
+        XCTAssertTrue(providerList.playlists.isEmpty)
+        XCTAssertTrue(playlistConfig.playlists.isEmpty)
+
+        let freeDL = try decode(FreeDLConfig.self, """
+        {"version": 1,
+         "defaults": {"plan_limit": 50, "download_order": "oldest_first",
+                      "target_format": "auto", "min_match_score": 72,
+                      "ambiguity_gap": 8, "replace_limit": 0,
+                      "command_timeout_seconds": 900},
+         "jobs": null}
+        """)
+        XCTAssertTrue(freeDL.jobs.isEmpty)
+
+        let rekordbox = try decode(RekordboxSyncConfig.self, #"{"folders": null, "jobs": null}"#)
+        XCTAssertTrue(rekordbox.folders.isEmpty)
+        XCTAssertTrue(rekordbox.jobs.isEmpty)
+
+        let inspect = try decode(RekordboxInspectResult.self, #"{"playlists": null, "contents": null}"#)
+        XCTAssertTrue(inspect.playlists.isEmpty)
+        XCTAssertTrue(inspect.contents.isEmpty)
+
+        let config = try decode(MainConfig.self, """
+        {"version": 1,
+         "defaults": {"state_dir": "/state", "archive_file": "archive.txt",
+                      "threads": 1, "continue_on_error": true,
+                      "command_timeout_seconds": 900},
+         "sources": null}
+        """)
+        XCTAssertTrue(config.sources.isEmpty)
+
+        let onboarding = try decode(OnboardingState.self, """
+        {"reason": "no_sources", "auto_started": true, "config_path": "/c.yaml",
+         "config_context_label": "/c.yaml", "detail_lines": null,
+         "defaults": {"state_dir": "/state", "archive_file": "archive.txt",
+                      "threads": 1, "continue_on_error": true,
+                      "command_timeout_seconds": 900}}
+        """)
+        XCTAssertTrue(onboarding.detailLines.isEmpty)
+
+        // A source udl planned to nothing still asks for a selection.
+        let prompt = try decode(SelectRowsParams.self, """
+        {"run_id": "r", "source_id": "s", "rows": null,
+         "details": {"source_id": "s", "source_type": "soundcloud",
+                     "adapter": "scdl", "url": "https://x.test",
+                     "target_dir": "/m", "state_file": "/s",
+                     "plan_limit": 50, "plan_window": "first", "dry_run": true},
+         "download_order": "newest_first", "plan_window": "first"}
+        """)
+        XCTAssertTrue(prompt.rows.isEmpty)
+
+        let snapshot = try decode(SourceSnapshot.self, """
+        {"lifecycle": "done", "confirmed": true, "rows": null, "activity": null}
+        """)
+        XCTAssertTrue(snapshot.rows.isEmpty)
+        XCTAssertTrue(snapshot.activity.isEmpty)
+    }
+
+    /// A duplicate cannot reuse the id: the id names the state file, so two
+    /// sources sharing one would be two sources udl cannot tell apart.
+    func testDuplicatingASourceTakesAFreeID() {
+        let original = source(id: "likes", url: "https://soundcloud.com/x/likes", targetDir: "/music")
+        let first = original.duplicated(existingIDs: ["likes"])
+        XCTAssertEqual(first.id, "likes-copy")
+        XCTAssertEqual(first.url, original.url)
+        let second = original.duplicated(existingIDs: ["likes", "likes-copy"])
+        XCTAssertEqual(second.id, "likes-copy-2")
+    }
+
+    /// C14 — `-32003` from `config.writeFile` is not a save error. Nothing was
+    /// written, and the two SHAs the backend reported are what the conflict
+    /// state offers the user a choice between.
+    func testConfigWriteConflictCarriesBothSHAs() throws {
+        let payload = """
+        {
+          "path": "/Users/x/.config/udl/config.yaml",
+          "expected_content_sha256": "aaaa1111",
+          "actual_content_sha256": "bbbb2222"
+        }
+        """.data(using: .utf8)!
+        let data = try JSONDecoder.agent.decode(JSONValue.self, from: payload)
+        let object = try XCTUnwrap(data.objectValue)
+        let conflict = AppState.ConfigConflict(
+            path: try XCTUnwrap(object["path"]?.stringValue),
+            expectedSHA256: try XCTUnwrap(object["expected_content_sha256"]?.stringValue),
+            actualSHA256: try XCTUnwrap(object["actual_content_sha256"]?.stringValue)
+        )
+        XCTAssertNotEqual(conflict.expectedSHA256, conflict.actualSHA256)
+        XCTAssertEqual(conflict.path, "/Users/x/.config/udl/config.yaml")
+    }
+
+    private func source(
+        id: String,
+        url: String,
+        targetDir: String,
+        stateFile: String? = "state.sync.scdl"
+    ) -> MainConfigSource {
+        MainConfigSource(
+            id: id, type: "soundcloud", enabled: true, targetDir: targetDir, url: url,
+            stateFile: stateFile,
+            sync: SourceSyncPolicy(breakOnExisting: nil, askOnExisting: nil, localIndexCache: nil),
+            adapter: SourceAdapter(kind: "scdl", extraArgs: nil, minVersion: nil)
+        )
     }
 }
