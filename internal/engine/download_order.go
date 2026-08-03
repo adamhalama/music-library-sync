@@ -12,16 +12,23 @@ type PlanWindow string
 const (
 	DownloadOrderNewestFirst DownloadOrder = "newest_first"
 	DownloadOrderOldestFirst DownloadOrder = "oldest_first"
+	// DefaultDownloadOrder is the single fallback for sync planning and
+	// execution. Standalone Free DL owns its separate string default.
+	DefaultDownloadOrder DownloadOrder = DownloadOrderOldestFirst
 
 	PlanWindowFirst  PlanWindow = "first"
 	PlanWindowLatest PlanWindow = "latest"
 )
 
 func NormalizeDownloadOrder(order DownloadOrder) DownloadOrder {
-	if order == DownloadOrderOldestFirst {
+	switch order {
+	case DownloadOrderNewestFirst:
+		return DownloadOrderNewestFirst
+	case DownloadOrderOldestFirst:
 		return DownloadOrderOldestFirst
+	default:
+		return DefaultDownloadOrder
 	}
-	return DownloadOrderNewestFirst
 }
 
 func NormalizePlanWindow(window PlanWindow) PlanWindow {

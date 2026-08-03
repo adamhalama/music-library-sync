@@ -96,7 +96,7 @@ func (i *Interaction) Input(prompt string) (string, error) {
 }
 
 func (i *Interaction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
-	order := engine.DownloadOrderNewestFirst
+	order := engine.DefaultDownloadOrder
 	if i.DownloadOrder != nil {
 		order = engine.NormalizeDownloadOrder(i.DownloadOrder(sourceID))
 	}

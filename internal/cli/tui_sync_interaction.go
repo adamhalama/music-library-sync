@@ -77,7 +77,7 @@ func (i *tuiSyncInteraction) Input(prompt string) (string, error) {
 
 func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
 	if i == nil || i.ch == nil {
-		manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+		manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DefaultDownloadOrder)
 		if err != nil {
 			return engine.PlanSelectionResult{}, err
 		}
@@ -94,7 +94,7 @@ func (i *tuiSyncInteraction) SelectRows(sourceID string, rows []engine.PlanRow) 
 		planWindow = engine.NormalizePlanWindow(window)
 	}
 	details := buildPlanSourceDetails(source, i.defaults, i.planLimit, planWindow, i.dryRun)
-	downloadOrder := engine.DownloadOrderNewestFirst
+	downloadOrder := engine.DefaultDownloadOrder
 	if order, ok := i.orderByID[sourceID]; ok && engine.SupportsDownloadOrder(source) {
 		downloadOrder = engine.NormalizeDownloadOrder(order)
 	}
@@ -192,7 +192,7 @@ func (i *tuiInitInteraction) Input(prompt string) (string, error) {
 }
 
 func (i *tuiInitInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
-	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DefaultDownloadOrder)
 	if err != nil {
 		return engine.PlanSelectionResult{}, err
 	}

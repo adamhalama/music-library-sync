@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-func TestProtocolV1GoldenInventoryAndMethodGroups(t *testing.T) {
-	payload, err := os.ReadFile("testdata/protocol_v1_golden.json")
+func TestProtocolV2GoldenInventoryAndMethodGroups(t *testing.T) {
+	payload, err := os.ReadFile("testdata/protocol_v2_golden.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestProtocolV1GoldenInventoryAndMethodGroups(t *testing.T) {
 }
 
 func TestGoDecodesSwiftGeneratedRequests(t *testing.T) {
-	path := filepath.Join("..", "..", "macos", "UDLTests", "Fixtures", "swift_requests_v1.ndjson")
+	path := filepath.Join("..", "..", "macos", "UDLTests", "Fixtures", "swift_requests_v2.ndjson")
 	file, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)

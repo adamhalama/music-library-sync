@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	MaxFrameBytes   = 8 << 20
 
 	CodeParseError     = -32700

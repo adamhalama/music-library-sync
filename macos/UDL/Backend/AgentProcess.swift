@@ -2,6 +2,36 @@ import Combine
 import Darwin
 import Foundation
 
+private final class LockedStderrBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = ""
+    private let maximumBytes: Int
+
+    init(maximumBytes: Int) { self.maximumBytes = maximumBytes }
+
+    func reset() {
+        lock.lock()
+        value = ""
+        lock.unlock()
+    }
+
+    func append(_ chunk: String) {
+        let redacted = redactedDiagnostic(chunk)
+        lock.lock()
+        value.append(redacted)
+        if value.utf8.count > maximumBytes {
+            value = String(decoding: value.utf8.suffix(maximumBytes), as: UTF8.self)
+        }
+        lock.unlock()
+    }
+
+    func snapshot() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 @MainActor
 final class AgentProcess: ObservableObject {
     enum State: Equatable {
@@ -23,8 +53,8 @@ final class AgentProcess: ObservableObject {
     }
 
     @Published private(set) var state: State = .stopped
-    @Published private(set) var stderrLog = ""
     @Published private(set) var backendPath = ""
+    var stderrLog: String { stderrBuffer.snapshot() }
 
     private(set) var connection: JSONRPCConnection?
     private(set) var client: UDLClient?
@@ -33,7 +63,7 @@ final class AgentProcess: ObservableObject {
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var stopping = false
-    private let maximumLogBytes = 128 * 1024
+    private let stderrBuffer = LockedStderrBuffer(maximumBytes: 128 * 1024)
 
     func launch(workingDirectory: URL) async throws -> UDLClient {
         guard process == nil else {
@@ -42,7 +72,7 @@ final class AgentProcess: ObservableObject {
         }
         state = .launching
         stopping = false
-        stderrLog = ""
+        stderrBuffer.reset()
 
         let executable = try Self.resolveBackendExecutable()
         backendPath = executable.path
@@ -59,10 +89,11 @@ final class AgentProcess: ObservableObject {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        let stderrBuffer = self.stderrBuffer
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in self?.appendStderr(chunk) }
+            stderrBuffer.append(chunk)
         }
         process.terminationHandler = { [weak self] process in
             Task { @MainActor in
@@ -154,14 +185,6 @@ final class AgentProcess: ObservableObject {
         stdinPipe = nil
         stdoutPipe = nil
         stderrPipe = nil
-    }
-
-    private func appendStderr(_ chunk: String) {
-        stderrLog.append(redactedDiagnostic(chunk))
-        if stderrLog.utf8.count > maximumLogBytes {
-            let suffix = stderrLog.utf8.suffix(maximumLogBytes)
-            stderrLog = String(decoding: suffix, as: UTF8.self)
-        }
     }
 
     private static func resolveBackendExecutable() throws -> URL {

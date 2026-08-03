@@ -1,20 +1,359 @@
 import SwiftUI
 
-/// Sync is three surfaces over one run, not three screens: you configure a
-/// run, udl plans one source at a time and blocks on each (`SyncPlanView`),
-/// then the run executes (`SyncRunView`). The plan surface wins over the run
-/// surface because while a `ui.selectRows` request is open the backend is doing
-/// nothing at all — the plan *is* what is happening.
+/// Configuration is the only pre-run screen. Once a run starts, one persistent
+/// source-order table remains mounted from planning through terminal results.
 struct SyncView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        if appState.planPrompt != nil {
-            SyncPlanView()
-        } else if appState.syncRun.phase.isActive || appState.syncRun.exitCode != nil {
-            SyncRunView()
+        if appState.syncRun.phase.isActive || appState.syncRun.exitCode != nil || !appState.syncRun.sourceTables.isEmpty {
+            SyncUnifiedWorkspaceView()
         } else {
             SyncConfigureView()
+        }
+    }
+}
+
+private enum UnifiedSyncFilter: String, CaseIterable, Identifiable {
+    case all
+    case inRun = "in run"
+    case remaining
+    case downloaded
+    case skipped
+    case failed
+    case have
+    case new
+    case gaps
+
+    var id: String { rawValue }
+
+    func includes(_ row: TrackRow) -> Bool {
+        switch self {
+        case .all: true
+        case .inRun: row.runScope == "included"
+        case .remaining: row.runScope == "included" && ["idle", "queued", "downloading"].contains(row.runtimeStatus)
+        case .downloaded: row.runtimeStatus == "downloaded"
+        case .skipped: row.runtimeStatus == "skipped"
+        case .failed: row.runtimeStatus == "failed"
+        case .have: row.runScope == "locked"
+        case .new: row.planClass == "new"
+        case .gaps: row.planClass == "gap" || row.planClass == "known_gap"
+        }
+    }
+}
+
+/// The accepted plan is the runtime table. It is never replaced by a second
+/// row presentation, and browsing state remains available while mutation is
+/// locked.
+private struct SyncUnifiedWorkspaceView: View {
+    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var chrome: ShellChrome
+
+    @State private var filter: UnifiedSyncFilter = .all
+    @State private var cursor: TrackRow.ID?
+    @State private var sortOrder = [KeyPathComparator(\TrackRow.index)]
+    @State private var confirmingStop = false
+
+    private var sourceID: String? {
+        if let selected = appState.selectedSyncSourceID { return selected }
+        if let active = appState.activeSyncSourceID { return active }
+        return appState.syncRun.requestedSourceIDs.first
+    }
+
+    private var table: SyncSourceTableState? {
+        sourceID.flatMap { appState.syncRun.sourceTables[$0] }
+    }
+
+    var body: some View {
+        BoundedContent {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if let message = appState.syncRun.terminalMessage {
+                    Callout(title: message, severity: terminalSeverity)
+                        .padding(.horizontal, Metrics.contentPaddingHorizontal)
+                        .padding(.bottom, 8)
+                }
+                if appState.planPrompt?.params.sourceID == sourceID {
+                    WaitingBanner(
+                        detail: "udl is paused on this source. Review the queue and Continue, rebuild the window, or Stop the run."
+                    )
+                    .padding(.horizontal, Metrics.contentPaddingHorizontal)
+                    .padding(.bottom, 8)
+                } else if let table, !isMutable(table) {
+                    ConstraintNote(text: table.accepted
+                        ? "Accepted queue locked — selection, order, window, reset, and rebuild controls cannot change during this run."
+                        : "This run is no longer waiting for a selection. The retained table is read-only.")
+                        .padding(.horizontal, Metrics.contentPaddingHorizontal)
+                        .padding(.bottom, 8)
+                }
+                tableBody
+            }
+        }
+        .workspaceToolbar(
+            title: sourceID ?? "Run Sync",
+            subtitle: appState.syncRun.runID.map { "protocol v2 · run \($0)" } ?? "sync.start",
+            searchable: true,
+            searchPrompt: "Filter by title or remote ID"
+        ) {
+            Picker("Rows", selection: $filter) {
+                ForEach(filters) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            .frame(width: 170)
+            if appState.syncRun.phase.isActive {
+                Button("Stop", role: .destructive) { confirmingStop = true }
+            }
+        }
+        .workspaceInspector { inspector }
+        .udlStatusBar { statusSummary } actions: { actions }
+        .sidebarContext(sidebarContext)
+        .confirmationDialog("Stop this run?", isPresented: $confirmingStop) {
+            Button("Stop run", role: .destructive) {
+                Task { await appState.cancelActiveSync() }
+            }
+            Button("Keep running", role: .cancel) {}
+        } message: {
+            Text("The track downloading now is discarded. Tracks already finished stay on disk and stay recorded in the state file, so a later run resumes from here.")
+        }
+        .onDisappear { chrome.searchText = "" }
+        .onChange(of: table?.accepted) { _, accepted in
+            filter = accepted == true ? .all : .all
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(sourceID ?? "Preparing run").font(Typography.sectionTitle)
+                    LifecycleChip(lifecycle: sourceID.map(appState.syncSourceLifecycle) ?? .queued)
+                    if let sourceID, let position = appState.syncSourcePosition(for: sourceID) {
+                        Text("Source \(position.index) of \(position.total)")
+                            .font(Typography.control)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+                Text(table.map { table in
+                    if isMutable(table) { return "Select tracks in source order. Queue positions update immediately." }
+                    if table.accepted { return "Source order stays fixed; run # is the authoritative execution order." }
+                    return "The run ended before this queue was accepted; the source-order table is retained read-only."
+                } ?? "Preparing the source table.")
+                    .font(Typography.control)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 0)
+            if let progress = appState.syncRun.progress?.track, !progress.name.isEmpty {
+                Text("\(progress.name) · \(Int(progress.progressPercent))%")
+                    .font(Typography.mono)
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, Metrics.contentPaddingHorizontal)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder private var tableBody: some View {
+        if let table, !table.rows.isEmpty {
+            Table(filteredRows(table), selection: $cursor, sortOrder: $sortOrder) {
+                TableColumn("") { row in selectionControl(row, table: table) }.width(30)
+                TableColumn("#", value: \.index) { row in
+                    Text(row.index, format: .number).font(Typography.mono).foregroundStyle(Theme.textTertiary)
+                }.width(38)
+                TableColumn("Status", value: \.statusLabel) { row in
+                    StatusPill(title: row.statusLabel, severity: severity(row))
+                }.width(min: 90, ideal: 110)
+                TableColumn("Class", value: \.planClass) { row in
+                    Text(row.planClass).font(Typography.mono).foregroundStyle(Theme.textTertiary)
+                }.width(min: 54, ideal: 68)
+                TableColumn("Run") { row in
+                    Text(row.executionSlot > 0 ? "run #\(row.executionSlot)" : "—")
+                        .font(Typography.mono)
+                        .foregroundStyle(row.executionSlot > 0 ? Theme.accent : Theme.textTertiary)
+                }.width(min: 60, ideal: 72)
+                TableColumn("Title", value: \.title) { row in
+                    Text(row.title).font(Typography.control).lineLimit(1)
+                }
+                TableColumn("Remote ID", value: \.remoteID) { row in MonoValue(text: row.remoteID) }
+                    .width(min: 110, ideal: 170)
+            }
+            .tableStyle(.inset(alternatesRowBackgrounds: true))
+            .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        } else if let table, !table.hasTrackPlan {
+            EmptyStateView(
+                title: sourceID ?? "Source",
+                kind: .empty,
+                detail: "This adapter exposes no track plan. Source-level lifecycle and activity still update here."
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            EmptyStateView(
+                title: sourceID ?? "Preparing source",
+                kind: appState.syncRun.phase.isActive
+                    ? .blocked("Queued — udl has not reached this source yet.")
+                    : .notRun(action: "configure another run"),
+                detail: nil
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder private func selectionControl(_ row: TrackRow, table: SyncSourceTableState) -> some View {
+        if isMutable(table) && row.toggleable {
+            Toggle("", isOn: Binding(
+                get: { appState.syncRun.sourceTables[table.sourceID]?.selectedIndices.contains(row.index) == true },
+                set: { selected in
+                    var indices = appState.syncRun.sourceTables[table.sourceID]?.selectedIndices ?? []
+                    if selected { indices.insert(row.index) } else { indices.remove(row.index) }
+                    appState.setSyncTableSelection(sourceID: table.sourceID, selectedIndices: indices)
+                }
+            )).labelsHidden()
+        } else {
+            Image(systemName: row.runScope == "locked" ? "lock.fill" : row.selected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(row.selected ? Theme.accent : Theme.textTertiary)
+                .accessibilityLabel(table.accepted ? "Queue accepted and locked" : "Row locked")
+        }
+    }
+
+    private func filteredRows(_ table: SyncSourceTableState) -> [TrackRow] {
+        let query = chrome.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return table.rows
+            .filter(filter.includes)
+            .filter { query.isEmpty || $0.title.lowercased().contains(query) || $0.remoteID.lowercased().contains(query) }
+            .sorted(using: sortOrder)
+    }
+
+    private var filters: [UnifiedSyncFilter] {
+        table?.accepted == true
+            ? [.all, .inRun, .remaining, .downloaded, .skipped, .failed, .have]
+            : [.all, .new, .gaps, .have]
+    }
+
+    @ViewBuilder private var inspector: some View {
+        if let table {
+            let capability = appState.syncCapability(forSourceID: table.sourceID)
+            InspectorSection(title: "Queue") {
+                Picker("Download order", selection: Binding(
+                    get: { appState.syncRun.sourceTables[table.sourceID]?.downloadOrder ?? table.downloadOrder },
+                    set: { appState.setSyncTableDownloadOrder(sourceID: table.sourceID, order: $0) }
+                )) { ForEach(DownloadOrder.allCases) { Text($0.label).tag($0) } }
+                .constrained(by: table.accepted
+                    ? "The accepted queue fixes download order for this run."
+                    : !isMutable(table) ? "This run is no longer waiting for a queue reply."
+                    : capability?.supportsDownloadOrder == false ? "This adapter fixes download order." : nil)
+
+                Picker("Plan window", selection: Binding(
+                    get: { appState.syncRun.sourceTables[table.sourceID]?.planWindow ?? table.planWindow },
+                    set: { appState.setSyncTablePlanWindow(sourceID: table.sourceID, window: $0) }
+                )) { ForEach(PlanWindow.allCases) { Text($0.label).tag($0) } }
+                .constrained(by: table.accepted
+                    ? "The accepted queue fixes the plan window for this run."
+                    : !isMutable(table) ? "This run is no longer waiting for a queue reply."
+                    : capability?.supportsPlanWindow == false ? "This adapter exposes no plan window." : nil)
+
+                FieldRow("Selected", "\(table.selectedIndices.count) of \(table.rows.count)")
+                FieldRow("Lifecycle", table.lifecycle)
+            }
+        }
+        InspectorSection(title: "Run") {
+            FieldRow("Phase", appState.syncRun.phase.rawValue)
+            FieldRow("Mode", appState.syncDryRun ? "Dry run" : "Live run")
+            if let exit = appState.syncRun.exitCode { FieldRow("Exit code", "\(exit)") }
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        if let table, !table.accepted,
+           let prompt = appState.planPrompt, prompt.params.sourceID == table.sourceID {
+            Button("Reset to defaults") {
+                appState.resetPlanSelection(sourceID: table.sourceID)
+                appState.setSyncTableSelection(
+                    sourceID: table.sourceID,
+                    selectedIndices: Set(table.planRows.filter(\.selectedByDefault).map(\.index))
+                )
+                appState.setSyncTableDownloadOrder(sourceID: table.sourceID, order: prompt.params.downloadOrder)
+                appState.setSyncTablePlanWindow(sourceID: table.sourceID, window: prompt.params.planWindow)
+            }
+            Button(table.planWindow == prompt.params.planWindow ? "Continue" : "Rebuild plan") {
+                submit(table, prompt: prompt)
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        } else if appState.syncRun.phase.isActive {
+            Button("Stop run", role: .destructive) { confirmingStop = true }
+        } else {
+            Button("Configure another run") { appState.resetSyncRun() }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func submit(_ table: SyncSourceTableState, prompt: AppState.PlanPrompt) {
+        let rebuild = table.planWindow != prompt.params.planWindow
+        appState.rememberPlanSelection(prompt.params, selectedIndices: table.selectedIndices, cursor: cursor)
+        let result = SelectRowsResult(
+            selectedIndices: rebuild ? [] : table.selectedIndices.sorted(),
+            downloadOrder: table.downloadOrder,
+            canceled: false,
+            rebuild: rebuild,
+            planWindow: table.planWindow
+        )
+        Task { await appState.answerPlanSelection(result, request: prompt.request) }
+    }
+
+    private func isMutable(_ table: SyncSourceTableState) -> Bool {
+        !table.accepted
+            && appState.syncRun.phase.isActive
+            && appState.planPrompt?.params.sourceID == table.sourceID
+    }
+
+    private var sidebarContext: SidebarContext? {
+        let ids = appState.syncRun.requestedSourceIDs
+        guard !ids.isEmpty else { return nil }
+        return SidebarContext(
+            title: "Run sources",
+            items: ids.map { id in
+                let capability = appState.syncCapability(forSourceID: id)
+                return SidebarContextItem(
+                    id: id, title: id, subtitle: capability?.adapter,
+                    sourceType: capability?.sourceType,
+                    lifecycle: appState.syncSourceLifecycle(id),
+                    unavailableReason: nil
+                )
+            },
+            selectedID: sourceID,
+            note: nil,
+            select: appState.selectSyncSource
+        )
+    }
+
+    private var statusSummary: some View {
+        SummaryLine {
+            if let table {
+                SummaryCount(value: table.rows.filter { $0.runScope == "included" }.count, noun: "in run", severity: .info)
+                Text("·")
+                SummaryCount(value: table.rows.filter { $0.runtimeStatus == "downloaded" }.count, noun: "downloaded", severity: .ok)
+                Text("·")
+                SummaryCount(value: table.rows.filter { $0.runtimeStatus == "failed" }.count, noun: "failed", severity: .error)
+            } else {
+                Text("Waiting for source plan or lifecycle event").foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    private func severity(_ row: TrackRow) -> Severity {
+        switch row.runtimeStatus {
+        case "downloaded": .ok
+        case "failed": .error
+        case "skipped": .warn
+        case "downloading": .info
+        default: row.runScope == "included" ? .info : .idle
+        }
+    }
+
+    private var terminalSeverity: Severity {
+        switch appState.syncRun.phase {
+        case .succeeded: .ok
+        case .failed, .partialFailure, .dependencyFailure: .error
+        default: .warn
         }
     }
 }

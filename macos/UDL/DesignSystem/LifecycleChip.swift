@@ -10,6 +10,7 @@ enum Lifecycle: String, CaseIterable, Sendable {
     case running
     case done
     case failed
+    case canceled
     case skipped
     case notRun
 
@@ -21,6 +22,7 @@ enum Lifecycle: String, CaseIterable, Sendable {
         case .running: "Running"
         case .done: "Done"
         case .failed: "Failed"
+        case .canceled: "Canceled"
         case .skipped: "Skipped"
         case .notRun: "Not run yet"
         }
@@ -30,7 +32,7 @@ enum Lifecycle: String, CaseIterable, Sendable {
         switch self {
         case .queued, .notRun: .idle
         case .planning, .running: .info
-        case .needsYou: .warn
+        case .needsYou, .canceled: .warn
         case .done: .ok
         case .failed: .error
         case .skipped: .idle
@@ -48,9 +50,11 @@ enum Lifecycle: String, CaseIterable, Sendable {
         case "planning", "preflight": self = .planning
         case "confirm", "confirming", "awaiting_confirmation": self = .needsYou
         case "running", "downloading", "executing": self = .running
-        case "done", "completed", "succeeded": self = .done
+        case "done", "completed", "finished", "succeeded": self = .done
         case "failed", "error": self = .failed
+        case "canceled", "cancelled", "interrupted": self = .canceled
         case "skipped": self = .skipped
+        case "not_run": self = .notRun
         default: self = .queued
         }
     }

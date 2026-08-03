@@ -17,6 +17,9 @@ Archived work:
 - `freedl-playlist-rekordbox-implementation.md` — completed implementation record and evidence
 - `native-macos-frontend-plan.md` — completed native SwiftUI frontend and agent-protocol plan
 - `native-macos-frontend-implementation.md` — completed implementation record and evidence for that frontend
+- `gui-redesign-plan.md` — completed native macOS GUI redesign plan
+- `gui-redesign-implementation.md` — completed GUI redesign implementation record and evidence
 
-The native macOS frontend reached workflow parity with the frozen Bubble Tea TUI; its
-deliberately deferred visual-design pass is the subject of the current root plan.
+The native macOS frontend and its visual-design pass are complete. The current
+root plan covers sync queue continuity, cancellation reliability, ordering, and
+download-time performance.

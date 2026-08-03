@@ -8,7 +8,7 @@ actor UDLClient {
     }
 
     func initialize() async throws -> InitializeResult {
-        try await connection.call(.sessionInitialize, params: InitializeParams(protocolVersion: 1))
+        try await connection.call(.sessionInitialize, params: InitializeParams(protocolVersion: 2))
     }
 
     func shutdown() async throws -> ShutdownResult {

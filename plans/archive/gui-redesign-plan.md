@@ -3,10 +3,10 @@
 - **Status:** Complete — phases 1–9 delivered and verified
 - **Target:** `macos/UDL` rebuilt to the Option 1 "Inspector" design, with every backend constraint made visually explicit
 - **Last updated:** 2026-08-03
-- **Implementation tracker:** [IMPLEMENTATION.md](./IMPLEMENTATION.md)
-- **Design reference:** [docs/gui-redesign/app/](./docs/gui-redesign/app/) (`shell.css` is the design system source of truth)
-- **Parity reference:** [docs/swiftui-parity.md](./docs/swiftui-parity.md)
-- **Predecessor:** [plans/archive/native-macos-frontend-plan.md](./plans/archive/native-macos-frontend-plan.md)
+- **Implementation tracker:** [gui-redesign-implementation.md](./gui-redesign-implementation.md)
+- **Design reference:** [docs/gui-redesign/app/](../../docs/gui-redesign/app/) (`shell.css` is the design system source of truth)
+- **Parity reference:** [docs/swiftui-parity.md](../../docs/swiftui-parity.md)
+- **Predecessor:** [native-macos-frontend-plan.md](./native-macos-frontend-plan.md)
 
 ## Purpose
 

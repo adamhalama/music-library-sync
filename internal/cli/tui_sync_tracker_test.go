@@ -12,7 +12,8 @@ import (
 func TestTUISyncRunTrackerObserveEventMapsRowsByIndexTrackIDAndTrackName(t *testing.T) {
 	tracker := newTUISyncRunTracker()
 	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
-		SourceID: "source-a",
+		SourceID:      "source-a",
+		DownloadOrder: engine.DownloadOrderNewestFirst,
 		Rows: []engine.PlanRow{
 			{Index: 1, Title: "Index Match", RemoteID: "idx-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
 			{Index: 2, Title: "ID Match", RemoteID: "track-2", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
@@ -165,7 +166,8 @@ func TestTUISyncRunTrackerMapsSparseSelectionIndicesByExecutionSlot(t *testing.T
 func TestTUISyncRunTrackerMapsLeadingOmissionsByExecutionSlot(t *testing.T) {
 	tracker := newTUISyncRunTracker()
 	state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{
-		SourceID: "source-a",
+		SourceID:      "source-a",
+		DownloadOrder: engine.DownloadOrderNewestFirst,
 		Rows: []engine.PlanRow{
 			{Index: 1, Title: "First", RemoteID: "track-1", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},
 			{Index: 2, Title: "Second", RemoteID: "track-2", Status: engine.PlanRowMissingNew, Toggleable: true, SelectedByDefault: true},

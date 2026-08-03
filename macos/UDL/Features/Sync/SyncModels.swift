@@ -218,6 +218,38 @@ struct PlanRow: Codable, Sendable, Identifiable {
     }
 }
 
+/// Pure source-order projection used while Go is blocked waiting for the plan
+/// reply. The backend manifest remains authoritative after acceptance; this
+/// gives the editable table the same execution slots without reordering rows.
+struct PlanQueueProjection: Sendable, Equatable {
+    private let slotsBySourceIndex: [Int: Int]
+
+    init(rows: [PlanRow], selectedIndices: Set<Int>, downloadOrder: DownloadOrder) {
+        let selectedCount = rows.reduce(into: 0) { count, row in
+            if row.toggleable && selectedIndices.contains(row.index) {
+                count += 1
+            }
+        }
+        var slots = Dictionary<Int, Int>(minimumCapacity: rows.count)
+        var selectedOffset = 0
+        for row in rows {
+            guard row.toggleable, selectedIndices.contains(row.index) else {
+                slots[row.index] = 0
+                continue
+            }
+            selectedOffset += 1
+            slots[row.index] = downloadOrder == .newestFirst
+                ? selectedOffset
+                : selectedCount - selectedOffset + 1
+        }
+        slotsBySourceIndex = slots
+    }
+
+    func executionSlot(forSourceIndex index: Int) -> Int {
+        slotsBySourceIndex[index] ?? 0
+    }
+}
+
 /// The plan table's segmented filter, matching `sync-plan.html`.
 enum PlanRowFilter: String, CaseIterable, Identifiable, Sendable {
     case all
@@ -340,6 +372,21 @@ struct SourceSnapshot: Codable, Sendable {
     var downloadedCount: Int { rows.filter { $0.runtimeStatus == "downloaded" }.count }
     var skippedCount: Int { rows.filter { $0.runtimeStatus == "skipped" }.count }
     var failedCount: Int { rows.filter { $0.runtimeStatus == "failed" }.count }
+
+    func merging(_ row: TrackRow) -> SourceSnapshot {
+        var merged = rows
+        if let index = merged.firstIndex(where: { $0.id == row.id }) {
+            merged[index] = row
+        } else {
+            merged.append(row)
+        }
+        return SourceSnapshot(
+            lifecycle: lifecycle,
+            confirmed: confirmed,
+            rows: merged,
+            activity: activity
+        )
+    }
 }
 
 struct StructuredProgressSnapshot: Codable, Sendable {
@@ -410,11 +457,23 @@ struct SyncEventNotification: Codable, Sendable {
     let runID: String
     let event: OutputEvent
     let source: SourceSnapshot
-    let progress: StructuredProgressSnapshot
 
     enum CodingKeys: String, CodingKey {
         case runID = "run_id"
-        case event, source, progress
+        case event, source
+    }
+}
+
+struct SyncProgressNotification: Codable, Sendable {
+    let runID: String
+    let sourceID: String
+    let progress: StructuredProgressSnapshot
+    let row: TrackRow?
+
+    enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case sourceID = "source_id"
+        case progress, row
     }
 }
 
@@ -434,6 +493,22 @@ enum SyncRunPhase: String, Sendable {
     }
 }
 
+enum SyncSourceFocus {
+    /// A source asking for input always wins. Otherwise an explicit sidebar
+    /// choice stays put; only an implicit selection follows active work.
+    static func target(
+        current: String?,
+        selectionIsExplicit: Bool,
+        pendingInput: String?,
+        active: String?
+    ) -> String? {
+        if let pendingInput, !pendingInput.isEmpty { return pendingInput }
+        if selectionIsExplicit { return current }
+        if let active, !active.isEmpty { return active }
+        return current
+    }
+}
+
 struct SyncRunState: Sendable {
     var runID: String?
     var phase: SyncRunPhase = .idle
@@ -442,10 +517,287 @@ struct SyncRunState: Sendable {
     /// sources that have not been reached yet emit no events at all.
     var requestedSourceIDs: [String] = []
     var sources: [String: SourceSnapshot] = [:]
+    var sourceTables: [String: SyncSourceTableState] = [:]
     var activity: [OutputEvent] = []
     var progress: StructuredProgressSnapshot?
     var terminalMessage: String?
     var exitCode: Int?
+    /// Stop is meaningful before `sync.start` returns its run ID. These flags
+    /// make that request durable across the response race and keep the actual
+    /// `run.cancel` send exactly-once.
+    var cancelRequested = false
+    var cancelRequestInFlight = false
+    var cancelAcknowledged = false
+    var stillStopping = false
+
+    /// Returns true only for the first request (or a retry after a request
+    /// failure). Repeated Stop actions while a request is queued or in flight
+    /// are intentionally idempotent.
+    mutating func requestCancellation() -> Bool {
+        guard phase.isActive, !cancelRequested, !cancelRequestInFlight, !cancelAcknowledged else {
+            return false
+        }
+        cancelRequested = true
+        stillStopping = false
+        phase = .canceling
+        terminalMessage = "Stopping… completed tracks stay saved."
+        return true
+    }
+
+    /// Records a start/event run ID without allowing a late response to revive
+    /// a canceling or terminal run.
+    mutating func registerRunID(_ id: String) {
+        runID = id
+        if phase == .starting {
+            phase = .running
+        }
+    }
+
+    mutating func beginCancellationRequest() -> Bool {
+        guard cancelRequested, runID != nil, !cancelRequestInFlight, !cancelAcknowledged else {
+            return false
+        }
+        cancelRequestInFlight = true
+        return true
+    }
+
+    mutating func acknowledgeCancellation() {
+        cancelRequestInFlight = false
+        cancelAcknowledged = true
+        if exitCode == nil {
+            terminalMessage = "Stop acknowledged. Waiting for the run to finish…"
+        }
+    }
+
+    mutating func failCancellation(_ message: String) {
+        cancelRequested = false
+        cancelRequestInFlight = false
+        cancelAcknowledged = false
+        stillStopping = false
+        guard exitCode == nil else { return }
+        phase = .running
+        terminalMessage = "Stop failed: \(message) Try Stop again."
+    }
+
+    mutating func markStillStopping() {
+        guard phase == .canceling, exitCode == nil else { return }
+        stillStopping = true
+        terminalMessage = "Still stopping… completed tracks remain saved."
+    }
+
+    /// Applies the protocol's canonical terminal mapping without discarding
+    /// the run's retained source tables. This is deliberately pure model logic
+    /// so exit 130 and every other terminal class can be validated without an
+    /// app process or a live backend connection.
+    mutating func finish(exitCode: Int, error: String?) {
+        self.exitCode = exitCode
+        terminalMessage = error
+        phase = switch exitCode {
+        case 0: .succeeded
+        case 4: .dependencyFailure
+        case 5: .partialFailure
+        case 130: .canceled
+        default: .failed
+        }
+        finalizeSourceTables()
+        if terminalMessage == nil {
+            terminalMessage = switch phase {
+            case .succeeded: "Sync completed successfully."
+            case .canceled: "Sync canceled. Completed tracks remain saved."
+            default: "Sync finished with exit code \(exitCode)."
+            }
+        }
+    }
+
+    /// Makes every retained source table terminal when a run ends before the
+    /// backend emits a final per-source snapshot (notably cancellation while
+    /// Go is blocked on a plan reply).
+    mutating func finalizeSourceTables() {
+        for sourceID in sourceTables.keys {
+            guard var table = sourceTables[sourceID],
+                  ["planning", "queued", "running"].contains(table.lifecycle) else { continue }
+            let lifecycle = switch phase {
+            case .succeeded: "finished"
+            case .canceled: table.accepted ? "canceled" : "not_run"
+            case .partialFailure, .dependencyFailure, .failed: "failed"
+            default: table.lifecycle
+            }
+            table.lifecycle = lifecycle
+            sourceTables[sourceID] = table
+            if let snapshot = sources[sourceID] {
+                sources[sourceID] = SourceSnapshot(
+                    lifecycle: lifecycle,
+                    confirmed: snapshot.confirmed,
+                    rows: snapshot.rows,
+                    activity: snapshot.activity
+                )
+            }
+        }
+    }
+
+    mutating func installPlan(
+        _ params: SelectRowsParams,
+        selectedIndices: Set<Int>
+    ) {
+        sourceTables[params.sourceID] = SyncSourceTableState(
+            sourceID: params.sourceID,
+            planRows: params.rows,
+            selectedIndices: selectedIndices,
+            downloadOrder: params.downloadOrder,
+            planWindow: params.planWindow,
+            accepted: false,
+            hasTrackPlan: true,
+            lifecycle: "planning"
+        )
+    }
+
+    mutating func updateDraft(
+        sourceID: String,
+        selectedIndices: Set<Int>? = nil,
+        downloadOrder: DownloadOrder? = nil,
+        planWindow: PlanWindow? = nil
+    ) {
+        guard var table = sourceTables[sourceID], !table.accepted else { return }
+        if let selectedIndices { table.selectedIndices = selectedIndices }
+        if let downloadOrder { table.downloadOrder = downloadOrder }
+        if let planWindow { table.planWindow = planWindow }
+        table.rebuildProjectedRows()
+        sourceTables[sourceID] = table
+    }
+
+    mutating func acceptPlan(sourceID: String) {
+        guard var table = sourceTables[sourceID] else { return }
+        table.accepted = true
+        table.lifecycle = "queued"
+        table.rebuildProjectedRows()
+        sourceTables[sourceID] = table
+    }
+
+    mutating func mergeSnapshot(sourceID: String, snapshot: SourceSnapshot) {
+        sources[sourceID] = snapshot
+        var table = sourceTables[sourceID] ?? SyncSourceTableState(
+            sourceID: sourceID,
+            planRows: [],
+            selectedIndices: [],
+            downloadOrder: .oldestFirst,
+            planWindow: .first,
+            accepted: true,
+            hasTrackPlan: !snapshot.rows.isEmpty,
+            lifecycle: snapshot.lifecycle
+        )
+        table.rows = snapshot.rows
+        table.lifecycle = snapshot.lifecycle
+        table.accepted = table.accepted || snapshot.confirmed
+        table.hasTrackPlan = table.hasTrackPlan || !snapshot.rows.isEmpty
+        sourceTables[sourceID] = table
+    }
+
+    mutating func mergeProgressRow(sourceID: String, row: TrackRow) {
+        let existing = sources[sourceID] ?? SourceSnapshot(
+            lifecycle: "running", confirmed: true, rows: [], activity: []
+        )
+        let merged = existing.merging(row)
+        sources[sourceID] = merged
+        var table = sourceTables[sourceID] ?? SyncSourceTableState(
+            sourceID: sourceID,
+            planRows: [],
+            selectedIndices: [],
+            downloadOrder: .oldestFirst,
+            planWindow: .first,
+            accepted: true,
+            hasTrackPlan: true,
+            lifecycle: merged.lifecycle
+        )
+        if let index = table.rows.firstIndex(where: { $0.id == row.id }) {
+            table.rows[index] = row
+        } else {
+            table.rows.append(row)
+        }
+        table.lifecycle = merged.lifecycle
+        table.accepted = true
+        table.hasTrackPlan = true
+        sourceTables[sourceID] = table
+    }
+
+    @discardableResult
+    mutating func applyProgress(_ notification: SyncProgressNotification) -> Bool {
+        guard phase != .canceling else { return false }
+        progress = notification.progress
+        if let row = notification.row {
+            mergeProgressRow(sourceID: notification.sourceID, row: row)
+        }
+        return true
+    }
+}
+
+struct SyncSourceTableState: Sendable {
+    let sourceID: String
+    var planRows: [PlanRow]
+    var selectedIndices: Set<Int>
+    var downloadOrder: DownloadOrder
+    var planWindow: PlanWindow
+    var accepted: Bool
+    var hasTrackPlan: Bool
+    var lifecycle: String
+    var rows: [TrackRow] = []
+
+    init(
+        sourceID: String,
+        planRows: [PlanRow],
+        selectedIndices: Set<Int>,
+        downloadOrder: DownloadOrder,
+        planWindow: PlanWindow,
+        accepted: Bool,
+        hasTrackPlan: Bool,
+        lifecycle: String
+    ) {
+        self.sourceID = sourceID
+        self.planRows = planRows
+        self.selectedIndices = selectedIndices
+        self.downloadOrder = downloadOrder
+        self.planWindow = planWindow
+        self.accepted = accepted
+        self.hasTrackPlan = hasTrackPlan
+        self.lifecycle = lifecycle
+        rebuildProjectedRows()
+    }
+
+    mutating func rebuildProjectedRows() {
+        guard !planRows.isEmpty else { return }
+        let projection = PlanQueueProjection(
+            rows: planRows,
+            selectedIndices: selectedIndices,
+            downloadOrder: downloadOrder
+        )
+        rows = planRows.map { row in
+            let selected = row.toggleable && selectedIndices.contains(row.index)
+            let runtimeStatus = selected ? "queued" : "idle"
+            let label = !row.toggleable ? "have-it" : selected ? "pending" : "not-run"
+            let planClass = switch row.status {
+            case "missing_known_gap": "gap"
+            case "already_downloaded": "have"
+            default: "new"
+            }
+            return TrackRow(
+                sourceID: sourceID,
+                sourceLabel: sourceID,
+                remoteID: row.remoteID,
+                title: row.title,
+                index: row.index,
+                executionSlot: projection.executionSlot(forSourceIndex: row.index),
+                toggleable: row.toggleable,
+                planStatus: row.status,
+                planClass: planClass,
+                selected: selected,
+                runScope: !row.toggleable ? "locked" : selected ? "included" : "excluded",
+                runtimeStatus: runtimeStatus,
+                statusLabel: label,
+                failureDetail: nil,
+                progressKnown: false,
+                progressPercent: 0
+            )
+        }
+    }
 }
 
 enum SyncRowFilter: String, CaseIterable, Identifiable {
@@ -455,6 +807,7 @@ enum SyncRowFilter: String, CaseIterable, Identifiable {
     case downloaded
     case skipped
     case failed
+    case have
     var id: String { rawValue }
 
     func includes(_ row: TrackRow) -> Bool {
@@ -465,6 +818,7 @@ enum SyncRowFilter: String, CaseIterable, Identifiable {
         case .downloaded: row.runtimeStatus == "downloaded"
         case .skipped: row.runtimeStatus == "skipped"
         case .failed: row.runtimeStatus == "failed"
+        case .have: row.runScope == "locked"
         }
     }
 }

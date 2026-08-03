@@ -58,8 +58,12 @@ actor JSONRPCConnection {
     private var closed = false
 
     nonisolated let notifications: AsyncStream<AgentNotification>
+    /// High-frequency progress is newest-only. Lossless lifecycle and terminal
+    /// notifications continue through `notifications`.
+    nonisolated let progressNotifications: AsyncStream<AgentNotification>
     nonisolated let uiRequests: AsyncStream<UIRequest>
     private let notificationContinuation: AsyncStream<AgentNotification>.Continuation
+    private let progressNotificationContinuation: AsyncStream<AgentNotification>.Continuation
     private let uiContinuation: AsyncStream<UIRequest>.Continuation
 
     init(readHandle: FileHandle, writeHandle: FileHandle) {
@@ -69,6 +73,12 @@ actor JSONRPCConnection {
         var notificationContinuation: AsyncStream<AgentNotification>.Continuation!
         notifications = AsyncStream { notificationContinuation = $0 }
         self.notificationContinuation = notificationContinuation
+
+        var progressNotificationContinuation: AsyncStream<AgentNotification>.Continuation!
+        progressNotifications = AsyncStream(bufferingPolicy: .bufferingNewest(1)) {
+            progressNotificationContinuation = $0
+        }
+        self.progressNotificationContinuation = progressNotificationContinuation
 
         var uiContinuation: AsyncStream<UIRequest>.Continuation!
         uiRequests = AsyncStream { uiContinuation = $0 }
@@ -177,6 +187,8 @@ actor JSONRPCConnection {
             if let method = message.method {
                 if let id = message.id, let kind = UIRequestKind(rawValue: method) {
                     uiContinuation.yield(UIRequest(id: id, kind: kind, params: message.params ?? .object([:])))
+                } else if method == "sync.progress" {
+                    progressNotificationContinuation.yield(AgentNotification(method: method, params: message.params ?? .object([:])))
                 } else {
                     notificationContinuation.yield(AgentNotification(method: method, params: message.params ?? .object([:])))
                 }
@@ -208,6 +220,7 @@ actor JSONRPCConnection {
         pending.removeAll()
         continuations.forEach { $0.resume(throwing: error) }
         notificationContinuation.finish()
+        progressNotificationContinuation.finish()
         uiContinuation.finish()
         readerTask?.cancel()
         readerTask = nil

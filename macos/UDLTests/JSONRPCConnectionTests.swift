@@ -36,8 +36,10 @@ final class JSONRPCConnectionTests: XCTestCase {
             "result": ["value": "first"],
         ], to: inbound.fileHandleForWriting)
 
-        XCTAssertEqual(try await first.value, .object(["value": .string("first")]))
-        XCTAssertEqual(try await second.value, .object(["value": .string("second")]))
+        let firstValue = try await first.value
+        let secondValue = try await second.value
+        XCTAssertEqual(firstValue, .object(["value": .string("first")]))
+        XCTAssertEqual(secondValue, .object(["value": .string("second")]))
         await connection.close()
     }
 
@@ -84,12 +86,53 @@ final class JSONRPCConnectionTests: XCTestCase {
             "params": ["prompt": "Continue?", "default": false],
         ], to: inbound.fileHandleForWriting)
         var requests = connection.uiRequests.makeAsyncIterator()
-        let request = try XCTUnwrap(await requests.next())
+        let nextRequest = await requests.next()
+        let request = try XCTUnwrap(nextRequest)
         XCTAssertEqual(request.kind, .confirm)
         try await connection.respond(to: request, result: .object(["confirmed": .bool(true)]))
         let reply = try readJSONObject(from: outbound.fileHandleForReading)
         XCTAssertEqual(reply["id"] as? String, "server-1")
         XCTAssertEqual((reply["result"] as? [String: Any])?["confirmed"] as? Bool, true)
+        await connection.close()
+    }
+
+    func testProgressIsNewestOnlyWhileLifecycleAndTerminalRemainLossless() async throws {
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let connection = JSONRPCConnection(
+            readHandle: inbound.fileHandleForReading,
+            writeHandle: outbound.fileHandleForWriting
+        )
+        await connection.start()
+
+        for percent in [10, 20, 30] {
+            try writeJSON([
+                "jsonrpc": "2.0", "method": "sync.progress",
+                "params": ["run_id": "run-1", "percent": percent],
+            ], to: inbound.fileHandleForWriting)
+        }
+        try writeJSON([
+            "jsonrpc": "2.0", "method": "sync.event",
+            "params": ["run_id": "run-1", "sequence": 1],
+        ], to: inbound.fileHandleForWriting)
+        try writeJSON([
+            "jsonrpc": "2.0", "method": "run.finished",
+            "params": ["run_id": "run-1", "sequence": 2],
+        ], to: inbound.fileHandleForWriting)
+
+        // Let the detached reader enqueue every frame before creating the
+        // iterators, proving that only progress uses newest-only buffering.
+        try await Task.sleep(for: .milliseconds(30))
+        var progress = connection.progressNotifications.makeAsyncIterator()
+        let nextProgress = await progress.next()
+        let latest = try XCTUnwrap(nextProgress)
+        XCTAssertEqual(latest.params.objectValue?["percent"]?.intValue, 30)
+
+        var lifecycle = connection.notifications.makeAsyncIterator()
+        let firstLifecycle = await lifecycle.next()
+        let terminal = await lifecycle.next()
+        XCTAssertEqual(firstLifecycle?.method, "sync.event")
+        XCTAssertEqual(terminal?.method, "run.finished")
         await connection.close()
     }
 
@@ -109,7 +152,8 @@ final class JSONRPCConnectionTests: XCTestCase {
                 "params": [:],
             ], to: inbound.fileHandleForWriting)
             var requests = connection.uiRequests.makeAsyncIterator()
-            let request = try XCTUnwrap(await requests.next())
+            let nextRequest = await requests.next()
+            let request = try XCTUnwrap(nextRequest)
             XCTAssertEqual(request.kind.rawValue, method)
             try await connection.respond(
                 to: request,
@@ -162,7 +206,8 @@ final class JSONRPCConnectionTests: XCTestCase {
             ],
         ], to: inbound.fileHandleForWriting)
         var requests = connection.uiRequests.makeAsyncIterator()
-        let request = try XCTUnwrap(await requests.next())
+        let nextRequest = await requests.next()
+        let request = try XCTUnwrap(nextRequest)
         XCTAssertEqual(request.kind, .selectRows)
 
         let recorder = Recorder()
@@ -205,6 +250,7 @@ final class JSONRPCConnectionTests: XCTestCase {
             if byte[0] == 0x0A { break }
             data.append(byte)
         }
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let object = try JSONSerialization.jsonObject(with: data)
+        return try XCTUnwrap(object as? [String: Any])
     }
 }

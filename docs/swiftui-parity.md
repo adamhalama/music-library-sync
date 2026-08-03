@@ -5,9 +5,11 @@ frontend. The plan and evidence for that work are archived under
 `plans/archive/native-macos-frontend-plan.md` and
 `plans/archive/native-macos-frontend-implementation.md`.
 
-The deferred visual-design pass over these same surfaces is tracked by the
-current root `PLAN.md` and `IMPLEMENTATION.md`; this document must be updated
-when the redesign changes a surface described below. That pass is complete: the
+The completed visual-design pass over these same surfaces is archived under
+`plans/archive/gui-redesign-plan.md` and
+`plans/archive/gui-redesign-implementation.md`. The current root `PLAN.md` and
+`IMPLEMENTATION.md` track the next sync reliability and unified-queue work; this
+document must be updated when that work changes a surface described below. The
 sections below carry a **Redesigned surface** block naming the constraint each
 screen now makes visible.
 
@@ -84,7 +86,7 @@ Status: implemented; it is the default destination.
 
 Status: implemented for the first vertical slice.
 
-- Initializes protocol v1 and verifies the complete method inventory.
+- Initializes protocol v2 and verifies the complete method inventory.
 - Renders healthy, warning, and blocked checks with detail and remediation.
 - Displays effective PATH and resolved dependency locations.
 - Keeps backend launch/protocol failure distinct from an unhealthy Doctor
@@ -158,15 +160,15 @@ validation remains open.
 | Source multi-select | Implemented | Loaded from `sources.capabilities`; per-source choices survive plan rebuilds |
 | Plan limit / unlimited | Implemented | Unlimited is encoded as plan limit `0` |
 | Dry run / timeout | Implemented | Non-negative values are validated before `sync.start` |
-| Per-source order | Implemented | Newest-first and oldest-first are sent by source |
+| Per-source order | Implemented | Oldest-first is the shared sync default; explicit newest-first is preserved |
 | Per-source plan window | Implemented | First/latest controls appear only for supporting sources |
-| Plan rows | Implemented | Go classifications, locked state, and defaults are rendered without reclassification |
+| Plan rows | Implemented | One persistent source-order table shows projected `run #N` slots before acceptance |
 | Plan filters | Implemented | all, will sync, missing new, known gap, already have |
 | Plan rebuild | Implemented | Swift source state changes before the rebuild response crosses the wire |
-| Runtime rows | Implemented | Go `SourceSnapshot` rows and lifecycle are authoritative |
+| Runtime rows | Implemented | Canonical snapshots/progress merge into the same accepted table by stable row identity |
 | Runtime filters | Implemented | all, in run, remaining, downloaded, skipped, failed |
 | Runtime activity | Implemented | Separate bounded event list; protocol frames are never displayed as logs |
-| Structured progress header | Implemented | Typed global and current-track meters render the backend snapshot without recomputation |
+| Structured progress header | Implemented | Protocol v2 newest-only progress is decoded off-main and merged without dropping lifecycle frames |
 | Confirmation / masked input | Implemented | Cancel replies are explicit typed canceled results |
 | Cancellation ordering | Implemented | Pending UI reply is sent before `run.cancel` |
 | Terminal states | Implemented | success, partial failure, dependency failure, failure, and cancellation remain visible |
@@ -174,18 +176,20 @@ validation remains open.
 
 Redesigned surface (C1–C6, C17):
 
-- `SyncView` is a router over one run: configure, plan (`SyncPlanView`), run
-  (`SyncRunView`). The plan surface outranks the run surface, because while a
-  `ui.selectRows` request is open the backend is doing nothing at all.
+- `SyncView` has two top-level modes: configuration, then one unified source
+  table workspace retained through planning, execution, cancellation, and
+  terminal results. Continue freezes the accepted queue without remounting or
+  reordering its rows.
 - **C1** — the plan prompt is docked in the workspace, not a `.sheet`.
   `AppState.modalPrompt` filters `.selectRows` out entirely, and a plan prompt
   routes the app to `.sync` as it arrives. `syncDryRun` defaults to `true`, so
   the run the app offers is always the reversible one whether it is started from
   Home or from the Sync screen.
 - **C2** — sidebar lifecycle chips (`Queued` · `Planning…` · `Needs you` ·
-  `Running` · `Done` · `Failed`), a "Source 2 of 4" header counter, and
-  unplanned sources dimmed with the reason stated once per section. A source
-  that never reported reads `Not run yet` once the run has ended.
+  `Running` · `Done` · `Failed`), a "Source 2 of 4" header counter, automatic
+  focus for sources needing input/active work, and retained navigation to every
+  previously planned source. A source that never reported reads `Not run yet`
+  once the run has ended.
 - **C3** — a "Backend paused — waiting for your selection" banner, progress
   meters rendered greyed and frozen, and the same statement in the status bar.
 - **C4** — the plan window control states that a change re-plans the source and

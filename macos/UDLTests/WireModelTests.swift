@@ -69,6 +69,7 @@ final class SourceRuleTests: XCTestCase {
             "restart",             // the backend would not come back
             "answerPrompt",        // the reply the blocked backend is waiting for
             "answerPlanSelection", // ditto, when it cannot even be encoded
+            "cancelPrompt",        // cancellation reply to the same blocked backend
         ]
         let lines = try source("Model/AppState.swift")
         let actual = enclosingFunctions(of: lines, matching: "alertMessage = ")
@@ -134,6 +135,33 @@ final class SourceRuleTests: XCTestCase {
 }
 
 final class WireModelTests: XCTestCase {
+    func testFinishedWireLifecycleMapsToDone() {
+        XCTAssertEqual(Lifecycle(wire: "finished"), .done)
+        XCTAssertEqual(Lifecycle(wire: "canceled"), .canceled)
+        XCTAssertEqual(Lifecycle(wire: "not_run"), .notRun)
+    }
+
+    func testEveryPromptKindHasTheCanonicalCancellationReply() {
+        XCTAssertEqual(
+            UIRequestKind.confirm.canceledResult,
+            .object(["confirmed": .bool(false), "canceled": .bool(true)])
+        )
+        XCTAssertEqual(
+            UIRequestKind.input.canceledResult,
+            .object(["value": .string(""), "canceled": .bool(true)])
+        )
+        XCTAssertEqual(
+            UIRequestKind.selectRows.canceledResult,
+            .object([
+                "selected_indices": .array([]),
+                "download_order": .string("oldest_first"),
+                "canceled": .bool(true),
+                "rebuild": .bool(false),
+                "plan_window": .string("first"),
+            ])
+        )
+    }
+
     func testUnknownFieldsAndEnumValuesDecode() throws {
         let payload = """
         {
@@ -216,7 +244,7 @@ final class WireModelTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let fixtureURL = repository
-            .appending(path: "internal/agent/testdata/protocol_v1_golden.json")
+            .appending(path: "internal/agent/testdata/protocol_v2_golden.json")
         let data = try Data(contentsOf: fixtureURL)
         let value = try JSONDecoder.agent.decode(JSONValue.self, from: data)
         guard case .object(let root) = value,
@@ -280,24 +308,13 @@ final class WireModelTests: XCTestCase {
           "run_id":"run-1",
           "event":{"timestamp":"2026-07-30T12:00:00Z","level":"info","event":"track.done","source_id":"source-a","message":"done"},
           "source":{"lifecycle":"running","confirmed":true,"rows":[{"source_id":"source-a","source_label":"Source A","remote_id":"one","title":"One","index":1,"execution_slot":0,"toggleable":true,"plan_status":"missing_known_gap","plan_class":"known_gap","selected":true,"run_scope":"included","runtime_status":"downloaded","status_label":"downloaded","progress_known":true,"progress_percent":100}],"activity":[]},
-          "progress":{
-            "progress":{
-              "source":{"id":"source-a","lifecycle":"running","planned_total":1,"item_total":1,"item_index":1,"completed":1},
-              "track":{"name":"One","lifecycle":"done","progress_percent":100},
-              "global":{"total":1,"completed":1}
-            },
-            "track":{"name":"One","progress_known":true,"progress_percent":100,"lifecycle":"done"},
-            "structured_track_events":true,
-            "future":"shape"
-          }
+          "future":"shape"
         }
         """.data(using: .utf8)!
         let event = try JSONDecoder.agent.decode(SyncEventNotification.self, from: payload)
         XCTAssertEqual(event.source.rows.first?.planClass, "known_gap")
         XCTAssertEqual(event.source.rows.first?.runtimeStatus, "downloaded")
         XCTAssertEqual(event.source.downloadedCount, 1)
-        XCTAssertEqual(event.progress.progress.global.completed, 1)
-        XCTAssertEqual(event.progress.track.progressPercent, 100)
     }
 
     func testARLReplacementDoesNotAppendHiddenExistingValue() {
@@ -536,6 +553,140 @@ final class WireModelTests: XCTestCase {
         XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
     }
 
+    func testSyncCancellationRequestedBeforeRunIDIsSentExactlyOnceWhenIDArrives() {
+        var run = SyncRunState(phase: .starting, requestedSourceIDs: ["source-a"])
+
+        XCTAssertTrue(run.requestCancellation())
+        XCTAssertEqual(run.phase, .canceling)
+        XCTAssertTrue(run.cancelRequested)
+        XCTAssertTrue(run.terminalMessage?.contains("Stopping") == true)
+        XCTAssertFalse(run.beginCancellationRequest(), "no request can be sent before the run ID exists")
+        XCTAssertFalse(run.requestCancellation(), "repeated Stop must be idempotent")
+
+        run.registerRunID("run-1")
+        XCTAssertEqual(run.phase, .canceling, "a late start response must not revive the run")
+        XCTAssertTrue(run.beginCancellationRequest())
+        XCTAssertFalse(run.beginCancellationRequest(), "only one cancellation request may be in flight")
+
+        run.acknowledgeCancellation()
+        XCTAssertTrue(run.cancelAcknowledged)
+        XCTAssertFalse(run.beginCancellationRequest(), "acknowledgement prevents a duplicate send")
+    }
+
+    func testSyncCancellationFailureReturnsToRetryableRunningState() {
+        var run = SyncRunState(runID: "run-1", phase: .running)
+        XCTAssertTrue(run.requestCancellation())
+        XCTAssertTrue(run.beginCancellationRequest())
+
+        run.failCancellation("connection remained healthy")
+        XCTAssertEqual(run.phase, .running)
+        XCTAssertFalse(run.cancelRequested)
+        XCTAssertFalse(run.cancelRequestInFlight)
+        XCTAssertFalse(run.cancelAcknowledged)
+        XCTAssertTrue(run.terminalMessage?.contains("Try Stop again") == true)
+
+        XCTAssertTrue(run.requestCancellation(), "failed cancellation must be retryable")
+        XCTAssertTrue(run.beginCancellationRequest())
+    }
+
+    func testSyncCancellationWatchdogCannotOverwriteTerminalState() {
+        var canceling = SyncRunState(runID: "run-1", phase: .canceling, cancelRequested: true)
+        canceling.markStillStopping()
+        XCTAssertTrue(canceling.stillStopping)
+        XCTAssertTrue(canceling.terminalMessage?.contains("Still stopping") == true)
+
+        var canceled = SyncRunState(runID: "run-1", phase: .canceled, exitCode: 130, cancelRequested: true)
+        canceled.markStillStopping()
+        XCTAssertFalse(canceled.stillStopping)
+        XCTAssertNil(canceled.terminalMessage)
+    }
+
+    func testLateCancellationResponseCannotOverwriteTerminalOutcome() {
+        var canceled = SyncRunState(
+            runID: "run-1",
+            phase: .canceled,
+            terminalMessage: "Sync canceled. Completed tracks remain saved.",
+            exitCode: 130,
+            cancelRequested: true,
+            cancelRequestInFlight: true
+        )
+
+        canceled.acknowledgeCancellation()
+        XCTAssertEqual(canceled.terminalMessage, "Sync canceled. Completed tracks remain saved.")
+
+        canceled.failCancellation("late reply")
+        XCTAssertEqual(canceled.phase, .canceled)
+        XCTAssertEqual(canceled.terminalMessage, "Sync canceled. Completed tracks remain saved.")
+    }
+
+    func testTerminalCancellationFinalizesRetainedSourceLifecycles() {
+        let rows = [PlanRow(
+            index: 1,
+            remoteID: "remote-1",
+            remoteURL: "https://example.test/1",
+            title: "One",
+            status: "missing_new",
+            toggleable: true,
+            selectedByDefault: true
+        )]
+        let details = PlanSourceDetails(
+            sourceID: "draft",
+            sourceType: "soundcloud",
+            adapter: "scdl",
+            url: "https://example.test",
+            targetDir: "/tmp/target",
+            stateFile: "/tmp/state",
+            planLimit: 1,
+            planWindow: .first,
+            dryRun: true
+        )
+        var run = SyncRunState(phase: .running)
+        run.installPlan(SelectRowsParams(
+            runID: "run-1",
+            sourceID: "draft",
+            rows: rows,
+            details: details,
+            downloadOrder: .oldestFirst,
+            planWindow: .first
+        ), selectedIndices: [1])
+        run.installPlan(SelectRowsParams(
+            runID: "run-1",
+            sourceID: "accepted",
+            rows: rows,
+            details: details,
+            downloadOrder: .oldestFirst,
+            planWindow: .first
+        ), selectedIndices: [1])
+        run.acceptPlan(sourceID: "accepted")
+        run.phase = .canceled
+
+        run.finalizeSourceTables()
+
+        XCTAssertEqual(run.sourceTables["draft"]?.lifecycle, "not_run")
+        XCTAssertEqual(run.sourceTables["accepted"]?.lifecycle, "canceled")
+    }
+
+    func testRunFinishedExitCodesMapToDistinctTerminalStates() {
+        let cases: [(Int, SyncRunPhase, String)] = [
+            (0, .succeeded, "completed successfully"),
+            (4, .dependencyFailure, "exit code 4"),
+            (5, .partialFailure, "exit code 5"),
+            (130, .canceled, "Completed tracks remain saved"),
+            (1, .failed, "exit code 1"),
+        ]
+        for (exitCode, expectedPhase, expectedMessage) in cases {
+            var run = SyncRunState(runID: "run-1", phase: .running)
+            run.finish(exitCode: exitCode, error: nil)
+            XCTAssertEqual(run.exitCode, exitCode)
+            XCTAssertEqual(run.phase, expectedPhase)
+            XCTAssertTrue(run.terminalMessage?.contains(expectedMessage) == true)
+        }
+
+        var explicit = SyncRunState(runID: "run-2", phase: .running)
+        explicit.finish(exitCode: 1, error: "backend detail")
+        XCTAssertEqual(explicit.terminalMessage, "backend detail")
+    }
+
     /// The defaults must reproduce exactly what the GUI sent before C17, so
     /// surfacing the controls does not silently change behaviour.
     func testAskOnExistingDefaultMatchesThePreviousHardcodedValues() {
@@ -567,6 +718,181 @@ final class WireModelTests: XCTestCase {
             XCTAssertFalse(row.statusLabel.isEmpty)
             XCTAssertFalse(row.lockReason.isEmpty)
         }
+    }
+
+    func testPlanQueueProjectionMatchesCanonicalOldestAndNewestSlots() {
+        func row(_ index: Int, toggleable: Bool = true) -> PlanRow {
+            PlanRow(
+                index: index,
+                remoteID: "track-\(index)",
+                remoteURL: "",
+                title: "Track \(index)",
+                status: toggleable ? "missing_new" : "already_downloaded",
+                toggleable: toggleable,
+                selectedByDefault: toggleable
+            )
+        }
+        let rows = [row(1), row(2, toggleable: false), row(3), row(4), row(5)]
+        let selected: Set<Int> = [1, 2, 3, 5]
+
+        let oldest = PlanQueueProjection(rows: rows, selectedIndices: selected, downloadOrder: .oldestFirst)
+        XCTAssertEqual(rows.map { oldest.executionSlot(forSourceIndex: $0.index) }, [3, 0, 2, 0, 1])
+
+        let newest = PlanQueueProjection(rows: rows, selectedIndices: selected, downloadOrder: .newestFirst)
+        XCTAssertEqual(rows.map { newest.executionSlot(forSourceIndex: $0.index) }, [1, 0, 2, 0, 3])
+    }
+
+    func testPlanQueueProjectionRenumbersSelectedRowsWithoutReorderingSourceRows() {
+        let rows = (1...4).map { index in
+            PlanRow(
+                index: index,
+                remoteID: "track-\(index)",
+                remoteURL: "",
+                title: "Track \(index)",
+                status: "missing_new",
+                toggleable: true,
+                selectedByDefault: true
+            )
+        }
+        let initial = PlanQueueProjection(rows: rows, selectedIndices: [1, 2, 3, 4], downloadOrder: .oldestFirst)
+        let toggled = PlanQueueProjection(rows: rows, selectedIndices: [1, 3, 4], downloadOrder: .oldestFirst)
+
+        XCTAssertEqual(rows.map(\.index), [1, 2, 3, 4])
+        XCTAssertEqual(rows.map { initial.executionSlot(forSourceIndex: $0.index) }, [4, 3, 2, 1])
+        XCTAssertEqual(rows.map { toggled.executionSlot(forSourceIndex: $0.index) }, [3, 0, 2, 1])
+    }
+
+    func testUnifiedSourceTableKeepsIdentityAndOrderWhenAccepted() {
+        let rows = (1...4).map { index in
+            PlanRow(
+                index: index, remoteID: "track-\(index)", remoteURL: "",
+                title: "Track \(index)", status: "missing_new",
+                toggleable: true, selectedByDefault: true
+            )
+        }
+        let params = SelectRowsParams(
+            runID: "run-1", sourceID: "source-a", rows: rows,
+            details: PlanSourceDetails(
+                sourceID: "source-a", sourceType: "soundcloud", adapter: "scdl",
+                url: "https://example.test", targetDir: "/music", stateFile: "/state",
+                planLimit: 50, planWindow: .first, dryRun: false
+            ),
+            downloadOrder: .oldestFirst, planWindow: .first
+        )
+        var run = SyncRunState(phase: .running, requestedSourceIDs: ["source-a"])
+        run.installPlan(params, selectedIndices: [1, 3, 4])
+        let before = try! XCTUnwrap(run.sourceTables["source-a"])
+        let identities = before.rows.map(\.id)
+        XCTAssertEqual(before.rows.map(\.executionSlot), [3, 0, 2, 1])
+
+        run.acceptPlan(sourceID: "source-a")
+        let accepted = try! XCTUnwrap(run.sourceTables["source-a"])
+        XCTAssertTrue(accepted.accepted)
+        XCTAssertEqual(accepted.rows.map(\.id), identities)
+        XCTAssertEqual(accepted.rows.map(\.index), [1, 2, 3, 4])
+
+        run.updateDraft(sourceID: "source-a", selectedIndices: [2], downloadOrder: .newestFirst)
+        let locked = try! XCTUnwrap(run.sourceTables["source-a"])
+        XCTAssertEqual(locked.selectedIndices, [1, 3, 4], "accepted mutation must be ignored")
+        XCTAssertEqual(locked.downloadOrder, .oldestFirst)
+    }
+
+    func testUnifiedSourceTableMergesCanonicalSnapshotAndProgressByRowIdentity() {
+        func track(_ index: Int, slot: Int, status: String) -> TrackRow {
+            TrackRow(
+                sourceID: "source-a", sourceLabel: "source-a", remoteID: "track-\(index)",
+                title: "Track \(index)", index: index, executionSlot: slot,
+                toggleable: true, planStatus: "missing_new", planClass: "new",
+                selected: true, runScope: "included", runtimeStatus: status,
+                statusLabel: status, failureDetail: nil,
+                progressKnown: status == "downloading", progressPercent: status == "downloading" ? 25 : 0
+            )
+        }
+        var run = SyncRunState(phase: .running, requestedSourceIDs: ["source-a", "source-b"])
+        run.mergeSnapshot(
+            sourceID: "source-a",
+            snapshot: SourceSnapshot(
+                lifecycle: "running", confirmed: true,
+                rows: [track(1, slot: 2, status: "queued"), track(2, slot: 1, status: "downloading")],
+                activity: []
+            )
+        )
+        run.mergeProgressRow(sourceID: "source-a", row: track(2, slot: 1, status: "downloaded"))
+
+        let table = try! XCTUnwrap(run.sourceTables["source-a"])
+        XCTAssertEqual(table.rows.map(\.index), [1, 2])
+        XCTAssertEqual(table.rows[1].runtimeStatus, "downloaded")
+        XCTAssertEqual(table.rows[1].executionSlot, 1)
+        XCTAssertEqual(run.requestedSourceIDs, ["source-a", "source-b"], "sidebar history order must remain stable")
+    }
+
+    func testMultiSourceFocusPrioritizesInputThenExplicitChoiceThenActiveWork() {
+        XCTAssertEqual(
+            SyncSourceFocus.target(
+                current: "source-a", selectionIsExplicit: true,
+                pendingInput: "source-b", active: "source-c"
+            ),
+            "source-b",
+            "a source needing input must override even an explicit sidebar choice"
+        )
+        XCTAssertEqual(
+            SyncSourceFocus.target(
+                current: "source-a", selectionIsExplicit: true,
+                pendingInput: nil, active: "source-c"
+            ),
+            "source-a",
+            "active work must not steal an explicit sidebar choice"
+        )
+        XCTAssertEqual(
+            SyncSourceFocus.target(
+                current: "source-a", selectionIsExplicit: false,
+                pendingInput: nil, active: "source-c"
+            ),
+            "source-c"
+        )
+        XCTAssertEqual(
+            SyncSourceFocus.target(
+                current: "source-a", selectionIsExplicit: false,
+                pendingInput: nil, active: nil
+            ),
+            "source-a"
+        )
+    }
+
+    func testProtocolV2ProgressDecodesCanonicalRowAndIsIgnoredAfterCancel() throws {
+        let payload = """
+        {
+          "run_id":"run-1",
+          "source_id":"source-a",
+          "progress":{
+            "progress":{
+              "source":{"id":"source-a","lifecycle":"running","planned_total":2,"item_total":2,"item_index":1,"completed":0},
+              "track":{"name":"Older","lifecycle":"downloading","progress_percent":73},
+              "global":{"total":2,"completed":0}
+            },
+            "track":{"name":"Older","progress_known":true,"progress_percent":73,"lifecycle":"downloading"},
+            "structured_track_events":true
+          },
+          "row":{
+            "source_id":"source-a","source_label":"source-a","remote_id":"older","title":"Older",
+            "index":8,"execution_slot":1,"toggleable":true,"plan_status":"missing_known_gap","plan_class":"known_gap",
+            "selected":true,"run_scope":"included","runtime_status":"downloading","status_label":"73%",
+            "progress_known":true,"progress_percent":73
+          }
+        }
+        """.data(using: .utf8)!
+        let notification = try JSONDecoder.agent.decode(SyncProgressNotification.self, from: payload)
+        XCTAssertEqual(notification.row?.index, 8)
+        XCTAssertEqual(notification.row?.executionSlot, 1)
+
+        var running = SyncRunState(runID: "run-1", phase: .running)
+        XCTAssertTrue(running.applyProgress(notification))
+        XCTAssertEqual(running.progress?.track.progressPercent, 73)
+
+        var canceling = SyncRunState(runID: "run-1", phase: .canceling, cancelRequested: true)
+        XCTAssertFalse(canceling.applyProgress(notification))
+        XCTAssertNil(canceling.progress)
+        XCTAssertTrue(canceling.sourceTables.isEmpty)
     }
 
     /// Home and Doctor both route a failing check through `DoctorFix`, so the
@@ -960,9 +1286,8 @@ final class WireModelTests: XCTestCase {
         // And unset must stay absent through an encode, not become `false`.
         let policy = SourceSyncPolicy(breakOnExisting: true, askOnExisting: nil, localIndexCache: false)
         let encoded = try JSONEncoder.agent.encode(policy)
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
-        )
+        let rawObject = try JSONSerialization.jsonObject(with: encoded)
+        let object = try XCTUnwrap(rawObject as? [String: Any])
         XCTAssertEqual(object["break_on_existing"] as? Bool, true)
         XCTAssertEqual(object["local_index_cache"] as? Bool, false)
         XCTAssertNil(object["ask_on_existing"], "unset must not be written as false")

@@ -159,6 +159,7 @@ final class AppState: ObservableObject {
     @Published var syncTrackStatus = SyncDefaults.trackStatus
     @Published private(set) var syncValidationMessage: String?
     @Published private(set) var syncRun = SyncRunState()
+    @Published private(set) var selectedSyncSourceID: String?
     @Published private(set) var playlists: [PlaylistListRow] = []
     @Published private(set) var playlistConfig: PlaylistConfigResult?
     @Published private(set) var playlistActiveRunID: String?
@@ -206,11 +207,14 @@ final class AppState: ObservableObject {
 
     private var client: UDLClient?
     private var notificationTask: Task<Void, Never>?
+    private var progressNotificationTask: Task<Void, Never>?
     private var promptTask: Task<Void, Never>?
+    private var syncCancellationWatchdog: Task<Void, Never>?
     private var playlistOperations: [String: PlaylistOperation] = [:]
     private var bufferedFinished: [String: RunFinishedNotification] = [:]
     private var planSelectionOverrides: [String: [String: Bool]] = [:]
     private var planCursorBySource: [String: String] = [:]
+    private var syncSidebarSelectionIsExplicit = false
 
     init() {
         projectDirectory = FileManager.default.homeDirectoryForCurrentUser
@@ -267,6 +271,14 @@ final class AppState: ObservableObject {
             return
         }
         planPrompt = PlanPrompt(id: prompt.id, request: prompt.request, params: params)
+        syncRun.installPlan(params, selectedIndices: initialPlanSelection(params))
+        selectedSyncSourceID = SyncSourceFocus.target(
+            current: selectedSyncSourceID,
+            selectionIsExplicit: syncSidebarSelectionIsExplicit,
+            pendingInput: params.sourceID,
+            active: activeSyncSourceID
+        )
+        syncSidebarSelectionIsExplicit = false
         // The plan is docked, so the workspace holding it has to be on screen
         // for the "Needs you" state to mean anything.
         destination = .sync
@@ -285,13 +297,33 @@ final class AppState: ObservableObject {
         return progressSource.isEmpty ? nil : progressSource
     }
 
+    func selectSyncSource(_ sourceID: String) {
+        guard syncRun.requestedSourceIDs.contains(sourceID) || syncRun.sourceTables[sourceID] != nil else { return }
+        selectedSyncSourceID = sourceID
+        syncSidebarSelectionIsExplicit = true
+    }
+
+    func setSyncTableSelection(sourceID: String, selectedIndices: Set<Int>) {
+        syncRun.updateDraft(sourceID: sourceID, selectedIndices: selectedIndices)
+    }
+
+    func setSyncTableDownloadOrder(sourceID: String, order: DownloadOrder) {
+        syncRun.updateDraft(sourceID: sourceID, downloadOrder: order)
+    }
+
+    func setSyncTablePlanWindow(sourceID: String, window: PlanWindow) {
+        syncRun.updateDraft(sourceID: sourceID, planWindow: window)
+    }
+
     /// C2 — "Source 2 of 4". Nil when the run has not reached a source yet, so
     /// the header says "Planning…" instead of inventing a position.
     var syncSourcePosition: (index: Int, total: Int)? {
+        activeSyncSourceID.flatMap(syncSourcePosition(for:))
+    }
+
+    func syncSourcePosition(for sourceID: String) -> (index: Int, total: Int)? {
         let ids = syncRun.requestedSourceIDs
-        guard !ids.isEmpty,
-              let current = activeSyncSourceID,
-              let index = ids.firstIndex(of: current) else { return nil }
+        guard !ids.isEmpty, let index = ids.firstIndex(of: sourceID) else { return nil }
         return (index + 1, ids.count)
     }
 
@@ -299,6 +331,7 @@ final class AppState: ObservableObject {
     /// reached yet emit no events, so they read `Queued`, never `Done`.
     func syncSourceLifecycle(_ sourceID: String) -> Lifecycle {
         if planPrompt?.params.sourceID == sourceID { return .needsYou }
+        if let table = syncRun.sourceTables[sourceID] { return Lifecycle(wire: table.lifecycle) }
         if let snapshot = syncRun.sources[sourceID] { return Lifecycle(wire: snapshot.lifecycle) }
         if syncRun.progress?.progress.source.id == sourceID { return .planning }
         // "Queued" is only true while the run is still going. Once it has
@@ -415,6 +448,7 @@ final class AppState: ObservableObject {
 
     func shutdown() async {
         notificationTask?.cancel()
+        progressNotificationTask?.cancel()
         promptTask?.cancel()
         pendingPrompt = nil
         await backend.stop()
@@ -530,7 +564,10 @@ final class AppState: ObservableObject {
         let orders = Dictionary(uniqueKeysWithValues: selected.compactMap { source in
             syncSourceOptions[source.id].map { (source.id, $0.downloadOrder) }
         })
+        syncCancellationWatchdog?.cancel()
         syncRun = SyncRunState(phase: .starting, requestedSourceIDs: selected.map(\.id))
+        selectedSyncSourceID = selected.first?.id
+        syncSidebarSelectionIsExplicit = false
         do {
             let started = try await client.startSync(SyncStartParams(
                 sourceIDs: selected.map(\.id),
@@ -547,10 +584,8 @@ final class AppState: ObservableObject {
                 noPreflight: syncNoPreflight,
                 trackStatus: syncTrackStatus
             ))
-            syncRun.runID = started.runID
-            if syncRun.exitCode == nil {
-                syncRun.phase = .running
-            }
+            syncRun.registerRunID(started.runID)
+            await sendPendingSyncCancellationIfReady()
         } catch {
             syncRun.phase = .failed
             syncRun.terminalMessage = error.localizedDescription
@@ -597,14 +632,17 @@ final class AppState: ObservableObject {
     }
 
     func cancelActiveSync() async {
-        guard let runID = syncRun.runID else { return }
-        syncRun.phase = .canceling
-        await cancelRun(runID)
+        guard syncRun.requestCancellation() else { return }
+        scheduleSyncCancellationWatchdog()
+        await sendPendingSyncCancellationIfReady()
     }
 
     func resetSyncRun() {
         guard !syncRun.phase.isActive else { return }
+        syncCancellationWatchdog?.cancel()
         syncRun = SyncRunState()
+        selectedSyncSourceID = nil
+        syncSidebarSelectionIsExplicit = false
     }
 
     func loadPlaylists() async {
@@ -1039,19 +1077,23 @@ final class AppState: ObservableObject {
         await restart()
     }
 
-    func answerPrompt(result: JSONValue) async {
-        guard let prompt = pendingPrompt, let connection = backend.connection else { return }
+    @discardableResult
+    func answerPrompt(result: JSONValue) async -> Bool {
+        guard let prompt = pendingPrompt, let connection = backend.connection else { return false }
         do {
             try await connection.respond(to: prompt.request, result: result)
         } catch {
             alertMessage = error.localizedDescription
+            return false
         }
         if pendingPrompt?.id == prompt.id {
             pendingPrompt = nil
         }
+        return true
     }
 
-    func answerPlanSelection(_ result: SelectRowsResult, request: UIRequest) async {
+    @discardableResult
+    func answerPlanSelection(_ result: SelectRowsResult, request: UIRequest) async -> Bool {
         // The UI's copied source settings must change before Go receives a
         // rebuild reply, matching the engine/TUI cross-boundary invariant.
         if result.rebuild,
@@ -1059,10 +1101,18 @@ final class AppState: ObservableObject {
             setSourcePlanWindow(params.sourceID, result.planWindow)
         }
         guard let encoded = try? result.jsonValue(using: .agent) else {
-            alertMessage = "Could not encode the plan selection response."
-            return
+            syncRun.terminalMessage = "Plan response could not be encoded. Review the selection and try again."
+            return false
         }
-        await answerPrompt(result: encoded)
+        guard await answerPrompt(result: encoded) else {
+            syncRun.terminalMessage = "Plan response could not be delivered. The table remains editable; try Continue again."
+            return false
+        }
+        if !result.rebuild,
+           let params = try? decode(SelectRowsParams.self, from: request.params) {
+            syncRun.acceptPlan(sourceID: params.sourceID)
+        }
+        return true
     }
 
     func initialPlanSelection(_ params: SelectRowsParams) -> Set<Int> {
@@ -1113,26 +1163,54 @@ final class AppState: ObservableObject {
         return cursor
     }
 
-    func cancelPrompt() async {
-        guard let prompt = pendingPrompt, let connection = backend.connection else { return }
-        let result: JSONValue
-        switch prompt.request.kind {
-        case .confirm:
-            result = .object(["confirmed": .bool(false), "canceled": .bool(true)])
-        case .input:
-            result = .object(["value": .string(""), "canceled": .bool(true)])
-        case .selectRows:
-            result = .object([
-                "selected_indices": .array([]),
-                "download_order": .string("newest_first"),
-                "canceled": .bool(true),
-                "rebuild": .bool(false),
-                "plan_window": .string("first"),
-            ])
+    @discardableResult
+    func cancelPrompt() async -> Bool {
+        guard let prompt = pendingPrompt else { return true }
+        guard let connection = backend.connection else { return false }
+        do {
+            try await connection.respond(to: prompt.request, result: prompt.request.kind.canceledResult)
+            if pendingPrompt?.id == prompt.id {
+                pendingPrompt = nil
+            }
+            return true
+        } catch {
+            // The backend is blocked waiting for this reply, so failure to
+            // deliver it is one of the few session-level errors that owns a
+            // modal. Keep the prompt visible so the state is not fabricated.
+            alertMessage = error.localizedDescription
+            return false
         }
-        try? await connection.respond(to: prompt.request, result: result)
-        if pendingPrompt?.id == prompt.id {
-            pendingPrompt = nil
+    }
+
+    private func sendPendingSyncCancellationIfReady() async {
+        guard syncRun.beginCancellationRequest(), let runID = syncRun.runID else { return }
+        let promptReplyDelivered = await cancelPrompt()
+        guard let client else {
+            syncRun.failCancellation("The backend client is unavailable.")
+            return
+        }
+        do {
+            let result = try await client.cancelRun(runID)
+            guard result.canceled else {
+                syncRun.failCancellation("The backend did not acknowledge the request.")
+                return
+            }
+            syncRun.acknowledgeCancellation()
+        } catch JSONRPCConnectionError.remote(let code, _, _) where code == -32002 && promptReplyDelivered {
+            // If our pending UI reply reached Go, `run not found` means its
+            // terminal path won the race and removed the registry entry.
+            syncRun.acknowledgeCancellation()
+        } catch {
+            syncRun.failCancellation(error.localizedDescription)
+        }
+    }
+
+    private func scheduleSyncCancellationWatchdog() {
+        syncCancellationWatchdog?.cancel()
+        syncCancellationWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.syncRun.markStillStopping()
         }
     }
 
@@ -1145,42 +1223,27 @@ final class AppState: ObservableObject {
 
     private func observe(connection: JSONRPCConnection) {
         notificationTask?.cancel()
+        progressNotificationTask?.cancel()
         promptTask?.cancel()
-        notificationTask = Task {
+        notificationTask = Task.detached { [weak self] in
             for await notification in connection.notifications {
-                if notification.method == "freedl.planEvent",
-                   let event = try? decode(FreeDLPlanEventNotification.self, from: notification.params),
-                   event.runID == freeDLRunID || (freeDLRunID == nil && freeDLOperation == .planning) {
-                    freeDLRunID = event.runID
-                    applyFreeDLPlanEvent(event.event)
-                } else if notification.method == "sync.event",
-                   let event = try? decode(SyncEventNotification.self, from: notification.params),
-                   event.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase == .starting) {
-                    syncRun.runID = event.runID
-                    let sourceID = event.event.sourceID ?? event.source.rows.first?.sourceID ?? ""
-                    if !sourceID.isEmpty {
-                        syncRun.sources[sourceID] = event.source
+                guard !Task.isCancelled,
+                      let data = try? JSONEncoder.agent.encode(notification.params) else { continue }
+                switch notification.method {
+                case "freedl.planEvent":
+                    if let event = try? JSONDecoder.agent.decode(FreeDLPlanEventNotification.self, from: data) {
+                        await self?.applyFreeDLPlanNotification(event)
                     }
-                    syncRun.progress = event.progress
-                    syncRun.activity.append(event.event)
-                    if syncRun.activity.count > 200 {
-                        syncRun.activity.removeFirst(syncRun.activity.count - 200)
+                case "sync.event":
+                    if let event = try? JSONDecoder.agent.decode(SyncEventNotification.self, from: data) {
+                        await self?.applyLosslessSyncEvent(event)
                     }
-                } else if notification.method == "sync.event",
-                          let event = try? decode(SyncEventNotification.self, from: notification.params),
-                          event.runID == freeDLRunID,
-                          freeDLOperation == .capture {
-                    let sourceID = event.event.sourceID ?? event.source.rows.first?.sourceID ?? ""
-                    if !sourceID.isEmpty {
-                        freeDLCaptureSources[sourceID] = event.source
+                case "run.finished":
+                    if let event = try? JSONDecoder.agent.decode(RunFinishedNotification.self, from: data) {
+                        await self?.routeFinished(event)
                     }
-                    freeDLCaptureActivity.append(event.event)
-                    if freeDLCaptureActivity.count > 200 {
-                        freeDLCaptureActivity.removeFirst(freeDLCaptureActivity.count - 200)
-                    }
-                } else if notification.method == "run.finished",
-                          let finished = try? decode(RunFinishedNotification.self, from: notification.params) {
-                    routeFinished(finished)
+                default:
+                    break
                 }
             }
             // Intentional shutdown/restart cancels this observer before closing
@@ -1188,7 +1251,18 @@ final class AppState: ObservableObject {
             // unexpected disconnect, even if the process termination handler
             // has already advanced backend.state to `.exited`.
             if !Task.isCancelled {
-                handleUnexpectedDisconnect()
+                await self?.handleUnexpectedDisconnect()
+            }
+        }
+        progressNotificationTask = Task.detached { [weak self] in
+            for await notification in connection.progressNotifications {
+                guard !Task.isCancelled,
+                      notification.method == "sync.progress",
+                      let data = try? JSONEncoder.agent.encode(notification.params),
+                      let progress = try? JSONDecoder.agent.decode(SyncProgressNotification.self, from: data) else {
+                    continue
+                }
+                await self?.applySyncProgress(progress)
             }
         }
         promptTask = Task {
@@ -1198,6 +1272,66 @@ final class AppState: ObservableObject {
             }
             pendingPrompt = nil
         }
+    }
+
+    private func applyFreeDLPlanNotification(_ notification: FreeDLPlanEventNotification) {
+        guard notification.runID == freeDLRunID || (freeDLRunID == nil && freeDLOperation == .planning) else { return }
+        freeDLRunID = notification.runID
+        applyFreeDLPlanEvent(notification.event)
+    }
+
+    private func applyLosslessSyncEvent(_ notification: SyncEventNotification) async {
+        if notification.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase.isActive) {
+            syncRun.registerRunID(notification.runID)
+            let sourceID = notification.event.sourceID ?? notification.source.rows.first?.sourceID ?? ""
+            if !sourceID.isEmpty {
+                syncRun.mergeSnapshot(sourceID: sourceID, snapshot: notification.source)
+                selectedSyncSourceID = SyncSourceFocus.target(
+                    current: selectedSyncSourceID,
+                    selectionIsExplicit: syncSidebarSelectionIsExplicit,
+                    pendingInput: planPrompt?.params.sourceID,
+                    active: sourceID
+                )
+            }
+            syncRun.activity.append(notification.event)
+            if syncRun.activity.count > 200 {
+                syncRun.activity.removeFirst(syncRun.activity.count - 200)
+            }
+            await sendPendingSyncCancellationIfReady()
+            return
+        }
+        guard notification.runID == freeDLRunID, freeDLOperation == .capture else { return }
+        let sourceID = notification.event.sourceID ?? notification.source.rows.first?.sourceID ?? ""
+        if !sourceID.isEmpty {
+            freeDLCaptureSources[sourceID] = notification.source
+        }
+        freeDLCaptureActivity.append(notification.event)
+        if freeDLCaptureActivity.count > 200 {
+            freeDLCaptureActivity.removeFirst(freeDLCaptureActivity.count - 200)
+        }
+    }
+
+    private func applySyncProgress(_ notification: SyncProgressNotification) {
+        if notification.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase.isActive) {
+            syncRun.registerRunID(notification.runID)
+            guard syncRun.applyProgress(notification) else { return }
+            selectedSyncSourceID = SyncSourceFocus.target(
+                current: selectedSyncSourceID,
+                selectionIsExplicit: syncSidebarSelectionIsExplicit,
+                pendingInput: planPrompt?.params.sourceID,
+                active: notification.sourceID
+            )
+            return
+        }
+        guard notification.runID == freeDLRunID, freeDLOperation == .capture,
+              let row = notification.row else { return }
+        let existing = freeDLCaptureSources[notification.sourceID] ?? SourceSnapshot(
+            lifecycle: "running",
+            confirmed: true,
+            rows: [],
+            activity: []
+        )
+        freeDLCaptureSources[notification.sourceID] = existing.merging(row)
     }
 
     /// C15 — an unexpected EOF or backend exit. Nothing is replayed, so every
@@ -1241,6 +1375,7 @@ final class AppState: ObservableObject {
     }
 
     private func clearSessionState() {
+        syncCancellationWatchdog?.cancel()
         client = nil
         initialization = nil
         doctor = nil
@@ -1248,6 +1383,8 @@ final class AppState: ObservableObject {
         syncSources = []
         syncSourceOptions = [:]
         syncRun = SyncRunState()
+        selectedSyncSourceID = nil
+        syncSidebarSelectionIsExplicit = false
         playlists = []
         playlistConfig = nil
         playlistActiveRunID = nil
@@ -1289,27 +1426,15 @@ final class AppState: ObservableObject {
     }
 
     private func applySyncFinished(_ finished: RunFinishedNotification) {
-        syncRun.exitCode = finished.exitCode
-        syncRun.terminalMessage = finished.error
-        switch finished.exitCode {
-        case 0: syncRun.phase = .succeeded
-        case 4: syncRun.phase = .dependencyFailure
-        case 5: syncRun.phase = .partialFailure
-        case 130: syncRun.phase = .canceled
-        default: syncRun.phase = .failed
-        }
-        if syncRun.terminalMessage == nil {
-            syncRun.terminalMessage = syncRun.phase == .succeeded
-                ? "Sync completed successfully."
-                : "Sync finished with exit code \(finished.exitCode)."
-        }
+        syncCancellationWatchdog?.cancel()
+        syncRun.finish(exitCode: finished.exitCode, error: finished.error)
         planSelectionOverrides = [:]
         planCursorBySource = [:]
     }
 
     private func routeFinished(_ finished: RunFinishedNotification) {
-        if finished.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase == .starting) {
-            syncRun.runID = finished.runID
+        if finished.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase.isActive) {
+            syncRun.registerRunID(finished.runID)
             applySyncFinished(finished)
             pendingPrompt = nil
             return

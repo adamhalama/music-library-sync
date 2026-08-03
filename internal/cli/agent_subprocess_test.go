@@ -58,7 +58,7 @@ func TestAgentSubprocessStdoutIsProtocolOnlyNDJSON(t *testing.T) {
 		}
 		return decoded
 	}
-	init := send(`{"jsonrpc":"2.0","id":1,"method":"session.initialize","params":{"protocol_version":1}}`)
+	init := send(`{"jsonrpc":"2.0","id":1,"method":"session.initialize","params":{"protocol_version":2}}`)
 	if init["error"] != nil || init["result"] == nil {
 		t.Fatalf("unexpected initialize response: %+v", init)
 	}

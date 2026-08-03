@@ -1,4 +1,4 @@
-.PHONY: build app-dev app-dev-open test smoke-main smoke-freedl smoke-all install uninstall clean legacy-install legacy-uninstall
+.PHONY: build app-dev app-dev-open app-dev-install app-test-dev test smoke-main smoke-freedl smoke-all install uninstall clean legacy-install legacy-uninstall
 
 GO ?= go
 PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /usr/local)
@@ -25,6 +25,12 @@ app-dev: build
 
 app-dev-open: app-dev
 	@open "$(CURDIR)/dist/dev/UDL-Dev.app"
+
+app-dev-install:
+	@bash packaging/dev/install_macos_app.sh
+
+app-test-dev:
+	@bash packaging/dev/test_macos_app.sh
 
 test:
 	@$(GO) test ./...

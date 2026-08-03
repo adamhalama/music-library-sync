@@ -37,31 +37,140 @@ type syncStartParams struct {
 }
 
 type syncEventParams struct {
-	RunID    string                            `json:"run_id"`
-	Event    output.Event                      `json:"event"`
-	Source   runstate.SourceSnapshot           `json:"source"`
-	Progress output.StructuredProgressSnapshot `json:"progress"`
+	RunID  string                  `json:"run_id"`
+	Event  output.Event            `json:"event"`
+	Source runstate.SourceSnapshot `json:"source"`
 }
 
+type syncProgressParams struct {
+	RunID    string                            `json:"run_id"`
+	SourceID string                            `json:"source_id"`
+	Progress output.StructuredProgressSnapshot `json:"progress"`
+	Row      *runstate.TrackRow                `json:"row,omitempty"`
+}
+
+const agentSyncProgressInterval = 100 * time.Millisecond
+
 type agentSyncEmitter struct {
-	mu       sync.Mutex
-	conn     *Conn
-	runID    string
-	tracker  *runstate.Tracker
-	progress *output.StructuredProgressTracker
+	mu              sync.Mutex
+	conn            *Conn
+	runID           string
+	tracker         *runstate.Tracker
+	progress        *output.StructuredProgressTracker
+	pendingProgress *syncProgressParams
+	progressTimer   *time.Timer
+	lastProgressAt  time.Time
+	asyncErr        error
+	closed          bool
 }
 
 func (e *agentSyncEmitter) Emit(event output.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.asyncErr != nil {
+		return e.asyncErr
+	}
+	if e.closed {
+		return io.ErrClosedPipe
+	}
 	e.progress.ObserveEvent(event)
 	outcomes := e.progress.DrainTrackOutcomes()
 	e.tracker.ObserveEvent(event, outcomes, "", false)
+	current := syncProgressParams{
+		RunID: e.runID, SourceID: event.SourceID,
+		Progress: e.progress.Snapshot(),
+		Row:      e.tracker.RowForEvent(event),
+	}
+	if event.Event == output.EventTrackProgress {
+		e.pendingProgress = &current
+		return e.scheduleProgressLocked(time.Now())
+	}
+	// A pending percentage must be visible before the lifecycle/outcome that
+	// supersedes it. Lifecycle frames are never coalesced or dropped.
+	if err := e.flushProgressAtRateLocked(time.Now()); err != nil {
+		return err
+	}
 	return e.conn.Notify("sync.event", syncEventParams{
 		RunID: e.runID, Event: event,
-		Source:   e.tracker.SourceSnapshot(event.SourceID),
-		Progress: e.progress.Snapshot(),
+		Source: e.tracker.SourceSnapshot(event.SourceID),
 	})
+}
+
+func (e *agentSyncEmitter) scheduleProgressLocked(now time.Time) error {
+	if e.pendingProgress == nil {
+		return nil
+	}
+	if e.lastProgressAt.IsZero() || now.Sub(e.lastProgressAt) >= agentSyncProgressInterval {
+		return e.flushProgressLocked(now)
+	}
+	if e.progressTimer == nil {
+		delay := agentSyncProgressInterval - now.Sub(e.lastProgressAt)
+		e.progressTimer = time.AfterFunc(delay, e.flushProgressFromTimer)
+	}
+	return nil
+}
+
+func (e *agentSyncEmitter) flushProgressFromTimer() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.progressTimer = nil
+	if e.closed || e.pendingProgress == nil {
+		return
+	}
+	if err := e.scheduleProgressLocked(time.Now()); err != nil {
+		e.asyncErr = err
+	}
+}
+
+// Lifecycle delivery may force the pending newest percentage to become
+// visible, but it does not bypass the per-run 10 Hz clock. The wait is bounded
+// to one interval and happens only at a lossless event boundary; ordinary
+// progress producers remain non-blocking and newest-wins.
+func (e *agentSyncEmitter) flushProgressAtRateLocked(now time.Time) error {
+	if e.pendingProgress == nil {
+		return nil
+	}
+	if !e.lastProgressAt.IsZero() {
+		if wait := agentSyncProgressInterval - now.Sub(e.lastProgressAt); wait > 0 {
+			if e.progressTimer != nil {
+				e.progressTimer.Stop()
+				e.progressTimer = nil
+			}
+			time.Sleep(wait)
+			now = time.Now()
+		}
+	}
+	return e.flushProgressLocked(now)
+}
+
+func (e *agentSyncEmitter) flushProgressLocked(now time.Time) error {
+	if e.progressTimer != nil {
+		e.progressTimer.Stop()
+		e.progressTimer = nil
+	}
+	if e.pendingProgress == nil {
+		return nil
+	}
+	pending := *e.pendingProgress
+	e.pendingProgress = nil
+	if err := e.conn.Notify("sync.progress", pending); err != nil {
+		return err
+	}
+	e.lastProgressAt = now
+	return nil
+}
+
+func (e *agentSyncEmitter) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return e.asyncErr
+	}
+	if err := e.flushProgressAtRateLocked(time.Now()); err != nil && e.asyncErr == nil {
+		e.asyncErr = err
+	}
+	e.closed = true
+	return e.asyncErr
 }
 
 func (s *Server) startSync(params json.RawMessage) (any, *RPCError) {
@@ -94,15 +203,11 @@ func (s *Server) startSync(params json.RawMessage) (any, *RPCError) {
 			"scdl": scdl.New(), "scdl-freedl": scdlfreedl.New(),
 		}
 	}
-	errOut := s.ErrOut
-	if errOut == nil {
-		errOut = io.Discard
-	}
 	runner := s.SyncRunner
 	if runner == nil {
-		// Protocol stdin is never exposed to adapters, and all child output is
-		// routed to stderr so stdout remains valid NDJSON.
-		runner = engine.NewSubprocessRunner(nil, errOut, errOut)
+		// Protocol stdin is never exposed to adapters. Raw progress stays in the
+		// runner's bounded tails instead of being duplicated onto agent stderr.
+		runner = engine.NewSubprocessRunner(nil, io.Discard, io.Discard)
 	}
 	runID, startErr := s.StartRun(func(ctx context.Context, runID string) (any, error, int) {
 		tracker := runstate.NewTracker()
@@ -149,6 +254,9 @@ func (s *Server) startSync(params json.RawMessage) (any, *RPCError) {
 			ScanGaps: request.ScanGaps, NoPreflight: request.NoPreflight,
 			AllowPrompt: true, TrackStatus: request.TrackStatus,
 		}, interaction)
+		if emitErr := emitter.Close(); runErr == nil && emitErr != nil {
+			runErr = emitErr
+		}
 		return result, runErr, syncExitCode(result, runErr)
 	})
 	if startErr != nil {

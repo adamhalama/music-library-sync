@@ -3271,6 +3271,9 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tuiPlanSelectRequestMsg, got %T", raw)
 	}
+	if req.DownloadOrder != engine.DefaultDownloadOrder {
+		t.Fatalf("plan request default order = %q, want %q", req.DownloadOrder, engine.DefaultDownloadOrder)
+	}
 	manifest, err := engine.BuildExecutionManifest("s1", rows, []int{1}, engine.DownloadOrderNewestFirst)
 	if err != nil {
 		t.Fatalf("build manifest: %v", err)
@@ -3288,7 +3291,7 @@ func TestTUISyncInteractionSelectRowsUsesTUIHandshake(t *testing.T) {
 		t.Fatalf("selected indices mismatch: got=%v", result.Manifest.SelectedIndices)
 	}
 	if result.Manifest.DownloadOrder != engine.DownloadOrderNewestFirst {
-		t.Fatalf("expected default handshake order newest_first, got %q", result.Manifest.DownloadOrder)
+		t.Fatalf("expected explicit newest_first reply to win, got %q", result.Manifest.DownloadOrder)
 	}
 }
 

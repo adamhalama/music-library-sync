@@ -114,7 +114,7 @@ func buildSpotifyDeemixPlan(
 			KnownIDs: map[string]struct{}{},
 			Entries:  map[string]spotifyStateEntry{},
 		},
-		DownloadOrder: DownloadOrderNewestFirst,
+		DownloadOrder: DefaultDownloadOrder,
 	}
 
 	stateFilePath, err := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)

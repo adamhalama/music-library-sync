@@ -1,8 +1,8 @@
 # GUI Redesign Implementation Tracker
 
 - **Overall status:** Complete — phases 1–9 done
-- **Plan:** [PLAN.md](./PLAN.md)
-- **Design reference:** [docs/gui-redesign/app/](./docs/gui-redesign/app/)
+- **Plan:** [gui-redesign-plan.md](./gui-redesign-plan.md)
+- **Design reference:** [docs/gui-redesign/app/](../../docs/gui-redesign/app/)
 - **Last updated:** 2026-08-03
 
 This is the live, editable execution record for the native macOS GUI redesign.

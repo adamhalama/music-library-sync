@@ -164,6 +164,25 @@ func (t *Tracker) ObserveEvent(event output.Event, outcomes []output.StructuredT
 	}
 }
 
+// RowForEvent returns the fully resolved plan row after ObserveEvent has
+// applied an adapter event. Adapter indices are execution counters, so callers
+// must not construct a row identity directly from them.
+func (t *Tracker) RowForEvent(event output.Event) *TrackRow {
+	if t == nil {
+		return nil
+	}
+	source := t.ensureSource(strings.TrimSpace(event.SourceID))
+	if source == nil {
+		return nil
+	}
+	row := source.resolveRowForEvent(event)
+	if row == nil {
+		return nil
+	}
+	copy := *row
+	return &copy
+}
+
 func (t *Tracker) AggregateCounts(doneWithoutError bool) (selected, completed, skipped, failed int, progressPercent float64) {
 	if t == nil {
 		return

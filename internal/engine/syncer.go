@@ -232,7 +232,7 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 		var sourcePreflight *SoundCloudPreflight
 		plannedSoundCloudTracks := []soundCloudRemoteTrack{}
 		var spotifyDeemixPlan *spotifyDeemixExecutionPlan
-		downloadOrder := DownloadOrderNewestFirst
+		downloadOrder := DefaultDownloadOrder
 		if opts.Plan {
 			sourcePlan, planErr := s.prepareSourcePlan(ctx, cfg, source, opts)
 			if planErr != nil {

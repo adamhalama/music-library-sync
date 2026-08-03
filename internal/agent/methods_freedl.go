@@ -227,6 +227,9 @@ func (s *Server) startFreeDLCapture(params json.RawMessage) (any, *RPCError) {
 			SourceIDs: []string{job.ID}, Plan: true, PlanLimit: job.PlanLimit,
 			AllowPrompt: false, TrackStatus: engine.TrackStatusNone,
 		}, freeDLCaptureInteraction{selected: selected, order: freeDLDownloadOrder(job.DownloadOrder)})
+		if emitErr := emitter.Close(); runErr == nil && emitErr != nil {
+			runErr = emitErr
+		}
 		if runErr == nil {
 			_ = freedl.WriteJSON(filepath.Join(plan.LogDir, "capture-result.json"), result)
 		}
@@ -406,11 +409,7 @@ func (s *Server) syncExecRunner() engine.ExecRunner {
 	if s.SyncRunner != nil {
 		return s.SyncRunner
 	}
-	errOut := s.ErrOut
-	if errOut == nil {
-		errOut = io.Discard
-	}
-	return engine.NewSubprocessRunner(nil, errOut, errOut)
+	return engine.NewSubprocessRunner(nil, io.Discard, io.Discard)
 }
 
 func capturePlanTransportEvent(event freedl.CapturePlanEvent, overrides map[string]bool) freeDLPlanEvent {

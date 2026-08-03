@@ -15,7 +15,7 @@ struct SyncPlanView: View {
 
     @State private var selected: Set<Int> = []
     @State private var cursor: PlanRow.ID?
-    @State private var order: DownloadOrder = .newestFirst
+    @State private var order: DownloadOrder = .oldestFirst
     @State private var window: PlanWindow = .first
     @State private var filter: PlanRowFilter = .all
     @State private var sortOrder = [KeyPathComparator(\PlanRow.index)]
@@ -137,7 +137,12 @@ struct SyncPlanView: View {
     }
 
     private func planTable(_ prompt: AppState.PlanPrompt) -> some View {
-        Table(rows(prompt), selection: $cursor, sortOrder: $sortOrder) {
+        let projection = PlanQueueProjection(
+            rows: prompt.params.rows,
+            selectedIndices: selected,
+            downloadOrder: order
+        )
+        return Table(rows(prompt), selection: $cursor, sortOrder: $sortOrder) {
             TableColumn("") { row in
                 toggle(row)
             }
@@ -149,6 +154,14 @@ struct SyncPlanView: View {
                     .foregroundStyle(Theme.textTertiary)
             }
             .width(38)
+
+            TableColumn("Run") { row in
+                let slot = projection.executionSlot(forSourceIndex: row.index)
+                Text(slot > 0 ? "run #\(slot)" : "—")
+                    .font(Typography.mono)
+                    .foregroundStyle(slot > 0 ? Theme.accent : Theme.textTertiary)
+            }
+            .width(min: 60, ideal: 72)
 
             TableColumn("Title", value: \.title) { row in
                 Text(row.title)

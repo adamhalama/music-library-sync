@@ -34,16 +34,19 @@ backend, ad-hoc signs inside-out, verifies the result, and writes
 
 Use `make app-dev-open` as the combined build-and-open command.
 
-To keep the development app available through Spotlight:
+To build, install, register with Spotlight, and open the development app:
 
 ```sh
-mkdir -p ~/Applications
-ditto dist/dev/UDL-Dev.app ~/Applications/UDL-Dev.app
-mdimport ~/Applications/UDL-Dev.app
-open ~/Applications/UDL-Dev.app
+make app-dev-install
 ```
 
-Re-run `make app-dev` and copy the result again after Go or Swift changes.
+The command displays build progress, can be canceled with Control-C, preserves
+the previously installed app if an update fails, and is safe to run repeatedly.
+Pass `--no-open` directly to `packaging/dev/install_macos_app.sh` when the app
+should not launch afterward. Set `UDL_APP_INSTALL_DIR` to override the default
+`~/Applications` destination.
+
+Re-run `make app-dev-install` after Go or Swift changes.
 Because a Finder/Spotlight launch does not receive Xcode scheme environment
 variables, the installed copy always uses its embedded backend.
 

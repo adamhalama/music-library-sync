@@ -172,7 +172,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	preflight := planStage.Preflight
 	knownGapIDs := planStage.KnownGapID
 	plannedIDs := planStage.PlannedID
-	plan.DownloadOrder = DownloadOrderNewestFirst
+	plan.DownloadOrder = DefaultDownloadOrder
 	plan.PlannedTracks = orderForExecution(orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&

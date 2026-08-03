@@ -68,6 +68,25 @@ func (interruptedRunnerWithArtifacts) Run(ctx context.Context, spec ExecSpec) Ex
 	return ExecResult{ExitCode: 130, Interrupted: true}
 }
 
+type completedThenInterruptedSpotifyRunner struct {
+	targetDir string
+	calls     int
+}
+
+func (r *completedThenInterruptedSpotifyRunner) Run(ctx context.Context, spec ExecSpec) ExecResult {
+	r.calls++
+	if r.calls == 1 {
+		if err := os.WriteFile(filepath.Join(r.targetDir, "completed.mp3"), []byte("complete"), 0o644); err != nil {
+			return ExecResult{ExitCode: 1, StderrTail: err.Error()}
+		}
+		return ExecResult{ExitCode: 0}
+	}
+	if err := os.WriteFile(filepath.Join(spec.Dir, "active.mp3.part"), []byte("partial"), 0o644); err != nil {
+		return ExecResult{ExitCode: 1, StderrTail: err.Error()}
+	}
+	return ExecResult{ExitCode: 130, Interrupted: true}
+}
+
 type sequenceRunner struct {
 	results []ExecResult
 	specs   []ExecSpec
@@ -473,6 +492,85 @@ func TestSyncerInterruptedCleansNewPartialArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "cleaned") {
 		t.Fatalf("expected cleanup message in output, got %s", buf.String())
+	}
+}
+
+func TestSpotifyInterruptionKeepsCompletedTrackStateAndRemovesActivePartial(t *testing.T) {
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	runtimeDir := filepath.Join(tmp, "runtime")
+	statePath := filepath.Join(tmp, "state", "spotify.sync")
+	for _, dir := range []string{targetDir, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	firstID := "1abc234def"
+	secondID := "2abc234def"
+	source := config.Source{
+		ID:               "spotify",
+		Type:             config.SourceTypeSpotify,
+		Enabled:          true,
+		URL:              "https://open.spotify.com/playlist/test",
+		TargetDir:        targetDir,
+		StateFile:        statePath,
+		DeemixRuntimeDir: runtimeDir,
+		Adapter:          config.AdapterSpec{Kind: "deemix"},
+	}
+	plan := &spotifyDeemixExecutionPlan{
+		Source:          source,
+		PlannedTrackIDs: []string{firstID, secondID},
+		TrackMetadata: map[string]spotifyTrackMetadata{
+			firstID:  {Title: "Completed", Artist: "Artist", Album: "Album"},
+			secondID: {Title: "Interrupted", Artist: "Artist", Album: "Album"},
+		},
+		State: spotifySyncState{
+			KnownIDs: map[string]struct{}{},
+			Entries:  map[string]spotifyStateEntry{},
+		},
+		StateWritePath: statePath,
+		DownloadOrder:  DownloadOrderOldestFirst,
+	}
+	runner := &completedThenInterruptedSpotifyRunner{targetDir: targetDir}
+	syncer := NewSyncer(
+		map[string]Adapter{"deemix": fakeDeemixAdapter{}},
+		runner,
+		output.NewHumanEmitter(&bytes.Buffer{}, &bytes.Buffer{}, false, true),
+	)
+
+	outcome := syncer.runSpotifyDeemix(
+		context.Background(),
+		config.Config{Defaults: config.Defaults{ContinueOnError: true}},
+		source,
+		fakeDeemixAdapter{},
+		source,
+		nil,
+		plan,
+		SyncOptions{},
+	)
+	if !outcome.Interrupted || !outcome.Stop {
+		t.Fatalf("expected interrupted stopping outcome, got %+v", outcome)
+	}
+	if runner.calls != 2 {
+		t.Fatalf("expected completed then interrupted invocation, got %d calls", runner.calls)
+	}
+
+	state, err := parseSpotifySyncState(statePath)
+	if err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	if _, ok := state.KnownIDs[firstID]; !ok {
+		t.Fatalf("completed track state was not durable: %+v", state.KnownIDs)
+	}
+	if _, ok := state.KnownIDs[secondID]; ok {
+		t.Fatalf("interrupted track must not be recorded: %+v", state.KnownIDs)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "completed.mp3")); err != nil {
+		t.Fatalf("completed media must survive interruption: %v", err)
+	}
+	if _, err := os.Stat(runtimeDir); !os.IsNotExist(err) {
+		t.Fatalf("active runtime and partial must be removed, stat err=%v", err)
 	}
 }
 
@@ -923,10 +1021,10 @@ func TestSyncerSpotifyDeemixScanGapsExecutesPlannedTracksDeterministically(t *te
 	if len(runner.specs) != 2 {
 		t.Fatalf("expected two track executions, got %d", len(runner.specs))
 	}
-	if got := runner.specs[0].Args[0]; got != "https://open.spotify.com/track/1abc234def" {
+	if got := runner.specs[0].Args[0]; got != "https://open.spotify.com/track/3abc234def" {
 		t.Fatalf("expected first planned track URL, got %q", got)
 	}
-	if got := runner.specs[1].Args[0]; got != "https://open.spotify.com/track/3abc234def" {
+	if got := runner.specs[1].Args[0]; got != "https://open.spotify.com/track/1abc234def" {
 		t.Fatalf("expected second planned track URL, got %q", got)
 	}
 
@@ -935,12 +1033,12 @@ func TestSyncerSpotifyDeemixScanGapsExecutesPlannedTracksDeterministically(t *te
 		t.Fatalf("read state: %v", err)
 	}
 	lines := spotifyStateIDsFromPayload(string(payload))
-	if len(lines) < 3 || lines[len(lines)-2] != "1abc234def" || lines[len(lines)-1] != "3abc234def" {
+	if len(lines) < 3 || lines[len(lines)-2] != "3abc234def" || lines[len(lines)-1] != "1abc234def" {
 		t.Fatalf("expected appended spotify track ids in deterministic order, got %q", string(payload))
 	}
 }
 
-func TestSyncerSpotifyDeemixOldestFirstReversesPlannedTrackExecution(t *testing.T) {
+func TestSyncerSpotifyDeemixDefaultsToOldestFirstTrackExecution(t *testing.T) {
 	tmp := t.TempDir()
 	targetDir := filepath.Join(tmp, "target")
 	stateDir := filepath.Join(tmp, "state")
@@ -1021,11 +1119,11 @@ func TestSyncerSpotifyDeemixOldestFirstReversesPlannedTrackExecution(t *testing.
 	if len(runner.specs) != 2 {
 		t.Fatalf("expected two track executions, got %d", len(runner.specs))
 	}
-	if got := runner.specs[0].Args[0]; got != "https://open.spotify.com/track/1abc234def" {
-		t.Fatalf("expected first planned track URL in default newest_first order, got %q", got)
+	if got := runner.specs[0].Args[0]; got != "https://open.spotify.com/track/3abc234def" {
+		t.Fatalf("expected first planned track URL in default oldest_first order, got %q", got)
 	}
-	if got := runner.specs[1].Args[0]; got != "https://open.spotify.com/track/3abc234def" {
-		t.Fatalf("expected second planned track URL in default newest_first order, got %q", got)
+	if got := runner.specs[1].Args[0]; got != "https://open.spotify.com/track/1abc234def" {
+		t.Fatalf("expected second planned track URL in default oldest_first order, got %q", got)
 	}
 
 	payload, err := os.ReadFile(statePath)
@@ -1033,8 +1131,8 @@ func TestSyncerSpotifyDeemixOldestFirstReversesPlannedTrackExecution(t *testing.
 		t.Fatalf("read state: %v", err)
 	}
 	lines := spotifyStateIDsFromPayload(string(payload))
-	if len(lines) < 3 || lines[len(lines)-2] != "1abc234def" || lines[len(lines)-1] != "3abc234def" {
-		t.Fatalf("expected appended spotify track ids in newest_first order, got %q", string(payload))
+	if len(lines) < 3 || lines[len(lines)-2] != "3abc234def" || lines[len(lines)-1] != "1abc234def" {
+		t.Fatalf("expected appended spotify track ids in oldest_first order, got %q", string(payload))
 	}
 }
 
@@ -1120,10 +1218,10 @@ func TestSyncerSpotifyDeemixFailureDoesNotAppendFailedTrack(t *testing.T) {
 	if len(state.KnownIDs) != 1 {
 		t.Fatalf("expected only successful track to be appended, got %+v", state.KnownIDs)
 	}
-	if _, ok := state.KnownIDs["1abc234def"]; !ok {
+	if _, ok := state.KnownIDs["2abc234def"]; !ok {
 		t.Fatalf("expected successful track id to be present in state")
 	}
-	if _, ok := state.KnownIDs["2abc234def"]; ok {
+	if _, ok := state.KnownIDs["1abc234def"]; ok {
 		t.Fatalf("did not expect failed track id to be appended")
 	}
 }
@@ -1210,7 +1308,7 @@ func TestSyncerSpotifyDeemixUnavailableTrackIsSkippedAndNotAppended(t *testing.T
 	if len(runner.specs) != 2 {
 		t.Fatalf("expected both planned tracks to execute, got %d", len(runner.specs))
 	}
-	if !strings.Contains(stdout.String(), "[spotify-deemix] [skip] 1abc234def (Regent - Missing Song) (unavailable-on-deezer)") {
+	if !strings.Contains(stdout.String(), "[spotify-deemix] [skip] 2abc234def (Regent - Available Song) (unavailable-on-deezer)") {
 		t.Fatalf("expected normalized unavailable skip event, got stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 
@@ -1218,10 +1316,10 @@ func TestSyncerSpotifyDeemixUnavailableTrackIsSkippedAndNotAppended(t *testing.T
 	if err != nil {
 		t.Fatalf("parse state: %v", err)
 	}
-	if _, ok := state.KnownIDs["1abc234def"]; ok {
+	if _, ok := state.KnownIDs["2abc234def"]; ok {
 		t.Fatalf("did not expect unavailable track id in state")
 	}
-	if _, ok := state.KnownIDs["2abc234def"]; !ok {
+	if _, ok := state.KnownIDs["1abc234def"]; !ok {
 		t.Fatalf("expected available track id in state, got %+v", state.KnownIDs)
 	}
 }
@@ -2061,12 +2159,12 @@ func TestSyncerSoundCloudFreeDLOldestFirstReversesBrowserHandoffOrder(t *testing
 		t.Fatalf("expected successful source run, got %+v", result)
 	}
 	wantOpened := []string{
-		"https://hypeddit.com/pichi/111",
-		"https://hypeddit.com/pichi/222",
 		"https://hypeddit.com/pichi/333",
+		"https://hypeddit.com/pichi/222",
+		"https://hypeddit.com/pichi/111",
 	}
 	if !reflect.DeepEqual(openedURLs, wantOpened) {
-		t.Fatalf("expected newest_first browser handoff order %v, got %v", wantOpened, openedURLs)
+		t.Fatalf("expected oldest_first browser handoff order %v, got %v", wantOpened, openedURLs)
 	}
 }
 

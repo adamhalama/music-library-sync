@@ -1,8 +1,10 @@
 # `udl agent` Protocol
 
-Protocol version 1 is JSON-RPC 2.0 over newline-delimited JSON. Each stdin or
+Protocol version 2 is JSON-RPC 2.0 over newline-delimited JSON. Each stdin or
 stdout line is one complete JSON object. Protocol stdout never contains logs,
-prompts, progress bars, or adapter output; those belong on stderr.
+prompts, progress bars, or adapter output. Raw adapter output is retained only
+in bounded runner tails and persisted failure diagnostics; it is not duplicated
+onto agent stderr.
 
 ## Framing and compatibility
 
@@ -11,7 +13,7 @@ prompts, progress bars, or adapter output; those belong on stderr.
 - Request IDs may be JSON strings or numbers. `null`, arrays, and objects are
   invalid IDs. Server-originated IDs use opaque `s-<number>` strings.
 - Unknown object fields are ignored. Additive fields are compatible within
-  protocol version 1.
+  protocol version 2.
 - A breaking field, method, or semantic change requires a new negotiated
   protocol version.
 - Responses may arrive out of order. Callers correlate them by ID.
@@ -43,7 +45,7 @@ Spotify secrets, SoundCloud client IDs, tokens, and authorization headers.
 ## Lifecycle
 
 The first application request is `session.initialize`, which negotiates
-protocol version 1 and returns the supported method inventory. Long-running
+protocol version 2 and returns the supported method inventory. Long-running
 methods return a `runId`; every accepted run emits exactly one `run.finished`
 notification. `session.shutdown` cancels active runs and closes cleanly.
 
@@ -54,13 +56,13 @@ interaction reply.
 
 ## Session and method inventory
 
-`session.initialize` takes `{"protocol_version":1}`. Its result contains
+`session.initialize` takes `{"protocol_version":2}`. Its result contains
 `protocol_version`, `build`, the complete `methods` array, `working_dir`,
 `config_paths`, `feature_config_paths`, and transport `capabilities`.
 `session.shutdown` takes no params and returns `{"shutdown":true}` after all
 active runs have been canceled.
 
-Protocol v1 exposes 37 methods:
+Protocol v2 exposes 37 methods:
 
 | Group | Methods |
 | --- | --- |
@@ -137,7 +139,8 @@ rows in error `data`.
 
 | Message | Direction | Payload |
 | --- | --- | --- |
-| `sync.event` | server → client | `run_id`, original engine `event`, source run-state snapshot, structured progress |
+| `sync.event` | server → client | Lossless `run_id`, lifecycle/outcome/failure engine `event`, and full source run-state snapshot |
+| `sync.progress` | server → client | Latest-only `run_id`, `source_id`, structured progress snapshot, and optional fully resolved changed row |
 | `freedl.planEvent` | server → client | `run_id`, event kind/stage/status/detail, optional row/plan/error and counters |
 | `run.finished` | server → client | `run_id`, optional `result` or `error`, and `exit_code` |
 | `ui.confirm` | server → client request | run/source context, prompt, default |
@@ -147,3 +150,11 @@ rows in error `data`.
 Exit codes preserve the CLI contract: success `0`, runtime failure `1`,
 invalid usage `2`, invalid config `3`, missing dependency `4`, partial success
 `5`, and interruption `130`.
+
+`track_progress` engine events are coalesced into `sync.progress` at a minimum
+100 ms interval per run. The newest pending percentage replaces older pending
+percentages. Pending progress is flushed before lifecycle/outcome/terminal
+notifications and emitter shutdown without bypassing that 100 ms clock, while
+`sync.event` and `run.finished` are never coalesced. Clients should buffer only
+the newest `sync.progress` frame and keep lossless buffering for every other
+notification.

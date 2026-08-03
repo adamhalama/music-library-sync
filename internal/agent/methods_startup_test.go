@@ -69,7 +69,7 @@ func TestStartupAndSourceCapabilitiesMatchApplicationRules(t *testing.T) {
 	if !got.SupportsPlan || !got.SupportsDownloadOrder || got.SupportsPlanWindow {
 		t.Fatalf("SoundCloud capabilities drifted from engine rules: %+v", got)
 	}
-	if got.DefaultPlanWindow != engine.PlanWindowFirst || got.DefaultDownloadOrder != engine.DownloadOrderNewestFirst {
+	if got.DefaultPlanWindow != engine.PlanWindowFirst || got.DefaultDownloadOrder != engine.DefaultDownloadOrder {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }

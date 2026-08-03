@@ -9,7 +9,7 @@ import (
 )
 
 func TestScriptedFullSyncProtocolFixture(t *testing.T) {
-	file, err := os.Open("testdata/sync_full_run_v1.ndjson")
+	file, err := os.Open("testdata/sync_full_run_v2.ndjson")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestScriptedFullSyncProtocolFixture(t *testing.T) {
 				t.Fatal("confirmation arrived before final selection")
 			}
 			sawConfirmation = true
-		case "sync.event":
+		case "sync.event", "sync.progress":
 			if !sawConfirmation {
 				t.Fatal("execution event arrived before confirmation")
 			}
@@ -94,7 +94,7 @@ func TestScriptedFullSyncProtocolFixture(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if lines != 14 {
+	if lines != 15 {
 		t.Fatalf("unexpected fixture length: %d", lines)
 	}
 	if !sawRebuildReply || !sawFinalSelection || !sawConfirmation || !sawExecution {
@@ -106,7 +106,7 @@ func TestScriptedFullSyncProtocolFixture(t *testing.T) {
 	joined := strings.Join(methods, ",")
 	for _, required := range []string{
 		"session.initialize", "sync.start", "ui.selectRows", "ui.confirm",
-		"sync.event", "run.finished", "session.shutdown",
+		"sync.event", "sync.progress", "run.finished", "session.shutdown",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("fixture missing %s: %s", required, joined)

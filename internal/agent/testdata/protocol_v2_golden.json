@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "methods": [
     "session.initialize",
     "session.shutdown",
@@ -43,8 +43,8 @@
     {
       "group": "session",
       "method": "session.initialize",
-      "request": {"protocol_version": 1},
-      "response": {"protocol_version": 1}
+      "request": {"protocol_version": 2},
+      "response": {"protocol_version": 2}
     },
     {
       "group": "runs",

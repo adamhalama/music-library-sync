@@ -77,6 +77,12 @@ This writes an ad-hoc-signed, current-architecture app to
 [the macOS app release guide](docs/release-macos-app.md) for Spotlight
 installation and the optional full-Xcode workflow.
 
+Build, install, and register the development app with Spotlight:
+
+```bash
+make app-dev-install
+```
+
 Legacy script install (optional during migration):
 
 ```bash

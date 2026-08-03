@@ -287,6 +287,27 @@ enum UIRequestKind: String, Codable, Sendable {
     case confirm = "ui.confirm"
     case input = "ui.input"
     case selectRows = "ui.selectRows"
+
+    /// A cancellation must answer the backend's blocked request with the exact
+    /// shape each prompt decoder expects. Keeping the mapping on the wire kind
+    /// makes all prompt types independently testable and prevents a new prompt
+    /// from accidentally becoming non-cancelable.
+    var canceledResult: JSONValue {
+        switch self {
+        case .confirm:
+            .object(["confirmed": .bool(false), "canceled": .bool(true)])
+        case .input:
+            .object(["value": .string(""), "canceled": .bool(true)])
+        case .selectRows:
+            .object([
+                "selected_indices": .array([]),
+                "download_order": .string("oldest_first"),
+                "canceled": .bool(true),
+                "rebuild": .bool(false),
+                "plan_window": .string("first"),
+            ])
+        }
+    }
 }
 
 struct UIRequest: Sendable {

@@ -68,7 +68,7 @@ func (s *Server) sourceCapabilities() (any, *RPCError) {
 			SupportsPlanWindow:    engine.SupportsPlanWindow(source),
 			SupportsDownloadOrder: engine.SupportsDownloadOrder(source),
 			DefaultPlanWindow:     engine.DefaultPlanWindowForSource(source),
-			DefaultDownloadOrder:  engine.DownloadOrderNewestFirst,
+			DefaultDownloadOrder:  engine.DefaultDownloadOrder,
 		})
 	}
 	return map[string]any{"sources": capabilities}, nil

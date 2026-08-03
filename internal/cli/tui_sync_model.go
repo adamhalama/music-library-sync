@@ -982,16 +982,16 @@ func (m *tuiSyncModel) toggleInteractiveDownloadOrder(sourceID string) {
 func (m tuiSyncModel) downloadOrderForSourceID(sourceID string) engine.DownloadOrder {
 	sourceID = strings.TrimSpace(sourceID)
 	if sourceID == "" {
-		return engine.DownloadOrderNewestFirst
+		return engine.DefaultDownloadOrder
 	}
 	if order, ok := m.interactiveOrders[sourceID]; ok {
 		return engine.NormalizeDownloadOrder(order)
 	}
 	source, ok := m.interactiveSourceByID(sourceID)
 	if ok && m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
-		return engine.DownloadOrderOldestFirst
+		return engine.DefaultDownloadOrder
 	}
-	return engine.DownloadOrderNewestFirst
+	return engine.DefaultDownloadOrder
 }
 
 func (m tuiSyncModel) currentInteractiveSourceSupportsDownloadOrder() bool {

@@ -19,7 +19,7 @@ func (NoopInteraction) Input(prompt string) (string, error) {
 }
 
 func (NoopInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engine.PlanSelectionResult, error) {
-	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DownloadOrderNewestFirst)
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, engine.DefaultSelectedPlanIndices(rows), engine.DefaultDownloadOrder)
 	if err != nil {
 		return engine.PlanSelectionResult{}, err
 	}
