@@ -112,7 +112,7 @@ func ValidateSnapshot(snapshot Snapshot) error {
 	if strings.TrimSpace(snapshot.Name) == "" {
 		return errors.New("snapshot name must not be empty")
 	}
-	if snapshot.Provider != ProviderAppleMusic {
+	if !SupportedProvider(snapshot.Provider) {
 		return fmt.Errorf("snapshot provider %q is unsupported", snapshot.Provider)
 	}
 	if snapshot.RefreshedAt.IsZero() {

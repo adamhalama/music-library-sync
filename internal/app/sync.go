@@ -7,6 +7,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/output"
 )
 
@@ -30,9 +31,22 @@ type SyncUseCase struct {
 	Registry map[string]engine.Adapter
 	Runner   engine.ExecRunner
 	Emitter  output.EventEmitter
+	// NavidromeOptions selects the phone-library config the post-sync scan
+	// hook reads. The zero value uses normal discovery.
+	NavidromeOptions navidrome.ManagerOptions
+	// NavidromeScanner overrides the post-sync scan request in tests.
+	NavidromeScanner NavidromeScanner
 }
 
 func (u SyncUseCase) Run(ctx context.Context, cfg config.Config, req SyncRequest, interaction Interaction) (engine.SyncResult, error) {
+	result, err := u.run(ctx, cfg, req, interaction)
+	// The optional phone server never changes the download result: the hook
+	// returns warnings, not errors, and runs after the result is already final.
+	RequestNavidromeScan(ctx, req, result, err, u.NavidromeOptions, u.NavidromeScanner, u.Emitter)
+	return result, err
+}
+
+func (u SyncUseCase) run(ctx context.Context, cfg config.Config, req SyncRequest, interaction Interaction) (engine.SyncResult, error) {
 	if interaction == nil {
 		interaction = NoopInteraction{}
 	}

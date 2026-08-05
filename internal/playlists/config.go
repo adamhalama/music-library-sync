@@ -16,6 +16,7 @@ import (
 const (
 	ConfigVersion      = 1
 	ProviderAppleMusic = "apple_music"
+	ProviderNavidrome  = "navidrome"
 	EnvConfigPath      = "UDL_PLAYLISTS_CONFIG"
 	ProjectConfigName  = "udl.playlists.yaml"
 )
@@ -95,7 +96,7 @@ func Validate(cfg Config) error {
 		if playlist.Name == "" {
 			problems = append(problems, fmt.Sprintf("playlist %q name must not be empty", playlist.ID))
 		}
-		if playlist.Provider != ProviderAppleMusic {
+		if !SupportedProvider(playlist.Provider) {
 			problems = append(problems, fmt.Sprintf("playlist %q provider %q is unsupported", playlist.ID, playlist.Provider))
 		}
 		if playlist.ProviderPlaylist == "" && playlist.ProviderPlaylistID == "" {
@@ -106,6 +107,18 @@ func Validate(cfg Config) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// SupportedProvider reports whether a provider can back a definition. Adding
+// navidrome here must not invalidate existing apple_music snapshots, so the
+// snapshot shape and checksum inputs stay unchanged.
+func SupportedProvider(provider string) bool {
+	switch provider {
+	case ProviderAppleMusic, ProviderNavidrome:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c Config) Definition(id string) (Definition, bool) {

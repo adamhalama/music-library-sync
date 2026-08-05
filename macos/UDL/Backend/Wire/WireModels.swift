@@ -103,6 +103,21 @@ enum AgentMethod: String, Codable, CaseIterable, Sendable {
     case rekordboxInspect = "rekordbox.inspect"
     case rekordboxPlan = "rekordbox.plan"
     case rekordboxApply = "rekordbox.apply"
+    case navidromeConfigRead = "navidrome.config.read"
+    case navidromeConfigWrite = "navidrome.config.write"
+    case navidromeDepsStatus = "navidrome.deps.status"
+    case navidromeDepsEnsure = "navidrome.deps.ensure"
+    case navidromeStatus = "navidrome.status"
+    case navidromeServiceControl = "navidrome.service.control"
+    case navidromeSetupPlan = "navidrome.setup.plan"
+    case navidromeSetupApply = "navidrome.setup.apply"
+    case navidromePlaylistsRefresh = "navidrome.playlists.refresh"
+    case navidromePlaylistsDeriveGenres = "navidrome.playlists.deriveGenres"
+    case navidromePlaylistsSaveGenres = "navidrome.playlists.saveGenres"
+    case navidromeFavoritesPlan = "navidrome.favorites.plan"
+    case navidromeFavoritesApply = "navidrome.favorites.apply"
+    case navidromeFavoritesList = "navidrome.favorites.list"
+    case navidromeBackupCreate = "navidrome.backup.create"
 }
 
 struct EmptyParams: Codable, Sendable {}
@@ -193,6 +208,7 @@ enum CredentialKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case soundCloudClientID = "soundcloud_client_id"
     case deemixARL = "deemix_arl"
     case spotifyApp = "spotify_app"
+    case navidromePassword = "navidrome_password"
     var id: String { rawValue }
 }
 

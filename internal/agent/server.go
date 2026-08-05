@@ -34,6 +34,7 @@ type Server struct {
 	FreeDLConfigPath    string
 	PlaylistsConfigPath string
 	RekordboxConfigPath string
+	NavidromeConfigPath string
 	ErrOut              io.Writer
 	SyncRegistry        map[string]engine.Adapter
 	SyncRunner          engine.ExecRunner
@@ -105,6 +106,21 @@ var protocolMethods = []string{
 	"rekordbox.inspect",
 	"rekordbox.plan",
 	"rekordbox.apply",
+	"navidrome.config.read",
+	"navidrome.config.write",
+	"navidrome.deps.status",
+	"navidrome.deps.ensure",
+	"navidrome.status",
+	"navidrome.service.control",
+	"navidrome.setup.plan",
+	"navidrome.setup.apply",
+	"navidrome.playlists.refresh",
+	"navidrome.playlists.deriveGenres",
+	"navidrome.playlists.saveGenres",
+	"navidrome.favorites.plan",
+	"navidrome.favorites.apply",
+	"navidrome.favorites.list",
+	"navidrome.backup.create",
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -203,6 +219,36 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *RPCError) 
 		return s.buildFreeDLPromotionPlan(params)
 	case "freedl.promote.apply":
 		return s.applyFreeDLPromotion(params)
+	case "navidrome.config.read":
+		return s.readNavidromeConfig()
+	case "navidrome.config.write":
+		return s.writeNavidromeConfig(params)
+	case "navidrome.deps.status":
+		return s.navidromeDepsStatus()
+	case "navidrome.deps.ensure":
+		return s.ensureNavidromeDeps(params)
+	case "navidrome.status":
+		return s.navidromeStatus()
+	case "navidrome.service.control":
+		return s.navidromeServiceControl(params)
+	case "navidrome.setup.plan":
+		return s.navidromeSetupPlan()
+	case "navidrome.setup.apply":
+		return s.navidromeSetupApply(params)
+	case "navidrome.playlists.refresh":
+		return s.navidromePlaylistsRefresh()
+	case "navidrome.playlists.deriveGenres":
+		return s.navidromeDeriveGenres()
+	case "navidrome.playlists.saveGenres":
+		return s.navidromeSaveGenres(params)
+	case "navidrome.favorites.plan":
+		return s.navidromeFavoritesPlan()
+	case "navidrome.favorites.apply":
+		return s.navidromeFavoritesApply(params)
+	case "navidrome.favorites.list":
+		return s.navidromeFavoritesList()
+	case "navidrome.backup.create":
+		return s.navidromeBackupCreate()
 	case "rekordbox.config.read":
 		return s.readRekordboxConfig()
 	case "rekordbox.config.write":
@@ -247,6 +293,18 @@ type runFinishedParams struct {
 	Result   any    `json:"result,omitempty"`
 	Error    string `json:"error,omitempty"`
 	ExitCode int    `json:"exit_code"`
+}
+
+// RunContext is the server-scoped context used by synchronous methods that do
+// not start a run.
+func (s *Server) RunContext() context.Context {
+	s.mu.Lock()
+	parent := s.runContext
+	s.mu.Unlock()
+	if parent == nil {
+		return context.Background()
+	}
+	return parent
 }
 
 func (s *Server) StartRun(work RunWork) (string, error) {

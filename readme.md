@@ -25,6 +25,7 @@ Runtime tools:
 - SoundCloud sync requires external `scdl` + `yt-dlp`
 - Spotify still relies on external `deemix` or `spotdl` plus credentials
 - Rekordbox sync uses a private Python environment managed by `udl rekordbox deps`; Homebrew supplies `python@3.12`
+- The Navidrome phone library needs `navidrome` **and `ffmpeg`**. Without ffmpeg every format a client will not take raw (m4a, wav, flac) fails to stream or download with `Internal Server Error: invalid argument`; only mp3 plays. `udl navidrome status` reports it on the `Transcoder:` line
 
 Dependency policy:
 - Homebrew installs `udl` with `python@3.12`, `scdl`, and `yt-dlp` as formula dependencies.
@@ -146,6 +147,7 @@ Global flags:
 - `--freedl-config <path>` (SoundCloud Free DL feature config; also `UDL_FREEDL_CONFIG`)
 - `--playlists-config <path>` (standalone playlist config; also `UDL_PLAYLISTS_CONFIG`)
 - `--rekordbox-config <path>` (Rekordbox sync config; also `UDL_REKORDBOX_CONFIG`)
+- `--navidrome-config <path>` (Navidrome phone-library config; also `UDL_NAVIDROME_CONFIG`)
 - `--json`
 - `-q, --quiet`
 - `-v, --verbose`
@@ -182,6 +184,36 @@ Global flags:
 - `udl playlist config path|show`: inspect the selected standalone playlist configuration.
 - Opening the TUI playlist screen is cache-only. Failed or canceled refreshes preserve the last valid checksummed snapshot.
 - Snapshot comparison counts duplicate track occurrences, so repeated playlist items are not collapsed.
+
+`navidrome` commands (macOS only; serves `~/Music/downloaded` to Amperfy on the
+home network):
+
+- `udl navidrome config path|show`: inspect the selected Navidrome feature configuration. The account password is never part of it.
+- `udl navidrome deps status`: report Homebrew and Navidrome availability without changing anything.
+- `udl navidrome deps ensure --confirm`: install or upgrade Navidrome through Homebrew. Refuses without `--confirm`.
+- `udl navidrome status`: report dependency, service, account, library, playlist, and backup state.
+- `udl navidrome setup plan [--plan-file <path>]`: build a checksummed plan of every file and service change. Writes nothing.
+- `udl navidrome setup apply --plan-file <path>`: revalidate the plan and apply it. Refuses to overwrite any file that is not UDL-managed.
+- `udl navidrome playlists refresh`: regenerate the managed `.nsp` files and ask Navidrome to re-import them.
+- `udl navidrome playlists derive-genres`: preview the HARD BOUNCE genre allowlist derived from the Apple Music playlist.
+- `udl navidrome playlists save-genres --genre <name> ...`: persist an approved allowlist and rewrite the playlists.
+- `udl navidrome favorites import plan [--plan-file <path>]`: classify every Apple Music favorite. Apple Music is only read.
+- `udl navidrome favorites import apply --plan-file <path>`: back up the database, star exact path matches, and verify parity.
+- `udl navidrome backup create` / `list`: manage Navidrome database backups.
+- v1 is trusted-LAN HTTP only. Never port-forward the Navidrome port.
+- `udl navidrome dates reconcile`: rewrite Navidrome's Date Added from each
+  file's recorded APFS creation time. Verified against 0.63.2, `dateadded` is
+  otherwise when the scanner first saw the file, so an imported back catalogue
+  sorts in scan order. The reconcile fixes both the managed smart playlists and
+  a client's own "Date Added" sort, takes a database backup first, is
+  idempotent, survives quick and full rescans, and is safe to run while the
+  server is running. Re-run it after adding a batch of older files.
+- The managed playlists directory must not be hidden. Navidrome skips hidden
+  folders silently, so a `.`-prefixed `playlists_path` imports nothing; UDL
+  refuses one.
+- Genre matching is case-sensitive, so the derived allowlist keeps every
+  distinct spelling (`Hard Bounce` and `HARD BOUNCE` are two entries).
+- The account password lives only in macOS Keychain. It never appears in configuration, plans, logs, or command arguments.
 
 `rekordbox` commands:
 

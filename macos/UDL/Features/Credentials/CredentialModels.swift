@@ -22,6 +22,11 @@ func credentialApplies(_ kind: CredentialKind, to source: SourceCapability) -> B
         source.sourceType == "soundcloud" && source.adapter.hasPrefix("scdl")
     case .deemixARL, .spotifyApp:
         source.sourceType == "spotify" && source.adapter == "deemix"
+    case .navidromePassword:
+        // No sync source consumes it. It is used by the Phone Library
+        // workflow, so the "Used by" column correctly says nothing here rather
+        // than naming a source that does not read it.
+        false
     }
 }
 
@@ -71,6 +76,7 @@ extension CredentialStatus {
         case .soundCloudClientID: ["SCDL_CLIENT_ID"]
         case .deemixARL: ["UDL_DEEMIX_ARL"]
         case .spotifyApp: ["UDL_SPOTIFY_CLIENT_ID", "UDL_SPOTIFY_CLIENT_SECRET"]
+        case .navidromePassword: ["UDL_NAVIDROME_PASSWORD"]
         }
     }
 }

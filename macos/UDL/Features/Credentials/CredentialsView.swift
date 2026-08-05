@@ -393,6 +393,7 @@ private struct CredentialEditor: View {
         case .soundCloudClientID: "SoundCloud client ID"
         case .deemixARL: "Deezer ARL"
         case .spotifyApp: "Spotify application credentials"
+        case .navidromePassword: "Navidrome account password"
         }
     }
 

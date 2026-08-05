@@ -17,6 +17,7 @@ const (
 	CredentialKindSoundCloudClientID CredentialKind = "soundcloud_client_id"
 	CredentialKindDeemixARL          CredentialKind = "deemix_arl"
 	CredentialKindSpotifyApp         CredentialKind = "spotify_app"
+	CredentialKindNavidromePassword  CredentialKind = "navidrome_password"
 )
 
 type CredentialStorageSource string

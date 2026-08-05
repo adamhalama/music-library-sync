@@ -19,6 +19,7 @@ type GlobalOptions struct {
 	FreeDLConfigPath    string
 	RekordboxConfigPath string
 	PlaylistsConfigPath string
+	NavidromeConfigPath string
 	JSON                bool
 	Quiet               bool
 	Verbose             bool

@@ -72,8 +72,12 @@ func (p AppleMusicProvider) Read(ctx context.Context, definition Definition) (Pr
 }
 
 type Service struct {
+	// Provider, when set, overrides provider selection entirely. Tests use it;
+	// production code lets the definition's provider decide.
 	Provider Provider
-	Now      func() time.Time
+	// ProviderFactory overrides how a named provider is constructed.
+	ProviderFactory func(provider string) (Provider, error)
+	Now             func() time.Time
 }
 
 type RefreshResult struct {
@@ -83,10 +87,11 @@ type RefreshResult struct {
 }
 
 func (s Service) ListProviderPlaylists(ctx context.Context, provider string) ([]ProviderPlaylist, error) {
-	if provider != ProviderAppleMusic {
-		return nil, fmt.Errorf("playlist provider %q is unsupported", provider)
+	selected, err := s.providerFor(provider)
+	if err != nil {
+		return nil, err
 	}
-	return s.provider().List(ctx)
+	return selected.List(ctx)
 }
 
 func (s Service) Refresh(ctx context.Context, main config.Config, definition Definition) (RefreshResult, error) {
@@ -96,7 +101,11 @@ func (s Service) Refresh(ctx context.Context, main config.Config, definition Def
 	if err := ctx.Err(); err != nil {
 		return RefreshResult{}, err
 	}
-	providerPlaylist, tracks, err := s.provider().Read(ctx, definition)
+	selected, err := s.providerFor(definition.Provider)
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	providerPlaylist, tracks, err := selected.Read(ctx, definition)
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh playlist %q: %w", definition.Name, err)
 	}
@@ -124,11 +133,21 @@ func (s Service) Refresh(ctx context.Context, main config.Config, definition Def
 	return RefreshResult{Snapshot: saved, Changes: changes, Path: path}, nil
 }
 
-func (s Service) provider() Provider {
+func (s Service) providerFor(provider string) (Provider, error) {
 	if s.Provider != nil {
-		return s.Provider
+		return s.Provider, nil
 	}
-	return AppleMusicProvider{}
+	if s.ProviderFactory != nil {
+		return s.ProviderFactory(provider)
+	}
+	switch provider {
+	case ProviderAppleMusic:
+		return AppleMusicProvider{}, nil
+	case ProviderNavidrome:
+		return NewNavidromeProvider()
+	default:
+		return nil, fmt.Errorf("playlist provider %q is unsupported", provider)
+	}
 }
 
 func (s Service) now() time.Time {

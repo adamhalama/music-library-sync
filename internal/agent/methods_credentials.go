@@ -13,27 +13,33 @@ type CredentialOperations struct {
 	InspectSoundCloud func(string) auth.CredentialStatus
 	InspectDeemix     func(string) auth.CredentialStatus
 	InspectSpotify    func(string) auth.CredentialStatus
+	InspectNavidrome  func(string) auth.CredentialStatus
 	SaveSoundCloud    func(string) error
 	SaveDeemix        func(string) error
 	SaveSpotify       func(auth.SpotifyCredentials) error
+	SaveNavidrome     func(string) error
 	ClearSoundCloud   func() error
 	ClearDeemix       func() error
 	ClearSpotify      func() error
+	ClearNavidrome    func() error
 	ClearFailure      func(string, auth.CredentialKind) error
 }
 
 func defaultCredentialOperations() *CredentialOperations {
 	return &CredentialOperations{
 		InspectSoundCloud: auth.InspectSoundCloudClientID,
-		InspectDeemix: auth.InspectDeemixARL,
-		InspectSpotify: auth.InspectSpotifyCredentials,
-		SaveSoundCloud: auth.SaveSoundCloudClientID,
-		SaveDeemix: auth.SaveDeemixARL,
-		SaveSpotify: auth.SaveSpotifyCredentials,
-		ClearSoundCloud: auth.RemoveSoundCloudClientID,
-		ClearDeemix: auth.RemoveDeemixARL,
-		ClearSpotify: auth.RemoveSpotifyCredentials,
-		ClearFailure: auth.ClearCredentialFailure,
+		InspectDeemix:     auth.InspectDeemixARL,
+		InspectSpotify:    auth.InspectSpotifyCredentials,
+		InspectNavidrome:  auth.InspectNavidromePassword,
+		SaveSoundCloud:    auth.SaveSoundCloudClientID,
+		SaveDeemix:        auth.SaveDeemixARL,
+		SaveSpotify:       auth.SaveSpotifyCredentials,
+		SaveNavidrome:     auth.SaveNavidromePassword,
+		ClearSoundCloud:   auth.RemoveSoundCloudClientID,
+		ClearDeemix:       auth.RemoveDeemixARL,
+		ClearSpotify:      auth.RemoveSpotifyCredentials,
+		ClearNavidrome:    auth.RemoveNavidromePassword,
+		ClearFailure:      auth.ClearCredentialFailure,
 	}
 }
 
@@ -61,10 +67,16 @@ func (s *Server) listCredentials() (any, *RPCError) {
 		return nil, rpcErr
 	}
 	ops := s.credentialOperations()
-	statuses := []auth.CredentialStatus{
-		ops.InspectSoundCloud(stateDir),
-		ops.InspectDeemix(stateDir),
-		ops.InspectSpotify(stateDir),
+	// An inspector may be unset when a caller supplies a partial
+	// CredentialOperations; skip it rather than panicking on the whole list.
+	statuses := []auth.CredentialStatus{}
+	for _, inspect := range []func(string) auth.CredentialStatus{
+		ops.InspectSoundCloud, ops.InspectDeemix, ops.InspectSpotify, ops.InspectNavidrome,
+	} {
+		if inspect == nil {
+			continue
+		}
+		statuses = append(statuses, inspect(stateDir))
 	}
 	result := make([]credentialStatusResult, 0, len(statuses))
 	for _, status := range statuses {
@@ -101,6 +113,11 @@ func (s *Server) saveCredential(params json.RawMessage) (any, *RPCError) {
 			return nil, credentialInputError(request.Kind)
 		}
 		err = ops.SaveSpotify(auth.SpotifyCredentials{ClientID: request.ClientID, ClientSecret: request.ClientSecret})
+	case auth.CredentialKindNavidromePassword:
+		if strings.TrimSpace(request.Value) == "" {
+			return nil, credentialInputError(request.Kind)
+		}
+		err = ops.SaveNavidrome(request.Value)
 	default:
 		return nil, NewRPCError(CodeInvalidParams, "unsupported credential kind", map[string]any{"kind": request.Kind})
 	}
@@ -127,6 +144,8 @@ func (s *Server) clearCredential(params json.RawMessage) (any, *RPCError) {
 		err = ops.ClearDeemix()
 	case auth.CredentialKindSpotifyApp:
 		err = ops.ClearSpotify()
+	case auth.CredentialKindNavidromePassword:
+		err = ops.ClearNavidrome()
 	default:
 		return nil, NewRPCError(CodeInvalidParams, "unsupported credential kind", map[string]any{"kind": request.Kind})
 	}

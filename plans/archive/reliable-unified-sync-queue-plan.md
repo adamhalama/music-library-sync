@@ -3,8 +3,9 @@
 - **Status:** Done
 - **Target:** Sync planning, execution, cancellation, and progress reporting across the Go engine, agent protocol, CLI/TUI, and native macOS app
 - **Last updated:** 2026-08-03
-- **Implementation tracker:** [IMPLEMENTATION.md](./IMPLEMENTATION.md)
-- **Predecessor:** [plans/archive/gui-redesign-plan.md](./plans/archive/gui-redesign-plan.md)
+- **Implementation tracker:**
+  [reliable-unified-sync-queue-implementation.md](./reliable-unified-sync-queue-implementation.md)
+- **Predecessor:** [gui-redesign-plan.md](./gui-redesign-plan.md)
 
 ## Purpose
 
@@ -163,5 +164,6 @@ The initiative is complete when:
 - completed-track state survives cancellation exactly as before;
 - Go race tests, Swift tests, protocol fixtures, and manual native-app checks all
   pass; and
-- [IMPLEMENTATION.md](./IMPLEMENTATION.md) records the final evidence and every
+- [reliable-unified-sync-queue-implementation.md](./reliable-unified-sync-queue-implementation.md)
+  records the final evidence and every
   deviation from this plan.

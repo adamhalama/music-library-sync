@@ -11,6 +11,7 @@ final class AppState: ObservableObject {
         case freeDL = "SoundCloud Free DL"
         case rekordbox = "Rekordbox Sync"
         case playlists = "Playlists"
+        case phoneLibrary = "Phone Library"
         case doctor = "Check System"
         case credentials = "Credentials"
         case config = "Advanced Config"
@@ -27,6 +28,7 @@ final class AppState: ObservableObject {
         var rekordboxBlockers = 0
         var freeDLSelectable = 0
         var playlistsWithoutSnapshot = 0
+        var phoneLibraryRemainingSteps = 0
         var configProblems = 0
         var syncNeedsYou = false
         var syncActive = false
@@ -197,6 +199,25 @@ final class AppState: ObservableObject {
     /// reports no process state and no checksum state before an attempt, so
     /// this is only ever set from a real backend refusal, never guessed.
     @Published private(set) var rekordboxObstacle: RekordboxObstacle?
+    // The Phone Library workflow lives in AppState+PhoneLibrary.swift, so its
+    // state cannot be `private(set)`: Swift scopes that to the declaring file.
+    // Nothing outside that extension writes them.
+    @Published var navidromeConfig: NavidromeConfigResult?
+    @Published var navidromeStatus: NavidromeStatus?
+    @Published var navidromeSetupPlan: NavidromeSetupPlanPresentation?
+    @Published var navidromeFavoritePlan: NavidromeFavoritePlanPresentation?
+    @Published var navidromeFavoriteResult: NavidromeFavoriteApplyResult?
+    /// What the server has starred right now. Read on demand — the return path
+    /// is an explicit action, never a side effect of loading a screen.
+    @Published var navidromeStarred: NavidromeStarredListResult?
+    @Published var navidromeGenreDerivation: NavidromeGenreDerivation?
+    /// Per-genre approval for the derived HARD BOUNCE allowlist. The derivation
+    /// is evidence; the user removes rather than re-adds.
+    @Published var navidromeGenreApproval: [String: Bool] = [:]
+    @Published var navidromePlaylistRefresh: NavidromePlaylistRefreshResult?
+    @Published var phoneLibraryOperation: PhoneLibraryOperation?
+    @Published var phoneLibraryRunID: String?
+    @Published var phoneLibraryStatus: WorkflowStatus?
     @Published private(set) var onboarding: OnboardingResult?
     @Published private(set) var startupAttention: StartupAttentionResult?
     @Published private(set) var configFile: ConfigFileResult?
@@ -205,7 +226,9 @@ final class AppState: ObservableObject {
     /// C14 — set only by a real `-32003` refusal from `config.writeFile`.
     @Published private(set) var configConflict: ConfigConflict?
 
-    private var client: UDLClient?
+    /// Internal rather than private because the Phone Library workflow is an
+    /// extension in another file.
+    private(set) var client: UDLClient?
     private var notificationTask: Task<Void, Never>?
     private var progressNotificationTask: Task<Void, Never>?
     private var promptTask: Task<Void, Never>?
@@ -241,6 +264,9 @@ final class AppState: ObservableObject {
         value.freeDLSelectable = freeDLRows.filter(\.selectable).count
         value.playlistsWithoutSnapshot = playlists.filter { $0.snapshot == nil || $0.snapshotError != nil }.count
         value.configProblems = configProblems.count
+        // Only badge Phone Library once its state has actually been read;
+        // before that the count would be an invented number of steps.
+        value.phoneLibraryRemainingSteps = navidromeStatus == nil ? 0 : phoneLibraryProgress.remaining
         value.syncActive = syncRun.phase.isActive
         value.syncNeedsYou = pendingPrompt != nil
         if let progress = syncRun.progress?.progress.global {
@@ -1351,6 +1377,9 @@ final class AppState: ObservableObject {
             freeDLStage = nil
             freeDLStatus = "Backend connection ended. No Free DL step was resumed or replayed."
         }
+        if interruptPhoneLibrary() {
+            interrupted.append(.phoneLibrary)
+        }
         if rekordboxOperation != nil || rekordboxRunID != nil {
             interrupted.append(.rekordbox)
             rekordboxOperation = nil
@@ -1412,6 +1441,7 @@ final class AppState: ObservableObject {
         rekordboxStatus = nil
         rekordboxApplyBlockers = []
         rekordboxObstacle = nil
+        clearPhoneLibrarySession()
         onboarding = nil
         startupAttention = nil
         configFile = nil
@@ -1449,6 +1479,11 @@ final class AppState: ObservableObject {
             applyRekordboxFinished(finished)
             return
         }
+        if finished.runID == phoneLibraryRunID || (phoneLibraryRunID == nil && phoneLibraryOperation != nil) {
+            phoneLibraryRunID = finished.runID
+            applyPhoneLibraryFinished(finished)
+            return
+        }
         guard let operation = playlistOperations.removeValue(forKey: finished.runID) else {
             // Long-running methods may finish before their start response is
             // delivered. Hold the terminal frame until its operation registers.
@@ -1458,7 +1493,8 @@ final class AppState: ObservableObject {
         applyPlaylistFinished(finished, operation: operation)
     }
 
-    private func consumeBufferedFinished(_ runID: String) {
+    /// Internal because the Phone Library workflow lives in another file.
+    func consumeBufferedFinished(_ runID: String) {
         guard let finished = bufferedFinished.removeValue(forKey: runID) else { return }
         if let operation = playlistOperations.removeValue(forKey: runID) {
             applyPlaylistFinished(finished, operation: operation)
@@ -1466,12 +1502,16 @@ final class AppState: ObservableObject {
             applyFreeDLFinished(finished)
         } else if rekordboxOperation != nil {
             applyRekordboxFinished(finished)
+        } else if phoneLibraryOperation != nil {
+            applyPhoneLibraryFinished(finished)
         } else {
             bufferedFinished[runID] = finished
         }
     }
 
-    private func applyPlaylistFinished(_ finished: RunFinishedNotification, operation: PlaylistOperation) {
+    /// Internal so the failure-surfacing behaviour can be tested directly. It is
+    /// the one handler whose whole job is what it says when things go wrong.
+    func applyPlaylistFinished(_ finished: RunFinishedNotification, operation: PlaylistOperation) {
         playlistActiveRunID = nil
         switch operation {
         case .providerList:
@@ -1483,10 +1523,23 @@ final class AppState: ObservableObject {
                     message: "Loaded \(listing.playlists.count) playlists from Music.",
                     severity: .ok
                 )
-            } else {
+            } else if finished.exitCode == 130 {
                 playlistStatus = PlaylistStatus(
-                    message: "Provider listing ended without changing any snapshot.",
+                    message: "Provider listing canceled.",
                     severity: .warn,
+                    preservedPreviousSnapshot: true
+                )
+            } else {
+                // The backend already produces an actionable message — a revoked
+                // Automation grant names System Settings. Discarding it made that
+                // whole class of failure invisible.
+                playlistStatus = PlaylistStatus(
+                    message: Self.playlistFailureDetail(
+                        finished,
+                        fallback: "Provider listing failed with exit code \(finished.exitCode).",
+                        undecodable: "Provider listing returned a result the app could not read."
+                    ),
+                    severity: .error,
                     preservedPreviousSnapshot: true
                 )
             }
@@ -1502,16 +1555,38 @@ final class AppState: ObservableObject {
             } else {
                 // C11 — a failed or canceled refresh never discards the last
                 // valid snapshot, and the message says so rather than reading
-                // as a generic failure.
+                // as a generic failure. The backend's own reason leads, so the
+                // preservation guarantee reads as reassurance rather than as
+                // the entire explanation.
+                let detail = finished.exitCode == 130
+                    ? "Refresh canceled."
+                    : Self.playlistFailureDetail(
+                        finished,
+                        fallback: "Refresh failed with exit code \(finished.exitCode).",
+                        undecodable: "Refresh returned a result the app could not read."
+                    )
                 playlistStatus = PlaylistStatus(
-                    message: finished.exitCode == 130
-                        ? "Refresh canceled. The previous valid snapshot was preserved."
-                        : "Refresh failed. The previous valid snapshot was preserved.",
+                    message: "\(detail) The previous valid snapshot was preserved.",
                     severity: finished.exitCode == 130 ? .warn : .error,
                     preservedPreviousSnapshot: true
                 )
             }
         }
+    }
+
+    /// The backend message wins whenever there is one, matching how the
+    /// Rekordbox handler reports. A zero exit code that still failed to decode
+    /// is not a backend failure, so it gets its own wording instead of a
+    /// nonsensical "failed with exit code 0".
+    static func playlistFailureDetail(
+        _ finished: RunFinishedNotification,
+        fallback: String,
+        undecodable: String
+    ) -> String {
+        if let error = finished.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            return error.hasSuffix(".") || error.hasSuffix("!") || error.hasSuffix("?") ? error : error + "."
+        }
+        return finished.exitCode == 0 ? undecodable : fallback
     }
 
     private func applyFreeDLPlanEvent(_ event: FreeDLPlanEvent) {
@@ -1679,6 +1754,12 @@ final class AppState: ObservableObject {
     }
 
     private func decode<T: Decodable>(_ type: T.Type, from value: JSONValue) throws -> T {
+        try decodeWire(type, from: value)
+    }
+
+    /// Shared with the Phone Library extension, which lives in another file and
+    /// so cannot reach a private helper.
+    func decodeWire<T: Decodable>(_ type: T.Type, from value: JSONValue) throws -> T {
         try JSONDecoder.agent.decode(type, from: JSONEncoder.agent.encode(value))
     }
 }

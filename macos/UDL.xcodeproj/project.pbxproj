@@ -13,6 +13,11 @@
 		A10000000000000000000004 /* JSONRPCConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* JSONRPCConnection.swift */; };
 		A10000000000000000000005 /* AgentProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* AgentProcess.swift */; };
 		A10000000000000000000006 /* UDLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* UDLClient.swift */; };
+		A10000000000000000000101 /* PhoneLibraryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000101 /* PhoneLibraryModels.swift */; };
+		A10000000000000000000102 /* PhoneLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000102 /* PhoneLibraryView.swift */; };
+		A10000000000000000000103 /* AppState+PhoneLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000103 /* AppState+PhoneLibrary.swift */; };
+		A10000000000000000000104 /* PhoneLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000104 /* PhoneLibraryTests.swift */; };
+		A10000000000000000000201 /* PlaylistErrorSurfacingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */; };
 		A10000000000000000000007 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* AppState.swift */; };
 		A10000000000000000000009 /* PendingPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* PendingPromptView.swift */; };
 		A1000000000000000000000A /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* DoctorView.swift */; };
@@ -82,6 +87,11 @@
 		B10000000000000000000004 /* JSONRPCConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/JSONRPCConnection.swift; sourceTree = "<group>"; };
 		B10000000000000000000005 /* AgentProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/AgentProcess.swift; sourceTree = "<group>"; };
 		B10000000000000000000006 /* UDLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/UDLClient.swift; sourceTree = "<group>"; };
+		B10000000000000000000101 /* PhoneLibraryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/PhoneLibrary/PhoneLibraryModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000102 /* PhoneLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/PhoneLibrary/PhoneLibraryView.swift; sourceTree = "<group>"; };
+		B10000000000000000000103 /* AppState+PhoneLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState+PhoneLibrary.swift; sourceTree = "<group>"; };
+		B10000000000000000000104 /* PhoneLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLibraryTests.swift; sourceTree = "<group>"; };
+		B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistErrorSurfacingTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState.swift; sourceTree = "<group>"; };
 		B10000000000000000000009 /* PendingPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/PendingPromptView.swift; sourceTree = "<group>"; };
 		B1000000000000000000000A /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Doctor/DoctorView.swift; sourceTree = "<group>"; };
@@ -161,6 +171,9 @@
 				B10000000000000000000005 /* AgentProcess.swift */,
 				B10000000000000000000006 /* UDLClient.swift */,
 				B10000000000000000000007 /* AppState.swift */,
+				B10000000000000000000103 /* AppState+PhoneLibrary.swift */,
+				B10000000000000000000101 /* PhoneLibraryModels.swift */,
+				B10000000000000000000102 /* PhoneLibraryView.swift */,
 						B10000000000000000000009 /* PendingPromptView.swift */,
 				B1000000000000000000000A /* DoctorView.swift */,
 				B1000000000000000000000B /* CredentialsView.swift */,
@@ -216,6 +229,8 @@
 			children = (
 				B1000000000000000000000C /* JSONRPCConnectionTests.swift */,
 				B1000000000000000000000D /* WireModelTests.swift */,
+				B10000000000000000000104 /* PhoneLibraryTests.swift */,
+				B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */,
 				B1000000000000000000000E /* AgentProcessTests.swift */,
 			);
 			path = UDLTests;
@@ -328,6 +343,9 @@
 				A10000000000000000000005 /* AgentProcess.swift in Sources */,
 				A10000000000000000000006 /* UDLClient.swift in Sources */,
 				A10000000000000000000007 /* AppState.swift in Sources */,
+				A10000000000000000000103 /* AppState+PhoneLibrary.swift in Sources */,
+				A10000000000000000000101 /* PhoneLibraryModels.swift in Sources */,
+				A10000000000000000000102 /* PhoneLibraryView.swift in Sources */,
 				A10000000000000000000009 /* PendingPromptView.swift in Sources */,
 				A1000000000000000000000A /* DoctorView.swift in Sources */,
 				A1000000000000000000000B /* CredentialsView.swift in Sources */,
@@ -383,6 +401,8 @@
 			files = (
 				A1000000000000000000000C /* JSONRPCConnectionTests.swift in Sources */,
 				A1000000000000000000000D /* WireModelTests.swift in Sources */,
+				A10000000000000000000104 /* PhoneLibraryTests.swift in Sources */,
+				A10000000000000000000201 /* PlaylistErrorSurfacingTests.swift in Sources */,
 				A1000000000000000000000E /* AgentProcessTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

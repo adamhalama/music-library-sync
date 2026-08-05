@@ -137,4 +137,55 @@ actor UDLClient {
     func applyRekordbox(_ params: RekordboxApplyParams) async throws -> RunIDResult {
         try await connection.call(.rekordboxApply, params: params)
     }
+
+    func readNavidromeConfig() async throws -> NavidromeConfigResult {
+        try await connection.call(.navidromeConfigRead, params: EmptyParams())
+    }
+    func writeNavidromeConfig(_ config: NavidromeConfig) async throws -> NavidromeConfigResult {
+        try await connection.call(.navidromeConfigWrite, params: NavidromeConfigWriteParams(config: config))
+    }
+    func navidromeDependencyStatus() async throws -> NavidromeDependencyStatus {
+        try await connection.call(.navidromeDepsStatus, params: EmptyParams())
+    }
+    /// The confirmation is explicit in the params because this changes the
+    /// machine; the backend refuses a request that does not carry it.
+    func installNavidrome() async throws -> RunIDResult {
+        try await connection.call(.navidromeDepsEnsure, params: NavidromeEnsureParams(confirm: true))
+    }
+    func navidromeStatus() async throws -> NavidromeStatus {
+        try await connection.call(.navidromeStatus, params: EmptyParams())
+    }
+    func controlNavidromeService(_ action: String) async throws -> RunIDResult {
+        try await connection.call(.navidromeServiceControl, params: NavidromeServiceControlParams(action: action))
+    }
+    func planNavidromeSetup() async throws -> RunIDResult {
+        try await connection.call(.navidromeSetupPlan, params: EmptyParams())
+    }
+    func applyNavidromeSetup(_ params: NavidromeSetupApplyParams) async throws -> RunIDResult {
+        try await connection.call(.navidromeSetupApply, params: params)
+    }
+    func refreshNavidromePlaylists() async throws -> RunIDResult {
+        try await connection.call(.navidromePlaylistsRefresh, params: EmptyParams())
+    }
+    func deriveNavidromeGenres() async throws -> RunIDResult {
+        try await connection.call(.navidromePlaylistsDeriveGenres, params: EmptyParams())
+    }
+    func saveNavidromeGenres(_ genres: [String]) async throws -> RunIDResult {
+        try await connection.call(.navidromePlaylistsSaveGenres, params: NavidromeSaveGenresParams(genres: genres))
+    }
+    func planNavidromeFavorites() async throws -> RunIDResult {
+        try await connection.call(.navidromeFavoritesPlan, params: EmptyParams())
+    }
+    func applyNavidromeFavorites(_ params: NavidromeFavoriteApplyParams) async throws -> RunIDResult {
+        try await connection.call(.navidromeFavoritesApply, params: params)
+    }
+    /// The return path: what the server has starred right now. Unlike the plan
+    /// and apply methods it never reads Apple Music, so it works without a Music
+    /// automation grant.
+    func listNavidromeStarred() async throws -> RunIDResult {
+        try await connection.call(.navidromeFavoritesList, params: EmptyParams())
+    }
+    func createNavidromeBackup() async throws -> RunIDResult {
+        try await connection.call(.navidromeBackupCreate, params: EmptyParams())
+    }
 }

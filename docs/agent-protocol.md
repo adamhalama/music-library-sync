@@ -75,6 +75,7 @@ Protocol v2 exposes 37 methods:
 | Playlists | `playlists.list`, `playlists.providerList`, `playlists.show`, `playlists.refresh`, `playlists.saveDefinition`, `playlists.config.read`, `playlists.config.write` |
 | Free DL | `freedl.config.read`, `freedl.config.write`, `freedl.plan.start`, `freedl.capture.start`, `freedl.promotionPlan.build`, `freedl.promote.apply` |
 | Rekordbox | `rekordbox.config.read`, `rekordbox.config.write`, `rekordbox.deps.status`, `rekordbox.deps.ensure`, `rekordbox.deps.reset`, `rekordbox.inspect`, `rekordbox.plan`, `rekordbox.apply` |
+| Navidrome | `navidrome.config.read`, `navidrome.config.write`, `navidrome.deps.status`, `navidrome.deps.ensure`, `navidrome.status`, `navidrome.service.control`, `navidrome.setup.plan`, `navidrome.setup.apply`, `navidrome.playlists.refresh`, `navidrome.playlists.deriveGenres`, `navidrome.playlists.saveGenres`, `navidrome.favorites.plan`, `navidrome.favorites.apply`, `navidrome.favorites.list`, `navidrome.backup.create` |
 
 ## Method contracts
 
@@ -116,6 +117,32 @@ marked **run** return `{"run_id":"…"}` immediately and terminate through
 | `rekordbox.deps.ensure`, `rekordbox.deps.reset`, `rekordbox.inspect` | `{}` | **run** |
 | `rekordbox.plan` | optional job/mapping, Music/Rekordbox selectors, runtime settings, or cached playlist ID | **run** returning the signed plan and path |
 | `rekordbox.apply` | signed `plan`, optional runtime/backup overrides, `dry_run` | **run** returning apply result |
+| `navidrome.config.read` | `{}` | write path, merged config, content |
+| `navidrome.config.write` | `config` | write path, saved config, canonical content |
+| `navidrome.deps.status` | `{}` | Homebrew/Navidrome availability, version, and problems; never mutates |
+| `navidrome.deps.ensure` | `confirm` (must be `true`) | **run** returning the Homebrew install result |
+| `navidrome.status` | `{}` | dependency, service, account, library, playlist, and backup state |
+| `navidrome.service.control` | `action` (`start`, `stop`, `restart`) | **run** returning the resulting service status |
+| `navidrome.setup.plan` | `{}` | **run** returning the checksummed setup plan |
+| `navidrome.setup.apply` | signed `plan` | **run** returning written files, directories, and service action |
+| `navidrome.playlists.refresh` | `{}` | **run** returning generated `.nsp` files, scan state, and warnings |
+| `navidrome.playlists.deriveGenres` | `{}` | **run** returning the previewed HARD BOUNCE allowlist and unmatched counts |
+| `navidrome.playlists.saveGenres` | `genres` (non-empty) | **run** persisting the allowlist and rewriting the playlists |
+| `navidrome.favorites.plan` | `{}` | **run** returning the checksummed favorite migration plan |
+| `navidrome.favorites.apply` | signed `plan` | **run** returning backup path, newly starred IDs, and parity |
+| `navidrome.favorites.list` | `{}` | **run** returning `count` and the server's starred `tracks`, path-sorted |
+| `navidrome.backup.create` | `{}` | **run** returning the created database backup |
+
+The Navidrome account password is never carried by any of these methods. It
+lives only in macOS Keychain and is written through `credentials.save`.
+`navidrome.setup.apply` and `navidrome.favorites.apply` reject a plan whose
+checksum does not verify, so a stale plan is refused rather than replayed.
+
+`navidrome.favorites.list` is the read side of the return path — a like made on
+the phone reaches UDL through it. It reads the server's stars directly and never
+touches Apple Music, so it is the one favourites method that works without a
+Music automation grant. Its ordering matches the `navidrome-favorites` snapshot,
+so a listing and a refreshed snapshot can be compared line for line.
 
 Config write methods intentionally perform canonical rewrites; comments and
 the caller's original formatting are not preserved. Main, playlist, Free DL,

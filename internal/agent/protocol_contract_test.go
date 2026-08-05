@@ -36,7 +36,7 @@ func TestProtocolV2GoldenInventoryAndMethodGroups(t *testing.T) {
 	expectedGroups := map[string]bool{
 		"session": true, "runs": true, "sync": true, "config": true,
 		"doctor": true, "credentials": true, "startup_sources": true,
-		"playlists": true, "freedl": true, "rekordbox": true,
+		"playlists": true, "freedl": true, "rekordbox": true, "navidrome": true,
 	}
 	methods := map[string]bool{}
 	for _, method := range protocolMethods {

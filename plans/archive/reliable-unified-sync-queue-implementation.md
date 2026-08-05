@@ -1,9 +1,11 @@
 # Reliable, Unified Sync Queue — Implementation Tracker
 
 - **Overall status:** Done
-- **Plan:** [PLAN.md](./PLAN.md)
+- **Plan:**
+  [reliable-unified-sync-queue-plan.md](./reliable-unified-sync-queue-plan.md)
 - **Last updated:** 2026-08-03
-- **Archived predecessor:** [plans/archive/gui-redesign-implementation.md](./plans/archive/gui-redesign-implementation.md)
+- **Archived predecessor:**
+  [gui-redesign-implementation.md](./gui-redesign-implementation.md)
 
 This is the live execution record for the reliable unified sync queue. Update
 status and evidence in the same change as implementation. A checked task means
@@ -49,7 +51,9 @@ do not silently broaden an existing checkbox.
 - [x] Keep completed-track state durable across cancellation.
 - [x] Update protocol fixtures and compatibility documentation with wire changes.
 - [x] Record exact validation commands and material manual evidence below.
-- [x] Record every deviation from [PLAN.md](./PLAN.md) in the decision log; none were required.
+- [x] Record every deviation from
+      [reliable-unified-sync-queue-plan.md](./reliable-unified-sync-queue-plan.md)
+      in the decision log; none were required.
 
 ---
 
@@ -354,7 +358,8 @@ unchanged.
 
 **Status:** Done
 
-**Exit gate:** every completion criterion in [PLAN.md](./PLAN.md) is met and the
+**Exit gate:** every completion criterion in
+[reliable-unified-sync-queue-plan.md](./reliable-unified-sync-queue-plan.md) is met and the
 commands/evidence below are recorded.
 
 ### Full validation

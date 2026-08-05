@@ -37,68 +37,138 @@
     "rekordbox.deps.reset",
     "rekordbox.inspect",
     "rekordbox.plan",
-    "rekordbox.apply"
+    "rekordbox.apply",
+    "navidrome.config.read",
+    "navidrome.config.write",
+    "navidrome.deps.status",
+    "navidrome.deps.ensure",
+    "navidrome.status",
+    "navidrome.service.control",
+    "navidrome.setup.plan",
+    "navidrome.setup.apply",
+    "navidrome.playlists.refresh",
+    "navidrome.playlists.deriveGenres",
+    "navidrome.playlists.saveGenres",
+    "navidrome.favorites.plan",
+    "navidrome.favorites.apply",
+    "navidrome.favorites.list",
+    "navidrome.backup.create"
   ],
   "groups": [
     {
       "group": "session",
       "method": "session.initialize",
-      "request": {"protocol_version": 2},
-      "response": {"protocol_version": 2}
+      "request": {
+        "protocol_version": 2
+      },
+      "response": {
+        "protocol_version": 2
+      }
     },
     {
       "group": "runs",
       "method": "run.cancel",
-      "request": {"run_id": "run-example"},
-      "response": {"canceled": true}
+      "request": {
+        "run_id": "run-example"
+      },
+      "response": {
+        "canceled": true
+      }
     },
     {
       "group": "sync",
       "method": "sync.start",
-      "request": {"source_ids": ["source-a"], "plan": true},
-      "response": {"run_id": "run-example"}
+      "request": {
+        "source_ids": [
+          "source-a"
+        ],
+        "plan": true
+      },
+      "response": {
+        "run_id": "run-example"
+      }
     },
     {
       "group": "config",
       "method": "config.validate",
-      "request": {"config": {"version": 1}},
-      "response": {"valid": true}
+      "request": {
+        "config": {
+          "version": 1
+        }
+      },
+      "response": {
+        "valid": true
+      }
     },
     {
       "group": "doctor",
       "method": "doctor.run",
       "request": {},
-      "response": {"checks": [], "exit_code": 0}
+      "response": {
+        "checks": [],
+        "exit_code": 0
+      }
     },
     {
       "group": "credentials",
       "method": "credentials.clear",
-      "request": {"kind": "deemix_arl"},
-      "response": {"cleared": true, "kind": "deemix_arl"}
+      "request": {
+        "kind": "deemix_arl"
+      },
+      "response": {
+        "cleared": true,
+        "kind": "deemix_arl"
+      }
     },
     {
       "group": "startup_sources",
       "method": "sources.capabilities",
       "request": {},
-      "response": {"sources": []}
+      "response": {
+        "sources": []
+      }
     },
     {
       "group": "playlists",
       "method": "playlists.show",
-      "request": {"playlist_id": "favorites"},
-      "response": {"definition": {}, "snapshot": {}}
+      "request": {
+        "playlist_id": "favorites"
+      },
+      "response": {
+        "definition": {},
+        "snapshot": {}
+      }
     },
     {
       "group": "freedl",
       "method": "freedl.plan.start",
-      "request": {"job_id": "soundcloud-free-dl"},
-      "response": {"run_id": "run-example"}
+      "request": {
+        "job_id": "soundcloud-free-dl"
+      },
+      "response": {
+        "run_id": "run-example"
+      }
     },
     {
       "group": "rekordbox",
       "method": "rekordbox.apply",
-      "request": {"plan": {}, "dry_run": true},
-      "response": {"run_id": "run-example"}
+      "request": {
+        "plan": {},
+        "dry_run": true
+      },
+      "response": {
+        "run_id": "run-example"
+      }
+    },
+    {
+      "group": "navidrome",
+      "method": "navidrome.setup.apply",
+      "request": {
+        "plan": {}
+      },
+      "response": {
+        "run_id": "run-example"
+      }
     }
   ]
 }

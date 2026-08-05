@@ -45,6 +45,7 @@ func newAgentCommand(app *AppContext) *cobra.Command {
 				ConfigPath:          app.Opts.ConfigPath,
 				FreeDLConfigPath:    app.Opts.FreeDLConfigPath,
 				PlaylistsConfigPath: app.Opts.PlaylistsConfigPath,
+				NavidromeConfigPath: app.Opts.NavidromeConfigPath,
 				RekordboxConfigPath: app.Opts.RekordboxConfigPath,
 				ErrOut:              cmd.ErrOrStderr(),
 			}

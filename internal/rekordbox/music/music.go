@@ -326,3 +326,77 @@ end try
 set AppleScript's text item delimiters to oldDelims
 return outText
 `
+
+// ListFavoriteTracks enumerates favorited local file tracks in the Apple Music
+// library. It is strictly read-only: nothing in this package ever writes to
+// Music.
+func (r Reader) ListFavoriteTracks(ctx context.Context) ([]Track, error) {
+	out, err := r.run(ctx, listFavoriteTracksScript)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFavoriteTracks(out)
+}
+
+// ParseFavoriteTracks parses the favorite enumeration rows.
+func ParseFavoriteTracks(raw string) ([]Track, error) {
+	tracks := []Track{}
+	for _, line := range splitLines(raw) {
+		cols := strings.Split(line, "\t")
+		if len(cols) == 0 || cols[0] == "" {
+			continue
+		}
+		if cols[0] != "TRACK" {
+			return nil, fmt.Errorf("parse Music favorite output: unexpected row kind %q", cols[0])
+		}
+		if len(cols) != 8 {
+			return nil, fmt.Errorf("parse Music favorite row: expected 8 columns, got %d", len(cols))
+		}
+		tracks = append(tracks, Track{
+			Index:        len(tracks) + 1,
+			PersistentID: cols[1],
+			DatabaseID:   cols[2],
+			Artist:       cols[3],
+			Title:        cols[4],
+			Album:        cols[5],
+			Duration:     cols[6],
+			Path:         cols[7],
+		})
+	}
+	return tracks, nil
+}
+
+// listFavoriteTracksScript reads favorites without mutating anything. Music.app
+// renamed the property from `loved` to `favorited`, so the script tries the
+// modern name first and falls back, rather than failing on one of the two.
+const listFavoriteTracksScript = `
+set oldDelims to AppleScript's text item delimiters
+set AppleScript's text item delimiters to linefeed
+try
+  tell application "Music"
+    -- "matched" is a Music.app term (smart-playlist matched), so a variable of
+    -- that name fails with -10003. favTracks is safe.
+    set favTracks to {}
+    try
+      set favTracks to (every file track of library playlist 1 whose favorited is true)
+    on error
+      -- "loved" was removed in newer Music versions and "favorited" is absent
+      -- in older ones; whichever exists is used.
+      set favTracks to (every file track of library playlist 1 whose loved is true)
+    end try
+    set rows to {}
+    repeat with t in favTracks
+      set locText to ""
+      try
+        set locText to POSIX path of ((location of t) as alias)
+      end try
+      set end of rows to "TRACK" & tab & (persistent ID of t as text) & tab & (database ID of t as text) & tab & (artist of t as text) & tab & (name of t as text) & tab & (album of t as text) & tab & ((duration of t) as text) & tab & locText
+    end repeat
+  end tell
+  set outText to rows as text
+on error errMsg number errNum
+  set outText to "ERROR " & errNum & ": " & errMsg
+end try
+set AppleScript's text item delimiters to oldDelims
+return outText
+`
