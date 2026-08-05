@@ -8,6 +8,7 @@ import (
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/jaa/update-downloads/internal/navidrome"
+	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/spf13/cobra"
 )
 
@@ -215,8 +216,18 @@ func newNavidromeSetupCommand(app *AppContext) *cobra.Command {
 			if err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
+			// A managed definition nobody wrote down cannot be refreshed, so
+			// setup registers them. This is append-only and idempotent; the
+			// existing Apple Music entries are never touched.
+			added, defErr := playlists.WriteNavidromeDefinitions(app.Opts.PlaylistsConfigPath, "")
+			if defErr != nil {
+				fmt.Fprintf(app.IO.ErrOut, "WARN: managed playlist definitions were not registered: %v\n", defErr)
+			}
 			if app.Opts.JSON {
 				return json.NewEncoder(app.IO.Out).Encode(result)
+			}
+			for _, id := range added {
+				fmt.Fprintf(app.IO.Out, "registered playlist definition %s\n", id)
 			}
 			for _, path := range result.CreatedDirectories {
 				fmt.Fprintf(app.IO.Out, "created directory %s\n", path)
@@ -403,8 +414,8 @@ func newNavidromeFavoritesCommand(app *AppContext) *cobra.Command {
 		Long: strings.TrimSpace(`
 Reads stars straight from the server, so a like made on the phone shows up here
 without Apple Music being involved at all. This is the read side of the return
-path: refresh the "` + navidrome.SmartPlaylistFavoritesName + `" playlist to turn
-these into a snapshot, then sync that snapshot to Rekordbox.
+path: refresh the "` + navidrome.SmartPlaylistFavoritesName + `" playlist to
+turn these into a snapshot, then sync that snapshot to Rekordbox.
 
 Nothing is written. Apple Music favorites are a separate set and are not shown.
 `),

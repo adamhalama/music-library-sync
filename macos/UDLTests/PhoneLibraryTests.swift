@@ -108,6 +108,41 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(config.config.playlists.hardBounceGenres, [])
     }
 
+    /// The return path's wire result. An empty star list is the normal state on
+    /// a fresh install, and Go encodes a nil slice as `null`, so it must decode.
+    func testStarredListingDecodesIncludingAnEmptyLibrary() throws {
+        let empty = """
+        {"count": 0, "tracks": null}
+        """.data(using: .utf8)!
+        let none = try JSONDecoder.agent.decode(NavidromeStarredListResult.self, from: empty)
+        XCTAssertEqual(none.count, 0)
+        XCTAssertEqual(none.tracks, [])
+
+        let payload = """
+        {
+          "count": 2,
+          "tracks": [
+            {"id": "a", "title": "First", "artist": "Someone", "path": "/music/a.mp3"},
+            {"id": "b", "title": "Second"}
+          ]
+        }
+        """.data(using: .utf8)!
+        let starred = try JSONDecoder.agent.decode(NavidromeStarredListResult.self, from: payload)
+        XCTAssertEqual(starred.count, 2)
+        XCTAssertEqual(starred.tracks.map(\.id), ["a", "b"])
+        XCTAssertEqual(starred.tracks[0].path, "/music/a.mp3")
+        // The optional fields are genuinely optional on the wire.
+        XCTAssertNil(starred.tracks[1].artist)
+        XCTAssertNil(starred.tracks[1].path)
+    }
+
+    /// Reading stars never writes, so it must not be treated as a step that
+    /// cannot be replayed after a backend restart.
+    func testReadingStarredTracksIsNotAMutatingOperation() {
+        XCTAssertFalse(PhoneLibraryOperation.favoriteList.isMutating)
+        XCTAssertTrue(PhoneLibraryOperation.favoriteApply.isMutating)
+    }
+
     /// The config that travels over the wire must never gain a password field:
     /// the secret lives only in Keychain and moves through `credentials.save`.
     func testTheConfigModelCarriesNoSecret() throws {

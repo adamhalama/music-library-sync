@@ -436,3 +436,38 @@ func TestUnauthorizedIsNotRetried(t *testing.T) {
 		t.Fatalf("rejected credentials must not be retried: %v", fake.Requests)
 	}
 }
+
+// getStarred2 defines no ordering, and every consumer of a star list — the
+// snapshot builder, the CLI, the agent — has to agree on one, or the snapshot
+// checksum churns on a refresh that changed nothing.
+func TestSortStarredSongsIsTotalAndStable(t *testing.T) {
+	songs := []Song{
+		{ID: "c", Path: "/music/c.mp3"},
+		{ID: "z"},
+		{ID: "a", Path: "/music/a.mp3"},
+		{ID: "b", Path: "/music/./b.mp3"},
+		{ID: "y"},
+	}
+	shuffled := []Song{songs[3], songs[1], songs[4], songs[0], songs[2]}
+	SortStarredSongs(songs)
+	SortStarredSongs(shuffled)
+
+	// Path-less songs sort first, ordered by ID; the rest sort by cleaned path.
+	want := []string{"y", "z", "a", "b", "c"}
+	for i, id := range want {
+		if songs[i].ID != id {
+			t.Fatalf("order = %v, want %v", ids(songs), want)
+		}
+		if shuffled[i].ID != id {
+			t.Fatalf("a different input order produced %v, want %v", ids(shuffled), want)
+		}
+	}
+}
+
+func ids(songs []Song) []string {
+	out := make([]string, 0, len(songs))
+	for _, song := range songs {
+		out = append(out, song.ID)
+	}
+	return out
+}

@@ -10,9 +10,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/playlists"
+	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 	"github.com/jaa/update-downloads/internal/rekordbox/pyruntime"
 )
@@ -68,7 +71,14 @@ type Checker struct {
 	ResolveDeemixWithSource   func() (string, auth.CredentialStorageSource, error)
 	ResolveSoundCloudClientID func() (string, auth.CredentialStorageSource, error)
 	LoadCredentialMetadata    func(string) (auth.CredentialMetadataStore, error)
-	Matrix                    map[string]dependencyMatrixRule
+	// ProbeMusicAutomation answers "can this process drive Music.app right
+	// now". It is a field so tests never reach osascript, and so the native
+	// app can be checked the same way the CLI is.
+	ProbeMusicAutomation func(context.Context) error
+	// LoadPlaylistDefinitions gates the Music check on the feature actually
+	// being configured. Nothing prompts for a permission nobody needs.
+	LoadPlaylistDefinitions func() ([]playlists.Definition, error)
+	Matrix                  map[string]dependencyMatrixRule
 }
 
 type dirAccessResult struct {
@@ -93,13 +103,70 @@ func NewChecker() *Checker {
 		ResolveDeemixWithSource:   auth.ResolveDeemixARLWithSource,
 		ResolveSoundCloudClientID: auth.ResolveSoundCloudClientIDWithSource,
 		LoadCredentialMetadata:    auth.LoadCredentialMetadata,
+		ProbeMusicAutomation:      probeMusicAutomation,
+		LoadPlaylistDefinitions:   loadPlaylistDefinitions,
 		Matrix:                    defaultDependencyMatrix(),
 	}
+}
+
+// musicAutomationTimeout keeps a revoked or hung permission from stalling
+// doctor. The grant either answers immediately or it is not there.
+const musicAutomationTimeout = 5 * time.Second
+
+func probeMusicAutomation(ctx context.Context) error {
+	probeCtx, cancel := context.WithTimeout(ctx, musicAutomationTimeout)
+	defer cancel()
+	_, err := music.Reader{}.ListPlaylists(probeCtx)
+	return err
+}
+
+func loadPlaylistDefinitions() ([]playlists.Definition, error) {
+	cfg, err := playlists.Load(playlists.LoadOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Playlists, nil
+}
+
+// musicAutomationCheck reports whether Music.app can be read, before a refresh
+// needs it. Under the native app the AppleEvent is attributed to UDL.app, which
+// needs its own Automation grant; without this check a revoked grant only ever
+// showed up as a failed refresh.
+func (c *Checker) musicAutomationCheck(ctx context.Context) []Check {
+	if c.ProbeMusicAutomation == nil || c.LoadPlaylistDefinitions == nil {
+		return nil
+	}
+	definitions, err := c.LoadPlaylistDefinitions()
+	if err != nil {
+		return nil
+	}
+	configured := false
+	for _, definition := range definitions {
+		if definition.Provider == playlists.ProviderAppleMusic {
+			configured = true
+			break
+		}
+	}
+	if !configured {
+		return nil
+	}
+	if err := c.ProbeMusicAutomation(ctx); err != nil {
+		return []Check{{Severity: SeverityWarn, Name: "music", Message: err.Error()}}
+	}
+	return []Check{{
+		Severity: SeverityInfo,
+		Name:     "music",
+		Message:  "Music.app automation is permitted; playlist refresh can read Music",
+	}}
 }
 
 func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 	report := Report{Checks: []Check{}}
 	rekordboxChecks := c.rekordboxChecks(ctx, cfg)
+	// Music automation is reported even with no sources configured: the
+	// playlists feature is independent of them, and a revoked grant is exactly
+	// the thing you want named before you go looking for it.
+	musicChecks := c.musicAutomationCheck(ctx)
 
 	if len(cfg.Sources) == 0 {
 		report.Checks = append(report.Checks,
@@ -114,6 +181,7 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 				Message:  "doctor will start dependency and auth checks after at least one source is configured",
 			},
 		)
+		report.Checks = append(report.Checks, musicChecks...)
 		report.Checks = append(report.Checks, rekordboxChecks...)
 		return report
 	}
@@ -296,6 +364,7 @@ func (c *Checker) Check(ctx context.Context, cfg config.Config) Report {
 			}
 		}
 	}
+	report.Checks = append(report.Checks, musicChecks...)
 	report.Checks = append(report.Checks, rekordboxChecks...)
 	return report
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/jaa/update-downloads/internal/navidrome"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 type navidromeConfigResult struct {
@@ -162,6 +163,13 @@ func (s *Server) navidromeSetupApply(params json.RawMessage) (any, *RPCError) {
 		result, applyErr := manager.ApplySetup(ctx, request.Plan)
 		if applyErr != nil {
 			return result, applyErr, exitcode.RuntimeFailure
+		}
+		// A managed definition nobody wrote down cannot be refreshed, so setup
+		// registers them. Failing to register is not a reason to fail an
+		// otherwise successful setup, so it is reported as a warning.
+		if _, defErr := playlists.WriteNavidromeDefinitions(s.PlaylistsConfigPath, s.WorkingDir); defErr != nil {
+			result.Message = strings.TrimSpace(result.Message +
+				" Managed playlist definitions were not registered: " + defErr.Error())
 		}
 		return result, nil, exitcode.Success
 	})

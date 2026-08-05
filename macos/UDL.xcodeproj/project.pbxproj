@@ -327,7 +327,7 @@
 			outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/udl");
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nsource_bin=\"${UDL_EMBEDDED_BINARY:-${PROJECT_DIR}/../bin/udl}\"\nif [ ! -x \"$source_bin\" ]; then\n  echo \"error: build udl first or set UDL_EMBEDDED_BINARY\" >&2\n  exit 1\nfi\ndestination=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/udl\"\nmkdir -p \"$(dirname \"$destination\")\"\ncp \"$source_bin\" \"$destination\"\nchmod 755 \"$destination\"\n";
+			shellScript = "set -eu\nsource_bin=\"${UDL_EMBEDDED_BINARY:-${PROJECT_DIR}/../bin/udl}\"\nif [ ! -x \"$source_bin\" ]; then\n  echo \"error: build udl first or set UDL_EMBEDDED_BINARY\" >&2\n  exit 1\nfi\ndestination=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/udl\"\nmkdir -p \"$(dirname \"$destination\")\"\ncp \"$source_bin\" \"$destination\"\nchmod 755 \"$destination\"\n# AppleEvents sent by this child process are attributed to UDL.app, and the\n# Automation grant is keyed on the app's code signature. An unsigned embedded\n# binary invalidates that signature, so a granted permission is lost on every\n# rebuild. Signing it here is what makes the grant survive.\nif [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ] && [ \"${EXPANDED_CODE_SIGN_IDENTITY}\" != \"-\" ]; then\n  codesign --force --timestamp=none --options runtime \\\n    --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$destination\"\nelif [ \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" = \"-\" ]; then\n  codesign --force --sign - \"$destination\"\nelse\n  echo \"warning: no signing identity; the embedded backend is unsigned and Automation grants will not survive a rebuild\" >&2\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

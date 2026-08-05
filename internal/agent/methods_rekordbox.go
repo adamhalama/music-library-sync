@@ -197,16 +197,28 @@ func (s *Server) planRekordbox(params json.RawMessage) (any, *RPCError) {
 		return nil, rpcErr
 	}
 	var snapshot *playlists.Snapshot
+	snapshotTarget := ""
 	if strings.TrimSpace(request.PlaylistID) != "" {
 		value, err := playlists.LoadSnapshot(cfg.Defaults.StateDir, request.PlaylistID)
 		if err != nil {
 			return nil, NewRPCError(CodeInvalidParams, "playlist snapshot is unavailable", map[string]string{"playlist_id": request.PlaylistID})
 		}
 		snapshot = &value
+		// The definition owns which Rekordbox playlist its snapshot belongs in.
+		// Without this every snapshot would land in the config-wide default and
+		// two unrelated favourite sets would merge.
+		if playlistCfg, err := playlists.Load(playlists.LoadOptions{
+			ExplicitPath: s.PlaylistsConfigPath, WorkingDir: s.WorkingDir,
+		}); err == nil {
+			if definition, ok := playlistCfg.Definition(request.PlaylistID); ok {
+				snapshotTarget = definition.DefaultRekordboxTarget
+			}
+		}
 	}
 	runID, err := s.StartRun(func(ctx context.Context, _ string) (any, error, int) {
 		result, planErr := s.rekordboxOperations().Plan(ctx, app.RekordboxPlaylistSyncPlanRequest{
 			Config: cfg, SyncConfig: &rbCfg, MappingID: request.MappingID, Snapshot: snapshot,
+			SnapshotRekordboxTarget: snapshotTarget,
 			Options: playlistsync.Options{
 				JobID: request.JobID, MusicPlaylist: request.MusicPlaylist,
 				MusicPlaylistID: request.MusicPlaylistID, RekordboxPlaylist: request.RekordboxPlaylist,

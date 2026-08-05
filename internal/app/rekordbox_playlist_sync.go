@@ -41,6 +41,12 @@ type RekordboxPlaylistSyncPlanRequest struct {
 	MappingID  string
 	Options    playlistsync.Options
 	Snapshot   *playlists.Snapshot
+	// SnapshotRekordboxTarget is the definition's `default_rekordbox_target`.
+	// It keeps two snapshots that mean different things — Apple Music
+	// favourites and Navidrome stars — out of each other's Rekordbox playlist
+	// without every caller having to name the target. An explicit option still
+	// wins.
+	SnapshotRekordboxTarget string
 }
 
 type RekordboxPlaylistSyncPlanResult struct {
@@ -146,7 +152,13 @@ func (u RekordboxPlaylistSyncUseCase) planSnapshot(ctx context.Context, req Reko
 	if err := playlists.ValidateSnapshot(snapshot); err != nil {
 		return RekordboxPlaylistSyncPlanResult{}, err
 	}
-	resolved, err := playlistsync.ResolveOptions(req.Config, req.Options)
+	options := req.Options
+	if strings.TrimSpace(options.RekordboxPlaylist) == "" &&
+		strings.TrimSpace(options.RekordboxPlaylistID) == "" &&
+		strings.TrimSpace(req.SnapshotRekordboxTarget) != "" {
+		options.RekordboxPlaylist = strings.TrimSpace(req.SnapshotRekordboxTarget)
+	}
+	resolved, err := playlistsync.ResolveOptions(req.Config, options)
 	if err != nil {
 		return RekordboxPlaylistSyncPlanResult{}, err
 	}
@@ -154,9 +166,9 @@ func (u RekordboxPlaylistSyncUseCase) planSnapshot(ctx context.Context, req Reko
 	resolved.MusicPlaylistID = snapshot.PlaylistID
 	resolved, err = u.ensureRuntime(ctx, resolved, pyruntime.Request{
 		Config:         req.Config,
-		PythonBin:      req.Options.PythonBin,
-		PythonPath:     req.Options.PythonPath,
-		ExplicitPython: req.Options.PythonBin != "" || req.Options.PythonPath != "",
+		PythonBin:      options.PythonBin,
+		PythonPath:     options.PythonPath,
+		ExplicitPython: options.PythonBin != "" || options.PythonPath != "",
 	})
 	if err != nil {
 		return RekordboxPlaylistSyncPlanResult{}, err

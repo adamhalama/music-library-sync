@@ -32,6 +32,7 @@ func TestNavidromeCommandTreeIsRegistered(t *testing.T) {
 		{"navidrome", "playlists", "refresh", "--help"},
 		{"navidrome", "favorites", "import", "plan", "--help"},
 		{"navidrome", "favorites", "import", "apply", "--help"},
+		{"navidrome", "favorites", "list", "--help"},
 		{"navidrome", "backup", "create", "--help"},
 	} {
 		app, _, _ := newNavidromeTestApp()
@@ -177,5 +178,32 @@ func TestPrintSetupPlanNamesEveryMutation(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "already in use") {
 		t.Fatalf("blockers must be explicit:\n%s", errOut.String())
+	}
+}
+
+// The starred listing renders without a server, so an empty result is not
+// mistaken for a failure and a path-less track does not print a bare dash.
+func TestPrintStarredFavoritesRendersEveryShape(t *testing.T) {
+	app, out, _ := newNavidromeTestApp()
+	printStarredFavorites(app, nil)
+	if !strings.Contains(out.String(), "Starred on Navidrome: 0") {
+		t.Fatalf("empty listing = %q", out.String())
+	}
+
+	app, out, _ = newNavidromeTestApp()
+	printStarredFavorites(app, []navidrome.Song{
+		{ID: "a", Title: "First", Artist: "Someone", Path: "/music/a.mp3"},
+		{ID: "b", Title: "Second"},
+	})
+	rendered := out.String()
+	for _, want := range []string{
+		"Starred on Navidrome: 2",
+		"Someone — First",
+		"/music/a.mp3",
+		"Unknown artist — Second",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("listing missing %q: %q", want, rendered)
+		}
 	}
 }

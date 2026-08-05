@@ -10,6 +10,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 func spotifyConfig() config.Config {
@@ -615,5 +616,80 @@ func TestDoctorSoundCloudCredentialNeedsRefresh(t *testing.T) {
 	report := checker.Check(context.Background(), soundcloudConfig())
 	if !hasErrorContaining(report, "needs refresh") {
 		t.Fatalf("expected stale soundcloud credential error, got %+v", report.Checks)
+	}
+}
+
+// The Music automation grant is invisible until something needs it. Doctor
+// reports it up front so a revoked permission is identifiable without reading
+// a failed refresh's logs.
+func TestMusicAutomationCheckReportsPermissionState(t *testing.T) {
+	appleDefinitions := func() ([]playlists.Definition, error) {
+		return []playlists.Definition{{
+			ID: "favorites", Name: "Favorites",
+			Provider: playlists.ProviderAppleMusic, ProviderPlaylist: "Favorites",
+		}}, nil
+	}
+	find := func(report Report) (Check, bool) {
+		for _, check := range report.Checks {
+			if check.Name == "music" {
+				return check, true
+			}
+		}
+		return Check{}, false
+	}
+
+	granted := &Checker{
+		LookPath:                func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:             func(context.Context, string) (string, error) { return "spotdl 4.5.0", nil },
+		Getenv:                  func(string) string { return "" },
+		CheckWritable:           func(string) error { return nil },
+		ProbeMusicAutomation:    func(context.Context) error { return nil },
+		LoadPlaylistDefinitions: appleDefinitions,
+	}
+	check, ok := find(granted.Check(context.Background(), spotifyConfig()))
+	if !ok || check.Severity != SeverityInfo {
+		t.Fatalf("granted check = %+v (found %v)", check, ok)
+	}
+
+	// The backend's own actionable text is what reaches the UI; doctor must
+	// pass it through rather than replacing it with a generic message.
+	denied := *granted
+	denied.ProbeMusicAutomation = func(context.Context) error {
+		return fmt.Errorf("Music automation permission denied; allow UDL in System Settings > Privacy & Security > Automation")
+	}
+	check, ok = find(denied.Check(context.Background(), spotifyConfig()))
+	if !ok || check.Severity != SeverityWarn {
+		t.Fatalf("denied check = %+v (found %v)", check, ok)
+	}
+	if !strings.Contains(check.Message, "System Settings") {
+		t.Fatalf("the actionable message was lost: %q", check.Message)
+	}
+}
+
+// Nothing prompts for a permission nobody needs: with no Apple Music
+// definition configured, the probe is never run.
+func TestMusicAutomationCheckIsSkippedWithoutAnAppleMusicDefinition(t *testing.T) {
+	probed := false
+	checker := &Checker{
+		LookPath:             func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		ReadVersion:          func(context.Context, string) (string, error) { return "spotdl 4.5.0", nil },
+		Getenv:               func(string) string { return "" },
+		CheckWritable:        func(string) error { return nil },
+		ProbeMusicAutomation: func(context.Context) error { probed = true; return nil },
+		LoadPlaylistDefinitions: func() ([]playlists.Definition, error) {
+			return []playlists.Definition{{
+				ID: "navidrome-favorites", Name: "Favourites (Navidrome)",
+				Provider: playlists.ProviderNavidrome, ProviderPlaylist: "Favourites (Navidrome)",
+			}}, nil
+		},
+	}
+	report := checker.Check(context.Background(), spotifyConfig())
+	if probed {
+		t.Fatalf("the Music probe must not run without an apple_music definition")
+	}
+	for _, check := range report.Checks {
+		if check.Name == "music" {
+			t.Fatalf("unexpected music check: %+v", check)
+		}
 	}
 }

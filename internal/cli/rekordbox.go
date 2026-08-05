@@ -11,6 +11,7 @@ import (
 	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/exitcode"
+	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 	"github.com/jaa/update-downloads/internal/rekordbox/pyruntime"
@@ -236,9 +237,18 @@ func newRekordboxPlaylistSyncCommand(app *AppContext) *cobra.Command {
 
 func newRekordboxPlaylistSyncPlanCommand(app *AppContext) *cobra.Command {
 	flags := defaultRekordboxPlaylistSyncFlags()
+	playlistID := ""
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Create a dry-run plan for Music.app to Rekordbox playlist sync",
+		Long: strings.TrimSpace(`
+Plan a Rekordbox playlist sync.
+
+By default the source is read live from Music.app. With --playlist-id the source
+is a saved UDL snapshot instead, which is how a Navidrome-backed playlist — one
+Music.app knows nothing about — reaches Rekordbox. The definition's
+default_rekordbox_target picks the destination unless you name one.
+`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			cfg, err := loadConfig(app)
@@ -254,10 +264,35 @@ func newRekordboxPlaylistSyncPlanCommand(app *AppContext) *cobra.Command {
 			}
 			cfg = configWithRekordboxSyncDefaults(cfg, rbCfg)
 
+			// A snapshot source is opt-in. Reading Music.app stays the default
+			// so nothing about the existing flow changes.
+			var snapshot *playlists.Snapshot
+			snapshotTarget := ""
+			if id := strings.TrimSpace(playlistID); id != "" {
+				_, playlistCfg, cfgErr := loadPlaylistConfigs(app)
+				if cfgErr != nil {
+					return withExitCode(exitcode.InvalidConfig, cfgErr)
+				}
+				definition, ok := playlistCfg.Definition(id)
+				if !ok {
+					return withExitCode(exitcode.InvalidUsage,
+						fmt.Errorf("no playlist definition %q is configured", id))
+				}
+				value, snapErr := playlists.LoadSnapshot(cfg.Defaults.StateDir, id)
+				if snapErr != nil {
+					return withExitCode(exitcode.InvalidUsage,
+						fmt.Errorf("playlist %q has no valid snapshot; run `udl playlist refresh %s` first: %w", id, id, snapErr))
+				}
+				snapshot = &value
+				snapshotTarget = definition.DefaultRekordboxTarget
+			}
+
 			result, err := (workflows.RekordboxPlaylistSyncUseCase{}).Plan(ctx, workflows.RekordboxPlaylistSyncPlanRequest{
-				Config:     cfg,
-				SyncConfig: &rbCfg,
-				MappingID:  flags.MappingID,
+				Config:                  cfg,
+				SyncConfig:              &rbCfg,
+				MappingID:               flags.MappingID,
+				Snapshot:                snapshot,
+				SnapshotRekordboxTarget: snapshotTarget,
 				Options: playlistsync.Options{
 					JobID:               flags.JobID,
 					MusicPlaylist:       flagValueIfChanged(cmd, "music-playlist", flags.MusicPlaylist),
@@ -282,6 +317,8 @@ func newRekordboxPlaylistSyncPlanCommand(app *AppContext) *cobra.Command {
 		},
 	}
 	addPlaylistSyncPlanFlags(cmd, &flags)
+	cmd.Flags().StringVar(&playlistID, "playlist-id", "",
+		"Plan from this saved UDL playlist snapshot instead of reading Music.app")
 	return cmd
 }
 

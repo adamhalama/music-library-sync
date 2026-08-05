@@ -107,6 +107,7 @@ struct PhoneLibraryView: View {
                 setupCard
                 playlistsCard
                 favoritesCard
+                starredCard
                 connectionCard
             }
             .padding(.horizontal, Metrics.contentPaddingHorizontal)
@@ -525,6 +526,50 @@ struct PhoneLibraryView: View {
             return "Every favorite is already starred or is excluded; there is nothing to import."
         }
         return nil
+    }
+
+    // MARK: Likes from the phone
+
+    /// The other direction. Apple Music favorites flow into Navidrome above;
+    /// this reads what the phone starred, which Apple Music never learns about.
+    private var starredCard: some View {
+        Card(
+            title: "Likes from the phone",
+            subtitle: "Read-only. Stars made in Amperfy are canonical in Navidrome."
+        ) {
+            if let starred = appState.navidromeStarred {
+                FieldRow("Starred on the server", "\(starred.count)")
+                ForEach(starred.tracks.prefix(20)) { track in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(track.artist.map { "\($0) — \(track.title)" } ?? track.title)
+                            .font(Typography.control)
+                        if let path = track.path, !path.isEmpty {
+                            Text(path)
+                                .font(Typography.caption)
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if starred.count > 20 {
+                    ConstraintNote(text: "\(starred.count - 20) more starred track(s) not shown.")
+                }
+                ConstraintNote(
+                    text: "Refresh the \"\(NavidromeStarredListResult.playlistName)\" snapshot in Playlists to send these to Rekordbox. It is a separate playlist from the Apple Music favorites, by design.",
+                    severity: .info
+                )
+            } else {
+                Text("Not read yet. This asks the server what is starred and changes nothing.")
+                    .font(Typography.control)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+
+            HStack(spacing: 8) {
+                Button("Read starred tracks") { Task { await appState.listNavidromeStarred() } }
+                    .constrained(by: serverReason)
+                Spacer(minLength: 0)
+            }
+        }
     }
 
     // MARK: Connection

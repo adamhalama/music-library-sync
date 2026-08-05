@@ -185,6 +185,35 @@ Global flags:
 - Opening the TUI playlist screen is cache-only. Failed or canceled refreshes preserve the last valid checksummed snapshot.
 - Snapshot comparison counts duplicate track occurrences, so repeated playlist items are not collapsed.
 
+Likes from the phone reach Rekordbox through the ordinary playlist pipeline:
+
+1. Star a track in Amperfy. It is canonical in Navidrome immediately.
+2. `udl navidrome favorites list` shows it.
+3. `udl playlist refresh navidrome-favorites` reads the server's stars directly
+   and writes them into the `navidrome-favorites` snapshot. The read is
+   path-sorted, so a refresh that changed nothing reports no changes rather than
+   churning the checksum.
+4. `udl rekordbox playlist-sync plan --playlist-id navidrome-favorites`, then
+   apply with Rekordbox closed. `--playlist-id` plans from a saved UDL snapshot
+   instead of reading Music.app, which is what lets a Navidrome-backed playlist
+   — one Music.app knows nothing about — reach Rekordbox. The definition's
+   `default_rekordbox_target` picks the destination unless you name one.
+
+Apple Music favourites and Navidrome stars are two separate sets, by design, and
+they are never merged. `favorites` (Apple Music) targets the `fav_imports`
+Rekordbox playlist; `navidrome-favorites` targets `nav_fav_imports`. Nothing is
+deduplicated between them and neither one is migrated into the other. The flow
+is one-way in each direction: Apple favourites can be imported into Navidrome,
+and Navidrome stars can be read out to Rekordbox, but nothing is ever written
+back into Music.app.
+
+Reading Apple Music needs an Automation grant. Under the native app the
+AppleEvent is attributed to `UDL.app`, so the grant lives under System Settings
+→ Privacy & Security → Automation → UDL → Music. `udl doctor` reports the state
+of that grant before a refresh needs it, and a failed refresh in the app now
+names the cause rather than reporting that nothing happened. The embedded
+backend is codesigned with the app, so a grant survives a rebuild.
+
 `navidrome` commands (macOS only; serves `~/Music/downloaded` to Amperfy on the
 home network):
 
@@ -199,6 +228,7 @@ home network):
 - `udl navidrome playlists save-genres --genre <name> ...`: persist an approved allowlist and rewrite the playlists.
 - `udl navidrome favorites import plan [--plan-file <path>]`: classify every Apple Music favorite. Apple Music is only read.
 - `udl navidrome favorites import apply --plan-file <path>`: back up the database, star exact path matches, and verify parity.
+- `udl navidrome favorites list [--json]`: list what is starred on the server right now. This is the return path — a like made on the phone in Amperfy is canonical in Navidrome, and this is how it reaches UDL. Apple Music is not consulted, so it works without a Music automation grant.
 - `udl navidrome backup create` / `list`: manage Navidrome database backups.
 - v1 is trusted-LAN HTTP only. Never port-forward the Navidrome port.
 - `udl navidrome dates reconcile`: rewrite Navidrome's Date Added from each

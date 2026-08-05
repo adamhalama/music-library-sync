@@ -422,3 +422,59 @@ func TestUnsupportedProviderIsRejectedByTheService(t *testing.T) {
 		t.Fatalf("expected an unsupported-provider error")
 	}
 }
+
+// A managed definition nobody wrote down cannot be refreshed. Setup registers
+// them, and doing so twice must not duplicate anything or disturb what is
+// already there.
+func TestWriteNavidromeDefinitionsIsAppendOnlyAndIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "playlists.yaml")
+	existing := Config{Version: ConfigVersion, Playlists: []Definition{{
+		ID: "favorites", Name: "Favorites", Provider: ProviderAppleMusic,
+		ProviderPlaylist: "Favourites", DefaultRekordboxTarget: "fav_imports",
+	}}}
+	if err := Save(path, existing); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	added, err := WriteNavidromeDefinitions(path, dir)
+	if err != nil {
+		t.Fatalf("WriteNavidromeDefinitions: %v", err)
+	}
+	if len(added) != 3 {
+		t.Fatalf("added = %v, want the three managed definitions", added)
+	}
+	merged, err := Load(LoadOptions{ExplicitPath: path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	apple, ok := merged.Definition("favorites")
+	if !ok || apple != existing.Playlists[0] {
+		t.Fatalf("the Apple Music definition was altered: %+v", apple)
+	}
+	starred, ok := merged.Definition(navidrome.SmartPlaylistFavorites)
+	if !ok || starred.ProviderPlaylistID != NavidromeStarredPlaylistID {
+		t.Fatalf("navidrome favourites definition = %+v", starred)
+	}
+
+	// A second call adds nothing and leaves the file alone.
+	againBefore, _ := os.ReadFile(path)
+	added, err = WriteNavidromeDefinitions(path, dir)
+	if err != nil {
+		t.Fatalf("second WriteNavidromeDefinitions: %v", err)
+	}
+	if len(added) != 0 {
+		t.Fatalf("second call added = %v", added)
+	}
+	againAfter, _ := os.ReadFile(path)
+	if string(againBefore) != string(againAfter) {
+		t.Fatalf("an idempotent call rewrote the file")
+	}
+	if string(before) == string(againAfter) {
+		t.Fatalf("the first call did not write anything")
+	}
+}

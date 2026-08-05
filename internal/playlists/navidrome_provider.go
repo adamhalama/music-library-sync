@@ -200,3 +200,31 @@ func EnsureNavidromeDefinitions(cfg Config) (Config, []string) {
 	}
 	return cfg, added
 }
+
+// WriteNavidromeDefinitions merges the managed definitions into the playlists
+// config on disk and returns which IDs were added. It is idempotent, so a
+// second setup apply reports nothing added rather than duplicating entries.
+//
+// Setup calls this because a definition nobody wrote down cannot be refreshed:
+// without it `udl playlist refresh navidrome-favorites` has nothing to resolve.
+func WriteNavidromeDefinitions(explicitPath, workingDir string) ([]string, error) {
+	path, err := ResolveWritePath(explicitPath, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	// Read the file that will be written, not the merged view. Saving a merged
+	// user+project view back into one file would silently copy the other file's
+	// entries into it.
+	cfg := Config{Version: ConfigVersion}
+	if err := mergeFile(&cfg, path, false); err != nil {
+		return nil, err
+	}
+	merged, added := EnsureNavidromeDefinitions(cfg)
+	if len(added) == 0 {
+		return added, nil
+	}
+	if err := Save(path, merged); err != nil {
+		return nil, err
+	}
+	return added, nil
+}
