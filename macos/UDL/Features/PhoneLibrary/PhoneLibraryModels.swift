@@ -48,6 +48,13 @@ struct NavidromePlaylistsConfig: Codable, Sendable, Equatable {
     }
 }
 
+/// The phone-side setup step, which nothing on this Mac can observe. Amperfy
+/// does not announce itself through any API UDL reads, so this is the user's
+/// own acknowledgement rather than a probe.
+struct NavidromePhoneConfig: Codable, Sendable, Equatable {
+    var connected: Bool
+}
+
 /// The Navidrome feature config. There is deliberately no password field: the
 /// account password lives only in macOS Keychain and travels through
 /// `credentials.save`.
@@ -59,6 +66,7 @@ struct NavidromeConfig: Codable, Sendable, Equatable {
     var scan: NavidromeScanConfig
     var backup: NavidromeBackupConfig
     var playlists: NavidromePlaylistsConfig
+    var phone: NavidromePhoneConfig
 }
 
 struct NavidromeConfigResult: Codable, Sendable {
@@ -194,6 +202,8 @@ struct NavidromeStatus: Codable, Sendable, Equatable {
     let backupCount: Int
     let latestBackup: NavidromeBackupInfo?
     let logPath: String?
+    /// Self-reported, from the config. Not an observation of the phone.
+    let phoneConnected: Bool
     @DefaultEmpty var problems: [String]
 
     enum CodingKeys: String, CodingKey {
@@ -209,6 +219,7 @@ struct NavidromeStatus: Codable, Sendable, Equatable {
         case backupCount = "backup_count"
         case latestBackup = "latest_backup"
         case logPath = "log_path"
+        case phoneConnected = "phone_connected"
         case problems
     }
 }
@@ -666,8 +677,11 @@ struct PhoneLibraryProgress: Equatable {
              done: status.reachable && status.libraryTracks > 0)
         step("playlists", "Create the managed smart playlists",
              done: status.managedPlaylists.count >= 3)
+        // The only step that happens on another device. Nothing here can see
+        // Amperfy, so this reflects what the user marked in the Connect card
+        // rather than a probe — stated as such wherever it is shown.
         step("phone", "Connect Amperfy over home Wi-Fi",
-             done: false)
+             done: status.phoneConnected)
         self.steps = steps
     }
 

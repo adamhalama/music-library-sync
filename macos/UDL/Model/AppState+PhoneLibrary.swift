@@ -44,6 +44,22 @@ extension AppState {
         }
     }
 
+    /// Records the user's acknowledgement that Amperfy reaches this Mac. It is
+    /// the last setup step and the only one nothing here can observe, so it is
+    /// stored in the feature config where the checklist reads it back.
+    func setPhoneConnected(_ connected: Bool) async {
+        guard var config = navidromeConfig?.config else {
+            phoneLibraryStatus = .failure("Phone Library config has not loaded yet.")
+            return
+        }
+        guard config.phone.connected != connected else { return }
+        config.phone.connected = connected
+        guard await savePhoneLibraryConfig(config) else { return }
+        phoneLibraryStatus = connected
+            ? "Marked the phone as connected. UDL cannot verify this itself."
+            : "Marked the phone as not connected."
+    }
+
     /// Saves the account password to macOS Keychain through the one credential
     /// path that writes secrets. The value is never held in `AppState`.
     func savePhoneLibraryPassword(_ password: String) async {

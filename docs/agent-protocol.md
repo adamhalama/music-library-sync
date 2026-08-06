@@ -121,7 +121,7 @@ marked **run** return `{"run_id":"…"}` immediately and terminate through
 | `navidrome.config.write` | `config` | write path, saved config, canonical content |
 | `navidrome.deps.status` | `{}` | Homebrew/Navidrome availability, version, and problems; never mutates |
 | `navidrome.deps.ensure` | `confirm` (must be `true`) | **run** returning the Homebrew install result |
-| `navidrome.status` | `{}` | dependency, service, account, library, playlist, and backup state |
+| `navidrome.status` | `{}` | dependency, service, account, library, playlist, and backup state, plus the self-reported `phone_connected` |
 | `navidrome.service.control` | `action` (`start`, `stop`, `restart`) | **run** returning the resulting service status |
 | `navidrome.setup.plan` | `{}` | **run** returning the checksummed setup plan |
 | `navidrome.setup.apply` | signed `plan` | **run** returning written files, directories, and service action |
@@ -143,6 +143,11 @@ the phone reaches UDL through it. It reads the server's stars directly and never
 touches Apple Music, so it is the one favourites method that works without a
 Music automation grant. Its ordering matches the `navidrome-favorites` snapshot,
 so a listing and a refreshed snapshot can be compared line for line.
+
+`phone.connected` in the Navidrome config is a user acknowledgement, not an
+observation: nothing on the Mac can see Amperfy, so the last setup step is
+recorded through `navidrome.config.write` and read back on `navidrome.status`
+as `phone_connected`. No method claims to have verified the phone.
 
 Config write methods intentionally perform canonical rewrites; comments and
 the caller's original formatting are not preserved. Main, playlist, Free DL,

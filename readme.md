@@ -229,6 +229,7 @@ home network):
 - `udl navidrome favorites import plan [--plan-file <path>]`: classify every Apple Music favorite. Apple Music is only read.
 - `udl navidrome favorites import apply --plan-file <path>`: back up the database, star exact path matches, and verify parity.
 - `udl navidrome favorites list [--json]`: list what is starred on the server right now. This is the return path — a like made on the phone in Amperfy is canonical in Navidrome, and this is how it reaches UDL. Apple Music is not consulted, so it works without a Music automation grant.
+- `udl navidrome phone [--connected=false]`: record — or withdraw — the acknowledgement that Amperfy on the phone reaches this Mac. It is self-reported: nothing here can observe the phone, and marking it changes only the setup checklist (the app's Connect Amperfy card has the same button). `udl navidrome status` shows it on the `Phone connected:` line.
 - `udl navidrome backup create` / `list`: manage Navidrome database backups.
 - v1 is trusted-LAN HTTP only. Never port-forward the Navidrome port.
 - `udl navidrome dates reconcile`: rewrite Navidrome's Date Added from each

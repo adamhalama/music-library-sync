@@ -117,7 +117,10 @@ type Status struct {
 	BackupCount      int              `json:"backup_count"`
 	LatestBackup     *Backup          `json:"latest_backup,omitempty"`
 	LogPath          string           `json:"log_path,omitempty"`
-	Problems         []string         `json:"problems"`
+	// PhoneConnected is the user's own acknowledgement that Amperfy reaches
+	// this Mac, not an observation. See PhoneConfig.
+	PhoneConnected bool     `json:"phone_connected"`
+	Problems       []string `json:"problems"`
 }
 
 // Status inspects dependency, service, and — when credentials exist — server
@@ -132,7 +135,11 @@ func (m *Manager) Status(ctx context.Context) Status {
 		PlaylistsDir: m.Resolved.PlaylistsDir,
 		Username:     m.Config.Server.Username,
 		LogPath:      m.Resolved.LogFile,
-		Problems:     []string{},
+		// Read from config, so it survives restarts and an unreachable server:
+		// a phone that was connected does not become unconnected because this
+		// Mac cannot ping Navidrome right now.
+		PhoneConnected: m.Config.Phone.Connected,
+		Problems:       []string{},
 	}
 	status.PasswordStored = auth.HasNavidromePassword()
 	status.Dependency = m.Deps.Status(ctx)
@@ -282,6 +289,22 @@ func (m *Manager) SaveGenres(ctx context.Context, genres []string) (PlaylistRefr
 	}
 	m.ConfigPath = path
 	return m.RefreshPlaylists(ctx)
+}
+
+// SetPhoneConnected records — or withdraws — the user's acknowledgement that
+// Amperfy reaches this Mac. It is the one setup step nothing here can observe,
+// so it is stored rather than probed.
+func (m *Manager) SetPhoneConnected(connected bool) error {
+	m.Config.Phone.Connected = connected
+	path, err := ResolveWritePath(m.ConfigPath, "")
+	if err != nil {
+		return err
+	}
+	if err := Save(path, m.Config); err != nil {
+		return err
+	}
+	m.ConfigPath = path
+	return nil
 }
 
 // AppleFavorites reads the favorited local tracks from Apple Music.

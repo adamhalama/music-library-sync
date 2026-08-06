@@ -36,6 +36,7 @@ final class PhoneLibraryTests: XCTestCase {
           "scanning": false,
           "managed_playlists": null,
           "backup_count": 0,
+          "phone_connected": false,
           "problems": null
         }
         """.data(using: .utf8)!
@@ -100,7 +101,8 @@ final class PhoneLibraryTests: XCTestCase {
             },
             "scan": {"schedule": "@every 1h"},
             "backup": {"schedule": "0 3 * * *", "count": 7},
-            "playlists": {"hard_bounce_genres": null, "apple_hard_bounce_playlist": "HARD BOUNCE"}
+            "playlists": {"hard_bounce_genres": null, "apple_hard_bounce_playlist": "HARD BOUNCE"},
+            "phone": {"connected": false}
           }
         }
         """.data(using: .utf8)!
@@ -156,7 +158,8 @@ final class PhoneLibraryTests: XCTestCase {
             ),
             scan: NavidromeScanConfig(schedule: "@every 1h"),
             backup: NavidromeBackupConfig(schedule: "0 3 * * *", count: 7),
-            playlists: NavidromePlaylistsConfig(hardBounceGenres: ["Hard Bounce"], appleHardBouncePlaylist: "HARD BOUNCE")
+            playlists: NavidromePlaylistsConfig(hardBounceGenres: ["Hard Bounce"], appleHardBouncePlaylist: "HARD BOUNCE"),
+            phone: NavidromePhoneConfig(connected: true)
         )
         let encoded = try JSONEncoder.agent.encode(config)
         let text = String(decoding: encoded, as: UTF8.self).lowercased()
@@ -314,11 +317,32 @@ final class PhoneLibraryTests: XCTestCase {
             playlistCount: 3
         )
         let progress = PhoneLibraryProgress(status: status)
-        // Everything except the phone connection, which no backend state can
-        // observe and which is therefore never claimed as done.
+        // Everything except the phone connection, which nothing here can
+        // observe: it stays current until the user acknowledges it.
         XCTAssertEqual(progress.completed, 5)
         XCTAssertEqual(progress.remaining, 1)
         XCTAssertEqual(progress.current?.id, "phone")
+    }
+
+    /// The last step is self-reported. Without a way to record it the checklist
+    /// would read "5 of 6" forever, which is what this replaced.
+    func testAcknowledgingThePhoneCompletesTheChecklist() {
+        let status = makeStatus(
+            dependencyReady: true,
+            homebrewInstalled: true,
+            serviceState: "running",
+            passwordStored: true,
+            username: "jaa",
+            reachable: true,
+            libraryTracks: 1574,
+            playlistCount: 3,
+            phoneConnected: true
+        )
+        let progress = PhoneLibraryProgress(status: status)
+        XCTAssertEqual(progress.completed, progress.total)
+        XCTAssertEqual(progress.remaining, 0)
+        XCTAssertNil(progress.current)
+        XCTAssertTrue(progress.steps.first { $0.id == "phone" }?.isDone ?? false)
     }
 
     func testProgressBlocksOnAnUnownedLaunchAgent() {
@@ -334,7 +358,7 @@ final class PhoneLibraryTests: XCTestCase {
             service: makeService(state: "stopped", owned: false),
             reachable: status.reachable, server: status.server, libraryTracks: status.libraryTracks,
             scanning: false, managedPlaylists: [], backupCount: 0, latestBackup: nil,
-            logPath: nil, problems: []
+            logPath: nil, phoneConnected: status.phoneConnected, problems: []
         )
         let progress = PhoneLibraryProgress(status: status)
         guard case .blocked(let reason)? = progress.steps.first(where: { $0.id == "service" })?.state else {
@@ -430,7 +454,8 @@ final class PhoneLibraryTests: XCTestCase {
         username: String,
         reachable: Bool,
         libraryTracks: Int,
-        playlistCount: Int
+        playlistCount: Int,
+        phoneConnected: Bool = false
     ) -> NavidromeStatus {
         let playlists = (0..<playlistCount).map {
             NavidromePlaylistInfo(id: "pl-\($0)", name: "Playlist \($0)", owner: "jaa", trackCount: 10)
@@ -462,6 +487,7 @@ final class PhoneLibraryTests: XCTestCase {
             backupCount: 0,
             latestBackup: nil,
             logPath: "/d/navidrome.log",
+            phoneConnected: phoneConnected,
             problems: []
         )
     }

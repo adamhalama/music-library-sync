@@ -68,6 +68,7 @@ type Config struct {
 	Scan      ScanConfig      `yaml:"scan" json:"scan"`
 	Backup    BackupConfig    `yaml:"backup" json:"backup"`
 	Playlists PlaylistsConfig `yaml:"playlists" json:"playlists"`
+	Phone     PhoneConfig     `yaml:"phone" json:"phone"`
 }
 
 // ServerConfig describes how UDL and Amperfy reach the server.
@@ -107,6 +108,15 @@ type BackupConfig struct {
 type PlaylistsConfig struct {
 	HardBounceGenres        []string `yaml:"hard_bounce_genres" json:"hard_bounce_genres"`
 	AppleHardBouncePlaylist string   `yaml:"apple_hard_bounce_playlist" json:"apple_hard_bounce_playlist"`
+}
+
+// PhoneConfig records the one setup step that happens on another device.
+//
+// Nothing on this Mac can observe that Amperfy was added to the phone: the
+// Subsonic API exposes no client registry UDL reads, so this is the user's own
+// acknowledgement, stored so the checklist can complete and stay complete.
+type PhoneConfig struct {
+	Connected bool `yaml:"connected" json:"connected"`
 }
 
 // LoadOptions selects which configuration files participate in discovery.
@@ -441,6 +451,7 @@ type fileConfig struct {
 	Scan      *fileScan      `yaml:"scan"`
 	Backup    *fileBackup    `yaml:"backup"`
 	Playlists *filePlaylists `yaml:"playlists"`
+	Phone     *filePhone     `yaml:"phone"`
 }
 
 type fileServer struct {
@@ -474,6 +485,10 @@ type filePlaylists struct {
 	AppleHardBouncePlaylist *string   `yaml:"apple_hard_bounce_playlist"`
 }
 
+type filePhone struct {
+	Connected *bool `yaml:"connected"`
+}
+
 func (f fileConfig) apply(cfg *Config) {
 	assignInt(f.Version, &cfg.Version)
 	assignBool(f.Enabled, &cfg.Enabled)
@@ -504,6 +519,9 @@ func (f fileConfig) apply(cfg *Config) {
 			cfg.Playlists.HardBounceGenres = append([]string(nil), *f.Playlists.HardBounceGenres...)
 		}
 		assignString(f.Playlists.AppleHardBouncePlaylist, &cfg.Playlists.AppleHardBouncePlaylist)
+	}
+	if f.Phone != nil {
+		assignBool(f.Phone.Connected, &cfg.Phone.Connected)
 	}
 }
 

@@ -138,10 +138,29 @@ struct PhoneLibraryView: View {
                         .font(Typography.control)
                         .foregroundStyle(step.isDone ? Theme.textSecondary : Theme.text)
                     Spacer(minLength: 0)
+                    // The phone step is the one nobody can finish for the user
+                    // and the one nothing here can observe, so its action lives
+                    // on the step itself. Buried in the Connect card at the
+                    // bottom of the page, it was unfindable.
+                    if step.id == "phone" {
+                        Button(step.isDone ? "Undo" : "Mark as connected") {
+                            Task { await appState.setPhoneConnected(!step.isDone) }
+                        }
+                        .buttonStyle(.link)
+                        .constrained(by: phoneAcknowledgementReason)
+                    }
                 }
                 if case .blocked(let reason) = step.state {
                     ConstraintNote(text: reason, severity: .warn)
                         .padding(.leading, 22)
+                }
+                if step.id == "phone", !step.isDone {
+                    ConstraintNote(
+                        text: "UDL cannot see your phone. Once Amperfy reaches this Mac, mark it yourself — the address and account are in the Connect Amperfy card below.",
+                        severity: .info,
+                        symbol: "iphone"
+                    )
+                    .padding(.leading, 22)
                 }
             }
         }
@@ -595,6 +614,17 @@ struct PhoneLibraryView: View {
                 severity: .warn,
                 symbol: "lock.shield"
             )
+            // The last checklist step happens on the phone, where UDL cannot
+            // see it: Amperfy announces itself through no API this app reads.
+            // So it is acknowledged here, and the wording never pretends the
+            // Mac checked.
+            if appState.navidromeStatus?.phoneConnected == true {
+                ConstraintNote(
+                    text: "You marked the phone as connected. UDL cannot verify this itself.",
+                    severity: .info,
+                    symbol: "checkmark.circle"
+                )
+            }
             HStack(spacing: 8) {
                 Button("Copy address") {
                     NSPasteboard.general.clearContents()
@@ -603,9 +633,30 @@ struct PhoneLibraryView: View {
                 .constrained(by: connection.isReady
                     ? nil
                     : "The LAN address is known once the service is running and the account is set.")
+                if appState.navidromeStatus?.phoneConnected == true {
+                    Button("Mark as not connected") {
+                        Task { await appState.setPhoneConnected(false) }
+                    }
+                    .constrained(by: phoneAcknowledgementReason)
+                } else {
+                    Button("Mark as connected") {
+                        Task { await appState.setPhoneConnected(true) }
+                    }
+                    .constrained(by: phoneAcknowledgementReason)
+                }
                 Spacer(minLength: 0)
             }
         }
+    }
+
+    /// The acknowledgement writes the feature config, so it waits for the
+    /// config to be loaded and for any running operation to finish.
+    private var phoneAcknowledgementReason: String? {
+        if appState.isPhoneLibraryBusy { return busyReason }
+        if appState.navidromeConfig == nil {
+            return "Phone Library state has not loaded yet."
+        }
+        return nil
     }
 
     // MARK: Shared reasons

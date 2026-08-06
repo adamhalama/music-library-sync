@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +34,7 @@ func TestNavidromeCommandTreeIsRegistered(t *testing.T) {
 		{"navidrome", "favorites", "import", "plan", "--help"},
 		{"navidrome", "favorites", "import", "apply", "--help"},
 		{"navidrome", "favorites", "list", "--help"},
+		{"navidrome", "phone", "--help"},
 		{"navidrome", "backup", "create", "--help"},
 	} {
 		app, _, _ := newNavidromeTestApp()
@@ -79,6 +81,53 @@ func TestNavidromeConfigShowOmitsCredentialFields(t *testing.T) {
 		if strings.Contains(strings.ToLower(rendered), forbidden) {
 			t.Fatalf("config show must not mention %q:\n%s", forbidden, rendered)
 		}
+	}
+}
+
+// The phone step cannot be observed from this Mac, so it is recorded. Both
+// directions must persist, or the checklist would be stuck at "5 of 6" — the
+// bug this command and its GUI button replaced.
+func TestNavidromePhoneAcknowledgementPersistsBothWays(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("navidrome configuration is macOS only")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "navidrome.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nenabled: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	run := func(args ...string) string {
+		app, out, _ := newNavidromeTestApp()
+		root := newRootCommand(app)
+		root.SetArgs(append([]string{"--navidrome-config", path}, args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return out.String()
+	}
+	connected := func() bool {
+		cfg, err := navidrome.Load(navidrome.LoadOptions{ExplicitPath: path})
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		return cfg.Phone.Connected
+	}
+
+	if connected() {
+		t.Fatal("a fresh config must not claim the phone is connected")
+	}
+	if rendered := run("navidrome", "phone"); !strings.Contains(rendered, "as connected") {
+		t.Fatalf("output = %q", rendered)
+	}
+	if !connected() {
+		t.Fatal("marking the phone connected must persist")
+	}
+	if rendered := run("navidrome", "phone", "--connected=false"); !strings.Contains(rendered, "not connected") {
+		t.Fatalf("output = %q", rendered)
+	}
+	if connected() {
+		t.Fatal("withdrawing the acknowledgement must persist")
 	}
 }
 

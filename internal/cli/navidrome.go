@@ -30,6 +30,7 @@ and importing favorites are explicit, confirmed actions.
 	cmd.AddCommand(newNavidromeSetupCommand(app))
 	cmd.AddCommand(newNavidromePlaylistsCommand(app))
 	cmd.AddCommand(newNavidromeFavoritesCommand(app))
+	cmd.AddCommand(newNavidromePhoneCommand(app))
 	cmd.AddCommand(newNavidromeBackupCommand(app))
 	cmd.AddCommand(newNavidromeDatesCommand(app))
 	return cmd
@@ -158,11 +159,46 @@ func newNavidromeStatusCommand(app *AppContext) *cobra.Command {
 					fmt.Fprintf(app.IO.Out, "Playlist: %s (%d tracks)\n", playlist.Name, playlist.TrackCount)
 				}
 			}
+			fmt.Fprintf(app.IO.Out, "Phone connected: %s (self-reported)\n", yesNo(status.PhoneConnected))
 			fmt.Fprintf(app.IO.Out, "Backups: %d\n", status.BackupCount)
 			printProblems(app, status.Problems)
 			return nil
 		},
 	}
+}
+
+// newNavidromePhoneCommand records the one setup step that happens on the
+// phone. Nothing here can observe Amperfy, so the acknowledgement is stored
+// where every surface reads it from: the feature config.
+func newNavidromePhoneCommand(app *AppContext) *cobra.Command {
+	connected := true
+	cmd := &cobra.Command{
+		Use:   "phone",
+		Short: "Record whether Amperfy on the phone reaches this Mac",
+		Long: strings.TrimSpace(`
+Mark the phone as connected once Amperfy can reach this Mac over home Wi-Fi.
+
+This is self-reported. UDL cannot observe the phone, and marking it changes
+nothing about the server — only the setup checklist.
+`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := navidromeManager(app, true)
+			if err != nil {
+				return err
+			}
+			if err := manager.SetPhoneConnected(connected); err != nil {
+				return err
+			}
+			if connected {
+				fmt.Fprintln(app.IO.Out, "Marked the phone as connected.")
+			} else {
+				fmt.Fprintln(app.IO.Out, "Marked the phone as not connected.")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&connected, "connected", true, "Whether Amperfy on the phone reaches this Mac")
+	return cmd
 }
 
 func newNavidromeSetupCommand(app *AppContext) *cobra.Command {

@@ -184,6 +184,44 @@ func TestSaveRoundTrip(t *testing.T) {
 	}
 }
 
+// The phone acknowledgement is the only setup step nothing here can observe,
+// so it has to survive a save/load. A config that forgets it puts the checklist
+// back to permanently incomplete.
+func TestPhoneAcknowledgementSurvivesASaveAndLoad(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "navidrome.yaml")
+
+	fresh := DefaultConfig()
+	if fresh.Phone.Connected {
+		t.Fatal("the default config must not claim the phone is connected")
+	}
+	fresh.Phone.Connected = true
+	if err := Save(path, fresh); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(LoadOptions{ExplicitPath: path, Env: map[string]string{}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loaded.Phone.Connected {
+		t.Fatalf("phone acknowledgement was lost: %+v", loaded.Phone)
+	}
+
+	// Withdrawing it must be equally durable, not merely absent from the file.
+	loaded.Phone.Connected = false
+	if err := Save(path, loaded); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reloaded, err := Load(LoadOptions{ExplicitPath: path, Env: map[string]string{}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if reloaded.Phone.Connected {
+		t.Fatalf("withdrawal was lost: %+v", reloaded.Phone)
+	}
+}
+
 func TestNormalizeGenresDeduplicatesExactlyAndSorts(t *testing.T) {
 	// Case variants are kept as separate entries: Navidrome matches genre
 	// case-sensitively, so folding them would drop whichever spelling lost.
