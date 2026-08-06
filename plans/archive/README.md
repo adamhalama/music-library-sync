@@ -23,15 +23,20 @@ Archived work:
 - `reliable-unified-sync-queue-implementation.md` — completed implementation record and evidence for the unified sync queue
 - `navidrome-phone-library-plan.md` — Navidrome + Amperfy phone library plan; code complete
 - `navidrome-phone-library-implementation.md` — implementation record and evidence for that initiative
+- `navidrome-likes-to-rekordbox-plan.md` — Navidrome likes reaching Rekordbox, and the GUI playlist-error blind spot; code complete
+- `navidrome-likes-to-rekordbox-implementation.md` — implementation record and evidence for that initiative
 
-The native macOS frontend, visual-design pass, unified sync queue, and the
-Navidrome + Amperfy phone library are code complete.
+The native macOS frontend, visual-design pass, unified sync queue, the Navidrome
++ Amperfy phone library, and Navidrome likes reaching Rekordbox are all code
+complete.
 
-The phone-library tracker is archived with Phase 7 (Amperfy acceptance) and
-Phase 8 (documentation) still open. Those items are **not** lost: they are
-restated as Phase 0 of the current [../../IMPLEMENTATION.md](../../IMPLEMENTATION.md),
-because the current initiative closes several of them as a side effect. Tick
-them there, not here.
+Two successive trackers have been archived with items still open — the phone
+library's Amperfy acceptance and documentation, and the likes-to-Rekordbox
+Rekordbox apply and un-star check. **None of those are lost.** Each generation
+restates its predecessor's open items as Phase 0 of the successor, and they now
+live in Phase 0 of the current [../../IMPLEMENTATION.md](../../IMPLEMENTATION.md).
+Tick them there, not here.
 
-The current root plan covers Navidrome likes reaching Rekordbox and the GUI
-playlist-error blind spot.
+The current root plan covers `udl triage` — remote metadata triage from the
+phone. Its wider context is
+[../holy-grail-music-loop.md](../holy-grail-music-loop.md).
