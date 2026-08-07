@@ -164,6 +164,9 @@ actor UDLClient {
     func applyNavidromeSetup(_ params: NavidromeSetupApplyParams) async throws -> RunIDResult {
         try await connection.call(.navidromeSetupApply, params: params)
     }
+    func registerNavidromePlaylists() async throws -> NavidromePlaylistRegistrationResult {
+        try await connection.call(.navidromePlaylistsRegister, params: EmptyParams())
+    }
     func refreshNavidromePlaylists() async throws -> RunIDResult {
         try await connection.call(.navidromePlaylistsRefresh, params: EmptyParams())
     }

@@ -114,6 +114,7 @@ var protocolMethods = []string{
 	"navidrome.service.control",
 	"navidrome.setup.plan",
 	"navidrome.setup.apply",
+	"navidrome.playlists.register",
 	"navidrome.playlists.refresh",
 	"navidrome.playlists.deriveGenres",
 	"navidrome.playlists.saveGenres",
@@ -235,6 +236,8 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *RPCError) 
 		return s.navidromeSetupPlan()
 	case "navidrome.setup.apply":
 		return s.navidromeSetupApply(params)
+	case "navidrome.playlists.register":
+		return s.navidromePlaylistsRegister()
 	case "navidrome.playlists.refresh":
 		return s.navidromePlaylistsRefresh()
 	case "navidrome.playlists.deriveGenres":

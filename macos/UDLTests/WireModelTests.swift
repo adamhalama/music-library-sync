@@ -132,6 +132,16 @@ final class SourceRuleTests: XCTestCase {
             "Disabling without an adjacent stated reason is failure mode 1. Use .constrained(by:)."
         )
     }
+
+    /// Phone Library is taller than any supported window. A bounded stack
+    /// clips the likes and connection cards without exposing any scroll action.
+    func testPhoneLibraryContentIsScrollable() throws {
+        let text = try source("Features/PhoneLibrary/PhoneLibraryView.swift").joined(separator: "\n")
+        XCTAssertTrue(
+            text.contains("private var content: some View {\n        ScrollView {"),
+            "Phone Library content must remain inside a ScrollView so its lower workflow cards are reachable."
+        )
+    }
 }
 
 final class WireModelTests: XCTestCase {

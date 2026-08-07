@@ -151,7 +151,7 @@ struct HomeView: View {
             workflowCard(
                 destination: .playlists,
                 title: "Playlists",
-                description: "Cached Apple Music snapshots you can hand off to Free DL or Rekordbox.",
+                description: "Cached provider snapshots you can hand off to Free DL or Rekordbox.",
                 pills: playlistPills
             )
         }

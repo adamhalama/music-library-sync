@@ -197,6 +197,14 @@ func (s *Server) navidromePlaylistsRefresh() (any, *RPCError) {
 	return map[string]string{"run_id": runID}, nil
 }
 
+func (s *Server) navidromePlaylistsRegister() (any, *RPCError) {
+	added, err := playlists.WriteNavidromeDefinitions(s.PlaylistsConfigPath, s.WorkingDir)
+	if err != nil {
+		return nil, asRPCError(err)
+	}
+	return map[string]any{"added": added}, nil
+}
+
 func (s *Server) navidromeDeriveGenres() (any, *RPCError) {
 	manager, rpcErr := s.navidromeManager(false)
 	if rpcErr != nil {

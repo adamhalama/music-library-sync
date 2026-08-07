@@ -3,10 +3,9 @@ import SwiftUI
 /// C11 — the cache-first playlist browser.
 ///
 /// Opening this screen reads `playlists.list` and `playlists.config.read` and
-/// nothing else; neither method contacts Music.app. Every path that does reach
-/// Music — refresh and provider discovery — is an explicit action behind its
-/// own confirmation, and every outcome that did not replace the snapshot says
-/// so in those words.
+/// nothing else; neither method contacts a provider. Every provider read — a
+/// snapshot refresh or Apple Music discovery — is an explicit action, and every
+/// outcome that did not replace the snapshot says so in those words.
 struct PlaylistsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var chrome: ShellChrome
@@ -47,7 +46,12 @@ struct PlaylistsView: View {
                 if appState.playlistConfig == nil {
                     await appState.loadPlaylists()
                 }
-                if selection == nil { selection = appState.playlists.first?.id }
+                if let requested = appState.consumeRequestedPlaylistID(),
+                   appState.playlists.contains(where: { $0.id == requested }) {
+                    selection = requested
+                } else if selection == nil {
+                    selection = appState.playlists.first?.id
+                }
             }
             .onDisappear { chrome.searchText = "" }
             .sheet(item: $editing) { target in
@@ -56,21 +60,25 @@ struct PlaylistsView: View {
             }
             .sheet(isPresented: $showingProvider) { providerSheet }
             .confirmationDialog(
-                "Refresh this snapshot from Music?",
+                "Refresh this snapshot from \(selectedProviderName)?",
                 isPresented: $confirmingRefresh,
                 titleVisibility: .visible
             ) {
-                Button("Refresh from Music") {
+                Button("Refresh from \(selectedProviderName)") {
                     if let id = selection { Task { await appState.refreshPlaylist(id) } }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("udl reads the current Apple Music playlist and replaces the cached snapshot only after the complete result validates. A failed or canceled refresh keeps the snapshot that is on screen now.")
+                Text("udl reads the current \(selectedProviderName) playlist and replaces the cached snapshot only after the complete result validates. A failed or canceled refresh keeps the snapshot that is on screen now.")
             }
     }
 
     private var selectedRow: PlaylistListRow? {
         appState.playlists.first { $0.id == selection }
+    }
+
+    private var selectedProviderName: String {
+        selectedRow?.definition.providerDisplayName ?? "provider"
     }
 
     // MARK: Content
@@ -167,8 +175,8 @@ struct PlaylistsView: View {
         } else {
             EmptyStateView(
                 title: "No cached snapshot",
-                kind: .notRun(action: "refresh once to read this playlist from Music and cache it"),
-                detail: "Opening a playlist never contacts Music.app, so nothing is fetched until you refresh. Nothing is on disk for this definition yet."
+                kind: .notRun(action: "refresh once to read this playlist from \(row.definition.providerDisplayName) and cache it"),
+                detail: "Opening a playlist never contacts its provider, so nothing is fetched until you refresh. Nothing is on disk for this definition yet."
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -233,8 +241,8 @@ struct PlaylistsView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
             Callout(
-                title: "Cached snapshot — opening never contacts Music.app.",
-                detail: "Music is read only when you refresh, and a refresh that fails or is canceled keeps the snapshot you are looking at.",
+                title: "Cached snapshot — opening never contacts \(selectedProviderName).",
+                detail: "\(selectedProviderName) is read only when you refresh, and a refresh that fails or is canceled keeps the snapshot you are looking at.",
                 severity: .info
             )
             if let status = appState.playlistStatus {
@@ -327,7 +335,7 @@ struct PlaylistsView: View {
                 FieldRow("Snapshot version", "\(snapshot.version)")
                 PathField(label: "checksum_sha256", path: snapshot.checksumSHA256)
                 ConstraintNote(
-                    text: "Read from the cached JSON on disk. Music.app has not been contacted in this session unless you refreshed."
+                    text: "Read from the cached JSON on disk. \(row.definition.providerDisplayName) has not been contacted in this session unless you refreshed."
                 )
                 ConstraintNote(
                     text: "\"Missing locally\" is what udl saw when this snapshot was taken. A file deleted since then still reads as on disk until the next refresh."
@@ -357,7 +365,8 @@ struct PlaylistsView: View {
                     symbol: "square.stack.3d.up",
                     target: definition.defaultRekordboxTarget,
                     emptyLabel: "No target mapped",
-                    destination: .rekordbox
+                    destination: .rekordbox,
+                    playlistID: definition.id
                 )
                 ConstraintNote(
                     text: "These are the definition's stored defaults in playlists.yaml. Opening a workflow from here navigates to it; it does not start a run."
@@ -367,7 +376,7 @@ struct PlaylistsView: View {
             InspectorSection(title: "Definition") {
                 FieldRow("ID", definition.id)
                 FieldRow("Provider", definition.provider)
-                FieldRow("Music playlist", definition.providerPlaylist ?? "—")
+                FieldRow("Provider playlist", definition.providerPlaylist ?? "—")
                 FieldRow("Persistent ID", definition.providerPlaylistID ?? "—")
                 Button("Edit playlist definition…") { editing = .edit(definition) }
                     .frame(maxWidth: .infinity)
@@ -397,7 +406,8 @@ struct PlaylistsView: View {
         symbol: String,
         target: String?,
         emptyLabel: String,
-        destination: AppState.Destination
+        destination: AppState.Destination,
+        playlistID: String? = nil
     ) -> some View {
         HStack(spacing: 9) {
             Image(systemName: symbol)
@@ -416,7 +426,16 @@ struct PlaylistsView: View {
                     if let definition = selectedRow?.definition { editing = .edit(definition) }
                 }
             } else {
-                Button("Open") { appState.destination = destination }
+                Button("Open") {
+                    if destination == .rekordbox, let playlistID {
+                        appState.openRekordboxPlaylist(playlistID)
+                    } else {
+                        appState.destination = destination
+                    }
+                }
+                .constrained(by: playlistID != nil && selectedRow?.snapshot == nil
+                    ? "Refresh this snapshot before sending it to Rekordbox."
+                    : nil)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -517,10 +536,10 @@ struct PlaylistsView: View {
             }
             .help("Canceling keeps the snapshot that is on screen. udl replaces a snapshot only after a complete refresh validates.")
         } else {
-            Button("Refresh from Music…") { confirmingRefresh = true }
+            Button("Refresh from \(selectedProviderName)…") { confirmingRefresh = true }
                 .buttonStyle(.borderedProminent)
                 .constrained(by: selection == nil ? "Select a playlist to refresh." : appState.busyReason)
-                .help("Reads this playlist from Music.app and replaces the cached snapshot only on success.")
+                .help("Reads this playlist from \(selectedProviderName) and replaces the cached snapshot only on success.")
         }
     }
 }

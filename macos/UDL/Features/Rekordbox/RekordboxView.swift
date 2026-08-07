@@ -33,7 +33,7 @@ struct RekordboxView: View {
                     } label: {
                         Label(appState.rekordboxPlan == nil ? "Generate plan" : "Regenerate plan", systemImage: "arrow.clockwise")
                     }
-                    .help("Planning is read-only. It re-reads Music.app and the Rekordbox collection and writes nothing.")
+                    .help("Planning is read-only. It reads the selected job, mapping, or cached snapshot and the Rekordbox collection, then writes nothing.")
                 }
             }
             .workspaceInspector { inspector }
@@ -42,6 +42,12 @@ struct RekordboxView: View {
             .task {
                 if appState.rekordboxConfig == nil || appState.rekordboxRuntime == nil {
                     await appState.loadRekordbox()
+                }
+                if appState.playlistConfig == nil {
+                    await appState.loadPlaylists()
+                }
+                if let playlistID = appState.consumeRequestedRekordboxPlaylistID() {
+                    target = .playlist(playlistID)
                 }
             }
             .onDisappear { chrome.searchText = "" }
@@ -192,7 +198,7 @@ struct RekordboxView: View {
                         .textSelection(.enabled)
                         .lineLimit(1)
                 } else {
-                    Text(isRunning(.plan) ? "reading Music.app and the Rekordbox collection…" : "rekordbox.plan has not been called")
+                    Text(isRunning(.plan) ? "reading the selected source and Rekordbox collection…" : "rekordbox.plan has not been called")
                         .font(Typography.monoSmall)
                         .foregroundStyle(Theme.textTertiary)
                 }
@@ -344,6 +350,15 @@ struct RekordboxView: View {
                 title: job.id,
                 subtitle: "playlist → \(job.rekordboxPlaylist ?? job.rekordboxPlaylistID ?? "—")",
                 sourceType: "rekordbox"
+            )
+        }
+        items += appState.playlists.compactMap { row in
+            guard row.snapshot != nil else { return nil }
+            return SidebarContextItem(
+                id: RekordboxPlanTarget.playlist(row.id).id,
+                title: row.definition.name,
+                subtitle: "snapshot → \(row.definition.defaultRekordboxTarget ?? "config default")",
+                sourceType: row.definition.provider
             )
         }
         return SidebarContext(
@@ -578,7 +593,11 @@ struct RekordboxView: View {
 
     private func generatePlan() {
         Task {
-            await appState.planRekordbox(jobID: target.jobID, mappingID: target.mappingID)
+            await appState.planRekordbox(
+                jobID: target.jobID,
+                mappingID: target.mappingID,
+                playlistID: target.playlistID
+            )
         }
     }
 
@@ -607,19 +626,21 @@ struct RekordboxView: View {
     enum RekordboxOperationKind { case plan, inspect, apply }
 }
 
-/// The `rekordbox.plan` target, as a sidebar identity. `job_id` and
-/// `mapping_id` are mutually exclusive on the wire, so they are one choice
-/// here rather than two pickers that can contradict each other.
+/// The `rekordbox.plan` target, as a sidebar identity. `job_id`, `mapping_id`,
+/// and `playlist_id` are mutually exclusive on the wire, so they are one
+/// choice here rather than controls that can contradict each other.
 enum RekordboxPlanTarget: Equatable {
     case configDefault
     case job(String)
     case mapping(String)
+    case playlist(String)
 
     var id: String {
         switch self {
         case .configDefault: "__default__"
         case .job(let value): "job:\(value)"
         case .mapping(let value): "mapping:\(value)"
+        case .playlist(let value): "playlist:\(value)"
         }
     }
 
@@ -630,6 +651,8 @@ enum RekordboxPlanTarget: Equatable {
             self = .job(value)
         } else if let value = id.split(separator: ":", maxSplits: 1).last.map(String.init), id.hasPrefix("mapping:") {
             self = .mapping(value)
+        } else if let value = id.split(separator: ":", maxSplits: 1).last.map(String.init), id.hasPrefix("playlist:") {
+            self = .playlist(value)
         } else {
             return nil
         }
@@ -642,6 +665,11 @@ enum RekordboxPlanTarget: Equatable {
 
     var mappingID: String? {
         if case .mapping(let value) = self { return value }
+        return nil
+    }
+
+    var playlistID: String? {
+        if case .playlist(let value) = self { return value }
         return nil
     }
 }

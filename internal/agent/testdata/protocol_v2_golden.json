@@ -46,6 +46,7 @@
     "navidrome.service.control",
     "navidrome.setup.plan",
     "navidrome.setup.apply",
+    "navidrome.playlists.register",
     "navidrome.playlists.refresh",
     "navidrome.playlists.deriveGenres",
     "navidrome.playlists.saveGenres",

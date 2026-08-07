@@ -53,6 +53,12 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(refresh.generated, [])
         XCTAssertEqual(refresh.warnings, [])
 
+        let registration = try JSONDecoder.agent.decode(
+            NavidromePlaylistRegistrationResult.self,
+            from: #"{"added": null}"#.data(using: .utf8)!
+        )
+        XCTAssertEqual(registration.added, [])
+
         let derivationPayload = """
         {
           "source_playlist": "HARD BOUNCE",
@@ -136,6 +142,29 @@ final class PhoneLibraryTests: XCTestCase {
         // The optional fields are genuinely optional on the wire.
         XCTAssertNil(starred.tracks[1].artist)
         XCTAssertNil(starred.tracks[1].path)
+    }
+
+    func testNavidromeFavoritesHandoffUsesTheManagedSnapshotIdentity() {
+        XCTAssertEqual(NavidromeStarredListResult.playlistID, "navidrome-favorites")
+        XCTAssertEqual(NavidromeStarredListResult.playlistName, "Favourites (Navidrome)")
+
+        let definition = PlaylistDefinition(
+            id: NavidromeStarredListResult.playlistID,
+            name: NavidromeStarredListResult.playlistName,
+            provider: "navidrome",
+            providerPlaylist: NavidromeStarredListResult.playlistName,
+            providerPlaylistID: "starred",
+            defaultFreeDLJob: nil,
+            defaultRekordboxTarget: "nav_fav_imports"
+        )
+        XCTAssertEqual(definition.providerDisplayName, "Navidrome")
+
+        let target = RekordboxPlanTarget.playlist(definition.id)
+        XCTAssertEqual(target.id, "playlist:navidrome-favorites")
+        XCTAssertEqual(RekordboxPlanTarget(id: target.id), target)
+        XCTAssertEqual(target.playlistID, definition.id)
+        XCTAssertNil(target.jobID)
+        XCTAssertNil(target.mappingID)
     }
 
     /// Reading stars never writes, so it must not be treated as a step that
@@ -393,6 +422,7 @@ final class PhoneLibraryTests: XCTestCase {
     func testMutatingOperationsAreDistinguishedFromReadOnlyOnes() {
         XCTAssertTrue(PhoneLibraryOperation.installDependency.isMutating)
         XCTAssertTrue(PhoneLibraryOperation.setupApply.isMutating)
+        XCTAssertTrue(PhoneLibraryOperation.registerPlaylists.isMutating)
         XCTAssertTrue(PhoneLibraryOperation.favoriteApply.isMutating)
         XCTAssertTrue(PhoneLibraryOperation.serviceControl(action: "restart").isMutating)
         XCTAssertTrue(PhoneLibraryOperation.saveGenres.isMutating)

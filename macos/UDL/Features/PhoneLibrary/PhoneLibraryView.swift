@@ -14,6 +14,7 @@ struct PhoneLibraryView: View {
     @State private var confirmingSetupApply = false
     @State private var confirmingFavoriteApply = false
     @State private var confirmingInstall = false
+    @State private var confirmingPlaylistRegistration = false
     @State private var showingPlanContents = false
 
     var body: some View {
@@ -41,6 +42,9 @@ struct PhoneLibraryView: View {
                 if appState.navidromeStatus == nil {
                     await appState.loadPhoneLibrary()
                 }
+                if appState.playlistConfig == nil {
+                    await appState.loadPlaylists()
+                }
             }
             .confirmationDialog(
                 "Install Navidrome with Homebrew?",
@@ -63,6 +67,18 @@ struct PhoneLibraryView: View {
                 Text("UDL re-verifies the plan checksum, refuses to overwrite any file it does not manage, writes the managed config and LaunchAgent, and restarts the service. Your audio files are never modified.")
             }
             .confirmationDialog(
+                "Register the managed Navidrome snapshots?",
+                isPresented: $confirmingPlaylistRegistration,
+                titleVisibility: .visible
+            ) {
+                Button("Register snapshots") {
+                    Task { await appState.registerNavidromePlaylists() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This appends any missing managed Navidrome definitions to playlists.yaml. Existing definitions and cached snapshots are left unchanged.")
+            }
+            .confirmationDialog(
                 "Import Apple Music favorites?",
                 isPresented: $confirmingFavoriteApply,
                 titleVisibility: .visible
@@ -82,7 +98,7 @@ struct PhoneLibraryView: View {
     // MARK: Content
 
     private var content: some View {
-        BoundedContent {
+        ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if let notResumed = appState.notResumedMessage(for: .phoneLibrary) {
                     Callout(title: notResumed, severity: .warn)
@@ -586,6 +602,16 @@ struct PhoneLibraryView: View {
             HStack(spacing: 8) {
                 Button("Read starred tracks") { Task { await appState.listNavidromeStarred() } }
                     .constrained(by: serverReason)
+                Button(appState.navidromeFavoritesSnapshotRegistered
+                       ? "Open favorites snapshot"
+                       : "Register favorites snapshot…") {
+                    if appState.navidromeFavoritesSnapshotRegistered {
+                        appState.openPlaylist(NavidromeStarredListResult.playlistID)
+                    } else {
+                        confirmingPlaylistRegistration = true
+                    }
+                }
+                .constrained(by: appState.isPhoneLibraryBusy ? busyReason : nil)
                 Spacer(minLength: 0)
             }
         }

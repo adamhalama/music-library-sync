@@ -111,6 +111,7 @@ enum AgentMethod: String, Codable, CaseIterable, Sendable {
     case navidromeServiceControl = "navidrome.service.control"
     case navidromeSetupPlan = "navidrome.setup.plan"
     case navidromeSetupApply = "navidrome.setup.apply"
+    case navidromePlaylistsRegister = "navidrome.playlists.register"
     case navidromePlaylistsRefresh = "navidrome.playlists.refresh"
     case navidromePlaylistsDeriveGenres = "navidrome.playlists.deriveGenres"
     case navidromePlaylistsSaveGenres = "navidrome.playlists.saveGenres"

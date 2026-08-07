@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jaa/update-downloads/internal/navidrome"
+	"github.com/jaa/update-downloads/internal/playlists"
 )
 
 func newNavidromeAgentServer(t *testing.T) (*Server, string) {
@@ -44,6 +45,7 @@ func TestNavidromeMethodsAreAdvertised(t *testing.T) {
 		"navidrome.deps.status", "navidrome.deps.ensure",
 		"navidrome.status", "navidrome.service.control",
 		"navidrome.setup.plan", "navidrome.setup.apply",
+		"navidrome.playlists.register",
 		"navidrome.playlists.refresh", "navidrome.playlists.deriveGenres",
 		"navidrome.playlists.saveGenres",
 		"navidrome.favorites.plan", "navidrome.favorites.apply",
@@ -80,6 +82,35 @@ func TestNavidromeConfigReadWriteRoundTrip(t *testing.T) {
 	}
 	if written.(navidromeConfigResult).Config.Scan.Schedule != "@every 2h" {
 		t.Fatalf("write did not persist: %+v", written)
+	}
+}
+
+func TestNavidromePlaylistRegistrationIsAppendOnlyAndIdempotent(t *testing.T) {
+	server, _ := newNavidromeAgentServer(t)
+	server.PlaylistsConfigPath = filepath.Join(t.TempDir(), "playlists.yaml")
+
+	value, rpcErr := server.navidromePlaylistsRegister()
+	if rpcErr != nil {
+		t.Fatalf("navidromePlaylistsRegister: %v", rpcErr)
+	}
+	added := value.(map[string]any)["added"].([]string)
+	if len(added) != 3 {
+		t.Fatalf("added = %v, want three managed definitions", added)
+	}
+	cfg, err := playlists.Load(playlists.LoadOptions{ExplicitPath: server.PlaylistsConfigPath})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Definition(navidrome.SmartPlaylistFavorites); !ok {
+		t.Fatalf("managed Navidrome favorites definition was not registered")
+	}
+
+	value, rpcErr = server.navidromePlaylistsRegister()
+	if rpcErr != nil {
+		t.Fatalf("second navidromePlaylistsRegister: %v", rpcErr)
+	}
+	if added = value.(map[string]any)["added"].([]string); len(added) != 0 {
+		t.Fatalf("second added = %v, want no duplicates", added)
 	}
 }
 

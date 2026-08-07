@@ -167,6 +167,11 @@ final class AppState: ObservableObject {
     @Published private(set) var playlistActiveRunID: String?
     @Published private(set) var playlistStatus: PlaylistStatus?
     @Published private(set) var providerPlaylists: [ProviderPlaylist] = []
+    /// One-shot cross-workflow navigation intents. Keeping the selected
+    /// snapshot in AppState lets a handoff survive the destination view being
+    /// destroyed and recreated without making it a sticky global selection.
+    @Published private(set) var requestedPlaylistID: String?
+    @Published private(set) var requestedRekordboxPlaylistID: String?
     @Published private(set) var freeDLConfig: FreeDLConfigResult?
     @Published private(set) var freeDLRunID: String?
     @Published private(set) var freeDLOperation: FreeDLOperation?
@@ -723,8 +728,9 @@ final class AppState: ObservableObject {
     func refreshPlaylist(_ playlistID: String) async {
         guard let client, playlistActiveRunID == nil else { return }
         clearNotResumed(.playlists)
+        let provider = playlists.first { $0.id == playlistID }?.definition.providerDisplayName ?? "provider"
         playlistStatus = PlaylistStatus(
-            message: "Refreshing from Music… the existing snapshot remains active until success.",
+            message: "Refreshing from \(provider)… the existing snapshot remains active until success.",
             severity: .info
         )
         do {
@@ -739,6 +745,26 @@ final class AppState: ObservableObject {
                 preservedPreviousSnapshot: true
             )
         }
+    }
+
+    func openPlaylist(_ playlistID: String) {
+        requestedPlaylistID = playlistID
+        destination = .playlists
+    }
+
+    func consumeRequestedPlaylistID() -> String? {
+        defer { requestedPlaylistID = nil }
+        return requestedPlaylistID
+    }
+
+    func openRekordboxPlaylist(_ playlistID: String) {
+        requestedRekordboxPlaylistID = playlistID
+        destination = .rekordbox
+    }
+
+    func consumeRequestedRekordboxPlaylistID() -> String? {
+        defer { requestedRekordboxPlaylistID = nil }
+        return requestedRekordboxPlaylistID
     }
 
     func discoverProviderPlaylists() async {

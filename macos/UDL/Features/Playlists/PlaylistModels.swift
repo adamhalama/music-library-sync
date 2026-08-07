@@ -18,6 +18,16 @@ struct PlaylistDefinition: Codable, Sendable, Identifiable {
     }
 }
 
+extension PlaylistDefinition {
+    var providerDisplayName: String {
+        switch provider {
+        case "apple_music": "Music"
+        case "navidrome": "Navidrome"
+        default: provider
+        }
+    }
+}
+
 struct PlaylistTrack: Codable, Sendable, Identifiable {
     var id: String { "\(index):\(providerID ?? ""):\(databaseID ?? "")" }
     let index: Int

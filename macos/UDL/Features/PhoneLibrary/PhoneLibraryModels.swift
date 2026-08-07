@@ -366,6 +366,10 @@ struct NavidromePlaylistRefreshResult: Codable, Sendable, Equatable {
     @DefaultEmpty var warnings: [String]
 }
 
+struct NavidromePlaylistRegistrationResult: Codable, Sendable, Equatable {
+    @DefaultEmpty var added: [String]
+}
+
 struct NavidromeGenreDerivation: Codable, Sendable, Equatable {
     let sourcePlaylist: String
     let sourceTrackCount: Int
@@ -553,6 +557,7 @@ struct NavidromeStarredListResult: Codable, Sendable, Equatable {
     /// The managed snapshot these stars flow into. It is a separate playlist
     /// from the Apple Music `favorites` snapshot by design, and it targets its
     /// own Rekordbox playlist.
+    static let playlistID = "navidrome-favorites"
     static let playlistName = "Favourites (Navidrome)"
 }
 
@@ -587,6 +592,7 @@ enum PhoneLibraryOperation: Equatable, Sendable {
     case serviceControl(action: String)
     case setupPlan
     case setupApply
+    case registerPlaylists
     case refreshPlaylists
     case deriveGenres
     case saveGenres
@@ -610,6 +616,7 @@ enum PhoneLibraryOperation: Equatable, Sendable {
         case .serviceControl(let action): "\(action.capitalized)ing the service…"
         case .setupPlan: "Building the setup plan…"
         case .setupApply: "Applying setup…"
+        case .registerPlaylists: "Registering managed snapshots…"
         case .refreshPlaylists: "Refreshing smart playlists…"
         case .deriveGenres: "Reading the Apple Music playlist…"
         case .saveGenres: "Saving the genre allowlist…"

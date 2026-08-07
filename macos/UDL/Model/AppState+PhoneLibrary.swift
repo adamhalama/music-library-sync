@@ -124,6 +124,32 @@ extension AppState {
         }
     }
 
+    var navidromeFavoritesSnapshotRegistered: Bool {
+        playlists.contains { $0.id == NavidromeStarredListResult.playlistID }
+    }
+
+    func registerNavidromePlaylists() async {
+        guard let client, !isPhoneLibraryBusy else { return }
+        phoneLibraryOperation = .registerPlaylists
+        defer { phoneLibraryOperation = nil }
+        phoneLibraryStatus = "Registering the managed Navidrome snapshots…"
+        do {
+            let result = try await client.registerNavidromePlaylists()
+            await loadPlaylists()
+            guard navidromeFavoritesSnapshotRegistered else {
+                phoneLibraryStatus = .failure("The Navidrome favorites snapshot was not registered.")
+                return
+            }
+            phoneLibraryStatus = WorkflowStatus(message: result.added.isEmpty
+                ? "The managed Navidrome snapshots were already registered."
+                : "Registered \(result.added.count) managed Navidrome snapshot(s).")
+        } catch JSONRPCConnectionError.remote(_, let message, _) {
+            phoneLibraryStatus = .failure(message)
+        } catch {
+            phoneLibraryStatus = .failure("Navidrome snapshots could not be registered: \(error.localizedDescription)")
+        }
+    }
+
     func deriveNavidromeGenres() async {
         navidromeGenreDerivation = nil
         await startPhoneLibraryOperation(.deriveGenres) { client in
@@ -253,6 +279,11 @@ extension AppState {
             // it on screen would invite a replay the backend would refuse.
             navidromeSetupPlan = nil
             Task { await loadPhoneLibrary() }
+        case .registerPlaylists:
+            // Registration is a direct config RPC rather than a run and never
+            // reaches this handler. The case still participates in the shared
+            // busy/interruption model while that request is in flight.
+            break
         case .refreshPlaylists:
             if let result = finished.result,
                let refreshed = try? decodeWire(NavidromePlaylistRefreshResult.self, from: result) {
