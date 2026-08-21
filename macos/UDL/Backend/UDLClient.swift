@@ -93,6 +93,15 @@ actor UDLClient {
     func writePlaylistsConfig(_ config: PlaylistConfig) async throws -> PlaylistConfigResult {
         try await connection.call(.playlistsConfigWrite, params: PlaylistConfigWriteParams(config: config))
     }
+    func inspectPlaylistSync() async throws -> PlaylistSyncInspectResult {
+        try await connection.call(.playlistSyncInspect, params: EmptyParams())
+    }
+    func planPlaylistSync(_ params: PlaylistSyncPlanParams) async throws -> RunIDResult {
+        try await connection.call(.playlistSyncPlan, params: params)
+    }
+    func applyPlaylistSync(_ params: PlaylistSyncApplyParams) async throws -> RunIDResult {
+        try await connection.call(.playlistSyncApply, params: params)
+    }
 
     func readFreeDLConfig() async throws -> FreeDLConfigResult {
         try await connection.call(.freeDLConfigRead, params: EmptyParams())

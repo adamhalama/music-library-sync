@@ -54,8 +54,13 @@ func TestPlaylistCacheAndConfigMethodsDoNotReadProvider(t *testing.T) {
 		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic,
 		ProviderPlaylist: "Favourites", ProviderPlaylistID: "provider-id",
 	}
+	syncJob := playlists.SyncJob{
+		ID:        "favs-august",
+		Rekordbox: playlists.PlaylistSelector{Playlist: "favs_august"},
+		Navidrome: playlists.PlaylistSelector{Playlist: "favs_august"},
+	}
 	if err := playlists.Save(playlistPath, playlists.Config{
-		Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition},
+		Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}, SyncJobs: []playlists.SyncJob{syncJob},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -102,9 +107,17 @@ func TestPlaylistCacheAndConfigMethodsDoNotReadProvider(t *testing.T) {
 	if read.Path != playlistPath || !strings.Contains(read.Content, "favorites") {
 		t.Fatalf("unexpected config read: %+v", read)
 	}
+	if len(read.Config.SyncJobs) != 1 || read.Config.SyncJobs[0].ID != "favs-august" {
+		t.Fatalf("sync jobs did not reach config.read: %+v", read.Config.SyncJobs)
+	}
 	read.Config.Playlists[0].Name = "My Favorites"
-	if _, rpcErr := server.writePlaylistsConfig(mustJSON(t, map[string]any{"config": read.Config})); rpcErr != nil {
+	writtenValue, rpcErr := server.writePlaylistsConfig(mustJSON(t, map[string]any{"config": read.Config}))
+	if rpcErr != nil {
 		t.Fatal(rpcErr)
+	}
+	written := writtenValue.(playlistConfigResult)
+	if len(written.Config.SyncJobs) != 1 || !strings.Contains(written.Content, "sync_jobs:") {
+		t.Fatalf("sync jobs did not round-trip through config.write: %+v", written)
 	}
 	createdValue, rpcErr := server.savePlaylistDefinition(mustJSON(t, map[string]any{
 		"definition": playlists.Definition{

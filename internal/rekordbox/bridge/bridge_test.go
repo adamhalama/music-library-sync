@@ -44,7 +44,7 @@ func shellQuote(value string) string {
 
 func TestClientInspectSendsRequestAndDecodesResponse(t *testing.T) {
 	response := `{"playlists":[{"id":"p1","name":"fav_imports","attribute":0,"parent_id":"root","content_ids":["c1"]}],` +
-		`"contents":[{"id":"c1","title":"One","folder_path":"/Music/One.mp3"}]}`
+		`"contents":[{"id":"c1","title":"One","artist":"DJ","album":"Set","duration_seconds":123,"folder_path":"/Music/One.mp3"}]}`
 	bin, requestPath, _ := stubPython(t, response, "", 0)
 
 	inspect, err := (Client{PythonBin: bin}).Inspect(context.Background(), "/db/dir")
@@ -56,6 +56,9 @@ func TestClientInspectSendsRequestAndDecodesResponse(t *testing.T) {
 	}
 	if len(inspect.Contents) != 1 || inspect.Contents[0].FolderPath != "/Music/One.mp3" {
 		t.Fatalf("unexpected contents: %+v", inspect.Contents)
+	}
+	if inspect.Contents[0].Artist != "DJ" || inspect.Contents[0].Album != "Set" || inspect.Contents[0].DurationSeconds != 123 {
+		t.Fatalf("content metadata was not decoded: %+v", inspect.Contents[0])
 	}
 
 	payload, err := os.ReadFile(requestPath)

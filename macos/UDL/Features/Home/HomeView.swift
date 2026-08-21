@@ -154,6 +154,12 @@ struct HomeView: View {
                 description: "Cached provider snapshots you can hand off to Free DL or Rekordbox.",
                 pills: playlistPills
             )
+            workflowCard(
+                destination: .playlistSync,
+                title: "Playlist Sync",
+                description: "Send a paired Rekordbox playlist to the phone, or bring phone membership and order back.",
+                pills: [("\(appState.playlistSyncJobs.count) jobs", .idle)]
+            )
         }
         .padding(.horizontal, Metrics.contentPaddingHorizontal)
         .padding(.vertical, 18)

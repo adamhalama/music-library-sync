@@ -26,25 +26,26 @@ type BuildInfo struct {
 }
 
 type Server struct {
-	Conn                *Conn
-	Runs                *RunRegistry
-	Build               BuildInfo
-	WorkingDir          string
-	ConfigPath          string
-	FreeDLConfigPath    string
-	PlaylistsConfigPath string
-	RekordboxConfigPath string
-	NavidromeConfigPath string
-	ErrOut              io.Writer
-	SyncRegistry        map[string]engine.Adapter
-	SyncRunner          engine.ExecRunner
-	DoctorChecker       *doctor.Checker
-	CredentialOps       *CredentialOperations
-	StartupInspectors   *app.CredentialInspectors
-	PlaylistService     *playlists.Service
-	FreeDLService       *freedl.Service
-	FreeDLOps           *FreeDLOperations
-	RekordboxOps        *RekordboxOperations
+	Conn                  *Conn
+	Runs                  *RunRegistry
+	Build                 BuildInfo
+	WorkingDir            string
+	ConfigPath            string
+	FreeDLConfigPath      string
+	PlaylistsConfigPath   string
+	RekordboxConfigPath   string
+	NavidromeConfigPath   string
+	ErrOut                io.Writer
+	SyncRegistry          map[string]engine.Adapter
+	SyncRunner            engine.ExecRunner
+	DoctorChecker         *doctor.Checker
+	CredentialOps         *CredentialOperations
+	StartupInspectors     *app.CredentialInspectors
+	PlaylistService       *playlists.Service
+	FreeDLService         *freedl.Service
+	FreeDLOps             *FreeDLOperations
+	RekordboxOps          *RekordboxOperations
+	PlaylistMirrorUseCase *app.PlaylistMirrorUseCase
 
 	mu           sync.Mutex
 	initialized  bool
@@ -92,6 +93,9 @@ var protocolMethods = []string{
 	"playlists.saveDefinition",
 	"playlists.config.read",
 	"playlists.config.write",
+	"playlistSync.inspect",
+	"playlistSync.plan",
+	"playlistSync.apply",
 	"freedl.config.read",
 	"freedl.config.write",
 	"freedl.plan.start",
@@ -208,6 +212,12 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *RPCError) 
 		return s.readPlaylistsConfig()
 	case "playlists.config.write":
 		return s.writePlaylistsConfig(params)
+	case "playlistSync.inspect":
+		return s.inspectPlaylistMirror()
+	case "playlistSync.plan":
+		return s.planPlaylistMirror(params)
+	case "playlistSync.apply":
+		return s.applyPlaylistMirror(params)
 	case "freedl.config.read":
 		return s.readFreeDLConfig()
 	case "freedl.config.write":

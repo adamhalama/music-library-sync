@@ -1,17 +1,15 @@
-# Navidrome Likes to Rekordbox — Implementation Tracker
+# Rekordbox and Navidrome Directional Playlist Sync — Implementation Tracker
 
-- **Overall status:** In review — every phase is implemented and validated,
-  including the native app and the end-to-end round trip. What remains is one
-  deliberate user action (the Rekordbox apply) and a set of Amperfy-client
-  checks carried forward from the predecessor.
+- **Overall status:** In progress
 - **Plan:** [PLAN.md](./PLAN.md)
-- **Last updated:** 2026-08-05
+- **Last updated:** 2026-08-07
 - **Archived predecessor:**
-  [plans/archive/navidrome-phone-library-implementation.md](./plans/archive/navidrome-phone-library-implementation.md)
+  [plans/archive/navidrome-likes-rekordbox-implementation.md](./plans/archive/navidrome-likes-rekordbox-implementation.md)
 
-This is the live execution record. Update status, evidence, decisions, and
-discovered work in the same change as the implementation. A checked task means
-the behavior is implemented **and** proportionally validated.
+This is the live execution record. Update phase status, checkboxes, evidence,
+decisions, deviations, and discovered work in the same change as the
+implementation. A checked task means the behavior is implemented **and**
+proportionally validated.
 
 ## Status Convention
 
@@ -22,526 +20,582 @@ Phase status must be one of:
 - `Blocked` — a recorded decision, dependency, or external action is required.
 - `In review` — implementation is complete and final validation remains.
 - `Done` — every task and exit gate is complete.
-- `Deferred` — deliberately removed, with the reason recorded in the decision log.
+- `Deferred` — deliberately removed, with the reason recorded below.
 
 Checkboxes:
 
 - `[ ]` not complete
 - `[x]` implemented and validated
 
-Do not check a task that is only coded. Add newly discovered work explicitly;
-do not silently broaden an existing checkbox.
-
-## Correction: an earlier version of this tracker was wrong about the toolchain
-
-An earlier revision of this file declared every Swift validation a manual gate
-"blocked: needs Xcode", on the basis that `xcodebuild` is unavailable and no
-`Xcode.app` is installed. **Both of those facts are true and the conclusion
-drawn from them was wrong.** This repository does not need Xcode:
-
-- `make app-test-dev` → `packaging/dev/test_macos_app.sh` compiles the app
-  sources and the test sources with `xcrun swiftc` against a hand-written
-  `XCTest` shim and runs them. Command Line Tools are sufficient.
-- `make app-dev-install` → `packaging/dev/install_macos_app.sh` builds, signs,
-  installs, and launches `UDL-Dev.app` from `~/Applications`.
-- `.dev/app.sh` drives the installed app for screenshots.
-
-Everything previously deferred on that basis has now actually been run. The
-mistake was concluding "no Xcode" meant "no Swift build" without first looking
-for the project's own tooling, which is listed in the Makefile.
+Do not check a task that is merely coded. Record newly discovered work instead
+of silently broadening an existing checkbox.
 
 ## Progress Dashboard
 
 | Phase | Status | Depends on | Exit gate |
 | --- | --- | --- | --- |
-| 0. Carried forward from phone library | In progress | — | Every open item from the predecessor tracker is closed or re-deferred with a reason |
-| 1. GUI playlist error surfacing | Done | — | A failing playlist operation shows the backend's own message |
-| 2. Backend signing and Automation | Done | 1 | An Automation grant survives an app rebuild, and the real cause of the favourites failure is recorded |
-| 3. Starred read path | Done | — | `getStarred2` produces a deterministic snapshot with no churn across identical refreshes |
-| 4. Managed definition and Rekordbox target | Done | 3 | `navidrome-favorites` reaches its own Rekordbox playlist, Apple `favorites` untouched |
-| 5. CLI, agent, and native surfaces | Done | 3, 4 | Starred tracks are readable from CLI, RPC, and the app |
-| 6. End-to-end acceptance | In review | 1–5 | A star made on the phone reaches Rekordbox |
-| 7. Documentation and close-out | In progress | 1–6 | Docs, evidence, and decision log complete |
+| 0. Baseline and contracts | Done | — | Existing behavior is green and new contracts are frozen |
+| 1. Pair config and durable state | Done | 0 | Jobs validate, bindings round-trip atomically, old configs remain valid |
+| 2. Shared identity and provider reads | Done | 1 | Both providers produce ordered tracks with one canonical path identity |
+| 3. Writable Navidrome playlists | Done | 2 | A normal owned playlist can be created/replaced and verified safely |
+| 4. Direction-neutral planner | Done | 2, 3 | Both directions produce checksummed, blocking-aware plans |
+| 5. Apply orchestration and recovery | In progress | 4 | Stale plans never write; verified applies back up and advance state |
+| 6. CLI workflow | In progress | 4, 5 | Human and JSON plan/show/apply flows are complete |
+| 7. Agent and native app | In progress | 4–6 | The app can configure, preview, confirm, apply, cancel, and report outcomes |
+| 8. Acceptance and hardening | In progress | 1–7 | Automated suites and the real phone round trip are green |
+| 9. Documentation and close-out | In progress | 8 | Docs, evidence, decisions, and plan status are final |
 
 ---
 
-## Phase 0 — Carried Forward from the Phone Library
+## Phase 0 — Baseline and Contracts
+
+**Status:** Done
+
+**Exit gate:** The repository baseline is recorded, current one-way workflows
+remain green, and public names/formats for this initiative are fixed.
+
+### Tasks
+
+- [x] Record the starting commit, branch, dirty-worktree state, Go version,
+      Swift toolchain, Navidrome version, and pyrekordbox runtime status.
+- [x] Run and record focused existing playlist, Navidrome, Rekordbox, agent, CLI,
+      and Swift tests before changing code.
+- [x] Confirm that the old `playlistsync.Plan` format and checksum code will not
+      be extended; create a separate mirror plan version instead.
+- [x] Freeze the public command tree, direction enum values, RPC method names,
+      YAML keys, state path, and JSON field names from PLAN.md.
+- [x] Define one terminology set across all surfaces:
+      `job`, `direction`, `source`, `destination`, `plan`, `binding`, and
+      `verified parity`.
+- [x] Add focused fixtures for a paired `favs_august` job, an existing adopted
+      Navidrome playlist, and an isolated Rekordbox playlist.
+
+### Evidence
+
+- Starting point: commit `1cf63ecdeab525a62b67ddbc28671be19f77ea18`
+  on `feature/swiftui-gui`; the worktree already contained the new root plan,
+  tracker, archive-index edits, and untracked predecessor archive copies. Those
+  user-authored planning changes were preserved.
+- Tool/runtime snapshot (2026-08-07 17:24 CEST): Go `1.26.0`
+  (`darwin/arm64`); Swift `6.3.3`; Navidrome `0.63.2 (source_archive)`;
+  managed pyrekordbox runtime healthy at version `0.4.4`. System
+  `/usr/bin/python3` does not contain pyrekordbox, which is expected because the
+  CLI selects the managed runtime.
+- Baseline commands/results:
+  - `go test ./internal/playlists ./internal/navidrome
+    ./internal/rekordbox/... ./internal/agent ./internal/cli`: playlists,
+    Rekordbox, agent, and CLI passed; the sandbox blocked Navidrome's local
+    `httptest` listener before assertions ran.
+  - `go test ./internal/navidrome` with local-listener permission: passed.
+  - `make app-test-dev`: 90 Swift tests passed, 0 failed.
+- Contract decisions: command/RPC/YAML/state names and terminology remain as
+  written in PLAN.md. New direction constants live with the pair-state
+  contract. The existing `internal/rekordbox/playlistsync.Plan` was not changed;
+  the mirror plan will be a separate type and version.
+- Fixtures: `internal/playlists/testdata/paired_favs_august.yaml`,
+  `navidrome_adopted_playlist.json`, and
+  `rekordbox_isolated_playlist.json`.
+
+---
+
+## Phase 1 — Pair Configuration and Durable State
+
+**Status:** Done
+
+**Exit gate:** Existing version-1 `playlists.yaml` files load unchanged; paired
+jobs validate; resolved bindings and last-success status are atomic and
+checksummed.
+
+### Configuration
+
+- [x] Add `sync_jobs` plus nested Rekordbox/Navidrome selectors to the playlist
+      configuration model and YAML/JSON encoders.
+- [x] Keep config version 1 and prove a file containing only existing
+      `playlists` entries marshals and behaves unchanged.
+- [x] Validate unique safe job IDs, required names, optional IDs, trimmed
+      values, and duplicate/colliding jobs with actionable field paths.
+- [x] Extend config read/write RPC and native DTOs; decode nil Go collections
+      with `@DefaultEmpty`.
+- [x] Add native editing for paired jobs without placing credentials or
+      runtime state in configuration. CLI users edit the documented YAML;
+      adding an unplanned CLI config-mutation command would violate the frozen
+      command tree. Implement the native editor with the Phase 7 workspace.
+
+### Binding state
+
+- [x] Define versioned pair state containing job ID, config fingerprint,
+      resolved provider IDs/names, last direction/time, final normalized-path
+      checksum, and its own checksum.
+- [x] Store state at `state_dir/playlist-sync/jobs/<job-id>.json` using the
+      repository's atomic write pattern and safe job IDs only.
+- [x] Ignore a binding when its config fingerprint differs; never silently
+      rewrite config to pin provider IDs.
+- [x] Make missing state a normal first-run condition and corrupted/checksum-
+      invalid state an explicit status that cannot be trusted.
+- [x] Test rename survival, changed-selector invalidation, interrupted writes,
+      corrupt JSON, bad checksum, missing directories, and nil collections.
+
+### Evidence
+
+- Tests: `go test ./internal/playlists ./internal/agent ./internal/cli` passed;
+  `make app-test-dev` passed 90/90. Coverage includes config normalization,
+  version-1 compatibility, omitted `sync_jobs`, field-path validation,
+  case-insensitive ID collision refusal, fixture loading, state permissions,
+  checksum validation, missing/corrupt state, rename survival, and selector
+  invalidation.
+- Example config: `internal/playlists/testdata/paired_favs_august.yaml`.
+- State contract: JSON version 1, mode `0600`, atomically written to
+  `playlist-sync/jobs/<job-id>.json`; it contains resolved provider IDs/names,
+  direction/time, config and final-path fingerprints, and no credentials.
+- Native editing is implemented in `PlaylistSyncJobEditor`; it writes through
+  the existing guarded playlist-config RPC and keeps credentials/state out of YAML.
+
+---
+
+## Phase 2 — Shared Identity and Provider Reads
+
+**Status:** Done
+
+**Exit gate:** Rekordbox and Navidrome expose ordered playlist tracks using the
+same canonical real-path identity, including enough metadata for plan rows.
+
+### Canonical path identity
+
+- [x] Extract one shared implementation for URL decoding, path cleaning, and
+      NFC normalization; keep existing exported normalization functions as
+      compatibility wrappers.
+- [x] Add cross-provider fixtures for NFD/NFC filenames, `file:` URLs,
+      redundant components, whitespace, case-sensitive paths, and missing
+      paths.
+- [x] Prohibit artist/title fallback in the shared matcher.
+
+### Rekordbox source read
+
+- [x] Extend bridge content inspection with the metadata needed by the plan UI
+      while retaining backward-compatible JSON decoding.
+- [x] Join each playlist's ordered content IDs to inspected content rows and
+      fail on missing content IDs rather than silently dropping them.
+- [x] Resolve by explicit ID, then valid saved binding, then one exact name;
+      reject ambiguous names and non-normal playlist attributes.
+- [x] Preserve the existing Rekordbox-closed and database-sidecar guard for all
+      live mirror planning.
+
+### Navidrome source/destination read
+
+- [x] Preserve playlist comment, owner, and smart/editability information in
+      the client model.
+- [x] Resolve by explicit ID, binding, or one exact name with the same selector
+      rules as Rekordbox.
+- [x] Confirm every song exposes an absolute real path; turn relative/simulated
+      paths into one actionable `DefaultReportRealPath` blocker.
+- [x] Index the complete accessible Navidrome song catalog by normalized path
+      without collapsing ambiguous rows.
+- [x] Test paging, duplicate IDs, duplicate paths, smart playlists, ownership,
+      renamed bindings, and exact-name ambiguity.
+
+### Evidence
+
+- Tests: `go test ./internal/pathidentity ./internal/playlists
+  ./internal/rekordbox/playlistsync ./internal/navidrome` passed.
+- Fixture notes: the shared table covers NFD/NFC equivalence, one-layer file
+  URL decoding (including literal percent preservation), redundant components,
+  surrounding whitespace, missing paths, case sensitivity, no-match, and
+  duplicate canonical-path ambiguity. Existing exported Navidrome and
+  Rekordbox normalization functions remain compatibility wrappers.
+- Provider-read coverage lives in `internal/playlistmirror/read_test.go`; the
+  Rekordbox bridge now emits artist, album, and duration without breaking older
+  JSON, and every live plan passes the existing closed-process/sidecar guard.
+
+---
+
+## Phase 3 — Writable Navidrome Playlists
+
+**Status:** Done
+
+**Exit gate:** UDL can create or completely replace one normal playlist owned
+by the configured account, without unsafe retries, and verify exact order.
+
+### Client mutation support
+
+- [x] Add OpenSubsonic extension discovery needed to determine `formPost`
+      support.
+- [x] Add a form-encoded mutation request path that shares authentication,
+      timeouts, response bounds, Subsonic error translation, and URL/token
+      redaction with existing reads.
+- [x] Implement complete ordered replacement through `createPlaylist` using a
+      playlist ID for existing destinations and a name only for creation.
+- [x] Prefer form POST; permit a bounded GET fallback only when the encoded
+      request fits the documented limit, otherwise return an upgrade/action
+      message before mutation.
+- [x] Do not apply the generic automatic retry loop to creation-by-name.
+- [x] After an uncertain create response, re-list exact-name playlists and
+      classify exact planned membership as success, no match as failure, and
+      multiple/different matches as partial/uncertain.
+- [x] Reject managed smart playlists and playlists owned by another account
+      before creating a backup or dispatching a mutation.
+- [x] Read the destination back and compare exact ordered song IDs after every
+      mutation.
+
+### Fake server and integration coverage
+
+- [x] Extend the fake server for extension discovery, POST parsing, repeated
+      song IDs, create/update responses, ownership failures, and response-lost
+      scenarios.
+- [x] Test create empty destination with non-empty source, replace existing,
+      reorder-only, no-op, large request, malformed response, 4xx/5xx,
+      cancellation, redacted errors, and verification mismatch.
+- [x] Prove an empty source is rejected by the higher-level workflow and never
+      reaches the mutation client.
+
+### Evidence
+
+- Tests: `go test ./internal/navidrome ./internal/playlistmirror ./internal/app`
+  passed, including form POST, repeated ordered IDs, bounded GET fallback,
+  response-loss reconciliation without retry, ownership/smart/empty guards,
+  malformed/provider failures, and readback mismatch.
+- Live/fake request evidence: the fake server records POST bodies separately
+  from URLs; credential assertions prove auth values are absent from URL query
+  strings. API semantics were checked against the official OpenSubsonic
+  `formPost`, extension-discovery, and `createPlaylist` contracts.
+
+---
+
+## Phase 4 — Direction-Neutral Planner
+
+**Status:** Done
+
+**Exit gate:** Either direction yields the same versioned plan contract,
+correct ordered actions, explicit blockers, and a stable checksum.
+
+### Plan model
+
+- [x] Define a new version-1 mirror plan with job/config fingerprint,
+      direction, generation time, source/destination descriptors, creation
+      intent, summary, rows, final destination IDs, preconditions, blockers,
+      warnings, and checksum.
+- [x] Define rows with source index, metadata, raw/normalized path, both
+      provider IDs, match status, and `add/remove/move/keep/blocked` action.
+- [x] Write atomic plan read/write/show/checksum helpers under a dedicated state
+      directory without touching old Rekordbox plan serialization.
+- [x] Ensure fixed-clock equivalent inputs produce byte-identical checksums and
+      malformed/unknown versions fail with regenerate guidance.
+
+### Planning rules
+
+- [x] Implement both explicit direction values with one generic matching and
+      diff core.
+- [x] Make source order the final destination order and calculate additions,
+      removals, moves, keeps, current count, and final count.
+- [x] Plan creation for a missing destination and adoption for one existing
+      exact-name normal destination.
+- [x] Block empty source, source missing, missing path matches, ambiguous path
+      matches, duplicate canonical tracks, duplicate target names, invalid
+      target type, unowned/smart Navidrome target, and Rekordbox-open state.
+- [x] Record ordered source/destination memberships and matched ID/path pairs as
+      live apply preconditions.
+- [x] Treat a directionally identical playlist as a successful no-op plan that
+      requires no backup or mutation.
+
+### Tests
+
+- [x] Table-test add, remove, move, mixed changes, no-op, destination creation,
+      destination adoption, and changed ordering in both directions.
+- [x] Test every blocker independently and prove blocked plans cannot validate
+      for apply.
+- [x] Test stable selectors, renamed bound playlists, changed config
+      fingerprint, and ambiguous exact names.
+
+### Evidence
+
+- Tests: `go test ./internal/playlistmirror ./internal/playlists` passed. The
+  planner covers both directions, mixed/reorder/no-op/create, every safety
+  blocker, selector/binding ambiguity, stable checksums, atomic round-trip, and
+  tamper rejection.
+- Example plans: deterministic plan fixtures are constructed in
+  `internal/playlistmirror/plan_test.go`; runtime plans are written under
+  `state_dir/playlist-sync/plans` or the explicit `--out` path.
+
+---
+
+## Phase 5 — Apply Orchestration and Recovery
 
 **Status:** In progress
 
-**Exit gate:** Every `[ ]` left in the archived predecessor tracker is closed
-here or explicitly re-deferred with a recorded reason.
+**Exit gate:** Apply revalidates all live state, backs up only the destination,
+verifies exact parity, and advances pair state only after success.
 
-### Favourite round trip (was Phase 4 validation)
+### Common apply pipeline
 
-- [x] Verify an explicit `navidrome-favorites` refresh reflects new server
-      stars. **Closed by Phase 6:** two tracks starred from a phone client
-      appeared as `+2 -0 unchanged=154`. Superseded in mechanism — the `.nsp`
-      smart playlist is no longer on the read path.
+- [x] Verify plan version/checksum, config fingerprint, direction, blockers,
+      and non-empty source before any dependency or mutation work.
+- [x] Re-resolve and re-read both playlists and all matched records; reject any
+      source membership/order, destination membership/order, provider ID, or
+      matched path change since planning.
+- [x] Make global dry-run perform complete validation but skip backups,
+      mutations, and pair-state writes.
+- [x] Return no-op without backup when live state still matches a no-op plan.
+- [x] Define cancellation boundaries before backup, after backup/before write,
+      while a provider request is in flight, and during verification.
 
-### Native workspace visual pass (was Phase 6 validation)
+### Rekordbox destination
 
-- [x] Build and manually inspect the Phone Library workspace against a real
-      installed server. Done in light mode against the live server: setup
-      checklist at 5 of 6, Navidrome 0.63.2 via Homebrew, service running,
-      1574 tracks, 3 retained backups, and the new starred card populated.
-- [ ] Dark mode and the empty / partial / failed states specifically.
-      `.dev/app.sh appearance true` exists for this; only the healthy light
-      state was exercised. Re-deferred as cosmetic.
+- [x] Reuse the existing closed-process/sidecar guard, managed pyrekordbox
+      runtime, full database-directory backup, transaction, and committed-state
+      verification.
+- [x] Convert the generic mirror plan into the existing bridge apply request
+      without weakening its expected-current-content-ID precondition.
+- [x] Verify exact final ordered content IDs and expose the backup path.
 
-### Amperfy acceptance (was Phase 7)
+### Navidrome destination
 
-*Needs the iPhone and the companion app. The favourite round trip below is now
-closed; the rest remain open.*
+- [x] Require the service, credentials, account ownership, and writable target
+      checks before backup.
+- [x] Run the existing verified Navidrome database backup command and refuse the
+      write if no new backup appears.
+- [x] Replace/create the complete ordered playlist and verify exact final song
+      IDs.
+- [x] Classify an uncertain transport result through readback instead of blind
+      retry.
 
-- [ ] Connect Amperfy over home Wi-Fi using the shared account.
-- [ ] Verify All Music, HARD BOUNCE, and Favourites ordering and membership.
-- [ ] Confirm enough free storage and download the complete All Music playlist.
-- [ ] Disable Wi-Fi/Mac availability and play multiple downloaded tracks.
-- [x] Favorite while connected and verify Navidrome plus explicit UDL refresh.
-      **Closed** — validated with **substreamer**, a different Subsonic client,
-      rather than Amperfy. The hop that mattered (phone client → Navidrome →
-      UDL snapshot) is proven; see the deviation note in Phase 6.
-- [ ] Test favorite changes while completely offline and record whether the
-      client queues them on reconnect.
-- [ ] Verify lock-screen, Control Center, Dynamic Island, and favorite control.
+### State and results
 
-### Documentation (was Phase 8)
+- [x] Atomically save resolved bindings and the final parity checksum only
+      after provider verification succeeds.
+- [x] Return exit code 5 plus backup and reconciliation details if an external
+      write is verified/possible but the final verification or local state
+      write does not complete.
+- [x] Ensure a failed/canceled apply never reports the old destination as
+      unchanged when the mutation request may have reached it.
+- [ ] Test backup failure prevents write, stale plans prevent backup, state
+      failure follows verified write, and rerunning after partial status safely
+      rebuilds a plan/binding.
 
-- [ ] Document Amperfy connection, Local Network permission, full download,
-      offline playback, and observed favorite behavior. Still open: it
-      documents observed behaviour and Amperfy itself has not been exercised.
-- [ ] Write `docs/navidrome-recovery.md`. **Re-deferred** — the predecessor's
-      own rule was to write it after walking the recovery path for real, and
-      walking it means deliberately breaking a working install.
-- [x] Document the deferred Tailscale/remote-access direction without
-      configuring it. Present in PLAN.md's Deferred section and in `readme.md`.
+### Evidence
 
-### Known cosmetic defect (carried, not yet scheduled)
-
-- [x] `getPlaylists` reports `songCount: 0` for a smart playlist until it is
-      refreshed. **Resolved as no longer load-bearing** — UDL does not read
-      favourites through the smart playlist any more. Still cosmetically
-      possible on the All Music and HARD BOUNCE rows; re-deferred.
-
----
-
-## Phase 1 — GUI Playlist Error Surfacing
-
-**Status:** Done
-
-**Exit gate:** A failing playlist operation in the native app shows the
-backend's own message, and a refresh failure still preserves the previous valid
-snapshot. **Met.**
-
-### Tasks
-
-- [x] In `applyPlaylistFinished` (`macos/UDL/Model/AppState.swift`), stop
-      discarding `RunFinishedNotification.error`.
-- [x] `.providerList` failure: `.error` severity carrying the backend message,
-      falling back to "Provider listing failed with exit code N."
-- [x] `.providerList` exit code `130`: `.warn`, "Provider listing canceled."
-- [x] `.refresh` failure: `preservedPreviousSnapshot: true` and the C11
-      guarantee intact; the backend message leads, the preservation sentence
-      follows.
-- [x] Match the Rekordbox handler's phrasing — both prefer `finished.error` and
-      fall back to an exit-code sentence.
-- [x] Confirm `PlaylistsView.swift` renders a multi-sentence message without
-      truncating. **No change needed** — the footer renders through `Callout`,
-      which already applies `.fixedSize(horizontal: false, vertical: true)` to
-      both title and detail (`Callout.swift:19,24`).
-
-**Deviation — a third case.** The original `else` covered both a non-zero exit
-and a zero exit whose result would not decode; collapsing them would print
-"failed with exit code 0". `AppState.playlistFailureDetail` distinguishes them.
-
-`applyPlaylistFinished` became internal so the behaviour is directly testable,
-following `consumeBufferedFinished` in the same file.
-
-### Validation
-
-- [x] Swift test: a `run.finished` carrying an error yields `.error` with the
-      backend text, for both operations.
-- [x] Swift test: exit code `130` yields `.warn` for both operations.
-- [x] Swift test: a failed refresh still reports `preservedPreviousSnapshot`
-      and still ends with the preservation sentence.
-- [x] Swift test: message assembly terminates the backend sentence and keeps
-      the undecodable case distinct.
-- [x] `make app-test-dev` → **87 passed, 0 failed**, including all six
-      `PlaylistErrorSurfacingTests`.
-- [x] Manual: the Playlists pane renders correctly in the running app, and
-      "Refresh from Music…" is correctly gated with *"A sync run is in
-      progress. Stop it to start other work."*
-- [ ] Manual: revoke Automation → Music and watch the pane name System
-      Settings. **Not run** — it would require revoking a working grant on the
-      user's machine, and the message path is covered by the unit tests above.
-      Recorded as a deliberate non-action, not an oversight.
+- Tests: `go test ./internal/app ./internal/agent ./internal/cli` passed for
+  stale-state rejection before backup, dry-run/no-op suppression, backup-before-
+  write, cancellation after backup/before mutation, exact provider readback,
+  pair-state advancement, post-verification state-write failure, backup failure,
+  and partial exit-code/result propagation.
+- Recovery cases: response-lost creation reconciles by exact live membership;
+  partial results retain the exact backup path. Explicit context-cancellation
+  boundary and post-verification state-write-failure tests remain open.
 
 ---
 
-## Phase 2 — Backend Signing and Automation Permission
-
-**Status:** Done
-
-**Exit gate:** An Automation grant survives an app rebuild, and the actual
-cause of the Apple Music favourites failure is recorded. **Met.**
-
-### Tasks
-
-- [x] In the Xcode project's `Embed udl backend` script phase, codesign the
-      copied binary after `cp` / `chmod 755`, guarded on the identity being
-      non-empty, with ad-hoc handled separately and an explicit warning when
-      there is no identity. Shell syntax verified with `sh -n`.
-- [x] Confirm no change is needed to `UDL.entitlements` or `Info.plist`.
-      **Confirmed twice** — by inspection, and then on the built app:
-      `codesign -d --entitlements -` on the installed bundle reports
-      `com.apple.security.automation.apple-events = true`.
-- [x] Add a Doctor check running `music.Reader.ListPlaylists` with a short
-      timeout, reporting the actionable automation error on failure.
-- [x] Register the check. **`Severity.forCheck` needed no change** — it maps on
-      `status`/`severity`, not on the check's name.
-- [x] Record the observed cause in the decision log.
-
-**Correction — the dev path was already signing.** An earlier revision of this
-tracker implied the embedded backend was unsigned everywhere.
-`packaging/dev/build_macos_app.sh` already did
-`codesign --force --options runtime --sign -` on `Contents/Resources/udl`
-before this work. **The gap existed only in the Xcode project path**, which is
-what the plan pointed at, and that is what was fixed.
-
-**Deviation — the Doctor probe is gated.** The plan did not say when to run it.
-Unconditional would prompt for Automation on every `udl doctor` for users with
-no Apple Music playlist. It now runs only when at least one `apple_music`
-definition is configured. `ProbeMusicAutomation` and `LoadPlaylistDefinitions`
-are injectable so tests never reach `osascript`. Timeout 5s.
-
-### Validation
-
-- [x] `codesign -dv` on the installed bundle's backend: valid, `adhoc,runtime`,
-      `Mach-O thin (arm64)`.
-- [x] **Rebuild survival — the phase's real gate.** A Swift source file was
-      changed so the ad-hoc cdhash would differ, then
-      `make app-dev-install` rebuilt, re-signed, reinstalled, and relaunched.
-      New `CDHash=0df9d3b564cdfdb11fffabb65031e19299e091ba`. No Automation
-      prompt appeared and the Doctor `music` check still passed. **The grant
-      survived a content-changing rebuild.** (The probe comment was reverted
-      afterwards.)
-- [x] Doctor shows the Automation check passing, in both surfaces:
-      `udl doctor` prints
-      `[info] music: Music.app automation is permitted; playlist refresh can
-      read Music`, and the app reports 29 passed / 3 warnings / 0 errors —
-      identical to the CLI's 29/3/0. The counts are a real discriminator: a
-      denied grant would move `music` from info to warn, giving 28/4.
-- [ ] The revoked-grant message in the Doctor pane. Not run, for the same
-      reason as Phase 1's revoke check; the Go test covers the denied branch
-      including the actionable text.
-- [x] Go test for the new doctor check with a faked probe: granted, denied
-      (asserting the actionable message survives), and not-configured
-      (asserting the probe never runs).
-
-### Cause — recorded as required
-
-**The Automation hypothesis is not confirmed, because the failure it was meant
-to explain does not currently reproduce.** `UDL-Dev.app` holds a working
-Automation grant, drives Music.app successfully, and keeps that grant across a
-rebuild. The plan required recording the cause "whether or not it matches the
-hypothesis", so: the honest answer is that the observed symptom is absent on
-this machine today, and the signing change is correct hygiene for the Xcode
-build path regardless. What *is* now true is that the three things needed to
-identify a recurrence exist — the GUI surfaces the backend message, Doctor
-reports grant state before a refresh needs it, and the Xcode-embedded binary is
-signed so the app's signature is not invalidated at build time.
-
----
-
-## Phase 3 — Starred Read Path
-
-**Status:** Done
-
-**Exit gate:** `getStarred2` produces a snapshot whose checksum is stable across
-repeated refreshes when the server has not changed. **Met against the live
-server.**
-
-### Tasks
-
-- [x] Add `Starred(ctx)` to the `NavidromeClient` interface;
-      `navidrome.Client.Starred` already satisfied it.
-- [x] Add the method to the fake client.
-- [x] Add `NavidromeStarredPlaylistID = "starred"` as the sentinel.
-- [x] Extract the song → `Track` loop into a shared `songTracks` helper.
-- [x] Branch in `Read` before the `PlaylistByName` lookup; return a synthetic
-      `ProviderPlaylist` named `navidrome.SmartPlaylistFavoritesName` carrying
-      the sentinel as its ID.
-- [x] Sort starred tracks by normalized path.
-- [x] Leave `playlists.Snapshot` / `Track` and `snapshotChecksum` untouched.
-
-**Deviation — the sort lives in `internal/navidrome`.** With the CLI and agent
-surfaces also listing stars, three consumers would each have defined an order
-and any drift reintroduces the churn the sort prevents. It is one exported
-function, `navidrome.SortStarredSongs`, used by the provider and by
-`Manager.StarredFavorites`. Ties break on song ID.
-
-**Correction to the exit gate's wording.** `RefreshedAt` is a
-`snapshotChecksum` input, so checksums are only identical across refreshes with
-the clock held still, which the unit test does. The property that matters in
-production is that repeated refreshes report **zero changes** — confirmed live.
-
-### Validation
-
-- [x] Unit: sentinel path produces a path-sorted list with correct
-      `MissingLocal` for present and absent files.
-- [x] Unit: two refreshes over identical data (fixed clock) produce an
-      identical checksum and zero changes.
-- [x] Unit: shuffled server order produces an identical track list.
-- [x] Unit: the named-playlist path still works unchanged.
-- [x] Unit: a server error on the starred path propagates.
-- [x] Unit: `SortStarredSongs` is total and order-independent.
-- [x] `go test -race ./internal/playlists/ ./internal/navidrome/` — pass.
-- [x] Live, twice against the running server:
-      `+154 -0 unchanged=0`, then `+0 -0 unchanged=154`.
-- [x] Live, after a real server-side change: `+2 -0 unchanged=154`. The two new
-      stars were picked up exactly and the other 154 did not churn.
-
----
-
-## Phase 4 — Managed Definition and Rekordbox Target
-
-**Status:** Done
-
-**Exit gate:** `navidrome-favorites` refreshes through the starred read and
-plans into its own Rekordbox playlist, with the Apple `favorites` definition
-provably untouched. **Met.**
-
-### Tasks
-
-- [x] Point the `SmartPlaylistFavorites` entry at the sentinel.
-- [x] Set `DefaultRekordboxTarget: "nav_fav_imports"`.
-- [x] Keep `ProviderPlaylist` populated so `Validate` passes.
-- [x] Confirm `EnsureNavidromeDefinitions` remains append-only.
-- [ ] ~~Confirm no new command is needed~~ — **wrong twice**, see below.
-
-### Discovered work — `EnsureNavidromeDefinitions` was never called
-
-It existed but had **no production caller**; only tests used it. The managed
-definitions were never written to `playlists.yaml`, so
-`udl playlist refresh navidrome-favorites` had nothing to resolve. Confirmed
-against the real config, which contains only `favorites`.
-
-- [x] Add `playlists.WriteNavidromeDefinitions`, merging into the file that
-      will actually be written — not the merged user+project view, which would
-      copy one file's entries into the other.
-- [x] Call it after a successful setup apply from both the CLI and the agent. A
-      registration failure warns rather than failing the setup.
-- [x] Test: append-only, idempotent, Apple entry untouched.
-- Consequence: existing installs need one idempotent
-  `udl navidrome setup apply` to pick the definitions up. **This machine has
-  not had that run** — validation used a temporary config copy instead, so the
-  user's real `playlists.yaml` was never modified.
-
-### Discovered work — `DefaultRekordboxTarget` was never read
-
-Declared in `config.go:38`, normalized, and **read nowhere**. Setting it would
-have had no effect: `planSnapshot` took its target from the caller's options or
-the config-wide default (`fav_imports`), so a `navidrome-favorites` plan would
-have aimed straight at the Apple Music favourites playlist — the exact merge
-PLAN.md decision 3 forbids.
-
-- [x] Add `SnapshotRekordboxTarget` to `RekordboxPlaylistSyncPlanRequest`,
-      applied in `planSnapshot` only when the caller named neither a target
-      name nor a target ID, so an explicit option still wins.
-- [x] Resolve it from the definition in the agent's `rekordbox.plan`.
-- [x] Test: the definition's target is used; an explicit option overrides it.
-
-### Validation
-
-- [x] Existing assertions that the Apple `favorites` definition survives the
-      merge still pass, unmodified.
-- [x] Unit: the managed definition carries the sentinel and the separate
-      target, and the merged config validates.
-- [x] The `favorites` snapshot is byte-for-byte identical across the entire
-      session: `b03b32828e1425fcd832178a8e14322c7f5098aae07d4e0fb5875f1a5b264694`
-      before and after.
-- [x] The user's real `~/.config/udl/playlists.yaml` is unmodified:
-      `baab284e40ce5ba959ed2e120c46dcb48d54e7a88a4494c4770b6b64beadaa7c`
-      before and after.
-
----
-
-## Phase 5 — CLI, Agent, and Native Surfaces
-
-**Status:** Done
-
-**Exit gate:** Starred tracks are readable from the CLI, over the agent
-protocol, and in the app. **Met in all three.**
-
-### Tasks
-
-- [x] `Manager.StarredFavorites(ctx)` next to `AppleFavorites`, sorting through
-      `SortStarredSongs`.
-- [x] `udl navidrome favorites list [--json]`. The parent command's `Short` was
-      updated — it claimed only "Migrate Apple Music favorites into Navidrome".
-- [x] `navidrome.favorites.list` as a run, matching the other favourites
-      methods. `tracks` is normalized to an array so an empty library never
-      encodes as `null`.
-- [x] Register in `protocolMethods` and the `handle` switch.
-- [x] Update `protocol_v2_golden.json` and `docs/agent-protocol.md`.
-- [x] Add the method to `UDLClient.swift` and a wire result in
-      `PhoneLibraryModels.swift`.
-- [x] Show the starred count in `PhoneLibraryView.swift` — a new "Likes from
-      the phone" card, read-only, with an explicit "Read starred tracks" action.
-
-**Deviation — the wire result lives in `PhoneLibraryModels.swift`.** The plan
-said `WireModels.swift`. Every other Phone Library result type lives in
-`PhoneLibraryModels.swift`; only the method enum lives in `WireModels.swift`,
-and that is where the new case went.
-
-**Correction — the contract test does not enforce the docs.** The plan said
-"the contract test enforces both". It does not: nothing in `internal/agent/`
-references `docs/agent-protocol.md`, and `go test ./internal/agent/` passed
-before the docs were touched. The golden file *is* enforced. The docs were
-updated by hand; do not rely on a test to catch a stale protocol doc.
-
-### Validation
-
-- [x] `go test ./internal/agent/` — contract and golden tests pass.
-- [x] `go test ./internal/cli/` — pass, including a rendering test covering the
-      empty listing and a path-less, artist-less track.
-- [x] Swift decode test for the wire result, including `"tracks": null`.
-- [x] Swift test asserting the read operation is non-mutating.
-- [x] **CLI, live:** `udl navidrome favorites list` → `Starred on Navidrome:
-      156`, path-sorted, with paths under each entry.
-- [x] **Wire, live:** `navidrome.favorites.list` returned
-      `{"count":156,"tracks":[…]}` via `run.finished`.
-- [x] **App, live:** pressed "Read starred tracks" in the running
-      `UDL-Dev.app`. The card populated from the server and now reads
-      *"Starred on the server"*, twenty track rows, *"136 more starred track(s)
-      not shown."* (20 + 136 = 156, matching the CLI), and the guidance
-      callout *"Refresh the "Favourites (Navidrome)" snapshot in Playlists to
-      send these to Rekordbox. It is a separate playlist from the Apple Music
-      favorites, by design."*
-
-**Note on how the app was verified.** Synthetic scroll events do not reach the
-app without Input Monitoring, which was not granted, so the card could not be
-photographed in place. It was verified through the accessibility tree instead —
-which is what the app actually rendered — and the button was identified by
-position (the only button between the card's body text and the next card's
-title) rather than pressed blind, since neighbouring buttons include
-"Repair or upgrade…" and "Import favorites…".
-
----
-
-## Phase 6 — End-to-End Acceptance
-
-**Status:** In review — the full path is proven; the Rekordbox apply is left to
-the user
-
-**Exit gate:** A star made on the phone reaches Rekordbox, and the Apple Music
-path is unaffected.
-
-### Tasks
-
-- [x] Star tracks from a phone client. Two tracks were starred during the
-      session: *MIESS x SMVGGLERS - CYNTHIA BATTLE (Bootleg)* and *[FREE DL]
-      Bikini Bottom (MIESS Spongebob Hardbounce Bootleg)*.
-- [x] `udl navidrome favorites list` shows them — count moved 154 → 156.
-- [x] `udl playlist refresh navidrome-favorites` reports `+2 -0
-      unchanged=154`. The two new stars propagated exactly; nothing else moved.
-- [x] Refresh with no change: `+0 -0 unchanged=154` (recorded earlier in the
-      session at the 154 baseline).
-- [x] `udl rekordbox playlist-sync plan --playlist-id navidrome-favorites`:
-      ```
-      Music playlist: Favourites (Navidrome) (156 tracks)
-      Rekordbox playlist: nav_fav_imports (will be created)
-      Matched by path: 156
-      Missing in RB: 0
-      Final target count: 156
-      ```
-- [ ] Apply with Rekordbox closed; verify membership. **Deliberately not run —
-      the user asked to keep this.** The plan is written and verified; applying
-      it writes to the Rekordbox database and is a one-command manual step.
-- [ ] Un-star and confirm the removal propagates. Not exercised; the removal
-      path is covered by unit tests but not live.
-- [x] Confirm `favorites` and its `fav_imports` target are unaffected —
-      checksum identical, and every plan targeted `nav_fav_imports`.
-- [x] Wire-level smoke matching how the app drives it — see the framing
-      discovery below.
-- [x] Repeat the favourites read from the native app — it succeeded.
-
-**Deviation — the client was substreamer, not Amperfy.** The plan and the
-predecessor tracker both name Amperfy. The stars were made in **substreamer**,
-a different Subsonic client on the same phone. The hop this plan cares about —
-phone client → Navidrome → UDL snapshot → Rekordbox plan — is fully proven.
-What is *not* proven is anything Amperfy-specific (its offline queueing, its
-lock-screen controls, its own favourite semantics), and those items stay open
-in Phase 0.
-
-### Discovered work — the wire smoke recipe in PLAN.md does not work
-
-PLAN.md's Evidence section describes driving the agent by piping frames. That
-produces **no output at all**, with exit code 0. The cause is in
-`internal/agent/conn.go:108` — requests are dispatched with
-`go c.handleRequest(...)`, so when stdin hits EOF the read loop returns and
-`Serve` exits before in-flight handlers have written their replies. Two
-consequences:
-
-1. A recipe that pipes a fixed set of frames and closes stdin loses the
-   responses. Holding stdin open works.
-2. Frames sent back-to-back race: `navidrome.favorites.list` immediately after
-   `session.initialize` returns `-32001` (session not initialized).
-
-Neither affects the native app, which holds the pipe open for the session and
-awaits each response. **Pre-existing, not caused by this work, out of scope to
-fix here.** Recorded because PLAN.md's stated evidence method is unreliable and
-anyone repeating it will conclude the agent is broken.
-
-### Validation
-
-- [x] `go build ./...`, `go vet ./...`, `go test ./...` — clean.
-- [x] Native test suite: `make app-test-dev` → **87 passed, 0 failed**.
-- [x] Track counts at each step: 154 → (2 starred from the phone) → 156 in the
-      listing, 156 in the app's card (20 shown + 136 more), `+2 -0
-      unchanged=154` in the snapshot, 156/156 matched by path and 0 missing in
-      the Rekordbox plan. The Apple `favorites` snapshot stayed at 167 with an
-      unchanged checksum throughout.
-
-### Artifacts left on the machine
-
-Validation was additive and reversible, but it did leave things:
-
-- `statefiles/playlists/navidrome-favorites.json` — a valid 156-track snapshot.
-  Harmless, and invisible to `udl playlist list` until the definition is
-  registered.
-- Two plan files under `statefiles/rekordbox/playlist-sync/`:
-  `nav_fav_imports-20260805-135000.plan.json` (154 tracks) and
-  `…-163126.plan.json` (156). Neither was applied.
-- `~/Applications/UDL-Dev.app` was rebuilt and reinstalled several times.
-- **Not touched:** `~/.config/udl/playlists.yaml`, `favorites.json`, the
-  Rekordbox database, and the Navidrome database.
-- A paused dry-run sync of `soundcloud-likes` was open in the app during
-  validation and was left exactly as found — its "2 of 50" selection is
-  unchanged, and a locked row was the only thing clicked in that pane.
-
----
-
-## Phase 7 — Documentation and Close-Out
+## Phase 6 — CLI Workflow
 
 **Status:** In progress
 
+**Exit gate:** Users and scripts can list jobs, plan either direction, inspect
+saved plans, and apply with consistent output and safety behavior.
+
+### Commands and flags
+
+- [x] Register `udl playlist sync list|plan|show|apply` without changing current
+      `playlist` or `rekordbox playlist-sync` behavior.
+- [x] Require `--job` and the full `--direction` value for plan; support
+      `--out` and the existing config/env precedence.
+- [x] Require `--plan-file` for show/apply; interactive apply confirms the
+      named destination, removals, and final count.
+- [x] Require `--force` with `--no-input`; respect global `--dry-run`, `--json`,
+      color/TTY behavior, and Ctrl-C semantics.
+
+### Output and errors
+
+- [x] Human plan output identifies direction, source/destination IDs and names,
+      creation/adoption, summary, blockers, backup kind, plan path, and next
+      command.
+- [x] JSON outputs expose stable structured result/plan fields and write only
+      primary data to stdout.
+- [x] Put progress, diagnostics, and errors on stderr without auth URLs,
+      secrets, or stack traces.
+- [x] Map invalid usage/config/dependencies/runtime/partial/interrupted outcomes
+      to the existing exit codes.
+- [x] Add help examples for initial Rekordbox → Navidrome seed, phone return,
+      saved plan review, JSON automation, dry-run apply, and no-op.
+
+### Tests
+
+- [x] Command registration/help/golden tests.
+- [x] Required flag, enum validation, `--no-input`/`--force`, dry-run, JSON,
+      stdout/stderr, and exit-code tests.
+- [ ] End-to-end CLI tests against fake Navidrome and isolated Rekordbox
+      fixtures.
+
+### Evidence
+
+- Tests: `go test ./internal/cli` passed for registration/help, exact required
+  direction/job flags, noninteractive force, human rendering, and blockers.
+- Terminal transcript: command examples are embedded in Cobra help and
+  `readme.md`. A combined fake-Navidrome/isolated-Rekordbox CLI acceptance test
+  remains open.
+
+---
+
+## Phase 7 — Agent Protocol and Native App
+
+**Status:** In progress
+
+**Exit gate:** The native app exposes the same jobs, plan, blockers, safety,
+apply result, and cancellation semantics as the CLI.
+
+### Agent protocol
+
+- [x] Add `playlistSync.inspect`, `playlistSync.plan`, and
+      `playlistSync.apply` to capability discovery, dispatch, protocol docs,
+      golden fixtures, and operation metadata.
+- [x] Run plan/apply through the cancellable run framework; preserve terminal
+      lifecycle/error frames and never auto-replay a mutating request after
+      backend recovery.
+- [x] Return Go collections as empty arrays where practical and decode every
+      inbound Swift collection with `@DefaultEmpty`.
+- [x] Keep plan and apply errors on the owning Playlist Sync workflow rather
+      than `alertMessage`.
+
+### Native workspace
+
+- [x] Add a `Playlist Sync` destination, sidebar entry, home action, attention
+      summary, and screen-owned `WorkflowStatus`.
+- [x] List configured jobs with provider names, resolved IDs, last direction,
+      last verified time, parity status, and corrupt/missing-state status.
+- [x] Add explicit “Send Rekordbox to phone” and “Bring phone edits to
+      Rekordbox” direction controls; do not infer direction from last run.
+- [ ] Add job editor/provider pickers that save through the existing guarded
+      config-write path and surface external-file conflicts.
+- [x] Render plan header, add/remove/move/keep/blocked filters, searchable row
+      table, source/destination metadata, preconditions, and backup expectation.
+- [x] Use `.constrained(by:)` for every disabled plan/apply/editor control and
+      state the reason adjacent to the control.
+- [x] Confirm apply with destination name, removals, final count, creation/
+      adoption, and backup type; never hide an empty-source or blocker override
+      because none exists.
+- [x] Render success, no-op, failure, cancellation, and partial/uncertain state
+      distinctly with backup and reconciliation detail.
+- [x] Preserve an in-flight plan during ordinary navigation, discard it when
+      its job/direction/config changes, and never resume an interrupted apply.
+
+### Swift validation
+
+- [x] DTO decoding tests, including nil collections and unknown enum values.
+- [ ] AppState run lifecycle, cancellation race, late reply, backend recovery,
+      config conflict, and workflow-error routing tests.
+- [x] SourceRuleTests for disabled controls and alert allowlist.
+- [ ] View/model tests for each status, direction, blocker, no-op, adoption,
+      creation, confirmation, and partial result.
+
+### Evidence
+
+- Tests: agent method inventory/dispatch tests pass; `make app-test-dev` passes
+  92/92, including protocol inventory, `@DefaultEmpty`, future action values,
+  workflow-owned errors, constrained controls, and partial backup rendering.
+- Screenshots/manual notes: **NOVEL UI/DESIGN** is recorded below and in the
+  view source. The production Swift module compiles. Rendered/manual coverage,
+  provider-picker enrichment, resolved-ID/parity detail, and full AppState race
+  matrices remain open.
+
+---
+
+## Phase 8 — Acceptance and Hardening
+
+**Status:** In progress
+
+**Exit gate:** Automated suites pass, destructive paths are isolated and
+recoverable, and one real phone round trip proves exact ordered parity.
+
+### Automated validation
+
+- [x] `go test ./...`
+- [x] `go vet ./...`
+- [x] `go test -race ./...`
+- [x] `make app-test-dev`
+- [x] Build the CLI and development app using the repository-supported paths.
+- [x] Run focused fake-Navidrome mutation tests with transport failures and
+      redaction assertions.
+- [ ] Extend/run the opt-in isolated Rekordbox apply-and-restore acceptance test
+      and verify byte-for-byte restoration.
+- [x] Verify old standalone playlist, Navidrome favourites, Free DL handoff,
+      and `rekordbox playlist-sync` tests remain green.
+
+### Real workflow acceptance
+
+- [ ] Configure `favs-august` as a paired job using the real playlists.
+- [ ] Plan Rekordbox → Navidrome and record every match/blocker, creation or
+      adoption, removals, final count, plan checksum, and backup expectation.
+- [ ] Apply with Rekordbox closed; verify the Navidrome/phone playlist has exact
+      ordered path parity and record the Navidrome backup.
+- [ ] On the phone, remove one track, add one already-indexed library track,
+      and reorder at least one track.
+- [ ] Plan Navidrome → Rekordbox and verify the preview names exactly those
+      membership/order changes with no unmatched rows.
+- [ ] Apply with Rekordbox closed; verify exact ordered content/path parity and
+      record the Rekordbox backup.
+- [ ] Re-plan both directions and record no-op results.
+- [ ] Verify a changed destination after planning refuses apply and regenerating
+      produces the expected new diff.
+- [ ] Verify empty source, unmatched path, duplicate path, and ambiguous target
+      acceptance blockers without bypassing them.
+
+### Manual native-app validation
+
+- [ ] Install/open with `make app-dev-install`; use `.dev/app.sh` and `.dev/ui`
+      for repeatable placement and screenshots.
+- [ ] Verify setup/edit, both directions, creation/adoption, row filters,
+      blocker explanations, confirmation, cancellation, success, no-op,
+      backend recovery, and partial-state rendering.
+- [ ] Confirm the workflow never exposes a password/token or contacts anything
+      outside the configured trusted-LAN Navidrome service.
+
+### Evidence
+
+- Automated command outputs: `go test ./...`, `go vet ./...`, and
+  `go test -race ./...` passed; `make app-test-dev` passed 92/92; `make app-dev`
+  built `bin/udl` and a valid ad-hoc-signed `dist/dev/UDL-Dev.app`. The sandbox
+  denied only a nonessential Go module stat-cache temp write during build; the
+  build itself completed successfully.
+- Real playlists/versions:
+- Backup paths:
+- Before/after checksums and ordered counts:
+- Screenshots:
+
+---
+
+## Phase 9 — Documentation and Close-Out
+
+**Status:** In progress
+
+**Exit gate:** The current behavior, recovery steps, evidence, and remaining
+deferred work are documented, and both root planning documents are final.
+
 ### Tasks
 
-- [x] Document `udl navidrome favorites list` and the `navidrome-favorites` →
-      Rekordbox flow in `readme.md` as a four-step sequence.
-- [x] Document that Apple and Navidrome favourites are separate by design and
-      target different Rekordbox playlists, and that nothing is written back
-      into Music.app.
-- [x] Document the Automation permission requirement and how to re-grant it.
-- [x] Document the new `--playlist-id` flag on `rekordbox playlist-sync plan`.
-- [x] Document `navidrome.favorites.list` in `docs/agent-protocol.md`.
-- [ ] Resolve every Phase 0 item — the favourite round trip and the visual pass
-      are closed; the Amperfy-client items and the recovery doc remain open
-      with reasons.
-- [ ] Update PLAN.md's status. Still `Planned`; it should move to `Delivered`
-      once the Rekordbox apply is run, which is the user's step.
+- [x] Document config schema, command examples, direction semantics, exact-path
+      requirement, empty-source refusal, destination adoption/creation, and
+      no-op behavior in `readme.md`.
+- [x] Document the three new RPC methods and payload/result examples in the
+      agent protocol guide.
+- [x] Add Navidrome playlist replacement recovery using the exact reported
+      backup and existing Rekordbox recovery references.
+- [x] Document that the feature is manual, direction-selected, membership/order
+      only, and never a merge or downloader.
+- [x] Add every non-obvious implementation lesson to `AGENTS.md` in the same
+      change that proves it.
+- [ ] Reconcile every unchecked task as completed, blocked with evidence, or
+      deferred with an explicit reason.
+- [ ] Fill the decision/deviation logs and final validation evidence below.
+- [ ] Change PLAN.md and this tracker to `Delivered`/`Done` only after all exit
+      criteria and the real phone round trip pass.
+- [ ] Archive these root documents only when a later initiative replaces them.
+
+### Evidence
+
+- Documentation changes: `readme.md` documents configuration, CLI use, exact
+  path and mirror semantics; `docs/agent-protocol.md` documents all three RPCs;
+  `docs/navidrome-playlist-recovery.md` records fresh-plan-first recovery;
+  `AGENTS.md` captures binding, OpenSubsonic mutation, and path-identity lessons.
+- Final commands/results: automated commands are recorded in Phase 8. Close-out
+  remains intentionally open until isolated destructive/manual and real-phone
+  acceptance evidence exists.
 
 ---
 
@@ -549,57 +603,51 @@ Validation was additive and reversible, but it did leave things:
 
 | Date | Phase | Decision | Rationale | Consequence |
 | --- | --- | --- | --- | --- |
-| 2026-08-05 | — | Read stars via `getStarred2`, not the `.nsp` smart playlist | The `.nsp` route depends on server import and ownership verification, never validated in the predecessor | The smart playlist stays for client browsing but is not load-bearing |
-| 2026-08-05 | — | `navidrome-favorites` targets `nav_fav_imports` | Apple and Navidrome favourites stay permanently separate | Two Rekordbox playlists; no dedup rule needed |
-| 2026-08-05 | — | Stars are snapshot membership, not a `Track` field | A starred field would change `snapshotChecksum` inputs | Snapshot format unchanged |
-| 2026-08-05 | — | GUI error surfacing ships before the signing fix | The Automation cause was a hypothesis | Phase 1 independent and independently valuable |
-| 2026-08-05 | 3 | The starred sort is one exported function in `internal/navidrome` | Three consumers would otherwise each define an order | `SortStarredSongs` is the single definition |
-| 2026-08-05 | 2 | The Doctor Music check runs only with an `apple_music` definition configured | An unconditional probe would prompt users who never touch Music | Visible when needed, never demanded when not |
-| 2026-08-05 | 2 | The Automation hypothesis is recorded as **unconfirmed, symptom absent** | The app holds a working grant and keeps it across rebuilds; the failure does not reproduce here | The signing fix stands as hygiene for the Xcode path, not as a proven cure |
-| 2026-08-05 | 4 | Managed definitions are written at setup apply, not synthesized at load | A definition the user cannot see or edit would be surprising | Existing installs need one idempotent setup apply |
-| 2026-08-05 | 4 | `default_rekordbox_target` applies only when the caller named no target | Unconditional would override an explicit `--rekordbox-playlist` | Definition sets the default; the flag wins |
-| 2026-08-05 | 6 | The Rekordbox apply was not run | It writes to the Rekordbox database; the user explicitly kept this step | Plan verified and ready; applying is one command |
-| 2026-08-05 | 6 | Amperfy was substituted with substreamer | It was the client to hand, and the hop under test is client-agnostic | The Subsonic round trip is proven; Amperfy-specific behaviour is not |
-| 2026-08-05 | 1,2 | The revoke-Automation checks were not run | They would revoke a working grant on the user's machine; the denied branches are unit-tested | Two manual checks recorded as deliberate non-actions |
-| 2026-08-05 | 0 | `docs/navidrome-recovery.md` re-deferred | It must be written after walking the recovery path, which means breaking a working install | Recovery undocumented; risk unchanged |
-| 2026-08-05 | 0 | The stale `songCount: 0` defect re-deferred | No longer load-bearing now that favourites bypass the smart playlist | Cosmetic on two rows |
+| 2026-08-07 | — | Use explicit direction per run | The workflow is seed to phone, edit, then bring back; automatic merge is unnecessary and harder to trust | The selected source replaces destination membership and order |
+| 2026-08-07 | — | Navidrome order controls the return run | Phone edits include ordering and must be reproduced in Rekordbox | Source order is authoritative in either selected direction |
+| 2026-08-07 | — | Block all unmatched or ambiguous tracks | A silent partial mirror can remove or omit gig tracks | Apply has no partial/skip mode |
+| 2026-08-07 | — | Preview and adopt one existing exact-name destination | Existing phone playlists should be reusable without hidden overwrite | Adoption is explicit in the plan; ambiguous names block |
+| 2026-08-07 | — | Never allow an empty source | Accidental provider emptiness must not clear a playlist | Clearing a paired playlist remains manual and outside this workflow |
+| 2026-08-07 | — | Add CLI and native-app surfaces together | Both scriptable diagnostics and the normal GUI workflow are required | Agent plan/apply contracts are shared by both |
+| 2026-08-07 | 0 | Use a separate mirror plan type/version | Existing Rekordbox plan checksums are a compatibility contract | No new fields are added to old plan serialization |
+| 2026-08-07 | 1 | Treat sync job IDs as case-insensitively unique | The state path is commonly stored on macOS's case-insensitive filesystem | `FAVS` and `favs` cannot silently share one binding file |
+| 2026-08-07 | 1 | Keep resolved provider IDs in state only | External renames should survive without config mutation | Selector changes invalidate the binding through the config fingerprint |
+| 2026-08-07 | 1 | Keep YAML as the CLI job-editing surface | PLAN.md freezes `playlist sync` to list/plan/show/apply and defines jobs in `playlists.yaml` | The tracker no longer invents an extra CLI mutation command; native editing remains required |
+| 2026-08-07 | 2 | Centralize exact path identity in `internal/pathidentity` | Three implementations had drifted: standalone matching lacked file-URL decoding and NFC folding | Existing exported normalizers wrap one implementation; the new mirror matcher has no metadata input |
+| 2026-08-07 | 3 | Prefer OpenSubsonic `formPost`; never blindly retry creation by name | Ordered membership can exceed safe GET sizes, and a lost create response can otherwise duplicate a playlist | Reconcile one exact-name playlist with exact planned membership; otherwise return partial/uncertain |
+| 2026-08-07 | 5 | Re-check cancellation after a successful destination backup | Cancellation can arrive between backup completion and the external mutation call | Apply returns the backup path and performs no write at that boundary; in-flight calls retain partial/uncertain semantics |
+
+Add rows whenever implementation evidence changes a decision. Do not rewrite
+history silently.
 
 ## Deviations from PLAN.md
 
 | Deviation | Reason | Consequence |
 | --- | --- | --- |
-| The starred sort lives in `internal/navidrome` as `SortStarredSongs` | Three surfaces list stars; one definition prevents drift | Provider, CLI, and agent are guaranteed to agree |
-| A third `.providerList` case for a zero exit with an undecodable result | The plan's two cases would print "failed with exit code 0" | `playlistFailureDetail` separates backend failure from decode failure |
-| `applyPlaylistFinished` made internal | The behaviour is the deliverable and needed a direct test | Matches `consumeBufferedFinished`'s existing precedent |
-| The Doctor probe is gated on an `apple_music` definition | The plan did not say when to run it | Recorded in the decision log |
-| The Swift wire result went into `PhoneLibraryModels.swift` | Every other Phone Library result type lives there | The method case still went into `WireModels.swift` |
-| **The plan's claim that the contract test enforces the protocol doc is false** | Nothing in `internal/agent/` references the doc | Docs updated by hand; no test guards them |
-| **"No new command is needed" was wrong twice** | `EnsureNavidromeDefinitions` had no caller; `DefaultRekordboxTarget` was read nowhere | Both closed: `WriteNavidromeDefinitions` plus a setup-apply call, and `SnapshotRekordboxTarget` through the plan path |
-| A `--playlist-id` flag was added to `rekordbox playlist-sync plan` | Phase 6's command assumed a flag that did not exist; snapshot planning was agent-only | The CLI can plan from a snapshot |
-| "Checksum stable across repeated refreshes" is imprecise | `RefreshedAt` is a checksum input | Tested both ways: fixed-clock checksum equality, and zero reported changes live |
-| The phone client was substreamer, not Amperfy | It was the client to hand | Subsonic round trip proven; Amperfy specifics still open |
-| **An earlier revision of this tracker wrongly declared Swift validation impossible** | It concluded "no Xcode" meant "no Swift build" without checking the Makefile, which exposes a `swiftc`-based test runner and app installer | Everything so deferred has now been run: 87 Swift tests pass and the app was built, installed, and driven |
+| None yet | — | — |
+
+## Discovered Work
+
+Record unplanned but necessary tasks here before implementing them.
+
+| Date | Phase | Work | Reason | Status |
+| --- | --- | --- | --- | --- |
+| 2026-08-07 | 1 | Reconcile CLI editing checklist with frozen CLI contract | The original Phase 1 text required a command absent from PLAN.md | Done: YAML is the CLI surface; native editor remains tracked |
+| 2026-08-07 | 5 | Add an explicit post-backup cancellation check | Context-aware provider calls alone left a small window in which cancellation had already won but mutation had not started | Done and covered by `TestPlaylistMirrorCancellationAfterBackupPreventsMutation` |
+| 2026-08-07 | 7 | Prevent late cancel completion from replacing a terminal app result | `run.finished` can arrive while `run.cancel` is awaiting its response | Done: the status changes only if the same run is still active |
+
+## Novel UI / Design Ledger
+
+Mark any newly invented view or visual interaction here as **NOVEL UI/DESIGN**
+before or alongside implementation, including why existing app patterns were
+insufficient and what validation was performed.
+
+| Date | Marker | View/design | Rationale | Validation |
+| --- | --- | --- | --- | --- |
+| 2026-08-07 | **NOVEL UI/DESIGN** | Dedicated Playlist Sync workspace with two plain-language direction actions and a row-level add/remove/move/keep/blocked preview | The workflow pairs two providers and cannot fit the cache-oriented standalone Playlists inspector without hiding direction and destructive replacement scope | Reuses existing shell, sidebar-context, status, callout, table, confirmation, and `.constrained(by:)` patterns; production module builds and 92 Swift tests pass; rendered manual validation remains required |
 
 ## Final Validation Evidence
 
-- `go build ./...`, `go vet ./...`, `go test ./...` — clean.
-- `make app-test-dev` — **87 Swift tests passed, 0 failed**, including 8 new.
-- `make app-dev-install` — builds, signs, installs, launches; embedded backend
-  signed `adhoc,runtime`; app entitlement `apple-events = true`.
-- Automation grant survived a content-changing rebuild (new cdhash, no prompt,
-  `music` check still passing).
-- Doctor agrees across surfaces: CLI 29 info / 3 warn / 0 error; app 29 passed /
-  3 warnings / 0 errors.
-- Live round trip: 2 tracks starred from a phone client → `udl navidrome
-  favorites list` 156 → app card 156 → snapshot `+2 -0 unchanged=154` →
-  Rekordbox plan 156/156 matched, 0 missing, target `nav_fav_imports`.
-- Apple Music path untouched: `favorites.json` `b03b3282…aa94` and
-  `playlists.yaml` `baab284e…aa7c`, identical before and after.
-
-**Outstanding:**
-
-1. Apply the Rekordbox plan with Rekordbox closed and verify membership — the
-   user's step, deliberately left.
-2. Register the managed definitions on this machine with one idempotent
-   `udl navidrome setup apply`.
-3. The Amperfy-specific items in Phase 0, and `docs/navidrome-recovery.md`.
+Not yet available. On completion, record exact commands, pass/fail counts,
+tool/service versions, real playlist counts, plan checksums, backup paths,
+ordered parity evidence, screenshots, and every deliberate non-action.

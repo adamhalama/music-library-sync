@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,20 @@ func TestPlaylistReadsOrderedMembership(t *testing.T) {
 	}
 }
 
+func TestPlaylistPreservesCommentAndManagedSmartStatus(t *testing.T) {
+	managed := convertPlaylist(rawPlaylist{
+		ID: "managed", Name: SmartPlaylistFavoritesName, Owner: "jaa",
+		Comment: "Managed by UDL (" + OwnershipMarker + ").",
+	})
+	if managed.Comment == "" || !managed.Smart {
+		t.Fatalf("managed playlist metadata was lost: %#v", managed)
+	}
+	normal := convertPlaylist(rawPlaylist{ID: "normal", Name: "favs", Owner: "jaa", Comment: "phone edits"})
+	if normal.Comment != "phone edits" || normal.Smart {
+		t.Fatalf("normal playlist was misclassified: %#v", normal)
+	}
+}
+
 func TestPlaylistByNameFallsBackToCaseInsensitive(t *testing.T) {
 	fake := newFakeServer(t)
 	fake.AddPlaylist("pl-1", "HARD BOUNCE", "jaa")
@@ -309,6 +324,121 @@ func TestPlaylistByNameFallsBackToCaseInsensitive(t *testing.T) {
 	}
 	if _, ok, err := fake.Client().PlaylistByName(context.Background(), "Nope"); err != nil || ok {
 		t.Fatalf("missing playlist must report ok=false: %v %v", ok, err)
+	}
+}
+
+func TestOpenSubsonicExtensionsAndFormPostPlaylistReplacement(t *testing.T) {
+	fake := newFakeServer(t)
+	fake.AddSong(song("1", "One", "/music/one.mp3"))
+	fake.AddSong(song("2", "Two", "/music/two.mp3"))
+	fake.AddPlaylist("pl-1", "favs", "jaa", "1")
+
+	supported, err := fake.Client().SupportsFormPost(context.Background())
+	if err != nil || !supported {
+		t.Fatalf("SupportsFormPost = %v, %v", supported, err)
+	}
+	result, err := fake.Client().ReplacePlaylist(context.Background(), "pl-1", "", []string{"2", "1", "2"})
+	if err != nil {
+		t.Fatalf("ReplacePlaylist: %v", err)
+	}
+	if result.Created || result.Reconciled || !sameOrderedStrings(result.SongIDs, []string{"2", "1", "2"}) {
+		t.Fatalf("unexpected replacement result: %#v", result)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	mutationIndex := -1
+	for index, endpoint := range fake.Requests {
+		if endpoint == "createPlaylist.view" {
+			mutationIndex = index
+			break
+		}
+	}
+	if mutationIndex < 0 || fake.Methods[mutationIndex] != http.MethodPost {
+		t.Fatalf("mutation did not use form POST: methods=%v", fake.Methods)
+	}
+	if fake.RawQueries[mutationIndex] != "" {
+		t.Fatalf("POST leaked credentials or song IDs in URL query: %q", fake.RawQueries[mutationIndex])
+	}
+	if got := fake.RawForms[mutationIndex]["songId"]; !sameOrderedStrings(got, []string{"2", "1", "2"}) {
+		t.Fatalf("repeated ordered song IDs were not posted: %v", got)
+	}
+}
+
+func TestCreatePlaylistLostResponseReconcilesWithoutRetry(t *testing.T) {
+	fake := newFakeServer(t)
+	fake.AddSong(song("1", "One", "/music/one.mp3"))
+	fake.AddSong(song("2", "Two", "/music/two.mp3"))
+	fake.MalformedAfterMutation = true
+
+	result, err := fake.Client().ReplacePlaylist(context.Background(), "", "favs", []string{"2", "1"})
+	if err != nil {
+		t.Fatalf("ReplacePlaylist: %v", err)
+	}
+	if !result.Created || !result.Reconciled || result.Playlist.Name != "favs" {
+		t.Fatalf("unexpected reconciled creation: %#v", result)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	createCalls := 0
+	for _, endpoint := range fake.Requests {
+		if endpoint == "createPlaylist.view" {
+			createCalls++
+		}
+	}
+	if createCalls != 1 || len(fake.Playlists) != 1 {
+		t.Fatalf("creation was blindly retried: calls=%d playlists=%d", createCalls, len(fake.Playlists))
+	}
+}
+
+func TestPlaylistMutationGETFallbackIsBounded(t *testing.T) {
+	fake := newFakeServer(t)
+	fake.Extensions = nil
+	fake.AddSong(song("1", "One", "/music/one.mp3"))
+	fake.AddPlaylist("pl-1", "favs", "jaa", "1")
+	if _, err := fake.Client().ReplacePlaylist(context.Background(), "pl-1", "", []string{"1"}); err != nil {
+		t.Fatalf("small GET fallback: %v", err)
+	}
+	fake.mu.Lock()
+	if fake.Methods[1] != http.MethodGet {
+		t.Fatalf("fallback method = %q", fake.Methods[1])
+	}
+	fake.mu.Unlock()
+
+	large := make([]string, 0, 2000)
+	for index := 0; index < cap(large); index++ {
+		large = append(large, strings.Repeat("x", 16)+strconv.Itoa(index))
+	}
+	if _, err := fake.Client().ReplacePlaylist(context.Background(), "pl-1", "", large); err == nil || !strings.Contains(err.Error(), "formPost") {
+		t.Fatalf("large fallback error = %v", err)
+	}
+}
+
+func TestPlaylistMutationGuardsAndVerificationMismatch(t *testing.T) {
+	fake := newFakeServer(t)
+	client := fake.Client()
+	if err := client.ValidateWritablePlaylist(Playlist{Name: "managed", Smart: true, Owner: "jaa"}); err == nil {
+		t.Fatal("expected managed smart playlist refusal")
+	}
+	if err := client.ValidateWritablePlaylist(Playlist{Name: "other", Owner: "someone-else"}); err == nil || !strings.Contains(err.Error(), "someone-else") {
+		t.Fatalf("ownership error = %v", err)
+	}
+	if _, err := client.ReplacePlaylist(context.Background(), "pl-1", "", nil); err == nil || !strings.Contains(err.Error(), "empty source") {
+		t.Fatalf("empty source error = %v", err)
+	}
+
+	fake.AddSong(song("1", "One", "/music/one.mp3"))
+	fake.AddSong(song("2", "Two", "/music/two.mp3"))
+	fake.AddPlaylist("pl-1", "favs", "jaa", "1")
+	fake.OnRequest = func(endpoint string, _ url.Values) {
+		if endpoint == "getPlaylist.view" {
+			fake.mu.Lock()
+			fake.Playlists["pl-1"].SongIDs = []string{"1", "2"}
+			fake.Playlists["pl-1"].SongCount = 2
+			fake.mu.Unlock()
+		}
+	}
+	if _, err := client.ReplacePlaylist(context.Background(), "pl-1", "", []string{"2", "1"}); err == nil || !errors.Is(err, ErrMutationUncertain) {
+		t.Fatalf("verification mismatch error = %v", err)
 	}
 }
 

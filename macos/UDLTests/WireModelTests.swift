@@ -1432,12 +1432,13 @@ final class WireModelTests: XCTestCase {
         let sources = try decode(SourceCapabilitiesResult.self, #"{"sources": null}"#)
         let playlistList = try decode(PlaylistListResult.self, #"{"playlists": null}"#)
         let providerList = try decode(ProviderPlaylistListResult.self, #"{"playlists": null}"#)
-        let playlistConfig = try decode(PlaylistConfig.self, #"{"version": 1, "playlists": null}"#)
+        let playlistConfig = try decode(PlaylistConfig.self, #"{"version": 1, "playlists": null, "sync_jobs": null}"#)
         XCTAssertTrue(credentials.credentials.isEmpty)
         XCTAssertTrue(sources.sources.isEmpty)
         XCTAssertTrue(playlistList.playlists.isEmpty)
         XCTAssertTrue(providerList.playlists.isEmpty)
         XCTAssertTrue(playlistConfig.playlists.isEmpty)
+        XCTAssertTrue(playlistConfig.syncJobs.isEmpty)
 
         let freeDL = try decode(FreeDLConfig.self, """
         {"version": 1,
@@ -1491,6 +1492,44 @@ final class WireModelTests: XCTestCase {
         """)
         XCTAssertTrue(snapshot.rows.isEmpty)
         XCTAssertTrue(snapshot.activity.isEmpty)
+    }
+
+    func testPlaylistSyncWireModelsAcceptNullCollectionsAndFutureActions() throws {
+        let inspect = try JSONDecoder.agent.decode(
+            PlaylistSyncInspectResult.self,
+            from: #"{"jobs":null}"#.data(using: .utf8)!
+        )
+        XCTAssertTrue(inspect.jobs.isEmpty)
+
+        let preconditions = try JSONDecoder.agent.decode(
+            PlaylistSyncPreconditions.self,
+            from: #"{"source_provider_ids":null,"source_normalized_paths":null,"destination_provider_ids":null,"destination_normalized_paths":null,"final_destination_provider_ids":null,"matched":null}"#.data(using: .utf8)!
+        )
+        XCTAssertTrue(preconditions.sourceProviderIDs.isEmpty)
+        XCTAssertTrue(preconditions.matched.isEmpty)
+
+        let row = try JSONDecoder.agent.decode(
+            PlaylistSyncPlanRow.self,
+            from: #"{"title":"Track","raw_path":"/Music/Track.flac","normalized_path":"/Music/Track.flac","action":"future-action"}"#.data(using: .utf8)!
+        )
+        XCTAssertEqual(row.action, "future-action")
+        XCTAssertEqual(row.actionLabel, "Future-Action")
+    }
+
+    @MainActor
+    func testPlaylistSyncPartialFailureKeepsBackupRecoveryPath() throws {
+        let state = AppState()
+        state.playlistSyncOperation = .apply(dryRun: false)
+        let value = try JSONDecoder.agent.decode(
+            JSONValue.self,
+            from: #"{"dry_run":false,"no_op":false,"backup_path":"/backups/navidrome-before-sync.db"}"#.data(using: .utf8)!
+        )
+        state.applyPlaylistSyncFinished(RunFinishedNotification(
+            runID: "pair-apply", result: value, error: "verification failed", exitCode: 5
+        ))
+        XCTAssertTrue(state.playlistSyncStatus?.message.contains("verification failed") == true)
+        XCTAssertTrue(state.playlistSyncStatus?.message.contains("/backups/navidrome-before-sync.db") == true)
+        XCTAssertNil(state.playlistSyncOperation)
     }
 
     /// A duplicate cannot reuse the id: the id names the state file, so two

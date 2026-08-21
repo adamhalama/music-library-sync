@@ -9,6 +9,7 @@ extension AppState.Destination {
         case .freeDL: "sparkle.magnifyingglass"
         case .rekordbox: "square.stack.3d.up"
         case .playlists: "music.note.list"
+        case .playlistSync: "arrow.left.arrow.right.square"
         case .phoneLibrary: "iphone.gen3"
         case .doctor: "stethoscope"
         case .credentials: "key.horizontal"
@@ -18,7 +19,7 @@ extension AppState.Destination {
 
     /// Sidebar grouping. `Welcome` is routed to on first run rather than
     /// navigated to, so it belongs to no group.
-    static let workflows: [AppState.Destination] = [.home, .sync, .freeDL, .rekordbox, .playlists, .phoneLibrary]
+    static let workflows: [AppState.Destination] = [.home, .sync, .freeDL, .rekordbox, .playlists, .playlistSync, .phoneLibrary]
     static let system: [AppState.Destination] = [.doctor, .credentials, .config]
 }
 
@@ -166,6 +167,8 @@ struct SidebarView: View {
             return attention.rekordboxBlockers > 0 ? (attention.rekordboxBlockers, .error) : nil
         case .playlists:
             return attention.playlistsWithoutSnapshot > 0 ? (attention.playlistsWithoutSnapshot, .warn) : nil
+        case .playlistSync:
+            return nil
         case .phoneLibrary:
             return attention.phoneLibraryRemainingSteps > 0
                 ? (attention.phoneLibraryRemainingSteps, .info)

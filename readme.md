@@ -115,6 +115,8 @@ udl sync
 udl validate
 udl playlist list
 udl playlist show favorites
+udl playlist sync list
+udl playlist sync plan --job favs-august --direction rekordbox-to-navidrome
 udl rekordbox deps status
 udl rekordbox playlist-sync plan
 ```
@@ -261,6 +263,47 @@ home network):
 - Recovery from the reported full-directory backup is documented in
   [`docs/rekordbox-recovery.md`](docs/rekordbox-recovery.md); validate the
   procedure on an isolated copy, never the live library.
+
+Directional paired-playlist commands:
+
+- Define pairs in `playlists.yaml` under `sync_jobs`. Each pair names one
+  Rekordbox playlist and one normal Navidrome playlist; optional provider IDs
+  pin the selector while durable resolved bindings remain in state, not config.
+- `udl playlist sync list` shows configured pairs and their last verified
+  direction. `plan --job <id> --direction
+  <rekordbox-to-navidrome|navidrome-to-rekordbox> [--out <path>]` reads both
+  providers and saves a checksummed preview. `show --plan-file <path>` verifies
+  and displays it. `apply --plan-file <path> [--force]` re-reads both sides,
+  backs up only the destination, replaces its complete membership and order,
+  and verifies exact parity. Use global `--dry-run` for full revalidation with
+  no backup or write; non-interactive apply requires `--force`.
+- Direction is always explicit. This is a manual mirror, never a merge or a
+  downloader: the selected source controls all destination membership and
+  order. Empty sources, missing/relative real paths, ambiguous path matches,
+  duplicate tracks/targets, managed smart playlists, and another user's
+  Navidrome playlist block the entire apply. An already identical pair is a
+  successful no-op with no backup.
+- A missing destination is created; one existing exact-name normal destination
+  is adopted. Multiple exact-name matches are refused. Path identity is exact
+  after file-URL decoding, path cleaning, and Unicode NFC normalization; there
+  is no artist/title fallback and case is preserved.
+- Example configuration:
+
+  ```yaml
+  version: 1
+  playlists: []
+  sync_jobs:
+    - id: favs-august
+      rekordbox:
+        playlist: Favs August
+      navidrome:
+        playlist: Favs August
+  ```
+
+- If apply reports partial/uncertain status, do not blindly retry. Inspect the
+  reported backup and live destination, then generate a fresh plan. Navidrome
+  recovery is documented in
+  [`docs/navidrome-playlist-recovery.md`](docs/navidrome-playlist-recovery.md).
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)

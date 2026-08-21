@@ -35,6 +35,8 @@ type fakeServer struct {
 	// RawQueries records the full query string of every request, so leak
 	// assertions can inspect exactly what went over the wire.
 	RawQueries []string
+	RawForms   []url.Values
+	Methods    []string
 
 	// Fail lets a test script an error response for one endpoint.
 	Fail map[string]subsonicError
@@ -42,12 +44,16 @@ type fakeServer struct {
 	HTTPStatus map[string]int
 	// Malformed makes an endpoint return a non-Subsonic body.
 	Malformed map[string]bool
+	// MalformedAfterMutation simulates a write that commits before the response
+	// is lost or becomes undecodable.
+	MalformedAfterMutation bool
 	// OnRequest runs before each response and may mutate state.
 	OnRequest func(endpoint string, query url.Values)
 	// ServerVersion is reported by ping.
 	ServerVersion string
 	// ServerType is reported by ping.
 	ServerType string
+	Extensions []openSubsonicExtension
 }
 
 type fakePlaylist struct {
@@ -68,6 +74,7 @@ func newFakeServer(t *testing.T) *fakeServer {
 		Malformed:     map[string]bool{},
 		ServerVersion: "0.63.2",
 		ServerType:    "navidrome",
+		Extensions:    []openSubsonicExtension{{Name: "formPost", Versions: []int{1}}},
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
@@ -83,11 +90,16 @@ func (f *fakeServer) URL() string { return f.server.URL }
 
 func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	endpoint := strings.TrimPrefix(r.URL.Path, "/rest/")
-	query := r.URL.Query()
+	if err := r.ParseForm(); err != nil {
+		f.t.Fatalf("parse fake request form: %v", err)
+	}
+	query := r.Form
 
 	f.mu.Lock()
 	f.Requests = append(f.Requests, endpoint)
 	f.RawQueries = append(f.RawQueries, r.URL.RawQuery)
+	f.RawForms = append(f.RawForms, cloneValues(query))
+	f.Methods = append(f.Methods, r.Method)
 	onRequest := f.OnRequest
 	scriptedStatus, hasStatus := f.HTTPStatus[endpoint]
 	malformed := f.Malformed[endpoint]
@@ -137,6 +149,8 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		f.write(w, func(resp *envelopeBody) {
 			resp.SearchResult3 = &searchResult3{Song: page}
 		})
+	case "getOpenSubsonicExtensions.view":
+		f.write(w, func(resp *envelopeBody) { resp.Extensions = f.Extensions })
 	case "getPlaylists.view":
 		items := []rawPlaylist{}
 		for _, playlist := range f.sortedPlaylists() {
@@ -156,6 +170,46 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		detail := &playlistDetail{rawPlaylist: playlist.rawPlaylist, Entry: entries}
+		f.write(w, func(resp *envelopeBody) { resp.Playlist = detail })
+	case "createPlaylist.view":
+		ids := append([]string(nil), query["songId"]...)
+		for _, id := range ids {
+			if _, ok := f.songByID(id); !ok {
+				f.writeError(w, subsonicError{Code: 70, Message: "Song not found"})
+				return
+			}
+		}
+		playlistID := query.Get("playlistId")
+		created := playlistID == ""
+		if created {
+			f.mu.Lock()
+			playlistID = fmt.Sprintf("created-%d", len(f.Playlists)+1)
+			f.Playlists[playlistID] = &fakePlaylist{rawPlaylist: rawPlaylist{
+				ID: playlistID, Name: query.Get("name"), Owner: f.Username, SongCount: len(ids),
+			}, SongIDs: ids}
+			f.mu.Unlock()
+		} else {
+			f.mu.Lock()
+			playlist, ok := f.Playlists[playlistID]
+			if ok {
+				playlist.SongIDs = ids
+				playlist.SongCount = len(ids)
+			}
+			f.mu.Unlock()
+			if !ok {
+				f.writeError(w, subsonicError{Code: 70, Message: "Playlist not found"})
+				return
+			}
+		}
+		if f.MalformedAfterMutation {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("committed but response lost"))
+			return
+		}
+		f.mu.Lock()
+		playlist := *f.Playlists[playlistID]
+		f.mu.Unlock()
+		detail := &playlistDetail{rawPlaylist: playlist.rawPlaylist}
 		f.write(w, func(resp *envelopeBody) { resp.Playlist = detail })
 	case "getStarred2.view":
 		starred := []rawSong{}
@@ -278,17 +332,26 @@ func (f *fakeServer) Salts() []string {
 }
 
 type envelopeBody struct {
-	Status        string           `json:"status"`
-	Version       string           `json:"version"`
-	Type          string           `json:"type,omitempty"`
-	ServerVersion string           `json:"serverVersion,omitempty"`
-	OpenSubsonic  bool             `json:"openSubsonic,omitempty"`
-	Error         *subsonicError   `json:"error,omitempty"`
-	SearchResult3 *searchResult3   `json:"searchResult3,omitempty"`
-	Playlists     *playlistsResult `json:"playlists,omitempty"`
-	Playlist      *playlistDetail  `json:"playlist,omitempty"`
-	Starred2      *starredResult   `json:"starred2,omitempty"`
-	ScanStatus    *scanStatus      `json:"scanStatus,omitempty"`
+	Status        string                  `json:"status"`
+	Version       string                  `json:"version"`
+	Type          string                  `json:"type,omitempty"`
+	ServerVersion string                  `json:"serverVersion,omitempty"`
+	OpenSubsonic  bool                    `json:"openSubsonic,omitempty"`
+	Error         *subsonicError          `json:"error,omitempty"`
+	SearchResult3 *searchResult3          `json:"searchResult3,omitempty"`
+	Playlists     *playlistsResult        `json:"playlists,omitempty"`
+	Playlist      *playlistDetail         `json:"playlist,omitempty"`
+	Starred2      *starredResult          `json:"starred2,omitempty"`
+	ScanStatus    *scanStatus             `json:"scanStatus,omitempty"`
+	Extensions    []openSubsonicExtension `json:"openSubsonicExtensions,omitempty"`
+}
+
+func cloneValues(input url.Values) url.Values {
+	out := url.Values{}
+	for key, values := range input {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func (f *fakeServer) write(w http.ResponseWriter, fill func(*envelopeBody)) {

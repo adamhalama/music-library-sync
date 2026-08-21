@@ -11,6 +11,7 @@ final class AppState: ObservableObject {
         case freeDL = "SoundCloud Free DL"
         case rekordbox = "Rekordbox Sync"
         case playlists = "Playlists"
+        case playlistSync = "Playlist Sync"
         case phoneLibrary = "Phone Library"
         case doctor = "Check System"
         case credentials = "Credentials"
@@ -167,6 +168,11 @@ final class AppState: ObservableObject {
     @Published private(set) var playlistActiveRunID: String?
     @Published private(set) var playlistStatus: PlaylistStatus?
     @Published private(set) var providerPlaylists: [ProviderPlaylist] = []
+    @Published var playlistSyncJobs: [PlaylistSyncInspectRow] = []
+    @Published var playlistSyncPlan: PlaylistSyncPlanResult?
+    @Published var playlistSyncRunID: String?
+    @Published var playlistSyncOperation: PlaylistSyncOperation?
+    @Published var playlistSyncStatus: WorkflowStatus?
     /// One-shot cross-workflow navigation intents. Keeping the selected
     /// snapshot in AppState lets a handoff survive the destination view being
     /// destroyed and recreated without making it a sticky global selection.
@@ -723,6 +729,14 @@ final class AppState: ObservableObject {
             )
             return false
         }
+    }
+
+    /// Writes the shared playlists file for the paired-playlist workflow while
+    /// keeping failures owned by that workflow instead of the snapshot screen.
+    func writePlaylistSyncConfig(_ config: PlaylistConfig) async throws {
+        guard let client else { return }
+        playlistConfig = try await client.writePlaylistsConfig(config)
+        await loadPlaylists()
     }
 
     func refreshPlaylist(_ playlistID: String) async {
@@ -1421,6 +1435,12 @@ final class AppState: ObservableObject {
                 preservedPreviousSnapshot: true
             )
         }
+        if playlistSyncRunID != nil || playlistSyncOperation != nil {
+            interrupted.append(.playlistSync)
+            playlistSyncRunID = nil
+            playlistSyncOperation = nil
+            playlistSyncStatus = .failure("Backend connection ended. No playlist mirror was resumed or replayed.")
+        }
         pendingPrompt = nil
         notResumed.formUnion(interrupted)
         backendRecovery = BackendRecovery(
@@ -1444,6 +1464,11 @@ final class AppState: ObservableObject {
         playlistConfig = nil
         playlistActiveRunID = nil
         providerPlaylists = []
+        playlistSyncJobs = []
+        playlistSyncPlan = nil
+        playlistSyncRunID = nil
+        playlistSyncOperation = nil
+        playlistSyncStatus = nil
         freeDLConfig = nil
         freeDLRunID = nil
         freeDLOperation = nil
@@ -1505,6 +1530,11 @@ final class AppState: ObservableObject {
             applyRekordboxFinished(finished)
             return
         }
+        if finished.runID == playlistSyncRunID || (playlistSyncRunID == nil && playlistSyncOperation != nil) {
+            playlistSyncRunID = finished.runID
+            applyPlaylistSyncFinished(finished)
+            return
+        }
         if finished.runID == phoneLibraryRunID || (phoneLibraryRunID == nil && phoneLibraryOperation != nil) {
             phoneLibraryRunID = finished.runID
             applyPhoneLibraryFinished(finished)
@@ -1528,6 +1558,8 @@ final class AppState: ObservableObject {
             applyFreeDLFinished(finished)
         } else if rekordboxOperation != nil {
             applyRekordboxFinished(finished)
+        } else if playlistSyncOperation != nil {
+            applyPlaylistSyncFinished(finished)
         } else if phoneLibraryOperation != nil {
             applyPhoneLibraryFinished(finished)
         } else {

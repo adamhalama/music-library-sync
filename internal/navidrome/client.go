@@ -16,9 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"golang.org/x/text/unicode/norm"
+	"github.com/jaa/update-downloads/internal/pathidentity"
 )
 
 const (
@@ -130,18 +129,24 @@ func RedactURL(raw string) string {
 
 type subsonicEnvelope struct {
 	Response struct {
-		Status        string           `json:"status"`
-		Version       string           `json:"version"`
-		Type          string           `json:"type"`
-		ServerVersion string           `json:"serverVersion"`
-		OpenSubsonic  bool             `json:"openSubsonic"`
-		Error         *subsonicError   `json:"error"`
-		SearchResult3 *searchResult3   `json:"searchResult3"`
-		Playlists     *playlistsResult `json:"playlists"`
-		Playlist      *playlistDetail  `json:"playlist"`
-		Starred2      *starredResult   `json:"starred2"`
-		ScanStatus    *scanStatus      `json:"scanStatus"`
+		Status        string                  `json:"status"`
+		Version       string                  `json:"version"`
+		Type          string                  `json:"type"`
+		ServerVersion string                  `json:"serverVersion"`
+		OpenSubsonic  bool                    `json:"openSubsonic"`
+		Error         *subsonicError          `json:"error"`
+		SearchResult3 *searchResult3          `json:"searchResult3"`
+		Playlists     *playlistsResult        `json:"playlists"`
+		Playlist      *playlistDetail         `json:"playlist"`
+		Starred2      *starredResult          `json:"starred2"`
+		ScanStatus    *scanStatus             `json:"scanStatus"`
+		Extensions    []openSubsonicExtension `json:"openSubsonicExtensions"`
 	} `json:"subsonic-response"`
+}
+
+type openSubsonicExtension struct {
+	Name     string `json:"name"`
+	Versions []int  `json:"versions"`
 }
 
 type subsonicError struct {
@@ -220,6 +225,7 @@ type Playlist struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Owner      string `json:"owner,omitempty"`
+	Comment    string `json:"comment,omitempty"`
 	TrackCount int    `json:"track_count"`
 	Smart      bool   `json:"smart"`
 }
@@ -231,6 +237,20 @@ type ServerInfo struct {
 	ServerVersion string `json:"server_version"`
 	OpenSubsonic  bool   `json:"open_subsonic"`
 }
+
+type Extension struct {
+	Name     string `json:"name"`
+	Versions []int  `json:"versions"`
+}
+
+type PlaylistMutationResult struct {
+	Playlist   Playlist `json:"playlist"`
+	SongIDs    []string `json:"song_ids"`
+	Created    bool     `json:"created"`
+	Reconciled bool     `json:"reconciled"`
+}
+
+var ErrMutationUncertain = errors.New("Navidrome playlist mutation outcome is uncertain")
 
 // maxAttempts covers one transient network hiccup or 5xx without turning a
 // genuinely down server into a long stall. Every endpoint UDL calls is
@@ -277,6 +297,10 @@ func retryable(ctx context.Context, err error) bool {
 var errTransient = errors.New("transient navidrome failure")
 
 func (c *Client) attempt(ctx context.Context, endpoint string, params url.Values) (*subsonicEnvelope, error) {
+	return c.attemptRequest(ctx, http.MethodGet, endpoint, params)
+}
+
+func (c *Client) attemptRequest(ctx context.Context, method, endpoint string, params url.Values) (*subsonicEnvelope, error) {
 	base := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if base == "" {
 		return nil, fmt.Errorf("navidrome server URL is not configured")
@@ -290,14 +314,23 @@ func (c *Client) attempt(ctx context.Context, endpoint string, params url.Values
 			auth.Add(key, value)
 		}
 	}
-	full := fmt.Sprintf("%s/rest/%s?%s", base, endpoint, auth.Encode())
+	full := fmt.Sprintf("%s/rest/%s", base, endpoint)
 	// Everything below reports `safe`, never `full`: the real URL carries the
 	// auth token and salt.
-	safe := fmt.Sprintf("%s/rest/%s", base, endpoint)
+	safe := full
+	var body io.Reader
+	if method == http.MethodPost {
+		body = strings.NewReader(auth.Encode())
+	} else {
+		full += "?" + auth.Encode()
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
+	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
 		return nil, fmt.Errorf("build request for %s: %w", safe, err)
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -335,6 +368,31 @@ func (c *Client) attempt(ctx context.Context, endpoint string, params url.Values
 		return nil, fmt.Errorf("%s did not return a Subsonic response; is this a Navidrome server?", safe)
 	}
 	return &envelope, nil
+}
+
+func (c *Client) postForm(ctx context.Context, endpoint string, params url.Values, attempts int) (*subsonicEnvelope, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 250 * time.Millisecond):
+			}
+		}
+		envelope, err := c.attemptRequest(ctx, http.MethodPost, endpoint, params)
+		if err == nil {
+			return envelope, nil
+		}
+		lastErr = err
+		if !retryable(ctx, err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
 }
 
 func translateSubsonicError(endpoint string, apiErr subsonicError) error {
@@ -388,6 +446,172 @@ func (c *Client) Ping(ctx context.Context) (ServerInfo, error) {
 			ErrIncompatibleServer, version, MinimumServerVersion)
 	}
 	return info, nil
+}
+
+func (c *Client) OpenSubsonicExtensions(ctx context.Context) ([]Extension, error) {
+	envelope, err := c.get(ctx, "getOpenSubsonicExtensions.view", nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Extension, 0, len(envelope.Response.Extensions))
+	for _, item := range envelope.Response.Extensions {
+		out = append(out, Extension{Name: item.Name, Versions: append([]int(nil), item.Versions...)})
+	}
+	return out, nil
+}
+
+func (c *Client) SupportsFormPost(ctx context.Context) (bool, error) {
+	items, err := c.OpenSubsonicExtensions(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		if item.Name != "formPost" {
+			continue
+		}
+		for _, version := range item.Versions {
+			if version >= 1 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+const maxMutationGETQueryBytes = 7000
+
+// ReplacePlaylist creates or completely replaces ordered playlist membership.
+// playlistID selects an update; an empty ID selects creation by name. Creation
+// is attempted exactly once and reconciled by exact name after a transient
+// result because blindly retrying could create a duplicate playlist.
+func (c *Client) ReplacePlaylist(ctx context.Context, playlistID, name string, songIDs []string) (PlaylistMutationResult, error) {
+	playlistID = strings.TrimSpace(playlistID)
+	name = strings.TrimSpace(name)
+	if playlistID == "" && name == "" {
+		return PlaylistMutationResult{}, errors.New("playlist name must be set when creating a playlist")
+	}
+	if len(songIDs) == 0 {
+		return PlaylistMutationResult{}, errors.New("refusing to create or replace a Navidrome playlist from an empty source")
+	}
+	params := url.Values{}
+	if playlistID != "" {
+		params.Set("playlistId", playlistID)
+	} else {
+		params.Set("name", name)
+	}
+	for _, id := range songIDs {
+		if strings.TrimSpace(id) == "" {
+			return PlaylistMutationResult{}, errors.New("playlist song IDs must not be empty")
+		}
+		params.Add("songId", id)
+	}
+
+	formPost, err := c.SupportsFormPost(ctx)
+	if err != nil {
+		return PlaylistMutationResult{}, fmt.Errorf("discover Navidrome formPost support: %w", err)
+	}
+	var envelope *subsonicEnvelope
+	if formPost {
+		attempts := maxAttempts
+		if playlistID == "" {
+			attempts = 1
+		}
+		envelope, err = c.postForm(ctx, "createPlaylist.view", params, attempts)
+	} else {
+		if len(params.Encode()) > maxMutationGETQueryBytes {
+			return PlaylistMutationResult{}, fmt.Errorf("Navidrome does not advertise the OpenSubsonic formPost extension and this playlist request exceeds the safe %d-byte GET limit; upgrade Navidrome before applying", maxMutationGETQueryBytes)
+		}
+		if playlistID == "" {
+			envelope, err = c.attempt(ctx, "createPlaylist.view", params)
+		} else {
+			envelope, err = c.get(ctx, "createPlaylist.view", params)
+		}
+	}
+	if err != nil {
+		if playlistID == "" && mutationOutcomeUncertain(ctx, err) {
+			return c.reconcileCreatedPlaylist(ctx, name, songIDs, err)
+		}
+		return PlaylistMutationResult{}, err
+	}
+
+	resolvedID := playlistID
+	if envelope.Response.Playlist != nil {
+		resolvedID = envelope.Response.Playlist.ID
+	}
+	if resolvedID == "" {
+		return c.reconcileCreatedPlaylist(ctx, name, songIDs, nil)
+	}
+	return c.verifyPlaylistMutation(ctx, resolvedID, songIDs, playlistID == "", false)
+}
+
+func mutationOutcomeUncertain(ctx context.Context, err error) bool {
+	if retryable(ctx, err) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "could not parse") || strings.Contains(message, "read response")
+}
+
+func (c *Client) ValidateWritablePlaylist(playlist Playlist) error {
+	if playlist.Smart {
+		return fmt.Errorf("Navidrome playlist %q is UDL-managed and cannot be overwritten", playlist.Name)
+	}
+	want := strings.TrimSpace(c.Credentials.Username)
+	if playlist.Owner != "" && want != "" && !strings.EqualFold(playlist.Owner, want) {
+		return fmt.Errorf("Navidrome playlist %q is owned by %q, not the configured account %q", playlist.Name, playlist.Owner, want)
+	}
+	return nil
+}
+
+func (c *Client) verifyPlaylistMutation(ctx context.Context, id string, songIDs []string, created, reconciled bool) (PlaylistMutationResult, error) {
+	playlist, songs, err := c.Playlist(ctx, id)
+	if err != nil {
+		return PlaylistMutationResult{}, fmt.Errorf("read Navidrome playlist after mutation: %w", err)
+	}
+	actual := make([]string, 0, len(songs))
+	for _, song := range songs {
+		actual = append(actual, song.ID)
+	}
+	if !sameOrderedStrings(actual, songIDs) {
+		return PlaylistMutationResult{}, fmt.Errorf("%w: playlist %q readback order differs from the planned song IDs", ErrMutationUncertain, playlist.Name)
+	}
+	return PlaylistMutationResult{Playlist: playlist, SongIDs: actual, Created: created, Reconciled: reconciled}, nil
+}
+
+func (c *Client) reconcileCreatedPlaylist(ctx context.Context, name string, songIDs []string, cause error) (PlaylistMutationResult, error) {
+	items, err := c.Playlists(ctx)
+	if err != nil {
+		return PlaylistMutationResult{}, fmt.Errorf("%w: create result could not be reconciled after %v: %v", ErrMutationUncertain, cause, err)
+	}
+	matches := []Playlist{}
+	for _, item := range items {
+		if item.Name == name {
+			matches = append(matches, item)
+		}
+	}
+	if len(matches) == 1 {
+		result, verifyErr := c.verifyPlaylistMutation(ctx, matches[0].ID, songIDs, true, true)
+		if verifyErr == nil {
+			return result, nil
+		}
+		return PlaylistMutationResult{}, verifyErr
+	}
+	if len(matches) == 0 && cause != nil {
+		return PlaylistMutationResult{}, cause
+	}
+	return PlaylistMutationResult{}, fmt.Errorf("%w: exact-name lookup found %d playlists named %q", ErrMutationUncertain, len(matches), name)
+}
+
+func sameOrderedStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // Songs enumerates the whole library, page by page.
@@ -575,11 +799,12 @@ func convertPlaylist(raw rawPlaylist) Playlist {
 		ID:         raw.ID,
 		Name:       strings.TrimSpace(raw.Name),
 		Owner:      strings.TrimSpace(raw.Owner),
+		Comment:    strings.TrimSpace(raw.Comment),
 		TrackCount: raw.SongCount,
 		// Navidrome marks smart playlists by the .nsp comment; the Subsonic
 		// shape has no dedicated flag, so treat an unmodifiable-by-us managed
 		// name as informational only.
-		Smart: false,
+		Smart: strings.Contains(raw.Comment, OwnershipMarker),
 	}
 }
 
@@ -623,18 +848,5 @@ func formatDuration(seconds int) string {
 // filesystem, so both sides must fold identically or path matching silently
 // misses every accented title.
 func NormalizePath(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return ""
-	}
-	if strings.HasPrefix(trimmed, "file:") {
-		if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
-			trimmed = parsed.Path
-		}
-	}
-	cleaned := filepath.Clean(trimmed)
-	if utf8.ValidString(cleaned) {
-		cleaned = norm.NFC.String(cleaned)
-	}
-	return cleaned
+	return pathidentity.Canonical(raw)
 }
