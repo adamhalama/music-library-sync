@@ -185,7 +185,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 
 	skippedNoLink := 0
 	skippedUnsupportedHost := 0
-	skippedHypedditTimeout := 0
+	skippedGateTimeout := 0
 	stuckLogCount := 0
 	var failureDetails map[string]any
 	failureMessage := ""
@@ -219,7 +219,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 			break
 		}
 
-		if !isHypedditPurchaseURL(metadata.PurchaseURL) {
+		if !isSupportedFreeDownloadGateURL(metadata.PurchaseURL) {
 			skippedUnsupportedHost++
 			_ = s.Emitter.Emit(output.Event{
 				Timestamp: s.Now(),
@@ -249,7 +249,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 			Level:     output.LevelInfo,
 			Event:     output.EventSourcePreflight,
 			SourceID:  source.ID,
-			Message:   fmt.Sprintf("[%s] [free-dl] hypeddit gate detected for %s; opening browser", source.ID, track.ID),
+			Message:   fmt.Sprintf("[%s] [free-dl] %s gate detected for %s; opening browser", source.ID, freeDLHostLabel(metadata.PurchaseURL), track.ID),
 		})
 		if openErr := openURLInBrowserFn(ctx, metadata.PurchaseURL); openErr != nil {
 			if errors.Is(openErr, exec.ErrNotFound) {
@@ -309,7 +309,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 				return outcome, nil
 			}
 			if errors.Is(detectErr, errBrowserDownloadIdleTimeout) || errors.Is(detectErr, errBrowserDownloadMaxTimeout) {
-				skippedHypedditTimeout++
+				skippedGateTimeout++
 				stuckRecord := soundCloudFreeDLStuckRecord{
 					Timestamp:     s.Now().UTC().Format(time.RFC3339Nano),
 					SourceID:      source.ID,
@@ -332,7 +332,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 					Event:     output.EventSourcePreflight,
 					SourceID:  source.ID,
 					Message: fmt.Sprintf(
-						"[%s] [skip] %s (%s) (hypeddit-timeout) %s",
+						"[%s] [skip] %s (%s) (free-dl-gate-timeout) %s",
 						source.ID,
 						track.ID,
 						displayName,
@@ -481,7 +481,7 @@ func (s *Syncer) runSoundCloudFreeDownloadSource(
 		"planned_download_count":   len(plannedTracks),
 		"skipped_no_free_dl":       skippedNoLink,
 		"skipped_unsupported_host": skippedUnsupportedHost,
-		"skipped_hypeddit_timeout": skippedHypedditTimeout,
+		"skipped_gate_timeout":     skippedGateTimeout,
 		"stuck_log_count":          stuckLogCount,
 	}
 	if strings.TrimSpace(stuckLogPath) != "" {

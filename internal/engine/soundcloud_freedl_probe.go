@@ -41,7 +41,7 @@ func ProbeSoundCloudFreeDL(ctx context.Context, row PlanRow) SoundCloudFreeDLPro
 		PurchaseURL: sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
 		Host:        freeDLHostLabel(metadata.PurchaseURL),
 	}
-	if !isHypedditPurchaseURL(metadata.PurchaseURL) {
+	if !isSupportedFreeDownloadGateURL(metadata.PurchaseURL) {
 		probe.Status = SoundCloudFreeDLUnsupportedHost
 	}
 	return probe

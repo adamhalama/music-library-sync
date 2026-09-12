@@ -465,11 +465,12 @@ Notes:
 - If no enabled Free DL jobs exist, the TUI opens setup automatically. Existing jobs can be managed from the Free DL job list with `e`, and new jobs can be added with `a`.
 - A Free DL TUI run chooses a plan limit first, streams the plan table as SoundCloud rows, local quality, and Free DL availability arrive, captures selected downloads into a configured buffer directory, builds a promotion plan from successful downloads, then confirms selected replacements. Originals are copied into the configured backup directory before any library file is replaced.
 - `scdl-freedl` keeps deterministic preflight/state/archive behavior but skips tracks that do not expose a free-download link.
-- `scdl-freedl` currently downloads only HypeEdit free-DL links (browser handoff opens the gate URL and waits for a completed file in `~/Downloads`). Non-HypeEdit free-DL hosts are skipped.
+- `scdl-freedl` downloads from a host allowlist of free-download gate services: `hypeddit.com`, `gaterush.me`, `droploud.com`, and `mypresskit.info` (browser handoff opens the gate URL and waits for a completed file in `~/Downloads`). Other free-DL hosts are skipped as `unsupported-free-download-host`.
+- A SoundCloud `purchase_url` backs both the `FREE DL` and `Buy` buttons and the page does not say which, so support is host-driven. Stores and smart links (`bandcamp.com`, `beatport.com`, `found.ee`) are deliberately excluded: opening them can never yield a free file, so they are skipped instead of costing a gate wait.
 - `scdl-freedl` tags downloaded files with track metadata and attempts to embed SoundCloud artwork thumbnails into the resulting media file.
 - Override watched browser download directory with `UDL_FREEDL_BROWSER_DOWNLOAD_DIR`.
-- On macOS, HypeEdit handoff opens Helium by default. Set `UDL_FREEDL_BROWSER_APP` to force another browser app.
-- HypeEdit browser handoff now uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
+- On macOS, gate handoff opens Helium by default. Set `UDL_FREEDL_BROWSER_APP` to force another browser app.
+- Gate browser handoff uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
 - Override idle timeout with `UDL_FREEDL_BROWSER_IDLE_TIMEOUT` (Go duration format, for example `45s` or `90s`).
 - Browser launch/wait/post-processing failures are persisted for manual follow-up in `defaults.state_dir/<source-id>.freedl-stuck.jsonl`.
 - Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.

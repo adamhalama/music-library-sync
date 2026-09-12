@@ -62,7 +62,11 @@ func SupportsPlanWindow(source config.Source) bool {
 }
 
 func SupportsPlan(source config.Source) bool {
-	return source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" ||
+	// Keep this in step with the providers registered in NewSyncer: the SCDL plan
+	// provider serves both scdl and scdl-freedl, and Free DL capture runs entirely
+	// through plan mode, so omitting scdl-freedl here silently skips the source.
+	return source.Type == config.SourceTypeSoundCloud &&
+		(source.Adapter.Kind == "scdl" || source.Adapter.Kind == "scdl-freedl") ||
 		source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix"
 }
 
