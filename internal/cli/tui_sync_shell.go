@@ -41,8 +41,12 @@ func (m tuiSyncModel) shellBadges() []tuiBadge {
 		{Label: "DRY-RUN: " + boolLabel(m.dryRun), Tone: boolTone(m.dryRun)},
 	}
 	if m.isInteractiveSyncWorkflow() {
-		badges = append(badges, tuiBadge{Label: "LIMIT: " + formatPlanLimit(m.planLimit), Tone: "info"})
-		badges = append(badges, tuiBadge{Label: "TIMEOUT: " + formatTimeoutOverride(m.timeoutOverride), Tone: "muted"})
+		badges = append(badges,
+			tuiBadge{Label: "LIMIT: " + formatPlanLimit(m.planLimit), Tone: "info"},
+			tuiBadge{Label: "ASK: " + formatAskOnExisting(m.askOnExistingSet), Tone: "info"},
+			tuiBadge{Label: "GAPS: " + boolLabel(m.scanGaps), Tone: boolTone(m.scanGaps)},
+			tuiBadge{Label: "TIMEOUT: " + formatTimeoutOverride(m.timeoutOverride), Tone: "muted"},
+		)
 		return badges
 	}
 	badges = append(badges,
@@ -57,7 +61,11 @@ func (m tuiSyncModel) shellBadges() []tuiBadge {
 func (m tuiSyncModel) shellCommandSummary() []string {
 	parts := []string{"udl", "sync"}
 	if m.isInteractiveSyncWorkflow() {
-		parts = append(parts, "--plan", "plan_limit="+formatPlanLimit(m.planLimit))
+		parts = append(parts,
+			"--plan", "plan_limit="+formatPlanLimit(m.planLimit),
+			"ask_on_existing="+formatAskOnExisting(m.askOnExistingSet),
+			fmt.Sprintf("scan_gaps=%t", m.scanGaps),
+		)
 	} else {
 		parts = append(parts,
 			"ask_on_existing="+formatAskOnExisting(m.askOnExistingSet),
@@ -862,6 +870,8 @@ func renderInteractiveIdleControls(layout tuiShellLayout, showOrder, showWindow 
 		renderPlanPromptKey("[/]", "plan limit"),
 		renderPlanPromptKey("l", "type limit"),
 		renderPlanPromptKey("u", "unlimited"),
+		renderPlanPromptKey("a", "ask-existing"),
+		renderPlanPromptKey("g", "scan-gaps"),
 		renderPlanPromptKey("p", "activity"),
 		renderPlanPromptKey("enter", "run"),
 	)
@@ -1249,7 +1259,7 @@ func (m tuiSyncModel) bodyView(includeSources bool) string {
 		fmt.Sprintf("dry_run=%t  timeout=%s", m.dryRun, formatTimeoutOverride(m.timeoutOverride)),
 	}
 	if m.isInteractiveSyncWorkflow() {
-		lines = append(lines, fmt.Sprintf("plan_limit=%s", formatPlanLimit(m.planLimit)))
+		lines = append(lines, fmt.Sprintf("plan_limit=%s  ask_on_existing=%s  scan_gaps=%t", formatPlanLimit(m.planLimit), formatAskOnExisting(m.askOnExistingSet), m.scanGaps))
 	} else {
 		lines = append(lines, fmt.Sprintf("ask_on_existing=%s  scan_gaps=%t  no_preflight=%t", formatAskOnExisting(m.askOnExistingSet), m.scanGaps, m.noPreflight))
 	}
