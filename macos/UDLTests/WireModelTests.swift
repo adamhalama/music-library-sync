@@ -495,10 +495,10 @@ final class WireModelTests: XCTestCase {
 
     /// `SyncDefaults` is the only place a sync default is written. A second copy
     /// is how `dryRun` once ended up claiming one value in a comment and another
-    /// in the initialiser, so this pins the constants themselves — including
-    /// C1's `dryRun: true`, without which the sidebar route offers a live run.
+    /// in the initialiser, so this pins the constants themselves. The ordinary
+    /// Run Sync route is live; Home opts into its preview explicitly.
     func testSyncDefaultsAreTheDocumentedC1AndC17Values() throws {
-        XCTAssertTrue(SyncDefaults.dryRun)
+        XCTAssertFalse(SyncDefaults.dryRun)
         XCTAssertFalse(SyncDefaults.unlimited)
         XCTAssertEqual(SyncDefaults.planLimit, 50)
         XCTAssertEqual(SyncDefaults.timeoutSeconds, 0)
@@ -528,7 +528,7 @@ final class WireModelTests: XCTestCase {
         let encoded = try JSONSerialization.jsonObject(
             with: JSONEncoder.agent.encode(params)
         ) as? [String: Any]
-        XCTAssertEqual(encoded?["dry_run"] as? Bool, true)
+        XCTAssertEqual(encoded?["dry_run"] as? Bool, false)
         XCTAssertEqual(encoded?["plan_limit"] as? Int, 50)
         XCTAssertEqual(encoded?["plan_window"] as? String, "first")
         XCTAssertEqual(encoded?["ask_on_existing_set"] as? Bool, false)
@@ -550,17 +550,31 @@ final class WireModelTests: XCTestCase {
         XCTAssertEqual(state.syncNoPreflight, SyncDefaults.noPreflight)
         XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
 
+        state.syncDryRun = true
         state.syncPlanWindow = .latest
         state.syncAskOnExisting = .ask
         state.syncScanGaps = true
         state.syncNoPreflight = true
         state.syncTrackStatus = .names
         state.resetSyncAdvanced()
+        XCTAssertEqual(state.syncDryRun, SyncDefaults.dryRun)
         XCTAssertEqual(state.syncPlanWindow, SyncDefaults.planWindow)
         XCTAssertEqual(state.syncAskOnExisting, SyncDefaults.askOnExisting)
         XCTAssertEqual(state.syncScanGaps, SyncDefaults.scanGaps)
         XCTAssertEqual(state.syncNoPreflight, SyncDefaults.noPreflight)
         XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
+    }
+
+    /// Home deliberately starts a preview, but "Configure another run" must
+    /// not let that one-shot choice leak into the next ordinary sync.
+    @MainActor
+    func testResetSyncRunRestoresLiveDefaultAfterPreview() {
+        let state = AppState()
+        state.syncDryRun = true
+
+        state.resetSyncRun()
+
+        XCTAssertFalse(state.syncDryRun)
     }
 
     func testSyncCancellationRequestedBeforeRunIDIsSentExactlyOnceWhenIDArrives() {
@@ -695,6 +709,13 @@ final class WireModelTests: XCTestCase {
         var explicit = SyncRunState(runID: "run-2", phase: .running)
         explicit.finish(exitCode: 1, error: "backend detail")
         XCTAssertEqual(explicit.terminalMessage, "backend detail")
+
+        var preview = SyncRunState(runID: "run-3", phase: .running)
+        preview.finish(exitCode: 0, error: nil, dryRun: true)
+        XCTAssertEqual(
+            preview.terminalMessage,
+            "Dry run completed successfully. No tracks were downloaded and no state was changed."
+        )
     }
 
     /// The defaults must reproduce exactly what the GUI sent before C17, so

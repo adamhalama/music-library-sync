@@ -369,7 +369,7 @@ struct SyncConfigureView: View {
                 WorkspaceHeader(
                     title: "Run Sync",
                     // C1 — the plan lives inside a run and nowhere else.
-                    lede: "udl has no plan preview. Planning happens inside a run, one source at a time, and the backend waits for your selection at each source. A dry run resolves every track and reports the outcome without writing files or touching the state file."
+                    lede: "Planning happens inside the run, one source at a time, and the backend waits for your selection at each source. Continue each accepted queue to download its selected tracks."
                 )
 
                 if let notResumed = appState.notResumedMessage(for: .sync) {
@@ -418,10 +418,10 @@ struct SyncConfigureView: View {
         }
     }
 
-    /// C1 — the button says which kind of run it starts, and dry run is the
-    /// default, so the plan is always reachable through a reversible action.
+    /// Preview mode is deliberately explicit even though its control lives in
+    /// Advanced, so the primary action can never imply that files will change.
     private var startLabel: String {
-        appState.syncDryRun ? "Start dry run & plan" : "Start sync & plan"
+        appState.syncDryRun ? "Preview plan without downloading" : "Start sync & plan"
     }
 
     private var selectedCount: Int {
@@ -489,7 +489,6 @@ struct SyncConfigureView: View {
 
     @ViewBuilder private var inspector: some View {
         InspectorSection(title: "Run") {
-            Toggle("Dry run", isOn: $appState.syncDryRun)
             Toggle("Unlimited plan", isOn: $appState.syncUnlimited)
             Stepper(
                 "Plan limit: \(appState.syncUnlimited ? "∞" : String(appState.syncPlanLimit))",
@@ -513,6 +512,9 @@ struct SyncConfigureView: View {
         // hardcoded in AppState.startSync(), which meant the GUI decided
         // silently on the user's behalf.
         InspectorSection(title: "Advanced") {
+            Toggle("Preview only (no downloads)", isOn: $appState.syncDryRun)
+            ConstraintNote(text: "Off by default. When enabled, udl plans the selected tracks but writes no files or state.")
+
             Picker("Plan window", selection: $appState.syncPlanWindow) {
                 ForEach(PlanWindow.allCases) { Text($0.label).tag($0) }
             }
@@ -550,7 +552,7 @@ struct SyncConfigureView: View {
             Text("·")
             SummaryCount(value: appState.syncSources.count, noun: "configured")
             Text("·")
-            Text(appState.syncDryRun ? "Dry run — nothing is written" : "Live run — files are written")
+            Text(appState.syncDryRun ? "Preview only — nothing is written" : "Live run — selected tracks will download")
                 .foregroundStyle(appState.syncDryRun ? Theme.textSecondary : Theme.warn)
         }
     }

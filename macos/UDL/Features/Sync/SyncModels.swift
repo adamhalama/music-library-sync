@@ -95,9 +95,9 @@ enum TrackStatusMode: String, Codable, CaseIterable, Identifiable, Sendable {
 /// an initialiser and a reset cannot drift apart — which is exactly how
 /// `dryRun` once ended up claiming one default in a comment and another in code.
 enum SyncDefaults {
-    /// C1 — the plan exists only inside a run, so the run the app offers by
-    /// default has to be the reversible one.
-    static let dryRun = true
+    /// The dedicated Home action opts into a reversible preview. Opening Run
+    /// Sync directly should do what its name says and download selected tracks.
+    static let dryRun = false
     static let unlimited = false
     static let planLimit = 50
     static let timeoutSeconds = 0
@@ -589,7 +589,7 @@ struct SyncRunState: Sendable {
     /// the run's retained source tables. This is deliberately pure model logic
     /// so exit 130 and every other terminal class can be validated without an
     /// app process or a live backend connection.
-    mutating func finish(exitCode: Int, error: String?) {
+    mutating func finish(exitCode: Int, error: String?, dryRun: Bool = false) {
         self.exitCode = exitCode
         terminalMessage = error
         phase = switch exitCode {
@@ -602,6 +602,7 @@ struct SyncRunState: Sendable {
         finalizeSourceTables()
         if terminalMessage == nil {
             terminalMessage = switch phase {
+            case .succeeded where dryRun: "Dry run completed successfully. No tracks were downloaded and no state was changed."
             case .succeeded: "Sync completed successfully."
             case .canceled: "Sync canceled. Completed tracks remain saved."
             default: "Sync finished with exit code \(exitCode)."
