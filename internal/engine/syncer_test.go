@@ -360,6 +360,15 @@ func TestSyncerDryRunDeterministicJSON(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte(`"event":"sync_finished"`)) {
 		t.Fatalf("expected sync_finished event, got %s", buf.String())
 	}
+	if !bytes.Contains(buf.Bytes(), []byte(`would download to`)) {
+		t.Fatalf("dry-run activity must describe a preview, got %s", buf.String())
+	}
+	if bytes.Contains(buf.Bytes(), []byte(`] downloading to `)) {
+		t.Fatalf("dry-run activity must not claim a download started, got %s", buf.String())
+	}
+	if !bytes.Contains(buf.Bytes(), []byte(`would run`)) {
+		t.Fatalf("dry-run activity must not claim the adapter executed, got %s", buf.String())
+	}
 }
 
 func TestSyncerEmitsNormalizedTrackEventsFromAdapterParser(t *testing.T) {
@@ -1666,6 +1675,8 @@ func TestSyncerSpotifyDeemixNoPreflightPlaylistUsesPageEnumeration(t *testing.T)
 	origEnumerate := enumerateSpotifyTracksFn
 	origEnumerateViaPage := enumerateSpotifyViaPageFn
 	origFetchTrackMetadata := fetchSpotifyTrackMetadataFn
+	origFetchToken := fetchSpotifyAccessTokenFn
+	origFetchAPIMetadata := fetchSpotifyTrackMetadataFromAPIFn
 	t.Cleanup(func() {
 		resolveSpotifyCredentialsFn = origResolveCreds
 		resolveDeemixARLFn = origResolveARL
@@ -1673,6 +1684,8 @@ func TestSyncerSpotifyDeemixNoPreflightPlaylistUsesPageEnumeration(t *testing.T)
 		enumerateSpotifyTracksFn = origEnumerate
 		enumerateSpotifyViaPageFn = origEnumerateViaPage
 		fetchSpotifyTrackMetadataFn = origFetchTrackMetadata
+		fetchSpotifyAccessTokenFn = origFetchToken
+		fetchSpotifyTrackMetadataFromAPIFn = origFetchAPIMetadata
 	})
 
 	resolveSpotifyCredentialsFn = func() (auth.SpotifyCredentials, error) {
@@ -1693,8 +1706,23 @@ func TestSyncerSpotifyDeemixNoPreflightPlaylistUsesPageEnumeration(t *testing.T)
 			{ID: "5onvWxBJehSONyspmnrvhD", Title: "Encoder", Artist: "Regent", Album: "Encoder"},
 		}, nil
 	}
+	// Page enumeration yields no ISRC, so the track endpoint is still consulted
+	// for one; scraping the track page must stay unnecessary.
+	fetchSpotifyAccessTokenFn = func(ctx context.Context, creds auth.SpotifyCredentials) (string, error) {
+		return "token", nil
+	}
+	fetchSpotifyTrackMetadataFromAPIFn = func(ctx context.Context, id, token string) (spotifyTrackMetadata, error) {
+		switch id {
+		case "41gXFhitx4whS6PsoXREzy":
+			return spotifyTrackMetadata{Title: "Permean", Artist: "Regent", Album: "Permean", ISRC: "GB0000000001"}, nil
+		case "5onvWxBJehSONyspmnrvhD":
+			return spotifyTrackMetadata{Title: "Encoder", Artist: "Regent", Album: "Encoder", ISRC: "GB0000000002"}, nil
+		}
+		t.Fatalf("unexpected track id for api metadata: %q", id)
+		return spotifyTrackMetadata{}, nil
+	}
 	fetchSpotifyTrackMetadataFn = func(ctx context.Context, id string) (spotifyTrackMetadata, error) {
-		t.Fatalf("did not expect network metadata fetch when page metadata is already available")
+		t.Fatalf("did not expect track page scraping when the api supplied metadata")
 		return spotifyTrackMetadata{}, nil
 	}
 

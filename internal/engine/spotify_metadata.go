@@ -42,25 +42,35 @@ func buildSpotifyTrackMetadataIndex(tracks []spotifyRemoteTrack) map[string]spot
 			Title:  strings.TrimSpace(track.Title),
 			Artist: strings.TrimSpace(track.Artist),
 			Album:  strings.TrimSpace(track.Album),
+			ISRC:   strings.TrimSpace(track.ISRC),
 		}
 	}
 	return lookup
 }
 
-func enrichSpotifyRemoteTrackMetadata(ctx context.Context, tracks []spotifyRemoteTrack) []spotifyRemoteTrack {
+// enrichSpotifyRemoteTrackMetadata fills in whatever the enumeration step could
+// not supply. A track is re-resolved when its title/artist are missing *or*
+// when it has no ISRC, because the ISRC is what the deemix Spotify plugin
+// matches against on Deezer.
+func enrichSpotifyRemoteTrackMetadata(
+	ctx context.Context,
+	tracks []spotifyRemoteTrack,
+	resolver *spotifyMetadataResolver,
+) []spotifyRemoteTrack {
 	if len(tracks) == 0 {
 		return tracks
 	}
 	out := append([]spotifyRemoteTrack(nil), tracks...)
 	for i, track := range out {
-		if hasUsableSpotifyMetadata(spotifyTrackMetadata{Title: track.Title, Artist: track.Artist, Album: track.Album}) {
+		usable := hasUsableSpotifyMetadata(spotifyTrackMetadata{Title: track.Title, Artist: track.Artist, Album: track.Album})
+		if usable && strings.TrimSpace(track.ISRC) != "" {
 			continue
 		}
 		id := extractSpotifyTrackID(track.ID)
 		if id == "" {
 			continue
 		}
-		metadata, err := fetchSpotifyTrackMetadataFn(ctx, id)
+		metadata, err := resolveSpotifyTrackMetadata(ctx, resolver, id)
 		if err != nil {
 			continue
 		}
@@ -74,27 +84,55 @@ func enrichSpotifyRemoteTrackMetadata(ctx context.Context, tracks []spotifyRemot
 		if strings.TrimSpace(metadata.Album) != "" {
 			out[i].Album = metadata.Album
 		}
+		if strings.TrimSpace(metadata.ISRC) != "" {
+			out[i].ISRC = metadata.ISRC
+		}
 	}
 	return out
+}
+
+// resolveSpotifyTrackMetadata uses the credential-aware resolver when one is
+// available and otherwise falls back to the public track page.
+func resolveSpotifyTrackMetadata(
+	ctx context.Context,
+	resolver *spotifyMetadataResolver,
+	trackID string,
+) (spotifyTrackMetadata, error) {
+	if resolver != nil {
+		return resolver.Resolve(ctx, trackID)
+	}
+	return fetchSpotifyTrackMetadataFn(ctx, trackID)
 }
 
 func resolveSpotifyTrackMetadataForExecution(
 	ctx context.Context,
 	trackID string,
 	preflight map[string]spotifyTrackMetadata,
+	resolver *spotifyMetadataResolver,
 ) (spotifyTrackMetadata, error) {
 	id := extractSpotifyTrackID(trackID)
 	if id == "" {
 		return spotifyTrackMetadata{}, fmt.Errorf("invalid spotify track id %q", trackID)
 	}
+	var cached spotifyTrackMetadata
 	if preflight != nil {
-		if cached, ok := preflight[id]; ok {
-			if hasUsableSpotifyMetadata(cached) {
-				return normalizeSpotifyTrackMetadata(cached), nil
+		if entry, ok := preflight[id]; ok && hasUsableSpotifyMetadata(entry) {
+			cached = normalizeSpotifyTrackMetadata(entry)
+			// Only a cached entry that already carries an ISRC is good enough
+			// to prime deemix with; otherwise try to resolve one.
+			if strings.TrimSpace(cached.ISRC) != "" {
+				return cached, nil
 			}
 		}
 	}
-	return fetchSpotifyTrackMetadataFn(ctx, id)
+	metadata, err := resolveSpotifyTrackMetadata(ctx, resolver, id)
+	if err == nil {
+		return metadata, nil
+	}
+	if hasUsableSpotifyMetadata(cached) {
+		return cached, nil
+	}
+	return spotifyTrackMetadata{}, err
 }
 
 func hasUsableSpotifyMetadata(metadata spotifyTrackMetadata) bool {
