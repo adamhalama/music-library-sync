@@ -1,5 +1,27 @@
 # Notes — Free DL upgrade 2026-09-12
 
+## 2026-09-12 continuation — browser access and authorization
+
+- User explicitly authorized all batch gate requirements: SoundCloud likes,
+  reposts, follows, mandatory `🔥` comments, Instagram follows, and submission
+  of the name/email already configured in the draft userscript.
+- T3 preview tools work in this session. SoundCloud OAuth and Instagram both
+  show signed-out pages; user login was requested. Native CUA inventory fails
+  with `CUA_REPL_ENABLED_SURFACES is required`.
+- Downloads promotion preview indexed 16 candidates against 46 library files:
+  zero matches, no writes. Existing three upgrades remain verified by status.py.
+- Corrected status.py to include only existing paths in the target directory.
+  The old first-48-rows filter counted two absent tracks (Divine and Parole).
+  Actual totals: 46 files = 3 upgraded + 12 gated + 31 unsupported/no free DL.
+- Live CHULO gate requires Instagram follows of gaddam.mode, jmarga.music,
+  cooltracksrecords as its first of two steps. Do not confirm a follow until
+  it has actually been performed.
+- PIKETU starts with first-name/email then SoundCloud; its noncurrent carousel
+  slides also appear in snapshot text. Scope actions to `.current-slide`.
+  Submitted the authorized email form, but it did not advance; no download.
+- No additional media was downloaded or promoted during these checks.
+- Validation: `python3 .dev/freedl-0912/status.py`; `git diff --check`.
+
 ## 2026-09-12 — scoping
 
 Scratch config (nothing touches the real `udl.yaml` / `freedl.yaml`):
@@ -302,3 +324,66 @@ unprompted.
 `.dev/freedl-0912/status.py` prints the live breakdown with the gate URL for each
 pending track. After clicking any of them, `promote-freedl --free-dl-dir
 ~/Downloads` picks the files up without another capture run.
+
+## Automating the gates — Tampermonkey userscript
+
+Asked to finish the remaining 12 gates automatically. Tampermonkey is already
+installed in Helium (`dhdgffkkebhmkfjojejmpbldmpobfkfo`), so the deliverable is
+`.dev/userscripts/udl-freedl-gate-autopilot.user.js` — one script with a
+per-host adapter rather than four scripts, since the plumbing (click-once,
+budget, HUD, abort) is shared.
+
+### What each gate actually requires (read from the live pages)
+
+Gaterush ships its controller as readable JS (`/js/gate-liquid.js`) whose header
+documents the backend wiring, and every gate exposes its own config in
+`window.__GATE__`. The 7 pending gaterush gates decompose as:
+
+| slug | steps |
+| --- | --- |
+| `bSwV6o` Nom Nom | soundcloud (like, repost, follow) |
+| `q-898b` FUNKY TOWN | soundcloud (like, repost, follow) |
+| `5Zaimw` Sonic Boom | soundcloud (+comment) |
+| `vH2MSL` SMVGGLERS - SEX | soundcloud (+comment), instagram |
+| `LrI671` FUMANDO MARIJUANA | email, soundcloud (+comment), instagram |
+| `f5BefF` chopstick420 - PRIME | email (+name), soundcloud (+comment), instagram |
+| `427_Cn` POP IT LIKE | email (+name), soundcloud (+comment), instagram x2 |
+
+Exact selectors: steps render one at a time into `#stepStage`; email is
+`#emailInput`/`#nameInput` + `[data-go]`; SoundCloud is an optional
+`#commentInput` + `.btn-soundcloud[data-go]` opening an OAuth popup; follow lists
+are `.follow-pair` holding `[data-open]` then `[data-confirm]`, the latter held
+inert for `CONFIRM_DELAY_MS` by `armConfirm`; completion sets `.ready` on
+`#download`.
+
+Hypeddit (2 gates) is `#downloadProcess` -> a `.fangate-slider-content` carousel
+(`.email` / `.sc` / `.ig` / `.dw`) advanced by `.step_button_N`, ending at
+`#gateDownloadButton`. Both pending gates are `gate_type=sc`.
+
+Droploud (2) and MyPressKit (1) are client-rendered Next.js apps — the step
+markup is not in the served HTML, only the entry CTA (`.ds-free-dl`) and
+"0/6 steps complete". Those two get a generic text-matched driver instead of
+exact selectors, with a deny-list that matters: Droploud renders **Add to cart**
+right next to the free download.
+
+### Deliberate limits
+
+- The script does not click **Allow/Connect** on an OAuth consent screen.
+  Granting an app access to an account is the account owner's call; it is a
+  one-time click per service and everything after it is automatic.
+- SoundCloud steps perform *real* follows/likes/reposts/comments via the gate's
+  backend. That is the actual price of these downloads, so automating the click
+  automates the action — documented at the top of the script rather than left
+  as a surprise.
+- Instagram/Spotify steps are honour-system confirms. The script genuinely opens
+  each profile; `offsiteFollows: "auto"` (default, since automatic completion is
+  what was asked for) also clicks confirm, `"manual"` leaves that to the user.
+
+### Not yet verified against a live gate
+
+The script is written from each gate's real DOM and, for Gaterush, its actual
+controller source — but it has not been run in a browser. Installing into
+Tampermonkey needs UI interaction this process cannot drive (no Automation or
+Screen Recording permission), and even `node --check` was refused by the
+sandbox, so the syntax check is unrun too. The first capture run after install
+is the real test.

@@ -7,7 +7,11 @@ LIB = os.path.expanduser("~/Music/downloaded/sc-likes-today-09-12")
 
 plans = sorted(glob.glob(f"{SCRATCH}/logs/*/capture-plan.json"))
 plan = json.load(open(plans[-1]))
-rows = [r for r in plan["rows"] if r["index"] <= 48]
+# The likes window includes two tracks absent from this batch. Scope by actual
+# local paths, not enumeration index, so the report describes the 46 files.
+rows = [r for r in plan["rows"]
+        if r.get("local_path") and os.path.isfile(r["local_path"])
+        and os.path.dirname(os.path.realpath(r["local_path"])) == os.path.realpath(LIB)]
 
 captured = {}   # remote_id -> downloaded filename
 for state in sorted(glob.glob(f"{SCRATCH}/logs/*/capture.sync.scdl")):
