@@ -1,75 +1,131 @@
-# Free DL gate userscripts
+# Free DL gate userscript
 
-`udl sync` with `adapter.kind: scdl-freedl` opens each track's free-download
-gate in a browser and waits for the finished file to appear in the browser's
-download directory. The gate itself is a human step: a page that asks you to
-follow/like/repost on SoundCloud, hand over an email, or follow an Instagram
-account before it hands you the file.
+`udl-freedl-gate-autopilot.user.js` advances artist-provided download gates in
+Helium. It fills configured email/name fields, starts the gate's SoundCloud
+OAuth workflow, opens required social profiles, and requests the final file.
+It waits for evidence of offsite actions; opening a profile is never treated as
+following, liking, commenting or reposting.
 
-`udl-freedl-gate-autopilot.user.js` performs those clicks, so a capture run can
-go through unattended.
+## Install and run
 
-## Install (Tampermonkey, already present in Helium)
+Import the script through Tampermonkey → Utilities → Import from file. Set
+`email` and `name` in the **installed** copy only. Never put personal values or
+credentials into the repository. Existing browser logins remain in Helium.
+Press Escape to stop. Each run has a ten-minute budget; the corner HUD records
+its actions. OAuth consent is left to the user or a separately authorized
+browser driver.
 
-1. Open the Tampermonkey dashboard → **Utilities** → **Import from file**, and
-   pick `udl-freedl-gate-autopilot.user.js`.
-   (Alternatively enable *Allow access to file URLs* for the extension and open
-   the file's `file://` URL — Tampermonkey then offers to install it.)
-2. Open `CONFIG` at the top of the installed script and fill in `email` / `name`
-   (they ship empty; never commit real values — the repo is public).
-3. Visit one gate by hand first, so you can approve the SoundCloud OAuth consent
-   screen once. The script deliberately does not click that button.
+A browser driver can inject the file's contents into an existing Helium gate
+tab. Before injection, set `window.UDL_GATE_CONFIG = { email, name }` using local
+values. Reinjection stops the previous runner so two loops cannot click the
+same page. Runtime configuration is also available through
+`window.udlGate.configure({ email, name })`.
 
-Press **Escape** on any gate page to abort a run. A small HUD in the bottom
-right shows each click as it happens.
+Inspect `window.udlGate.inspect()` or `window.udlGate.state` for progress:
 
-## Covered hosts
-
-| host | how it is driven |
+| Status | Meaning |
 | --- | --- |
-| `gaterush.me` | Exact: steps render into `#stepStage`; `#emailInput`/`#nameInput` + `[data-go]`, `.follow-pair` → `[data-open]` then `[data-confirm]`, `.btn-soundcloud` for OAuth, `#download` once it gains `.ready`. |
-| `hypeddit.com` | Exact: `#downloadProcess` opens the `.fangate-slider-content` carousel; each slide advanced by its `.step_button_N`, finishing at `#gateDownloadButton`. |
-| `droploud.com` | Generic: entry CTA `.ds-free-dl`, then text-matched advance buttons. |
-| `mypresskit.info` | Generic: `/gate/` pages, text-matched advance buttons. |
+| `running` | Advancing the current gate. |
+| `needs-email` / `needs-name` | Fill the field or configure the missing value; the loop resumes. |
+| `needs-follow` | Perform and verify the follow identified by `state.pending.profile`. |
+| `needs-social-action` | Perform and verify the action identified by `state.pending.kind` and `.profile`. |
+| `needs-interaction` | Generic gate has no recognized next control; inspect login, CAPTCHA or provider UI. |
+| `download-requested` | Final download control was clicked; filesystem capture must still verify the file. |
+| `stalled` / `error` / `aborted` | Budget exhausted, script error, or deliberate stop. |
 
-Droploud and MyPressKit are client-rendered Next.js apps whose step markup is
-not in the served HTML, so they get the generic driver rather than exact
-selectors. The generic driver only presses controls whose label matches an
-allow-list (`continue`, `next`, `confirm`, `download`, …) and never presses one
-matching the deny-list (`add to cart`, `buy`, `checkout`, `subscribe`, …) —
-Droploud in particular puts an **Add to cart** button next to the free download.
+After actually performing an action in the opened profile tab, the driver can
+report observed success back in the gate tab:
 
-## What it does to your accounts
-
-These gates are not paywalls; the artist is giving the file away and the price is
-a social action. Automating the clicks automates the actions:
-
-- **SoundCloud steps are real.** After you authorise the gate once via OAuth, its
-  backend performs genuine follows, likes, reposts and comments from your
-  account. Reposts appear in your followers' feeds.
-- **Email steps** submit `CONFIG.email` to the artist's mailing list.
-- **Instagram/Spotify steps are honour-system.** The gate opens the profile and
-  asks you to confirm you followed. The script opens the profile for real, but
-  with `offsiteFollows: "auto"` it also clicks confirm — which asserts a follow
-  that only happened if you actually did it in the tab that opened. Set
-  `offsiteFollows: "manual"` to open the profile and leave the confirm to you.
-
-The script will not click **Allow**/**Connect** on an OAuth consent screen.
-Granting an app access to your account is yours to approve; once granted per
-service, later gates go through without it.
-
-## Using it with a capture run
-
-With the script installed, re-run the Free DL capture and the gates complete on
-their own:
-
-```sh
-python3 .dev/freedl-0912/plan.py 50          # refresh the plan
-python3 .dev/freedl-0912/capture.py <plan.json> [remote_id ...]
-python3 .dev/freedl-0912/promote.py <capture-run-id> --apply
-python3 .dev/freedl-0912/status.py           # what upgraded, what is left
+```js
+// Use the exact profile URL from state.pending; do not fabricate evidence.
+window.udlGate.confirmFollow(profileURL, "Following button observed");
+window.udlGate.confirmAction(trackURL, "like", "Unlike button observed");
+window.udlGate.confirmAction(trackURL, "repost", "Undo repost button observed");
+window.udlGate.confirmAction(trackURL, "comment", "Submitted comment visible");
 ```
 
-If a gate is completed out of band, the file just sits in `~/Downloads`;
-`udl promote-freedl --free-dl-dir ~/Downloads --library-dir <dir>` picks it up
-without another capture run.
+Evidence is held only in the current page's memory. The script does not inspect
+cross-origin tabs itself. A human can also complete the gate controls directly;
+the runner observes subsequent page changes. `window.udlGate.stop()` stops it.
+
+## Host behavior
+
+| Host | Adapter |
+| --- | --- |
+| `gaterush.me` | Email, SoundCloud OAuth, both follow-list layouts, final ready download button. Follow confirmations require reported evidence. |
+| `hypeddit.com` | Only the current carousel slide; text email/name fields; no-API SoundCloud actions; final download slide. |
+| `droploud.com` | Current `.dtr-stage` card, exact public Flight gate URLs, all-account evidence before confirmation, explicit unlocked download card. |
+| `mypresskit.info` | Native combined SoundCloud OAuth, comment textarea, verified-only Instagram confirmation, exact enabled Download. |
+
+Hypeddit's upcoming and completed slides can still have layout boxes, so
+`offsetParent` alone does not indicate the current step. Its SoundCloud
+no-API buttons merely open a popup and remove `.undone`; neither event proves
+an action happened. Required actions are confirmed independently by URL and
+action, so a verified like cannot also satisfy a required repost or comment.
+
+Generic adapters do not automatically press follow confirmations or purchase
+controls. An entry button labelled Download does not count as a finished
+download. Only a final provider download button or direct file link yields
+`download-requested`; success belongs to the file capture and quality check.
+
+## Capture and promotion
+
+```sh
+python3 .dev/freedl-0912/plan.py 50
+python3 .dev/freedl-0912/capture.py <plan.json> [remote_id ...]
+python3 .dev/freedl-0912/promote.py <capture-run-id> --apply
+python3 .dev/freedl-0912/status.py
+```
+
+Files completed outside a capture run remain in Helium's download directory
+and can be scanned with `udl promote-freedl --free-dl-dir <downloads> --library-dir
+<isolated-upgrade-directory>`.
+
+## Regression tests
+
+Install the DOM test dependency outside the checkout, then run the tests:
+
+```sh
+npm install --prefix /tmp/udl-userscript-tests jsdom@29 --no-audit --no-fund
+NODE_PATH=/tmp/udl-userscript-tests/node_modules node .dev/userscripts/udl-freedl-gate-autopilot.test.cjs
+node --check .dev/userscripts/udl-freedl-gate-autopilot.user.js
+```
+
+Fixtures cover hidden carousel slides, missing/runtime email configuration,
+both Gaterush follow layouts, armed confirmations after reinjection, separate
+like/repost evidence, and entry download buttons. They simulate DOM behavior;
+real downloads still require browser and filesystem verification.
+
+## Background-only operation
+
+Set `window.UDL_GATE_CONFIG = { backgroundOnly: true }` before injection (or
+use `udlGate.configure`). Synchronous social-link popup requests are recorded
+in `state.openRequests` instead of opening windows. An external driver performs
+those actions in existing background tabs, then supplies actual evidence.
+Droploud exposes every outstanding account in `state.pending.profiles`; one
+confirmed account never satisfies a multi-account step. URLs come from the
+page's public `gateData`, not guessed display names. SoundCloud/OAuth steps
+report `needs-oauth` and their requirements for the browser driver.
+
+Background mode suppresses popup calls made synchronously by recognized click
+handlers. It does not manage asynchronous provider code or unknown navigation;
+the driver should stop the runner before any unsupported workflow.
+
+MyPressKit's Instagram button immediately records gate completion, so it is
+never clicked before independently verified following. Its combined SoundCloud
+step fills the configured comment and, in background mode, reports the exact
+native OAuth fallback URL in `state.pending.profile`. The driver can review
+scopes and navigate an owned background tab; the script does not impersonate
+OAuth completion. Completed steps render checkmarked text and are not clicked
+again. Only an enabled button whose exact label is Download requests the file.
+
+Hidden tabs may pause finite CSS entry animations at opacity zero. Background
+mode finishes fade-in animations only on known gate cards/current slides;
+infinite spinners, exit animations, unrelated elements and upcoming Hypeddit
+slides stay untouched. This restores visibility without advancing future steps.
+
+Inject into the **page's main JavaScript world**. Helium's Apple Events
+`execute javascript` can run in an isolated world: its `window.open` replacement
+cannot intercept handlers in the page world. A driver can execute a script
+node using the page's existing CSP nonce (see `.dev/freedl-0912/helium.py`'s
+main-world helper). Runtime configuration must be set in that same world.
