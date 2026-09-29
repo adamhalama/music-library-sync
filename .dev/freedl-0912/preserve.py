@@ -65,6 +65,7 @@ def install_verified(stage, target, output, backup, birthtime, evidence, result)
     transaction = evidence/'transaction.json'
     write_evidence(transaction, {'status':'prepared', 'target':str(target),
                                 'output':str(output), 'backup':str(backup)})
+    rollback_birthtime = getattr(target.stat(), 'st_birthtime', None)
     installed = False
     try:
         os.replace(stage, output)
@@ -84,8 +85,8 @@ def install_verified(stage, target, output, backup, birthtime, evidence, result)
             rollback = Path(name)
             try:
                 shutil.copy2(backup, rollback)
-                if birthtime is not None:
-                    restore_birthtime(rollback, birthtime)
+                if rollback_birthtime is not None:
+                    restore_birthtime(rollback, rollback_birthtime)
                 os.replace(rollback, target)
                 if output != target:
                     output.unlink(missing_ok=True)
@@ -116,6 +117,8 @@ def main():
     try:
         if args.action == 'restore-tags':
             tags = scoped(args.backup, SCRATCH/'backups')
+            if sys.platform == 'darwin':
+                birthtime = tags.stat().st_birthtime
             shutil.copy2(target, stage)
             expected_audio = stream_hash(target)
             output = target

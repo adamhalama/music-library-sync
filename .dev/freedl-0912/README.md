@@ -50,3 +50,11 @@ and backup before resuming. Run isolated regression tests with:
 ```sh
 python3 .dev/freedl-0912/test_quality.py
 ```
+
+`promote.py CAPTURE_RUN --apply` automatically repairs each successfully replaced
+row using its native backup/library paths, including successes in partially failed
+runs. It checks Mutagen availability before applying, reports missing backups or
+repair failures with a nonzero exit, and always closes its agent. Native promotion
+hashes describe the pre-repair output; the separate preservation ledger records
+the final metadata-restored file. Tag restoration uses the backup's creation time,
+so it also corrects native promotion timestamp drift.
