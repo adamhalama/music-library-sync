@@ -44,6 +44,10 @@
   "use strict";
 
   // Reinjection replaces the old runner instead of issuing duplicate actions.
+  if (window.udlGate && (window.udlGate.isPaused?.() || ["paused", "needs-captcha"].includes(window.udlGate.state.status))) {
+    // Reinjection must not restart automation while a person owns the form.
+    return;
+  }
   if (window.udlGate) window.udlGate.stop();
   const CONFIG = {
     // Used for gates with an email step. Fill these in your installed copy
@@ -66,11 +70,14 @@
   /* ------------------------------ plumbing ------------------------------ */
 
   let aborted = false;
+  let paused = false;
+  let pauseStarted = 0;
+  let pausedMs = 0;
   const started = Date.now();
   const log = [];
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const budgetLeft = () => CONFIG.budgetMs - (Date.now() - started);
+  const budgetLeft = () => CONFIG.budgetMs - (Date.now() - started - pausedMs - (paused ? Date.now() - pauseStarted : 0));
   function finishBackgroundEntryAnimations() {
     if (!CONFIG.backgroundOnly || !document.getAnimations) return;
     const host = location.hostname.replace(/^www\./, "");
@@ -84,7 +91,7 @@
           target.matches("#stepStage > .step.entering");
       } else if (host === "hypeddit.com") {
         // Upcoming cards remain untouched, even if their animations are finite.
-        knownEntry = target.matches(".fangate-slider-content.current-slide:not(.upcomming-slide):not(.move-left)");
+        knownEntry = target.matches(".fangate-slider-content.current-slide:not(.upcomming-slide):not(.move-left),#myCarousel.downloadProcess.move-bottom-now");
       } else if (host === "droploud.com") {
         knownEntry = target.matches(".dtr-stage.is-vis,.dtr-stage.is-vis > .dtr-card-pane");
       }
@@ -138,6 +145,17 @@
   const state = { status: "starting", host: location.hostname, pending: null, log };
   const api = window.udlGate = {
     state,
+    isPaused() { return paused; },
+    pause() { beginPause("paused"); note("paused; call resume() when finished"); },
+    resume() {
+      if (aborted) return false;
+      if (captchaPending()) { beginPause("needs-captcha"); return false; }
+      if (paused) pausedMs += Date.now() - pauseStarted;
+      paused = false;
+      state.status = "running";
+      note("resumed explicitly");
+      return true;
+    },
     stop() { aborted = true; state.status = "aborted"; removeEventListener("keydown", onKeyDown); hud.remove(); },
     // Supply the exact profile URL plus a description of observed success.
     // Caller must first perform and verify the actual follow in the profile tab.
@@ -148,6 +166,31 @@
     },
     configure(values) { Object.assign(CONFIG, values); },
   };
+  function beginPause(status) {
+    if (!paused) pauseStarted = Date.now();
+    paused = true;
+    state.status = status;
+  }
+  function captchaPending() {
+    const providers = [
+      { widget: '.g-recaptcha,[data-sitekey][data-callback],iframe[src*="recaptcha"][src*="anchor"]', response: '[name="g-recaptcha-response"]' },
+      { widget: '.h-captcha,iframe[src*="hcaptcha.com"]', response: '[name="h-captcha-response"]' },
+    ];
+    return providers.some(provider => {
+      const shown = [...document.querySelectorAll(provider.widget)].some(visible);
+      const solved = [...document.querySelectorAll(provider.response)].some(el => el.value?.trim());
+      return shown && !solved;
+    });
+  }
+  function canProceed() {
+    if (paused || aborted) return false;
+    if (captchaPending()) {
+      beginPause("needs-captcha");
+      note("CAPTCHA visible; paused until explicit resume()");
+      return false;
+    }
+    return true;
+  }
   function followKey(open) {
     return open.dataset.url || open.href || open.dataset.open || open.dataset.h || "";
   }
@@ -157,7 +200,7 @@
   }
   /** Click an element at most once, and only while it is actually clickable. */
   async function clickOnce(el, why) {
-    if (!el || aborted || clicked.has(el) || !visible(el)) return false;
+    if (!el || aborted || !canProceed() || clicked.has(el) || !visible(el)) return false;
     clicked.add(el);
     note("click: " + why);
     el.scrollIntoView({ block: "center" });
@@ -252,6 +295,7 @@
         const download = document.getElementById("download");
 
         while (!aborted && budgetLeft() > 0) {
+          if (!canProceed()) { await sleep(CONFIG.tickMs); continue; }
           if (download && visible(download) && download.classList.contains("ready")) {
             await clickOnce(download, "gaterush download");
             return "download-requested";
@@ -333,6 +377,7 @@
         await clickOnce(document.getElementById("downloadProcess"), "start hypeddit gate");
 
         while (!aborted && budgetLeft() > 0) {
+          if (!canProceed()) { await sleep(CONFIG.tickMs); continue; }
           const slide = currentHypedditSlide();
           const dl = document.getElementById("gateDownloadButton");
           if (visible(dl) && (!slide || slide.contains(dl))) {
@@ -437,6 +482,7 @@
 
   async function droploudGate() {
     while (!aborted && budgetLeft() > 0) {
+      if (!canProceed()) { await sleep(CONFIG.tickMs); continue; }
       const pane = document.querySelector(".dtr-stage.is-vis .dtr-card-pane");
       if (!pane) { await sleep(CONFIG.tickMs); continue; }
       const heading = textOf(pane.querySelector(".dtr-card-title") || pane);
@@ -478,6 +524,7 @@
 
   async function myPressKitGate() {
     while (!aborted && budgetLeft() > 0) {
+      if (!canProceed()) { await sleep(CONFIG.tickMs); continue; }
       const gate = flightData("gate");
       const controls = [...document.querySelectorAll("main button")].filter(visible);
       const download = controls.find(el => textOf(el) === "download");
@@ -551,6 +598,7 @@
 
     let idleTicks = 0;
     while (!aborted && budgetLeft() > 0) {
+      if (!canProceed()) { await sleep(CONFIG.tickMs); continue; }
       const emails = Array.prototype.slice
         .call(document.querySelectorAll('input[type="email"]'))
         .filter(visible);

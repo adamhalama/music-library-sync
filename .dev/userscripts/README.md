@@ -129,3 +129,17 @@ Inject into the **page's main JavaScript world**. Helium's Apple Events
 cannot intercept handlers in the page world. A driver can execute a script
 node using the page's existing CSP nonce (see `.dev/freedl-0912/helium.py`'s
 main-world helper). Runtime configuration must be set in that same world.
+
+## Letting a person handle a gate
+
+Call `udlGate.pause()` before interacting with the form. It preserves social
+evidence and clicked-control history, freezes the run budget, and prevents
+further script input changes and clicks. `udlGate.resume()` explicitly resumes;
+`udlGate.stop()` permanently ends that runner. Reinjection into a paused runner
+is a no-op, so reinstalling the script cannot unexpectedly restart it.
+
+A rendered unsolved reCAPTCHA or hCaptcha automatically pauses with
+`needs-captcha`. Complete it yourself, then call `resume()`. A response token
+alone never resumes automation, and `resume()` returns false while the widget
+is still unsolved. This prevents script submissions during manual solving;
+it is not a CAPTCHA-solving mechanism.

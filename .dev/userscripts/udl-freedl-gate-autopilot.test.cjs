@@ -109,5 +109,27 @@ function page(host,html){
  const future=w.document.querySelector('.upcomming-slide');w.document.getAnimations=()=>[{playState:'running',effect:{target:future,getComputedTiming:()=>({iterations:1,endTime:500}),getKeyframes:()=>[{opacity:0},{opacity:1}]},finish(){finished++}}];
  start();await sleep(100);assert.equal(finished,0);assert.equal(w.udlGate.state.status,'needs-email');dom.window.close();
  }
- console.log('PASS: 12 DOM regression scenarios');
+ // Hypeddit's enclosing carousel transition can remain at opacity zero in a hidden tab.
+ {
+ const {w,dom,start}=page('hypeddit.com','<div style="display:none"><button id="downloadProcess">Download</button></div><div id="myCarousel" class="downloadProcess move-bottom-now" style="opacity:0"><div class="fangate-slider-content current-slide"><input id="email_address"></div><div class="fangate-slider-content upcomming-slide"><button id="gateDownloadButton">Download</button></div></div>');
+ w.UDL_GATE_CONFIG.backgroundOnly=true;let finished=0,entryClicks=0;w.document.querySelector('#downloadProcess').onclick=()=>entryClicks++;
+ const carousel=w.document.querySelector('#myCarousel');const animation={playState:'running',effect:{target:carousel,getComputedTiming:()=>({iterations:1,endTime:400}),getKeyframes:()=>[{opacity:'0'},{opacity:'1'}]},finish(){finished++;this.playState='finished';carousel.style.opacity='1'}};w.document.getAnimations=()=>[animation];
+ start();await sleep(100);assert.equal(finished,1);assert.equal(entryClicks,0);assert.equal(w.udlGate.state.status,'needs-email');assert.match(w.udlGate.inspect().currentSlide,/current-slide/);dom.window.close();
+ }
+ // A rendered CAPTCHA owns the form until solved AND explicitly resumed.
+ {
+ const {w,dom,start}=page('hypeddit.com','<button id="downloadProcess">Download</button><div class="fangate-slider-content current-slide"><input id="email_address"><input id="email_name"><button id="email_to_downloads_next">Share email address</button><div class="g-recaptcha"></div><textarea name="g-recaptcha-response"></textarea></div>');
+ w.UDL_GATE_CONFIG.email='test@example.invalid';w.UDL_GATE_CONFIG.name='Test';let submitted=0;w.document.querySelector('#email_to_downloads_next').onclick=()=>submitted++;
+ start();await sleep(100);assert.equal(w.udlGate.state.status,'needs-captcha');assert.equal(submitted,0);assert.equal(w.udlGate.resume(),false);
+ const api=w.udlGate;start();assert.equal(w.udlGate,api);assert.equal(w.udlGate.isPaused(),true);
+ w.document.querySelector('textarea').value='human-solved-token';await sleep(100);assert.equal(submitted,0);assert.equal(w.udlGate.state.status,'needs-captcha');
+ assert.equal(w.udlGate.resume(),true);await sleep(100);assert.equal(submitted,1);dom.window.close();
+ }
+ // Explicit pause retains verified evidence and suppresses all further actions.
+ {
+ const {w,dom,start}=page('gaterush.me','<div id="stepStage"><div class="follow-pair"><button data-open data-url="https://example.com/artist">Open</button><button data-confirm disabled>Followed</button></div></div>');
+ const open=w.document.querySelector('[data-open]'),confirm=w.document.querySelector('[data-confirm]');let confirmed=0;open.onclick=()=>{open.disabled=true;open.classList.add('done');confirm.disabled=false};confirm.onclick=()=>{confirmed++;confirm.classList.add('done');confirm.disabled=true};
+ start();await sleep(100);w.udlGate.pause();w.udlGate.confirmFollow('https://example.com/artist','Following observed');await sleep(100);assert.equal(confirmed,0);assert.equal(w.udlGate.state.status,'paused');assert.equal(w.udlGate.resume(),true);await sleep(100);assert.equal(confirmed,1);dom.window.close();
+ }
+ console.log('PASS: 15 DOM regression scenarios');
 })().catch(e=>{console.error(e);process.exitCode=1});
