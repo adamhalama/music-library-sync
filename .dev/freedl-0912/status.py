@@ -9,6 +9,13 @@ plans = sorted(glob.glob(f"{SCRATCH}/logs/*/capture-plan.json"))
 plan = json.load(open(plans[-1]))
 # The likes window includes two tracks absent from this batch. Scope by actual
 # local paths, not enumeration index, so the report describes the 46 files.
+# Explicit original-format migrations retain identity by their logged old path.
+for evidence in sorted(glob.glob(f"{SCRATCH}/logs/*/preservation-result.json")):
+    migration = json.load(open(evidence))
+    if migration.get("action") == "install-mp3":
+        for row in plan["rows"]:
+            if row.get("local_path") == migration["before"]["path"]:
+                row["local_path"] = migration["after"]["path"]
 rows = [r for r in plan["rows"]
         if r.get("local_path") and os.path.isfile(r["local_path"])
         and os.path.dirname(os.path.realpath(r["local_path"])) == os.path.realpath(LIB)]
@@ -26,10 +33,15 @@ for res in sorted(glob.glob(f"{SCRATCH}/logs/*/promotion-result.json")):
         if r["status"] == "replaced":
             promoted.add(os.path.basename(r["library_path"]))
 
+for evidence in sorted(glob.glob(f"{SCRATCH}/logs/*/preservation-result.json")):
+    migration = json.load(open(evidence))
+    if migration.get("action") == "install-mp3":
+        promoted.add(os.path.basename(migration["after"]["path"]))
+
 def kbps(path):
     try:
         out = subprocess.run(["ffprobe","-hide_banner","-loglevel","error",
-                              "-show_entries","format=bit_rate","-of","csv=p=0",path],
+                              "-select_streams","a:0","-show_entries","stream=bit_rate","-of","csv=p=0",path],
                              capture_output=True, text=True, timeout=10).stdout.strip()
         return int(out)//1000 if out.isdigit() else 0
     except Exception:
