@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from audit import classify_change, promotion_ledger
+from audit import baseline_backups, classify_change, promotion_ledger
 import preserve
 import promote
 
@@ -92,6 +92,40 @@ class QualityTests(unittest.TestCase):
         with patch.object(promote.subprocess,'run') as run:
             promote.repair_replaced_rows({'exit_code':0,'result':{'rows':[{'status':'skipped'}]}})
             run.assert_not_called()
+
+    def test_original_baseline_wins_over_earlier_named_metadata_repair(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            original = root/'backups'/'20260929-213700-local'/'nested'/'track.m4a'
+            repair = root/'backups'/'20260929-193700-utc-repair'/'track.m4a'
+            for path in (original, repair):
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b'original' if path == original else b'upgraded')
+            log = root/'logs'/'nested'/'run'/'promotion-result.json'
+            log.parent.mkdir(parents=True)
+            log.write_text(json.dumps({'rows':[{'status':'replaced','library_path':'track.m4a','backup_path':str(original)}]}))
+            self.assertEqual(baseline_backups(root), {'track':original})
+            self.assertIn('track', promotion_ledger(root))
+
+    def test_missing_original_does_not_fall_back_to_repair(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            log = root/'logs'/'run'/'promotion-result.json'
+            log.parent.mkdir(parents=True)
+            log.write_text(json.dumps({'rows':[{'status':'replaced','library_path':'track.m4a','backup_path':str(root/'backups/missing.m4a')}]}))
+            with self.assertRaisesRegex(FileNotFoundError,'baseline missing'):
+                baseline_backups(root)
+
+    def test_migration_baseline_uses_original_extension(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            backup = root/'backups'/'old.m4a'
+            backup.parent.mkdir()
+            backup.write_bytes(b'original')
+            log = root/'logs'/'run'/'preservation-result.json'
+            log.parent.mkdir(parents=True)
+            log.write_text(json.dumps({'action':'install-mp3','after':{'path':'old.mp3'},'backup':str(backup)}))
+            self.assertEqual(baseline_backups(root), {'old':backup})
 
 
 if __name__ == '__main__':

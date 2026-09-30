@@ -36,15 +36,44 @@ def stream_hash(path):
 
 def promotion_ledger(scratch):
     promoted = {}
-    for log in sorted((scratch/'logs').glob('*/promotion-result.json')):
+    for log in sorted((scratch/'logs').rglob('promotion-result.json')):
         for row in json.loads(log.read_text()).get('rows', []):
             if row.get('status') == 'replaced':
                 promoted[Path(row['library_path']).stem] = str(log)
-    for log in sorted((scratch/'logs').glob('*/preservation-result.json')):
+    for log in sorted((scratch/'logs').rglob('preservation-result.json')):
         record = json.loads(log.read_text())
         if record.get('action') == 'install-mp3':
             promoted[Path(record['after']['path']).stem] = str(log)
     return promoted
+
+def baseline_backups(scratch):
+    """Resolve original audio from explicit mutation records, never folder names.
+
+    Capture run IDs use local time while metadata repairs use UTC, so lexical
+    backup ordering can select a later, already-upgraded metadata-repair copy.
+    """
+    candidates = []
+    for log in (scratch/'logs').rglob('promotion-result.json'):
+        for row in json.loads(log.read_text()).get('rows') or []:
+            if row.get('status') == 'replaced' and row.get('backup_path'):
+                candidates.append((log.stat().st_mtime_ns, Path(row['library_path']).stem,
+                                   Path(row['backup_path'])))
+    for log in (scratch/'logs').rglob('preservation-result.json'):
+        record = json.loads(log.read_text())
+        if record.get('action') == 'install-mp3' and record.get('backup'):
+            candidates.append((log.stat().st_mtime_ns, Path(record['after']['path']).stem,
+                               Path(record['backup'])))
+    backups = {}
+    for _, stem, backup in sorted(candidates):
+        # A recorded but missing original must fail visibly; substituting a
+        # metadata-repair copy would silently turn an upgrade into "unchanged".
+        if stem not in backups:
+            if not backup.is_file():
+                raise FileNotFoundError(f'Promotion baseline missing: {backup}')
+            if not backup.resolve().is_relative_to((scratch/'backups').resolve()):
+                raise ValueError(f'Promotion baseline outside scratch backups: {backup}')
+            backups[stem] = backup
+    return backups
 
 def classify_change(before, current, promotion_evidence):
     changed_audio = before['encoded_audio_sha256'] != current['encoded_audio_sha256']
@@ -59,10 +88,7 @@ def main():
     parser.add_argument('--output', type=Path, default=SCRATCH / 'quality-audit')
     args = parser.parse_args()
     paths = sorted(p for p in LIB.iterdir() if p.suffix.lower() in MEDIA)
-    backups = {}
-    for p in sorted((SCRATCH / 'backups').glob('*/*')):
-        if p.suffix.lower() in MEDIA:
-            backups.setdefault(p.stem, p)
+    backups = baseline_backups(SCRATCH)
     plans = sorted((SCRATCH / 'logs').glob('*/capture-plan.json'))
     definitions = {}
     for p in plans:
@@ -86,7 +112,7 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         rows = list(pool.map(inspect, paths))
     output = {'generated_at': datetime.now(timezone.utc).isoformat(), 'library': str(LIB),
-              'note': 'Bitrates are audio-stream measurements; higher rate alone cannot prove perceptual quality. Before uses earliest available backup, otherwise current file (no independent baseline). Upgrades require both promotion evidence and changed encoded audio.',
+              'note': 'Bitrates are audio-stream measurements; higher rate alone cannot prove perceptual quality. Before uses the original backup referenced by the earliest successful promotion/migration record (ordered by ledger file time), otherwise current file (no independent baseline). Upgrades require both promotion evidence and changed encoded audio.',
               'count': len(rows), 'upgraded': sum(r['upgraded'] for r in rows), 'rows': rows}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.with_suffix('.json').write_text(json.dumps(output, indent=2)+'\n')
