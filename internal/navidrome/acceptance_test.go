@@ -1,3 +1,5 @@
+//go:build darwin
+
 package navidrome
 
 import (
@@ -39,6 +41,7 @@ type fileManifest struct {
 // backups, restart, and — above all — that not one source byte or timestamp
 // changed.
 //
+// This fixture is Darwin-only because it controls APFS creation times with SetFile.
 // It is opt-in because it needs a real binary. Without one it skips rather
 // than silently passing.
 func TestNavidromeIsolatedAcceptance(t *testing.T) {

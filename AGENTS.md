@@ -78,3 +78,5 @@ We are building this together. When you learn something non-obvious, add it here
 - SoundCloud profile-card comment forms can appear in the DOM before they accept submission. Scroll the exact track card into view and focus its input before sending input events and clicking Submit; require the posted account/comment plus cleared input or increased count as proof. Direct track pages in Helium sometimes render only an empty shell while the artist profile's exact track card works.
 
 - Hypeddit Spotify callbacks can succeed in a reused background tab without an opener: their normal same-origin localStorage signal advances the gate. Verify the callback's success text and the resulting gate slide, and confirm `lifetime_fan_sp == 0` before Connect to preserve the future-song opt-out.
+
+- Navidrome real-server acceptance fixtures that call Darwin-only APFS creation-time helpers must also carry a Darwin build tag. A runtime opt-in skip cannot prevent undefined-helper compilation failures on Linux.
