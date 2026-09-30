@@ -44,6 +44,18 @@ function page(host,html){
  w.udlGate.confirmAction('https://example.com/track','like','Unlike visible');await sleep(100);assert.equal(w.udlGate.state.pending.kind,'repost');assert.equal(advanced,0);
  w.udlGate.confirmAction('https://example.com/track','repost','Undo repost visible');await sleep(100);assert.equal(advanced,1);dom.window.close();
  }
+ // Hypeddit's validation Next reveals a separate transition Next; both wait for real evidence.
+ {
+ const {w,dom,start}=page('hypeddit.com','<style>.hide{display:none}</style><button id="downloadProcess">Download</button><div class="sc fangate-slider-content current-slide"><a class="hype-btn" data-step="like" data-url="https://example.com/track">Like</a><a class="hype-btn" id="skipper_sc_channel">Next</a><button class="hide" id="skipper_sc_next">Next</button></div><div class="dw fangate-slider-content upcomming-slide"><a id="gateDownloadButton">Download</a></div>');
+ let validations=0,transitions=0,downloads=0;
+ const validation=w.document.querySelector('#skipper_sc_channel'),transition=w.document.querySelector('#skipper_sc_next');
+ validation.onclick=()=>{validations++;validation.classList.add('hide');transition.classList.remove('hide')};
+ transition.onclick=()=>{transitions++;w.document.querySelector('.sc').classList.remove('current-slide');w.document.querySelector('.dw').classList.remove('upcomming-slide');w.document.querySelector('.dw').classList.add('current-slide')};
+ w.document.querySelector('#gateDownloadButton').onclick=()=>downloads++;
+ start();await sleep(100);assert.equal(validations,0);assert.equal(transitions,0);assert.equal(downloads,0);
+ w.udlGate.confirmAction('https://example.com/track','like','Unlike observed');await sleep(200);
+ assert.equal(validations,1);assert.equal(transitions,1);assert.equal(downloads,1);dom.window.close();
+ }
  // Entry Download is not a successful download, nor permission to confirm follows.
  {
  const {w,dom,start}=page('mypresskit.info','<button id="entry">Download</button><button id="confirm">I followed</button>');let confirms=0;
@@ -131,5 +143,5 @@ function page(host,html){
  const open=w.document.querySelector('[data-open]'),confirm=w.document.querySelector('[data-confirm]');let confirmed=0;open.onclick=()=>{open.disabled=true;open.classList.add('done');confirm.disabled=false};confirm.onclick=()=>{confirmed++;confirm.classList.add('done');confirm.disabled=true};
  start();await sleep(100);w.udlGate.pause();w.udlGate.confirmFollow('https://example.com/artist','Following observed');await sleep(100);assert.equal(confirmed,0);assert.equal(w.udlGate.state.status,'paused');assert.equal(w.udlGate.resume(),true);await sleep(100);assert.equal(confirmed,1);dom.window.close();
  }
- console.log('PASS: 15 DOM regression scenarios');
+ console.log('PASS: 16 DOM regression scenarios');
 })().catch(e=>{console.error(e);process.exitCode=1});
