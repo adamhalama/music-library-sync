@@ -1,5 +1,40 @@
 # Notes — Free DL upgrade 2026-09-12
 
+## 2026-09-29 continuation — background Helium automation
+
+- User authorized finishing all eligible tracks in the isolated 46-file directory,
+  code/automation fixes and coherent commits. Main `sc-likes` remains out of scope.
+- User chose background-only Helium control: no foreground mouse/keyboard, pause
+  for login/CAPTCHA dialogs. They enabled JavaScript from Apple Events and signed
+  into SoundCloud and Instagram. Existing GATERUSH authorization remains approved.
+- Helium Apple Events executes JavaScript in an isolated world. `helium.py`
+  injects a temporary nonce-bearing script for page-world automation, required
+  for intercepting the gate's `window.open` without creating foreground popups.
+- Hidden tabs pause finite CSS entry animations. The userscript finishes only
+  known finite gate fade-ins, never upcoming Hypeddit slides or infinite effects.
+- All four old upgrades lost MP4 freeform source-URL tags. `preserve.py` restored
+  complete metadata and original creation times without re-encoding. FUNKY TOWN
+  is now the original ~267 kbps MP3 (explicit extension migration, AAC backed up).
+- `promote.py --apply` now restores/validates metadata automatically. Each browser
+  capture must use a fresh run: reusing an old run can reselect already-promoted
+  files and overwrite its promotion ledger. `intake.py` creates isolated runs
+  and stages by remote ID (native state parsing collapses repeated spaces).
+- Confirmed promotions this session: FUNKY TOWN, Sonic Boom, SMVGGLERS - SEX,
+  FUMANDO MARIJUANA, PRIME, POP IT LIKE. With the four previous upgrades this is
+  **10 upgraded, 5 gates remaining, 31 without a supported free route**.
+- Remaining: PIKETU and Dex Fury (Hypeddit), CHULO and YOKAI (Droploud), WHO WANT
+  SMOKE (MyPressKit). PIKETU CAPTCHA was completed by the user. WHO WANT SMOKE's
+  real SoundCloud OAuth completed all five SC actions; Instagram remains.
+- `download.py` transfers the ordinary authenticated same-origin media response
+  through Helium when native multiple downloads do not start. Cookies stay in
+  Helium; binary chunks go directly from browser to Python, not tool output.
+- Private gate email/name configuration recovered from the earlier authorized
+  draft is stored outside the repository in scratch `automation/gate-config.json`.
+  Never commit it or expose it in error traces.
+- Current files and per-mutation proofs: scratch `logs/*/preservation-result.json`;
+  run `audit.py` after the final promotion for the complete quality table.
+
+
 ## 2026-09-12 continuation — browser access and authorization
 
 - User explicitly authorized all batch gate requirements: SoundCloud likes,
@@ -387,3 +422,28 @@ Tampermonkey needs UI interaction this process cannot drive (no Automation or
 Screen Recording permission), and even `node --check` was refused by the
 sandbox, so the syntax check is unrun too. The first capture run after install
 is the real test.
+
+
+### September 30 continuation: CAPTCHA pause and eleven verified upgrades
+
+- PIKETU helper remains stopped while the user handles CAPTCHA. New helper
+  latches an unsolved CAPTCHA pause, preserves it on reinjection, and requires
+  explicit resume. Fifteen DOM regression scenarios pass.
+- WHO WANT SMOKE completed all six native gate steps. Instagram notpumbaa_
+  Following survived reload. Fresh single-track run
+  `20260930-whowantsmoke-2352500969` promoted one file, zero failures; preservation
+  checks passed. Source WAV SHA256:
+  `4dbf0579a3d95d9a226ae011f7f8cce1a88559e75397b45b34bc3fc3a247e97b`.
+- Audit baseline discovery now follows successful promotion backup paths, not
+  lexically sorted capture/repair directories mixing local and UTC timestamps.
+  Eleven quality tests pass. Latest full scan: 46 files, 11 upgrades, 46 clean
+  decodes, 46 preserved tags/artwork/creation times.
+- Remaining: PIKETU, Dex Fury, CHULO, YOKAI. Browser interaction remains
+  background-only. CHULO helper injected but inspection timed out; inspect before
+  retrying. Its three Instagram follows were previously verified. YOKAI is at
+  entry; Dex Fury has manual SoundCloud actions then Spotify/Instagram steps.
+- Owned Helium window 1725014557: CHULO tab1725014558; YOKAI tab1725014608;
+  Dex Fury SoundCloud track tab1725014610 (main content stalls); Dex Fury Hypeddit
+  tab1725014621. PIKETU remains user-owned window1725014604/tab1725014605.
+- Browser helper tab lists redact query/fragment credentials. Private runtime
+  config and follow/download evidence stay under the scratch automation folder.
