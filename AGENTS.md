@@ -72,3 +72,5 @@ We are building this together. When you learn something non-obvious, add it here
 
 - Free DL batch audit baselines must come from successful promotion records' explicit backup paths. Capture folder IDs can use local time while metadata-repair folders use UTC; lexical ordering can select already-upgraded repair copies and undercount upgrades.
 - Browser capture filenames with repeated spaces are unsafe as native Free DL state keys because the Go parser uses `strings.Fields`. Stage by remote ID and retain the original filename in intake evidence.
+
+- `[Hypeddit helper] clicking:` identifies the independently installed Tampermonkey Hypeddit Skip/Download Helper, not `window.udlGate`. Its closure-local timer/observer survives disabling until the page reloads; stopping udlGate alone does not stop it. Verify the exact installed script is Disabled and reload the affected tab before asking the user to retry CAPTCHA.

@@ -143,3 +143,16 @@ A rendered unsolved reCAPTCHA or hCaptcha automatically pauses with
 alone never resumes automation, and `resume()` returns false while the widget
 is still unsolved. This prevents script submissions during manual solving;
 it is not a CAPTCHA-solving mechanism.
+
+
+### Conflicting installed Hypeddit helper
+
+Console messages beginning `[Hypeddit helper] clicking:` come from the older
+Tampermonkey **Hypeddit Skip/Download Helper**, not this repository's `udlGate`.
+Calling `udlGate.stop()` cannot stop that script's private interval/observer.
+Disable that specific script in Tampermonkey's Installed Userscripts dashboard,
+verify its switch reads Disabled, then reload the affected Hypeddit tab to unload
+the already-running instance. Disabling alone does not clear existing timers.
+Do not reload during a user's CAPTCHA attempt without explaining the reset.
+Keep the older script disabled when using this helper; no replacement needs to
+run while the user handles verification.
