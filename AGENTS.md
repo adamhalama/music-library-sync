@@ -76,3 +76,5 @@ We are building this together. When you learn something non-obvious, add it here
 - `[Hypeddit helper] clicking:` identifies the independently installed Tampermonkey Hypeddit Skip/Download Helper, not `window.udlGate`. Its closure-local timer/observer survives disabling until the page reloads; stopping udlGate alone does not stop it. Verify the exact installed script is Disabled and reload the affected tab before asking the user to retry CAPTCHA.
 
 - SoundCloud profile-card comment forms can appear in the DOM before they accept submission. Scroll the exact track card into view and focus its input before sending input events and clicking Submit; require the posted account/comment plus cleared input or increased count as proof. Direct track pages in Helium sometimes render only an empty shell while the artist profile's exact track card works.
+
+- Hypeddit Spotify callbacks can succeed in a reused background tab without an opener: their normal same-origin localStorage signal advances the gate. Verify the callback's success text and the resulting gate slide, and confirm `lifetime_fan_sp == 0` before Connect to preserve the future-song opt-out.

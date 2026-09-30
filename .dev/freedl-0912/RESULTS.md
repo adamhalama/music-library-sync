@@ -1,13 +1,13 @@
 # September 12 Free DL upgrade results
 
-Snapshot: 2026-09-30T10:16:35.738602+00:00. This report records the current checkpoint; one supported gate remains in progress.
+Final audit: 2026-09-30T10:42:01.105784+00:00. All 15 supported Free DL candidates have verified upgrades.
 
 The isolated library is `/Users/jaa/Music/downloaded/sc-likes-today-09-12` (46 tracks). Upgrades, backups and preservation repairs in this batch target that copy. The normal `~/Music/downloaded/sc-likes` library was not a promotion target.
 
 | Outcome | Count |
 |---|---:|
-| Confirmed upgrades | 14 |
-| Supported gates pending | 1 |
+| Confirmed upgrades | 15 |
+| Supported gates pending | 0 |
 | No supported Free DL route | 31 |
 | Full audio decodes passing | 46/46 |
 | Tags, artwork and creation times preserved | 46/46 |
@@ -19,6 +19,7 @@ Rates below measure the audio stream, excluding artwork and container overhead. 
 | Track | Downloaded original | Before | Installed audio |
 |---|---|---|---|
 | CHULO | WAV, 16-bit | AAC 160.0 kbps | AAC 277.3 kbps |
+| Dex Fury - Oriental Bounce (Free DL) | WAV, 24-bit | AAC 160.0 kbps | AAC 284.9 kbps |
 | Emmanuel Messina - Pianolator [UNDRGRNDSPORTS] | WAV, 16-bit | AAC 160.0 kbps | AAC 270.0 kbps |
 | FRAI X JCB  - FEEL GOOD | WAV, 24-bit | AAC 160.0 kbps | AAC 270.3 kbps |
 | FUNKY TOWN (TOWLIE FLIP) | MP3 (artist file) | AAC 160.0 kbps | MP3 267.2 kbps |
@@ -46,8 +47,8 @@ Local evidence:
 - [Capture and promotion ledgers](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/logs)
 - [Original-file backups](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/backups)
 
-## Remaining work
+## Gate exception and unchanged files
 
-Dex Fury — Oriental Bounce is pending at Hypeddit: its genuine SoundCloud actions are complete, but its hidden tab repeatedly times out before Spotify Connect. Future-song opt-out must be checked again after the last reload. CHULO and ZiNØ x Shizeero — YOKAI have completed their Droploud gates and verified promotions. Of the other 31 unupgraded tracks, 27 have an unsupported purchase/download host and four advertise no Free DL route in the saved capture plan. Their current files remain in the isolated library.
+Dex Fury — Oriental Bounce completed its native Hypeddit flow and verified promotion. Its Instagram link `dexfury_music` is unavailable: the exact profile returned Instagram’s unavailable-page message after reload, and the artist’s current public SoundCloud bio still advertises that same username. No Instagram follow was performed or claimed. The gate’s ordinary link click and Next action nevertheless allowed the flow to continue. Required SoundCloud actions and the Spotify OAuth callback were verified; optional future Spotify additions were disabled (`futureOptOut=0`). Public-link and unavailable-page evidence are retained in the scratch `automation` directory.
 
-Refresh this checkpoint from the regenerated audit after additional promotions; do not reuse an earlier capture run for newly downloaded tracks.
+The other 31 tracks advertise no supported Free DL route in the saved capture plan: 27 use an unsupported purchase/download host, and four have no Free DL route. Their current files remain in the isolated library. These are outside the 15 completed supported candidates.

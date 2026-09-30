@@ -476,3 +476,18 @@ is the real test.
 - Reusable exact-card SoundCloud helper requires explicit focus opt-in for comments;
  9offline tests pass. Droploud native unlocked capture has2offline regressions.
  Hypeddit two-stage Next regression brings DOM suite to16;11quality tests pass.
+
+
+### September 30 final gate completion
+
+- Making Dex Fury's gate visible restored execution. Verified all real SC actions,
+  then normal Next advanced; `lifetime_fan_sp == 0` was confirmed before Spotify
+  Connect. Native Spotify consent/callback succeeded in an existing background
+  tab and the site's localStorage fallback advanced the gate to Instagram.
+- The exact Instagram profile `dexfury_music` is unavailable after reload. The
+  artist's current public SoundCloud profile (Dex 98) still links that username;
+  no official replacement was found. No Instagram follow was asserted. The
+  gate's normal profile click-through and Next nevertheless unlocked the download.
+  Private evidence records this exception and the successful Spotify callback.
+- Requested the final native Dex original WAV download; intake, preservation and
+  full-library audit are recorded in the final RESULTS.md checkpoint.
