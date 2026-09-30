@@ -87,3 +87,10 @@ Explicit follow/like/repost/comment actions verify the resulting state and never
 retry uncertain writes. Comments additionally require `--allow-focus`: their lazy
 UI requires scrolling and focusing the input, so do not use that flag while the
 user is working. Default inspection preserves drafts and changes no browser UI.
+
+`droploud.py` saves a native, server-unlocked download in the background. It
+intercepts the site's file anchor and success-page navigation, retains interception
+for a delayed response after timeout, and refuses duplicate pending requests.
+Signed URLs stay in exclusive mode-0600 evidence outside the checkout. The helper
+never completes requirements itself. Validate with `python3
+.dev/freedl-0912/test_droploud.py`.
