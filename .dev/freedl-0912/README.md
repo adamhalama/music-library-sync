@@ -4,7 +4,7 @@ These scripts only modify `~/Music/downloaded/sc-likes-today-09-12` and use
 `~/dev/music-down/statefiles/freedl/upgrade-09-12` for originals, backups and evidence.
 
 - `python3 .dev/freedl-0912/audit.py`: probe every actual media file, fully decode audio,
-  compare audio bitrate, tags and artwork hashes with its earliest backup, and write
+  compare audio bitrate, tags and artwork hashes with the original backup recorded by its successful promotion, and write
   `quality-audit.json` plus `quality-audit.md` in scratch. Bitrate is audio-only;
   container size including artwork is not used as a quality measurement.
 - `preserve.py restore-tags BACKUP TARGET`: restore the entire original MP4 tag set
@@ -58,3 +58,26 @@ repair failures with a nonzero exit, and always closes its agent. Native promoti
 hashes describe the pre-repair output; the separate preservation ledger records
 the final metadata-restored file. Tag restoration uses the backup's creation time,
 so it also corrects native promotion timestamp drift.
+
+Background browser tools use explicitly selected Helium window/tab IDs and never
+activate a window or synthesize keyboard/mouse input:
+
+- `helium.py`: list tabs, inspect, navigate, inject or stop the gate helper. Tab lists
+  redact URL queries/fragments because OAuth callbacks can contain credentials.
+- `gaterush.py`: route the site's normal OAuth flow through an owned auxiliary tab
+  and deliver only a verified provider callback to the gate.
+- `download.py`: transfer an unlocked same-origin media response from Helium into
+  its download directory without exporting browser cookies.
+- `instagram.py`: perform an authorized profile follow and verify Following after
+  reload. It refuses missing/ambiguous controls before acting.
+
+Keep personal form configuration and action evidence outside the repository. A
+browser timeout may occur after an action succeeded: inspect before retrying.
+CAPTCHA detection pauses the userscript until explicit resume; leave human-owned
+tabs untouched during verification. A real site follow must be observed before
+confirming a gate step. Background tabs may stall; do not activate them to work
+around that while the user is working.
+
+`intake.py` creates fresh single-track capture runs from the original identity
+plan, validates downloaded media, and stages names by remote ID. This avoids the
+native state parser collapsing repeated spaces in browser-provided filenames.
