@@ -74,3 +74,5 @@ We are building this together. When you learn something non-obvious, add it here
 - Browser capture filenames with repeated spaces are unsafe as native Free DL state keys because the Go parser uses `strings.Fields`. Stage by remote ID and retain the original filename in intake evidence.
 
 - `[Hypeddit helper] clicking:` identifies the independently installed Tampermonkey Hypeddit Skip/Download Helper, not `window.udlGate`. Its closure-local timer/observer survives disabling until the page reloads; stopping udlGate alone does not stop it. Verify the exact installed script is Disabled and reload the affected tab before asking the user to retry CAPTCHA.
+
+- SoundCloud profile-card comment forms can appear in the DOM before they accept submission. Scroll the exact track card into view and focus its input before sending input events and clicking Submit; require the posted account/comment plus cleared input or increased count as proof. Direct track pages in Helium sometimes render only an empty shell while the artist profile's exact track card works.

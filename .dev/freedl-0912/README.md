@@ -81,3 +81,9 @@ around that while the user is working.
 `intake.py` creates fresh single-track capture runs from the original identity
 plan, validates downloaded media, and stages names by remote ID. This avoids the
 native state parser collapsing repeated spaces in browser-provided filenames.
+
+`soundcloud.py` inspects an exact artist profile and track card without navigation.
+Explicit follow/like/repost/comment actions verify the resulting state and never
+retry uncertain writes. Comments additionally require `--allow-focus`: their lazy
+UI requires scrolling and focusing the input, so do not use that flag while the
+user is working. Default inspection preserves drafts and changes no browser UI.
