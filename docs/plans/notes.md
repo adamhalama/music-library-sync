@@ -447,3 +447,32 @@ is the real test.
   tab1725014621. PIKETU remains user-owned window1725014604/tab1725014605.
 - Browser helper tab lists redact query/fragment credentials. Private runtime
   config and follow/download evidence stay under the scratch automation folder.
+
+
+### September 30 final background checkpoint: fourteen upgrades
+
+- PIKETU's repeat clicker was a separate installed Tampermonkey script, not
+  `udlGate`. Disabled the exact installed script and reloaded; two observation
+  windows recorded zero synthetic clicks. User CAPTCHA then succeeded. Real SC
+  follow/like/repost/comment verified; original WAV promoted in
+  `20260930-piketu-2342117072`, now AAC259.5kbps from160.
+- CHULO completed native Droploud OAuth, verified Instagram follows and manual SC
+  repost. `20260930-chulo-2360495132`:16-bit WAV43884924bytes,
+  SHA2564b41a69ae3fe87dba5da72c681c45f72cc8a68cbe0c8533697b133e3ddcf7543,
+  installed AAC277.3kbps. One replacement, zero failures, preservation passed.
+- YOKAI completed native email, existing real IG follow, SC OAuth and manual repost;
+  skipped the explicitly optional Droploud follow. Background signed download
+  captured without UI anchor/navigation. `20260930-yokai-2385345252`:24-bit WAV
+  57476368bytes SHA25653eade30deff0d8933fc0de9cf2969cf603fe35917a978b8940b8565ee6fc378,
+  installed AAC269.3kbps. One replacement, zero failures, preservation passed.
+- Full audit:46files,14upgrades,46clean decodes,46preserved tags/art/creation times.
+  `.dev/freedl-0912/RESULTS.md` is the current table; raw evidence stays in scratch.
+- Sole supported candidate pending: Dex Fury. Real SC follow/like/repost/comment
+  proven in private `automation/dex-social-evidence.json`. Hidden Hypeddit tab
+  repeatedly times out despite inactive-tab reload. Spotify Connect never started;
+  replay normal steps and verify future-song opt-out again after reload before
+  Connect. Current gate window1725014557/tab1725014621. No foreground work while
+  user is using the PC. User asked to leave the gate visible when convenient.
+- Reusable exact-card SoundCloud helper requires explicit focus opt-in for comments;
+ 9offline tests pass. Droploud native unlocked capture has2offline regressions.
+ Hypeddit two-stage Next regression brings DOM suite to16;11quality tests pass.
