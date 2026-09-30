@@ -1,6 +1,6 @@
 # September 12 Free DL upgrade results
 
-Final audit: 2026-09-30T10:42:01.105784+00:00. All 15 supported Free DL candidates have verified upgrades.
+Final audit: 2026-09-30T13:39:11.723009+00:00. All 15 supported Free DL candidates have verified upgrades.
 
 The isolated library is `/Users/jaa/Music/downloaded/sc-likes-today-09-12` (46 tracks). Upgrades, backups and preservation repairs in this batch target that copy. The normal `~/Music/downloaded/sc-likes` library was not a promotion target.
 
@@ -40,7 +40,12 @@ Every upgraded row has a successful promotion or migration ledger and a changed 
 
 New browser intakes verify the exact saved remote ID, title, gate URL and isolated target, then verify download size/hash, complete decode and duration before staging by remote ID. Fresh single-track promotion runs preview one selected row and keep rollback backups. Downloaded originals and intake evidence remain under `~/dev/music-down/statefiles/freedl/upgrade-09-12/buffer` and `logs`.
 
-Local evidence:
+Portable proof for reviewers:
+
+- [Full 46-track quality table](QUALITY.md)
+- [Hashes and measured stream evidence](quality-evidence.json)
+
+Local source evidence:
 
 - [Full 46-track quality table](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.md)
 - [Machine-readable audit](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.json)

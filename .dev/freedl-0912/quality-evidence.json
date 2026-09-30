@@ -1,0 +1,1759 @@
+{
+  "generated_at": "2026-09-30T13:39:11.723009+00:00",
+  "scope": "Isolated September 12 batch (46 files)",
+  "note": "Bitrates are audio-stream measurements; higher rate alone cannot prove perceptual quality. Before uses the original backup referenced by the earliest successful promotion/migration record (ordered by ledger file time), otherwise current file (no independent baseline). Upgrades require both promotion evidence and changed encoded audio.",
+  "count": 46,
+  "upgraded": 15,
+  "decode_passed": 46,
+  "preservation_passed": 46,
+  "rows": [
+    {
+      "track": "BCCO Premiere,： The Southern - Ultrasound (Stripped Mix) [MRS004]",
+      "remote_id": "2345332088",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "0f6d86c8c34f4fe0e4a29d6fd4692dc6105c82947a87817164cbc0b098be7c96",
+        "encoded_audio_sha256": "SHA256=dc5b95285398cc0c7d9336595fbd7697aa6277de9cb1464be684eb879a9cd6fe",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 331.000522,
+        "artwork": [
+          "713acb093dd6b4700ea5d269a1a7908d6f05825c904b7d7c8fac3146727855fb"
+        ],
+        "filename": "BCCO Premiere,： The Southern - Ultrasound (Stripped Mix) [MRS004].m4a"
+      },
+      "after": {
+        "sha256": "0f6d86c8c34f4fe0e4a29d6fd4692dc6105c82947a87817164cbc0b098be7c96",
+        "encoded_audio_sha256": "SHA256=dc5b95285398cc0c7d9336595fbd7697aa6277de9cb1464be684eb879a9cd6fe",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 331.000522,
+        "artwork": [
+          "713acb093dd6b4700ea5d269a1a7908d6f05825c904b7d7c8fac3146727855fb"
+        ],
+        "filename": "BCCO Premiere,： The Southern - Ultrasound (Stripped Mix) [MRS004].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "BCCO Premiere： FENIM0RE - My Last Descent [KYSH-002]",
+      "remote_id": "2336625794",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "5bcce055e7f56372b3aac0b9eadc2561b023b7631488e645f29e0ca6785df0f7",
+        "encoded_audio_sha256": "SHA256=d7e2813942a0dc6a575274a4f48ac8a716a866acf714b4a792e2500b75043ec8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 322.04644,
+        "artwork": [
+          "60f73538b274a8d9db1b72f9a6a4d523e3c881dff63a437638f2dfd8d0058dc2"
+        ],
+        "filename": "BCCO Premiere： FENIM0RE - My Last Descent [KYSH-002].m4a"
+      },
+      "after": {
+        "sha256": "5bcce055e7f56372b3aac0b9eadc2561b023b7631488e645f29e0ca6785df0f7",
+        "encoded_audio_sha256": "SHA256=d7e2813942a0dc6a575274a4f48ac8a716a866acf714b4a792e2500b75043ec8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 322.04644,
+        "artwork": [
+          "60f73538b274a8d9db1b72f9a6a4d523e3c881dff63a437638f2dfd8d0058dc2"
+        ],
+        "filename": "BCCO Premiere： FENIM0RE - My Last Descent [KYSH-002].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "BCCO Premiere： Filtrack - Cheeky Jaw and The 5 Sesh Gremlins (No Valentia Remix)  [VEP003]",
+      "remote_id": "2332622699",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "6658e90e8983cc4acbf98b58b16eeb558e23210000aa2afc4eaad277f983bf3a",
+        "encoded_audio_sha256": "SHA256=57c6a553cd187d384e08eee5413f3f2d7808613b82454f76e300fc6a3c8f714b",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 313.379773,
+        "artwork": [
+          "7ac176b84fa2b3b11a32fa2d2ec0f194defb635a7f2c1c763b5e5a49dd5c6cb8"
+        ],
+        "filename": "BCCO Premiere： Filtrack - Cheeky Jaw and The 5 Sesh Gremlins (No Valentia Remix)  [VEP003].m4a"
+      },
+      "after": {
+        "sha256": "6658e90e8983cc4acbf98b58b16eeb558e23210000aa2afc4eaad277f983bf3a",
+        "encoded_audio_sha256": "SHA256=57c6a553cd187d384e08eee5413f3f2d7808613b82454f76e300fc6a3c8f714b",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 313.379773,
+        "artwork": [
+          "7ac176b84fa2b3b11a32fa2d2ec0f194defb635a7f2c1c763b5e5a49dd5c6cb8"
+        ],
+        "filename": "BCCO Premiere： Filtrack - Cheeky Jaw and The 5 Sesh Gremlins (No Valentia Remix)  [VEP003].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "BCCO Premiere： Kaltblume - Vice [GRÜVW01]",
+      "remote_id": "2339543660",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "ede3c5d6943877bc53b225d5a5e48f2e295695d353cee633699c91fd2e31a3d0",
+        "encoded_audio_sha256": "SHA256=6ea5dab76fbb8ffece115b0efc1a17677d8d632bcdcaaba936b705df2a79a9dd",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 330.433107,
+        "artwork": [
+          "55b42483e08a4dc3090ddd409a018e61f5e5dfc5d6095593014ea5a851355a71"
+        ],
+        "filename": "BCCO Premiere： Kaltblume - Vice [GRÜVW01].m4a"
+      },
+      "after": {
+        "sha256": "ede3c5d6943877bc53b225d5a5e48f2e295695d353cee633699c91fd2e31a3d0",
+        "encoded_audio_sha256": "SHA256=6ea5dab76fbb8ffece115b0efc1a17677d8d632bcdcaaba936b705df2a79a9dd",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 330.433107,
+        "artwork": [
+          "55b42483e08a4dc3090ddd409a018e61f5e5dfc5d6095593014ea5a851355a71"
+        ],
+        "filename": "BCCO Premiere： Kaltblume - Vice [GRÜVW01].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "BCCO Premiere： Seigg - Activ [KYSH-002]",
+      "remote_id": "2333922716",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "39895814d81fcb4509c356ec50c20f8f79dbeb690e2c2ee1ce778e874a0b9791",
+        "encoded_audio_sha256": "SHA256=8a3645f7fd924c0eaf1e18e8bfe40ffde254dbb0e2511c400879efcd13f553a8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 314.04644,
+        "artwork": [
+          "60f73538b274a8d9db1b72f9a6a4d523e3c881dff63a437638f2dfd8d0058dc2"
+        ],
+        "filename": "BCCO Premiere： Seigg - Activ [KYSH-002].m4a"
+      },
+      "after": {
+        "sha256": "39895814d81fcb4509c356ec50c20f8f79dbeb690e2c2ee1ce778e874a0b9791",
+        "encoded_audio_sha256": "SHA256=8a3645f7fd924c0eaf1e18e8bfe40ffde254dbb0e2511c400879efcd13f553a8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 314.04644,
+        "artwork": [
+          "60f73538b274a8d9db1b72f9a6a4d523e3c881dff63a437638f2dfd8d0058dc2"
+        ],
+        "filename": "BCCO Premiere： Seigg - Activ [KYSH-002].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "BCCO Premiere： Seigg - Locked [KYSH-EP07]",
+      "remote_id": "2287028786",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "1ce94b9e60c85b4dfce0bbe0d14872e423e24f9e8535be864ac2cd636603f0c6",
+        "encoded_audio_sha256": "SHA256=71b5b04fa0e37da0ad1cb7674be1c944e44526c59aff9e2663a1387f39329c34",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 330.903583,
+        "artwork": [
+          "cf60236e1ce151c9659d72ad8199787e77aa2aa7597b561103b833adbe0e1f14"
+        ],
+        "filename": "BCCO Premiere： Seigg - Locked [KYSH-EP07].m4a"
+      },
+      "after": {
+        "sha256": "1ce94b9e60c85b4dfce0bbe0d14872e423e24f9e8535be864ac2cd636603f0c6",
+        "encoded_audio_sha256": "SHA256=71b5b04fa0e37da0ad1cb7674be1c944e44526c59aff9e2663a1387f39329c34",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 330.903583,
+        "artwork": [
+          "cf60236e1ce151c9659d72ad8199787e77aa2aa7597b561103b833adbe0e1f14"
+        ],
+        "filename": "BCCO Premiere： Seigg - Locked [KYSH-EP07].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "CHULO",
+      "remote_id": "2360495132",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "660020ee426e83e50e2ea1b183476795ad31c52d9f033b91687afa96a85f6f3e",
+        "encoded_audio_sha256": "SHA256=d0b963eb369e5022054d38f6f144d90264e1e35abfb9f39c54918c5b9c57a16a",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 248.826939,
+        "artwork": [
+          "b1a9b63fa55742e82b56ce90d31af1a8dba1328acd6d912d3b9109d4ff50e777"
+        ],
+        "filename": "CHULO.m4a"
+      },
+      "after": {
+        "sha256": "e7431e31ceca8629e765c4d155e0b4e848702f2181f9f9f81ed3e13adc272e4e",
+        "encoded_audio_sha256": "SHA256=ba95c22f3b0b9a7e61960ce6aff1bdeaf33efae1f366b1264cae62cb54ead2df",
+        "codec": "aac",
+        "audio_kbps": 277.3,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 248.78,
+        "artwork": [
+          "b1a9b63fa55742e82b56ce90d31af1a8dba1328acd6d912d3b9109d4ff50e777"
+        ],
+        "filename": "CHULO.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Cult & Dylan Fogarty - We're Supposed To Be Using This Room At 7 [RG2]",
+      "remote_id": "1731999492",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "97cb96def1f8dbd83a1f47c10d7aa6932023c21662c7b5d374eff0af34a02b9e",
+        "encoded_audio_sha256": "SHA256=f1aabc38bd681692ee69e2829e7d4efc0f77a5d73f1e3a1c80bb2df23b95024d",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 315.66288,
+        "artwork": [
+          "70de9818e3dda108f66fa266d40e3fc1f2dd0181eb46e0bbee46859d6ad81081"
+        ],
+        "filename": "Cult & Dylan Fogarty - We're Supposed To Be Using This Room At 7 [RG2].m4a"
+      },
+      "after": {
+        "sha256": "97cb96def1f8dbd83a1f47c10d7aa6932023c21662c7b5d374eff0af34a02b9e",
+        "encoded_audio_sha256": "SHA256=f1aabc38bd681692ee69e2829e7d4efc0f77a5d73f1e3a1c80bb2df23b95024d",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 315.66288,
+        "artwork": [
+          "70de9818e3dda108f66fa266d40e3fc1f2dd0181eb46e0bbee46859d6ad81081"
+        ],
+        "filename": "Cult & Dylan Fogarty - We're Supposed To Be Using This Room At 7 [RG2].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "DS Premiere： Disguised - Crusher Wheels [MR045]",
+      "remote_id": "2307734003",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "0390d1cccb9323bf132701be3569440d147c23bbdde09735f24b46db33ca6776",
+        "encoded_audio_sha256": "SHA256=675c8e66d3b8265d1cd4abd71f9926d6d949db107589c65a8c777d2457f032c6",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 300.464762,
+        "artwork": [
+          "662ed9e741edc92028534a61d145efe82e4e2de323b8d4338c81240d15f26a1c"
+        ],
+        "filename": "DS Premiere： Disguised - Crusher Wheels [MR045].m4a"
+      },
+      "after": {
+        "sha256": "0390d1cccb9323bf132701be3569440d147c23bbdde09735f24b46db33ca6776",
+        "encoded_audio_sha256": "SHA256=675c8e66d3b8265d1cd4abd71f9926d6d949db107589c65a8c777d2457f032c6",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 300.464762,
+        "artwork": [
+          "662ed9e741edc92028534a61d145efe82e4e2de323b8d4338c81240d15f26a1c"
+        ],
+        "filename": "DS Premiere： Disguised - Crusher Wheels [MR045].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Danny Wabbit - Eyes (Original Mix)",
+      "remote_id": "2139917331",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "ca09924a0c27bed8ef4232bcefd7acda054c8ce2a2dd8a52bd333cb8483d7c5f",
+        "encoded_audio_sha256": "SHA256=e054ed3f47c7b39c5d21f7928c61566e4820668bd6df6f0c4060f4996b6f5aca",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 323.882063,
+        "artwork": [
+          "1d79cd05c0a350471aaf62d50710c75236e2d0391717f16b934eab2f39bad696"
+        ],
+        "filename": "Danny Wabbit - Eyes (Original Mix).m4a"
+      },
+      "after": {
+        "sha256": "ca09924a0c27bed8ef4232bcefd7acda054c8ce2a2dd8a52bd333cb8483d7c5f",
+        "encoded_audio_sha256": "SHA256=e054ed3f47c7b39c5d21f7928c61566e4820668bd6df6f0c4060f4996b6f5aca",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 323.882063,
+        "artwork": [
+          "1d79cd05c0a350471aaf62d50710c75236e2d0391717f16b934eab2f39bad696"
+        ],
+        "filename": "Danny Wabbit - Eyes (Original Mix).m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Dex Fury - Oriental Bounce (Free DL)",
+      "remote_id": "2351493041",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "3510927efb4432dea635254bd7b0e84101ff659e7d162fa007bc9d2eefa9457f",
+        "encoded_audio_sha256": "SHA256=d11add56c093cb0646a470181b58df26d86710a0431b347b01b183b2e738f1d7",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 256.04644,
+        "artwork": [
+          "14f0a2934a7ba40b5e06151f0b1b65df9c26aefb45469b96a0ea9b0828e21c67"
+        ],
+        "filename": "Dex Fury - Oriental Bounce (Free DL).m4a"
+      },
+      "after": {
+        "sha256": "bb5fbe83882c978a3454aaee057219e892a755e8505339cad3ed1c041f219c37",
+        "encoded_audio_sha256": "SHA256=dcf0431b9fef9ab4033c384ea56b9d8cc3cb9adcf2c046ac54258c8ff11203d4",
+        "codec": "aac",
+        "audio_kbps": 284.9,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 256.0,
+        "artwork": [
+          "14f0a2934a7ba40b5e06151f0b1b65df9c26aefb45469b96a0ea9b0828e21c67"
+        ],
+        "filename": "Dex Fury - Oriental Bounce (Free DL).m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Disguised - Kobi",
+      "remote_id": "1601074356",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "e0bbb584040b54ca9201a241638f0ea9cca21566282505a7347e2f57669f6f61",
+        "encoded_audio_sha256": "SHA256=184444f4280dbd4f737d3e1f0748ebda266df4ed542b9606789beb3fb5dfad63",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 366.670658,
+        "artwork": [
+          "bfb0ee3f74bd9a91662c112034a1b29c1ea289cb80ee0a23637d085f53fc9bf1"
+        ],
+        "filename": "Disguised - Kobi.m4a"
+      },
+      "after": {
+        "sha256": "e0bbb584040b54ca9201a241638f0ea9cca21566282505a7347e2f57669f6f61",
+        "encoded_audio_sha256": "SHA256=184444f4280dbd4f737d3e1f0748ebda266df4ed542b9606789beb3fb5dfad63",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 366.670658,
+        "artwork": [
+          "bfb0ee3f74bd9a91662c112034a1b29c1ea289cb80ee0a23637d085f53fc9bf1"
+        ],
+        "filename": "Disguised - Kobi.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Emmanuel Messina - Pianolator [UNDRGRNDSPORTS]",
+      "remote_id": "2371653950",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "9b141184fe8f3af0e5b0f6706f01bb0221ceeb28735daf418595ef56ff7f5c5b",
+        "encoded_audio_sha256": "SHA256=b5ed637e4a64441eed7d0f068df79f0fd542ed70d31f76297eb42fe00eaa83eb",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 222.92644,
+        "artwork": [
+          "46c1763419fb225814759094dcb1bed54a605a7e63c0c749c8d0f96bea737ff8"
+        ],
+        "filename": "Emmanuel Messina - Pianolator [UNDRGRNDSPORTS].m4a"
+      },
+      "after": {
+        "sha256": "62dde4a10708c3b2dcd1f96a5c741570ae543239eb1c0a973c85132a51144224",
+        "encoded_audio_sha256": "SHA256=5d15fe6294e62d524612f28103ee56f0b36aef5ae152500f44a554c6353b514f",
+        "codec": "aac",
+        "audio_kbps": 270.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 222.88,
+        "artwork": [
+          "46c1763419fb225814759094dcb1bed54a605a7e63c0c749c8d0f96bea737ff8"
+        ],
+        "filename": "Emmanuel Messina - Pianolator [UNDRGRNDSPORTS].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "FRAI X JCB  - FEEL GOOD",
+      "remote_id": "2346403526",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "675e7a346cde591986217f514143aa911a8c1c62f6f1e4b36592124e2e966145",
+        "encoded_audio_sha256": "SHA256=83254e0d1be51695944a87989a53701ab2a9228ea16333d1453ec091724cf824",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 331.475011,
+        "artwork": [
+          "e73e36398203f36e69b481d6d30c3e0d28ba81853a262d2f8732360f29983f2c"
+        ],
+        "filename": "FRAI X JCB  - FEEL GOOD.m4a"
+      },
+      "after": {
+        "sha256": "6bfae3dc2f48c5025c39a3ea47f13a212ebb94e1bca7d1dfe2eabaf4fea4da02",
+        "encoded_audio_sha256": "SHA256=347ecfabab2f595f1227731c78c8a72ba7f403a201bfe8e5a95fea52bd32449f",
+        "codec": "aac",
+        "audio_kbps": 270.3,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 331.428005,
+        "artwork": [
+          "e73e36398203f36e69b481d6d30c3e0d28ba81853a262d2f8732360f29983f2c"
+        ],
+        "filename": "FRAI X JCB  - FEEL GOOD.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "FUNKY TOWN (TOWLIE FLIP)",
+      "remote_id": "2367212195",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": false,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "df12d7aef1b5ee750807e1c0e259d05a9e439707be34c007efc71742725cb63d",
+        "encoded_audio_sha256": "SHA256=10bbfc80b4c8ffffc8cab240d19ff808ce1c7b04b718f3c149bb6563589be962",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 181.666621,
+        "artwork": [
+          "15b47605c1614ac1b3dbb2db965c28d9ed244fac7fa4645f7fa7557afe882a43"
+        ],
+        "filename": "FUNKY TOWN (TOWLIE FLIP).m4a"
+      },
+      "after": {
+        "sha256": "582d2f43b81c742b23552234b946605bea2ed1de42e3b738b61b002ebc2ecd2d",
+        "encoded_audio_sha256": "SHA256=c95b31cc9bd44b2fcbfd2a99482315acf54c63809e8a457f93dd044b6bfde3be",
+        "codec": "mp3",
+        "audio_kbps": 267.2,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 181.620181,
+        "artwork": [
+          "15b47605c1614ac1b3dbb2db965c28d9ed244fac7fa4645f7fa7557afe882a43"
+        ],
+        "filename": "FUNKY TOWN (TOWLIE FLIP).mp3",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Filtrack - Faster Ro-Minimal [VEP003]",
+      "remote_id": "2357706872",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "def2c448b70c6840445f9f3301804c8891b32c7bd5964a5a2da0793740f1bc7c",
+        "encoded_audio_sha256": "SHA256=faef9ca90902035c93c305c600019fcec40175b5f02b3390092a0e308bdce63b",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 330.04644,
+        "artwork": [
+          "74ed1209bfcba0ec7a82212b388ef373df9dfa8362e58e98d424fca008eaccb0"
+        ],
+        "filename": "Filtrack - Faster Ro-Minimal [VEP003].m4a"
+      },
+      "after": {
+        "sha256": "def2c448b70c6840445f9f3301804c8891b32c7bd5964a5a2da0793740f1bc7c",
+        "encoded_audio_sha256": "SHA256=faef9ca90902035c93c305c600019fcec40175b5f02b3390092a0e308bdce63b",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 330.04644,
+        "artwork": [
+          "74ed1209bfcba0ec7a82212b388ef373df9dfa8362e58e98d424fca008eaccb0"
+        ],
+        "filename": "Filtrack - Faster Ro-Minimal [VEP003].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Funkhaus - saints",
+      "remote_id": "2359588223",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "e29e1b9996b6f323c2de4a8a3666a9dc22e7ab04d04e42d9ef372486f3b349fd",
+        "encoded_audio_sha256": "SHA256=d51414068538533b2c0f326f1f658fc21c50d7a3ba0cd4fbfe641c69496ce849",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 390.903605,
+        "artwork": [
+          "137411ddbb49e8a658814e9da463c7fe7e77d7e2f503a3c90f0e97b77402bbd0"
+        ],
+        "filename": "Funkhaus - saints.m4a"
+      },
+      "after": {
+        "sha256": "e29e1b9996b6f323c2de4a8a3666a9dc22e7ab04d04e42d9ef372486f3b349fd",
+        "encoded_audio_sha256": "SHA256=d51414068538533b2c0f326f1f658fc21c50d7a3ba0cd4fbfe641c69496ce849",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 390.903605,
+        "artwork": [
+          "137411ddbb49e8a658814e9da463c7fe7e77d7e2f503a3c90f0e97b77402bbd0"
+        ],
+        "filename": "Funkhaus - saints.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "GTG Premiere ｜ Luigi Madonna — Purpose [BCCO005]",
+      "remote_id": "2384662659",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "bf0295aaaf18f26aa051f359b5dbe2f4798badbc6aa38d761f2afd265c4d63bd",
+        "encoded_audio_sha256": "SHA256=5a3830515f3f5b5a21d5650fb31cdaf192e4b49e97adfd70581c23e01de94bfb",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 314.412653,
+        "artwork": [
+          "2655426aeb8862fb93b23f02df87992e828cfd199c1445403ef49bb3ea65db53"
+        ],
+        "filename": "GTG Premiere ｜ Luigi Madonna — Purpose [BCCO005].m4a"
+      },
+      "after": {
+        "sha256": "bf0295aaaf18f26aa051f359b5dbe2f4798badbc6aa38d761f2afd265c4d63bd",
+        "encoded_audio_sha256": "SHA256=5a3830515f3f5b5a21d5650fb31cdaf192e4b49e97adfd70581c23e01de94bfb",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 314.412653,
+        "artwork": [
+          "2655426aeb8862fb93b23f02df87992e828cfd199c1445403ef49bb3ea65db53"
+        ],
+        "filename": "GTG Premiere ｜ Luigi Madonna — Purpose [BCCO005].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "I Don't Wait For The Drop (FREE DL)",
+      "remote_id": "2376888125",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "8ec96ec897d2593943cad07b76879422364f4e38447073ffb5e4ababcfd6bf05",
+        "encoded_audio_sha256": "SHA256=925dec1ba54df109bb75dc0381447b8f6a2f1b2c74d161974ce02eb6eaff7bd9",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 288.79644,
+        "artwork": [
+          "2edf59474399629b7dbf3d98084d3aa622053a206df1aaf9c423aae789956641"
+        ],
+        "filename": "I Don't Wait For The Drop (FREE DL).m4a"
+      },
+      "after": {
+        "sha256": "8ec96ec897d2593943cad07b76879422364f4e38447073ffb5e4ababcfd6bf05",
+        "encoded_audio_sha256": "SHA256=925dec1ba54df109bb75dc0381447b8f6a2f1b2c74d161974ce02eb6eaff7bd9",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 288.79644,
+        "artwork": [
+          "2edf59474399629b7dbf3d98084d3aa622053a206df1aaf9c423aae789956641"
+        ],
+        "filename": "I Don't Wait For The Drop (FREE DL).m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "KØDA  - POP IT LIKE [UNDRGRNDSPORTS]",
+      "remote_id": "2385121257",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "aef0e068edd1a852c60458c76f4cdfdbd8e83b051243c091461b4e480388d702",
+        "encoded_audio_sha256": "SHA256=798758e1f63b95ab5f8cbef58899ce9b1075b67337cb7cb8e17bc17bab0a16e1",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 201.997664,
+        "artwork": [
+          "5b0c78aefab5f19c5c3e1c8b6a914ece538feded806da58dfb2aa26a180efe29"
+        ],
+        "filename": "KØDA  - POP IT LIKE [UNDRGRNDSPORTS].m4a"
+      },
+      "after": {
+        "sha256": "6ba99a3776f021a0c5c8ace7b251206ff589f496166a79c1a0d33ca17e3bfc85",
+        "encoded_audio_sha256": "SHA256=606f1c801cd8723d7c238d3c07e301655a92a4da83bb8bfa2c3f7e7a480ce268",
+        "codec": "aac",
+        "audio_kbps": 257.5,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 201.950998,
+        "artwork": [
+          "5b0c78aefab5f19c5c3e1c8b6a914ece538feded806da58dfb2aa26a180efe29"
+        ],
+        "filename": "KØDA  - POP IT LIKE [UNDRGRNDSPORTS].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Lars Huismann - Centrifuge [FK001] ｜ Expansions VA",
+      "remote_id": "2267668985",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "d1e68318bac4dcb572f1d4d00450be520336017b127ce2990be15fa8d46aad76",
+        "encoded_audio_sha256": "SHA256=c8fcdb90c1267857c4f78a6d7b3abab460a795728023e9c8ae1d1308364423a8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 350.349433,
+        "artwork": [
+          "fee34a84ef40cb6996e0ea09eaa1eb54710dbbc8e44fac4fc7f7c7223ed79909"
+        ],
+        "filename": "Lars Huismann - Centrifuge [FK001] ｜ Expansions VA.m4a"
+      },
+      "after": {
+        "sha256": "d1e68318bac4dcb572f1d4d00450be520336017b127ce2990be15fa8d46aad76",
+        "encoded_audio_sha256": "SHA256=c8fcdb90c1267857c4f78a6d7b3abab460a795728023e9c8ae1d1308364423a8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 350.349433,
+        "artwork": [
+          "fee34a84ef40cb6996e0ea09eaa1eb54710dbbc8e44fac4fc7f7c7223ed79909"
+        ],
+        "filename": "Lars Huismann - Centrifuge [FK001] ｜ Expansions VA.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Larsson - Massive Attack (Lucas Sosa (AR) Remix)",
+      "remote_id": "1884512058",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "fc3d4b6b5751adbb83e4b6c42b04b9d5146cd77cdfd0156474286742ba1bedc6",
+        "encoded_audio_sha256": "SHA256=4d721adad5276112b249582037e45fadf6dd55578cebc479c72053e11921beb6",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 318.475011,
+        "artwork": [
+          "4b5a559e651c81aa7b6b2e6bb846cee376ba6fe72db241d3eb2dc7df33972e5a"
+        ],
+        "filename": "Larsson - Massive Attack (Lucas Sosa (AR) Remix).m4a"
+      },
+      "after": {
+        "sha256": "fc3d4b6b5751adbb83e4b6c42b04b9d5146cd77cdfd0156474286742ba1bedc6",
+        "encoded_audio_sha256": "SHA256=4d721adad5276112b249582037e45fadf6dd55578cebc479c72053e11921beb6",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 318.475011,
+        "artwork": [
+          "4b5a559e651c81aa7b6b2e6bb846cee376ba6fe72db241d3eb2dc7df33972e5a"
+        ],
+        "filename": "Larsson - Massive Attack (Lucas Sosa (AR) Remix).m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Nom Nom [Free DL] - Birthday Special",
+      "remote_id": "2379250868",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "8bc6cd797cb19540f4c53fa1461152bf608482daf922f4315d6064d3f0bddf49",
+        "encoded_audio_sha256": "SHA256=a8ba09d0ae9d0aec0146afd7c552acc1e647ddef3ff8916f33bb530ee53c7cb8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 167.002971,
+        "artwork": [
+          "88cba5995d504239b95d5845b330b5822fefcb06f14a6827ae3c03106d46bc4f"
+        ],
+        "filename": "Nom Nom [Free DL] - Birthday Special.m4a"
+      },
+      "after": {
+        "sha256": "f74067a02e82d481241bdd8b4b006bd2d81d453299f218075c827fc0f2513c62",
+        "encoded_audio_sha256": "SHA256=4bf201e2dac94f301c7ae7bc5e234ec50c24e37ad2898bb76c913d094bcff9f1",
+        "codec": "aac",
+        "audio_kbps": 272.6,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 166.956009,
+        "artwork": [
+          "88cba5995d504239b95d5845b330b5822fefcb06f14a6827ae3c03106d46bc4f"
+        ],
+        "filename": "Nom Nom [Free DL] - Birthday Special.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PIKETU",
+      "remote_id": "2342117072",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "7f7eb747e129a254c510292e95ee5535598e2faf19a1fa2b0231a1ee494eefb3",
+        "encoded_audio_sha256": "SHA256=cd28ed5c81d18d43d6d11adbfb6ad3df6ee66bafdbce45a1dfa53d791b3dac17",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 277.54644,
+        "artwork": [
+          "dc68107dff81eeefdcaa607f130805153b9de680cb9009082b5b2a8474d78ccd"
+        ],
+        "filename": "PIKETU.m4a"
+      },
+      "after": {
+        "sha256": "502a98f22b86b69795572bb16cd49b4170f30eba1ab7be991c2caf7fc6ec13f3",
+        "encoded_audio_sha256": "SHA256=0c9154880fd6d76b3d69cb9090c69f7ce45a1bab1f782db6482992776c58e4c3",
+        "codec": "aac",
+        "audio_kbps": 259.5,
+        "sample_rate": 48000,
+        "channels": 2,
+        "duration": 277.5,
+        "artwork": [
+          "dc68107dff81eeefdcaa607f130805153b9de680cb9009082b5b2a8474d78ccd"
+        ],
+        "filename": "PIKETU.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Bengalo – Kneissel (MAURER Remix) [WC019]",
+      "remote_id": "2329570121",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "84cd22d4e9504938528763fae71326b19771883600fd1f7bb36ff74e6542f758",
+        "encoded_audio_sha256": "SHA256=56cc16b5bbedea0a277b8157f6951c5ac664b27e17ac5148749b9c656e5258a3",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 335.710794,
+        "artwork": [
+          "eaf9cb9c0ad28af600cf9a928eec849ecf51c57809dfe52c4d56b40a957f2e26"
+        ],
+        "filename": "PREMIERE： Bengalo – Kneissel (MAURER Remix) [WC019].m4a"
+      },
+      "after": {
+        "sha256": "84cd22d4e9504938528763fae71326b19771883600fd1f7bb36ff74e6542f758",
+        "encoded_audio_sha256": "SHA256=56cc16b5bbedea0a277b8157f6951c5ac664b27e17ac5148749b9c656e5258a3",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 335.710794,
+        "artwork": [
+          "eaf9cb9c0ad28af600cf9a928eec849ecf51c57809dfe52c4d56b40a957f2e26"
+        ],
+        "filename": "PREMIERE： Bengalo – Kneissel (MAURER Remix) [WC019].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Daniel S. – Odds On [A11]",
+      "remote_id": "2354155694",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "6b3edf5e82a8274b625c3ce45e40e3fa52a14d3adaa9ee190c9c6aff11d28bca",
+        "encoded_audio_sha256": "SHA256=54a1bff9aff15b1988bd99c2a33609430fff0c3d9eb3f0b02ab2e20022bae327",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 294.641429,
+        "artwork": [
+          "5782c9aa77ac0fa0bd7bea88289cf84fe633ff6ede90ae86011ed21237295186"
+        ],
+        "filename": "PREMIERE： Daniel S. – Odds On [A11].m4a"
+      },
+      "after": {
+        "sha256": "6b3edf5e82a8274b625c3ce45e40e3fa52a14d3adaa9ee190c9c6aff11d28bca",
+        "encoded_audio_sha256": "SHA256=54a1bff9aff15b1988bd99c2a33609430fff0c3d9eb3f0b02ab2e20022bae327",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 294.641429,
+        "artwork": [
+          "5782c9aa77ac0fa0bd7bea88289cf84fe633ff6ede90ae86011ed21237295186"
+        ],
+        "filename": "PREMIERE： Daniel S. – Odds On [A11].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Derode – Stigmatization [KYSH-EP10]",
+      "remote_id": "2360388098",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "f31dc0b165dba33db95517b864153b689e40ba3943ba6fd93819db2c7b720636",
+        "encoded_audio_sha256": "SHA256=b2acb2bf37dbc880089e512b58fd173daa2befb754d04b159a9607d2663b415e",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 310.04644,
+        "artwork": [
+          "7f451b1d17debd74c1946ee0983136c70af7b206a7c40d246ef631512c143126"
+        ],
+        "filename": "PREMIERE： Derode – Stigmatization [KYSH-EP10].m4a"
+      },
+      "after": {
+        "sha256": "f31dc0b165dba33db95517b864153b689e40ba3943ba6fd93819db2c7b720636",
+        "encoded_audio_sha256": "SHA256=b2acb2bf37dbc880089e512b58fd173daa2befb754d04b159a9607d2663b415e",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 310.04644,
+        "artwork": [
+          "7f451b1d17debd74c1946ee0983136c70af7b206a7c40d246ef631512c143126"
+        ],
+        "filename": "PREMIERE： Derode – Stigmatization [KYSH-EP10].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Disguised & FANK - All You Find [MR045]",
+      "remote_id": "2314254182",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "2da764d377febea5dc626783c3379be784fa4c0b74b7b9b777833ef52c1c675b",
+        "encoded_audio_sha256": "SHA256=0d838636c303bd08202d7484c9820beb68742469ddfca29eb45ef997236725cf",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 301.713719,
+        "artwork": [
+          "6dfb78aeaec1f6fe10ab40183d16fbea7d1308670cb32fbb0638adfe7bf996ca"
+        ],
+        "filename": "PREMIERE： Disguised & FANK - All You Find [MR045].m4a"
+      },
+      "after": {
+        "sha256": "2da764d377febea5dc626783c3379be784fa4c0b74b7b9b777833ef52c1c675b",
+        "encoded_audio_sha256": "SHA256=0d838636c303bd08202d7484c9820beb68742469ddfca29eb45ef997236725cf",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 301.713719,
+        "artwork": [
+          "6dfb78aeaec1f6fe10ab40183d16fbea7d1308670cb32fbb0638adfe7bf996ca"
+        ],
+        "filename": "PREMIERE： Disguised & FANK - All You Find [MR045].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Iguana – Kedungu [DECOYVA001]",
+      "remote_id": "2340308060",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "ee9decde668e2f2ed6cfe07c32c5307142d82b252382f67f91019bad7b390570",
+        "encoded_audio_sha256": "SHA256=215eae8c3b1fe8b2b9ca47805c251e9db9ae89f116fd2520331e69f7483f9e71",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 291.356825,
+        "artwork": [
+          "8e2db76516c141ab83232ab17cab36a2874488722878d14817ca7805341cd02b"
+        ],
+        "filename": "PREMIERE： Iguana – Kedungu [DECOYVA001].m4a"
+      },
+      "after": {
+        "sha256": "ee9decde668e2f2ed6cfe07c32c5307142d82b252382f67f91019bad7b390570",
+        "encoded_audio_sha256": "SHA256=215eae8c3b1fe8b2b9ca47805c251e9db9ae89f116fd2520331e69f7483f9e71",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 291.356825,
+        "artwork": [
+          "8e2db76516c141ab83232ab17cab36a2874488722878d14817ca7805341cd02b"
+        ],
+        "filename": "PREMIERE： Iguana – Kedungu [DECOYVA001].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Mislaw – The Day I Lost My Driving License (feat. Faustyna Maciejczuk) [BCCOVA20]",
+      "remote_id": "2344684358",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "873d58fae55ff0a5282c580ff8e4a7bdc9f9b4658faeab9b2e716332a7393412",
+        "encoded_audio_sha256": "SHA256=84b6e2e81a6fe57672919986cd032436f5dadad39f6c5486c179afdf246a3bb4",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 380.593107,
+        "artwork": [
+          "132804c2a87ad3896139320aff3c582de1dcd135306f45b9b75329cadb29681e"
+        ],
+        "filename": "PREMIERE： Mislaw – The Day I Lost My Driving License (feat. Faustyna Maciejczuk) [BCCOVA20].m4a"
+      },
+      "after": {
+        "sha256": "873d58fae55ff0a5282c580ff8e4a7bdc9f9b4658faeab9b2e716332a7393412",
+        "encoded_audio_sha256": "SHA256=84b6e2e81a6fe57672919986cd032436f5dadad39f6c5486c179afdf246a3bb4",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 380.593107,
+        "artwork": [
+          "132804c2a87ad3896139320aff3c582de1dcd135306f45b9b75329cadb29681e"
+        ],
+        "filename": "PREMIERE： Mislaw – The Day I Lost My Driving License (feat. Faustyna Maciejczuk) [BCCOVA20].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Noah Tauber – Kinnoul [BCCX028]",
+      "remote_id": "2374115732",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "dde9b0d441d58ebe28d808d4c565bdc95c5560d00caf71ea253fb599d519824d",
+        "encoded_audio_sha256": "SHA256=521be70daf0903ad712a5fdb34ea152ccc651c68895bc492cc6138aa8b35bae0",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 340.48644,
+        "artwork": [
+          "02dc0329451b706451a958e6025e295d8dad3db53de18842296a979648236e2c"
+        ],
+        "filename": "PREMIERE： Noah Tauber – Kinnoul [BCCX028].m4a"
+      },
+      "after": {
+        "sha256": "dde9b0d441d58ebe28d808d4c565bdc95c5560d00caf71ea253fb599d519824d",
+        "encoded_audio_sha256": "SHA256=521be70daf0903ad712a5fdb34ea152ccc651c68895bc492cc6138aa8b35bae0",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 340.48644,
+        "artwork": [
+          "02dc0329451b706451a958e6025e295d8dad3db53de18842296a979648236e2c"
+        ],
+        "filename": "PREMIERE： Noah Tauber – Kinnoul [BCCX028].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "PREMIERE： Tøtal - Is it a crime？ [BCCOVA20]",
+      "remote_id": "2351102018",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "1df45c7c6360fd39dfe736f93fd95b9f5674f654541b47f5bcbba858e1a04f5b",
+        "encoded_audio_sha256": "SHA256=d3fee372624cd255dcee2887de2a280ebb5867613da8fe531e2f34c95d50e875",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 318.033107,
+        "artwork": [
+          "0fad6181787eb7c34e8d3eee4490a9c259e348842be82790951f8061e06c3867"
+        ],
+        "filename": "PREMIERE： Tøtal - Is it a crime？ [BCCOVA20].m4a"
+      },
+      "after": {
+        "sha256": "1df45c7c6360fd39dfe736f93fd95b9f5674f654541b47f5bcbba858e1a04f5b",
+        "encoded_audio_sha256": "SHA256=d3fee372624cd255dcee2887de2a280ebb5867613da8fe531e2f34c95d50e875",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 318.033107,
+        "artwork": [
+          "0fad6181787eb7c34e8d3eee4490a9c259e348842be82790951f8061e06c3867"
+        ],
+        "filename": "PREMIERE： Tøtal - Is it a crime？ [BCCOVA20].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Paolo Doldo x DJ HOTMAIL - Sonic Boom (FREE DOWNLOAD )",
+      "remote_id": "2352435620",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "501192483f900453ee0442e9303833440e1fbe497b9137e994837c1b530d787e",
+        "encoded_audio_sha256": "SHA256=a6bd041c1dc5d31f6c5f0fd96974066a14ddf60941580c86711d97ebd54bd32d",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 263.461088,
+        "artwork": [
+          "323eb2c8dbaefd1bb533d5d42fd2e03d0e76e61d56cfaa0cd4a9174fadc16021"
+        ],
+        "filename": "Paolo Doldo x DJ HOTMAIL - Sonic Boom (FREE DOWNLOAD ).m4a"
+      },
+      "after": {
+        "sha256": "7a0a2a9b16d1661410357df789fbebdaa3f54feea09eb23f2dd10d3acc490bae",
+        "encoded_audio_sha256": "SHA256=75755ebc240325733f4e1a2d780104cb6bf07af906f26bdd85b2804bbe2429a5",
+        "codec": "aac",
+        "audio_kbps": 265.8,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 263.413991,
+        "artwork": [
+          "323eb2c8dbaefd1bb533d5d42fd2e03d0e76e61d56cfaa0cd4a9174fadc16021"
+        ],
+        "filename": "Paolo Doldo x DJ HOTMAIL - Sonic Boom (FREE DOWNLOAD ).m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Premiere： CVNSUMED - Yoake [HDD001]",
+      "remote_id": "2311452086",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "0920d78f12a18db05a4884853af7bdf3db2abb1e415a7273ec808c4e25582c78",
+        "encoded_audio_sha256": "SHA256=042fd98561052d35669697512fe74eea25910f266cb9553a139ad2096aab05da",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 303.622449,
+        "artwork": [
+          "5f6978a9f04e9e95a83580e16fe1974c3a4644c31bb6a07864f00031a773f1ee"
+        ],
+        "filename": "Premiere： CVNSUMED - Yoake [HDD001].m4a"
+      },
+      "after": {
+        "sha256": "0920d78f12a18db05a4884853af7bdf3db2abb1e415a7273ec808c4e25582c78",
+        "encoded_audio_sha256": "SHA256=042fd98561052d35669697512fe74eea25910f266cb9553a139ad2096aab05da",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 303.622449,
+        "artwork": [
+          "5f6978a9f04e9e95a83580e16fe1974c3a4644c31bb6a07864f00031a773f1ee"
+        ],
+        "filename": "Premiere： CVNSUMED - Yoake [HDD001].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Premiere： KUSS - Obsessed [GRÜVW01]",
+      "remote_id": "2332538519",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "58bd7cdf7e555baa020abe97d5e956e6749474cc1fcce84813cdf06d9543387b",
+        "encoded_audio_sha256": "SHA256=7553e9dd32310ea9e638e99e2f9ceb81ed89e8e1a0f465c5913e6a73b33b646d",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 291.993107,
+        "artwork": [
+          "b6fcfa6bb3a6cc4c7d5cbfa731975594ab0aa2b773d5f12e4b67d060552cfa69"
+        ],
+        "filename": "Premiere： KUSS - Obsessed [GRÜVW01].m4a"
+      },
+      "after": {
+        "sha256": "58bd7cdf7e555baa020abe97d5e956e6749474cc1fcce84813cdf06d9543387b",
+        "encoded_audio_sha256": "SHA256=7553e9dd32310ea9e638e99e2f9ceb81ed89e8e1a0f465c5913e6a73b33b646d",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 291.993107,
+        "artwork": [
+          "b6fcfa6bb3a6cc4c7d5cbfa731975594ab0aa2b773d5f12e4b67d060552cfa69"
+        ],
+        "filename": "Premiere： KUSS - Obsessed [GRÜVW01].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Premiere： Phil Berg — Tempest [MR047]",
+      "remote_id": "2356790594",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "243ac2b8cb01913f029acff5ac322710e83be699dba50450dfe212c681b2a262",
+        "encoded_audio_sha256": "SHA256=225981f1f622690878c7e88a95efffd7ad789ff6f12f26a5c548e4791b346eb0",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 316.297778,
+        "artwork": [
+          "2f3b5b23093879838abbfdd10fc35c65de36e9d0059376b028e7076b2e502288"
+        ],
+        "filename": "Premiere： Phil Berg — Tempest [MR047].m4a"
+      },
+      "after": {
+        "sha256": "243ac2b8cb01913f029acff5ac322710e83be699dba50450dfe212c681b2a262",
+        "encoded_audio_sha256": "SHA256=225981f1f622690878c7e88a95efffd7ad789ff6f12f26a5c548e4791b346eb0",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 316.297778,
+        "artwork": [
+          "2f3b5b23093879838abbfdd10fc35c65de36e9d0059376b028e7076b2e502288"
+        ],
+        "filename": "Premiere： Phil Berg — Tempest [MR047].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Premiere： West Code & Amelia Rdrgz — Musica de Diseño [MLKL049]",
+      "remote_id": "2350619420",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "05ef0a4c89430b637e236d1d316ad37b6c6698fbe7cd76fcc1cbced38dfd4f03",
+        "encoded_audio_sha256": "SHA256=f34340cb4f34ac769b0fb0098ebdf42fec61c1b38c111ba85782967f1776fb09",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 313.903878,
+        "artwork": [
+          "eec1c556f55bf39f8827f1e71bffa147d68b8ceb94aa3f8e490413c8fe96a5ee"
+        ],
+        "filename": "Premiere： West Code & Amelia Rdrgz — Musica de Diseño [MLKL049].m4a"
+      },
+      "after": {
+        "sha256": "05ef0a4c89430b637e236d1d316ad37b6c6698fbe7cd76fcc1cbced38dfd4f03",
+        "encoded_audio_sha256": "SHA256=f34340cb4f34ac769b0fb0098ebdf42fec61c1b38c111ba85782967f1776fb09",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 313.903878,
+        "artwork": [
+          "eec1c556f55bf39f8827f1e71bffa147d68b8ceb94aa3f8e490413c8fe96a5ee"
+        ],
+        "filename": "Premiere： West Code & Amelia Rdrgz — Musica de Diseño [MLKL049].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "RED ROOM",
+      "remote_id": "2288041838",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "07a0131224b3808e6b1b54bac8d65152b04bc7ed6d80ae30f1e6cd1a88f25728",
+        "encoded_audio_sha256": "SHA256=5e8a65c63205b2236ecefe55834fee9feeec02a4f332dd136e57481feba90475",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 224.04644,
+        "artwork": [
+          "4b13165c9179ede6534fb1ee70f646aa283fabf4a787d240858dcdb48ec09444"
+        ],
+        "filename": "RED ROOM.m4a"
+      },
+      "after": {
+        "sha256": "47737033ca6c772821c34aaafeed8c211f2b7f99b6a5ee966360aa3c836b3095",
+        "encoded_audio_sha256": "SHA256=0a5320f6eca59f0acdc1d8ec482b62135a6df1e0320ea8cfdf07df12805e305e",
+        "codec": "aac",
+        "audio_kbps": 272.0,
+        "sample_rate": 48000,
+        "channels": 2,
+        "duration": 224.189,
+        "artwork": [
+          "4b13165c9179ede6534fb1ee70f646aa283fabf4a787d240858dcdb48ec09444"
+        ],
+        "filename": "RED ROOM.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Regal - Forgotten Heroes",
+      "remote_id": "2300100947",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "bd25b23eb380cc350ecf2af2b53103ee3857f48784740ff231860785085ed042",
+        "encoded_audio_sha256": "SHA256=926e09e2d038f80ea7a28547fcc1f0d9aa6b7e0eeb494297a4888d215e2a01a2",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 360.141111,
+        "artwork": [
+          "6907f350e3d5094b05192098388725587558d946f9bcffa24fdf53d848b3f06c"
+        ],
+        "filename": "Regal - Forgotten Heroes.m4a"
+      },
+      "after": {
+        "sha256": "bd25b23eb380cc350ecf2af2b53103ee3857f48784740ff231860785085ed042",
+        "encoded_audio_sha256": "SHA256=926e09e2d038f80ea7a28547fcc1f0d9aa6b7e0eeb494297a4888d215e2a01a2",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 360.141111,
+        "artwork": [
+          "6907f350e3d5094b05192098388725587558d946f9bcffa24fdf53d848b3f06c"
+        ],
+        "filename": "Regal - Forgotten Heroes.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "Sicion - Collide [GRÜVEP6]",
+      "remote_id": "2315049044",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "44b1dcfc5c2ce7c2e5daf7e477a788f75025c599c5d879f1f47bff9f2f662b6e",
+        "encoded_audio_sha256": "SHA256=fbcab7d394f8dad28c0b480cf63a454bb31db2d109229f690bd7d70b59b038ee",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 340.419773,
+        "artwork": [
+          "4f02fa50f4a7743818d61cf3090d485dc703bf8406460afda35899ff1eb37a30"
+        ],
+        "filename": "Sicion - Collide [GRÜVEP6].m4a"
+      },
+      "after": {
+        "sha256": "44b1dcfc5c2ce7c2e5daf7e477a788f75025c599c5d879f1f47bff9f2f662b6e",
+        "encoded_audio_sha256": "SHA256=fbcab7d394f8dad28c0b480cf63a454bb31db2d109229f690bd7d70b59b038ee",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 340.419773,
+        "artwork": [
+          "4f02fa50f4a7743818d61cf3090d485dc703bf8406460afda35899ff1eb37a30"
+        ],
+        "filename": "Sicion - Collide [GRÜVEP6].m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "WHO WANT SMOKE",
+      "remote_id": "2352500969",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "48a9331ac3a5ca072b3ead6217825728764fe7500497543fec4429cea65f53ac",
+        "encoded_audio_sha256": "SHA256=1268fa4fd7772f8283077172438bb5e594e4bd381a6a8feeabbcd0ac6020dd5c",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 229.986553,
+        "artwork": [
+          "844e8dc89506285efb16a2dcb51658489226811266df90ee8c9f4e08fb53aa33"
+        ],
+        "filename": "WHO WANT SMOKE.m4a"
+      },
+      "after": {
+        "sha256": "fb3a7a39b14942198cd1b27b3ee61d3c404bec079664b9f6fdb26f64b18f0253",
+        "encoded_audio_sha256": "SHA256=a2a792b4ac04a4267dc50e8e415629055acaf28769b3979e669b9a05236b888d",
+        "codec": "aac",
+        "audio_kbps": 276.9,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 229.94,
+        "artwork": [
+          "844e8dc89506285efb16a2dcb51658489226811266df90ee8c9f4e08fb53aa33"
+        ],
+        "filename": "WHO WANT SMOKE.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "XtassyFx - El after",
+      "remote_id": "2339477303",
+      "upgraded": false,
+      "changed_audio": false,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": false,
+      "before": {
+        "sha256": "8230f19fdfcb92810ef9669182793118f8f8e79212fec5fb4bbb2417aead5fb8",
+        "encoded_audio_sha256": "SHA256=af210a0cf9ebdbb4ca1e6cf0e1164b9d1410cb15fcff324722dac6b5b64ef040",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 169.802562,
+        "artwork": [
+          "0cc370b3ba2414158db1fc3a87c2fd6f6254e0ec0fadde788c97fc03a8bed97b"
+        ],
+        "filename": "XtassyFx - El after.m4a"
+      },
+      "after": {
+        "sha256": "8230f19fdfcb92810ef9669182793118f8f8e79212fec5fb4bbb2417aead5fb8",
+        "encoded_audio_sha256": "SHA256=af210a0cf9ebdbb4ca1e6cf0e1164b9d1410cb15fcff324722dac6b5b64ef040",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 169.802562,
+        "artwork": [
+          "0cc370b3ba2414158db1fc3a87c2fd6f6254e0ec0fadde788c97fc03a8bed97b"
+        ],
+        "filename": "XtassyFx - El after.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "ZiNØ x Shizeero - YOKAI",
+      "remote_id": "2385345252",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "900a6bfa7492b503fddf993d11c7ed0e265ba6093ad0bc8bff10051444dcd374",
+        "encoded_audio_sha256": "SHA256=93412eae5cb4c62a3b198cac5602a1ec425b4a39e9a9b7d2de9ba53ff2cb082c",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 217.265578,
+        "artwork": [
+          "3efc0cc41e4e6a51f3f05ab97e4589a92e87eb49df9a3a3ded168cee3a28b49b"
+        ],
+        "filename": "ZiNØ x Shizeero - YOKAI.m4a"
+      },
+      "after": {
+        "sha256": "4e6fbacfe4f47b7a938aecb610cd4cc0ca9b766b485d2c90cb65e7f739d91fc6",
+        "encoded_audio_sha256": "SHA256=67ef51779408493996c93207d4b14ad38fd775a7d56acb39bbd5df68390cfb0e",
+        "codec": "aac",
+        "audio_kbps": 269.3,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 217.219002,
+        "artwork": [
+          "3efc0cc41e4e6a51f3f05ab97e4589a92e87eb49df9a3a3ded168cee3a28b49b"
+        ],
+        "filename": "ZiNØ x Shizeero - YOKAI.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "[FREE DL] KØDA  - FUMANDO MARIJUANA",
+      "remote_id": "2316943241",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "7a9a4ecdd1db9219cee95599c74e7c23e9cfef19da74bd5dabd58e4e2ac64c0d",
+        "encoded_audio_sha256": "SHA256=5202e28e1586c431b8e2134dd1efbe43c2bffb7dfff7efc206c573ce811bddfb",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 222.126054,
+        "artwork": [
+          "d35d6e8726e9874a25213696eac3a67d360329cacdf20d3fd410c7cefdfd9ad1"
+        ],
+        "filename": "[FREE DL] KØDA  - FUMANDO MARIJUANA.m4a"
+      },
+      "after": {
+        "sha256": "6a19abf3381f96511520c62cbbc022d93a27683287a13be609a21333d1a9ab4b",
+        "encoded_audio_sha256": "SHA256=15825210884ea7d30cae10001ea3e133adcfa6a4eadbd7b1253880c39dbbcb07",
+        "codec": "aac",
+        "audio_kbps": 267.1,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 222.079002,
+        "artwork": [
+          "d35d6e8726e9874a25213696eac3a67d360329cacdf20d3fd410c7cefdfd9ad1"
+        ],
+        "filename": "[FREE DL] KØDA  - FUMANDO MARIJUANA.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "[FREE DL] SMVGGLERS - SEX",
+      "remote_id": "2390217021",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "ce62cc67a1e6fdd29a10ef6b0461af2ce32335e4e49cf2df9a9e7690e2806e38",
+        "encoded_audio_sha256": "SHA256=c9c71bd6d07703cec1aafcadaa42eb0411fb8b7e96ff719fbf29fc4f69544085",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 213.379773,
+        "artwork": [
+          "b07dea02914411d0e3416c6792918ac272e08d96055a12c791bb09f705cde68e"
+        ],
+        "filename": "[FREE DL] SMVGGLERS - SEX.m4a"
+      },
+      "after": {
+        "sha256": "340b32a77e2513f970893b034572cf6458f9d6f372e6c52037153bb60ebcf5ed",
+        "encoded_audio_sha256": "SHA256=b3a8663e69eac0a3ec7b47dd15cb16ace37fbd5918be1b932424a585bbb663d4",
+        "codec": "aac",
+        "audio_kbps": 274.4,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 213.332993,
+        "artwork": [
+          "b07dea02914411d0e3416c6792918ac272e08d96055a12c791bb09f705cde68e"
+        ],
+        "filename": "[FREE DL] SMVGGLERS - SEX.m4a",
+        "decode_ok": true
+      }
+    },
+    {
+      "track": "chopstick420 - PRIME",
+      "remote_id": "2380537872",
+      "upgraded": true,
+      "changed_audio": true,
+      "path_preserved": true,
+      "tags_preserved": true,
+      "artwork_preserved": true,
+      "birthtime_preserved": true,
+      "has_promotion_evidence": true,
+      "before": {
+        "sha256": "62dfcd106f2c157b3d79764fa4f97a8b5fd249e1079a19a4f30a63c634c33fae",
+        "encoded_audio_sha256": "SHA256=659bd4ba29b33b81ef4656dd1a6460693385425414830d250a0d4724d70939a8",
+        "codec": "aac",
+        "audio_kbps": 160.0,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 245.838118,
+        "artwork": [
+          "5795a5979b65819b873094fabd9d66ff0f6bf3820d1a7d9cfaf14fa0f1ac39fd"
+        ],
+        "filename": "chopstick420 - PRIME.m4a"
+      },
+      "after": {
+        "sha256": "9e4c651141379cee237f2432d083d7d53c3e601d47cda359e1d1bffa3e66a03a",
+        "encoded_audio_sha256": "SHA256=43e44bd88f655fb6ee535d87568df542088395c46f92967b54a26c421aec97d3",
+        "codec": "aac",
+        "audio_kbps": 278.3,
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration": 245.790998,
+        "artwork": [
+          "5795a5979b65819b873094fabd9d66ff0f6bf3820d1a7d9cfaf14fa0f1ac39fd"
+        ],
+        "filename": "chopstick420 - PRIME.m4a",
+        "decode_ok": true
+      }
+    }
+  ]
+}
