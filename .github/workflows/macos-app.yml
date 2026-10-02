@@ -45,6 +45,9 @@ jobs:
           xcodebuild \
             -project macos/UDL.xcodeproj \
             -scheme UDLTests \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 30 \
+            -maximum-test-execution-time-allowance 60 \
             -configuration Debug \
             -destination 'platform=macOS' \
             -derivedDataPath dist/DerivedData \
