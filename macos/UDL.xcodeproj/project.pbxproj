@@ -89,7 +89,7 @@
 		B10000000000000000000006 /* UDLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/UDLClient.swift; sourceTree = "<group>"; };
 		B10000000000000000000101 /* PhoneLibraryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/PhoneLibrary/PhoneLibraryModels.swift; sourceTree = "<group>"; };
 		B10000000000000000000102 /* PhoneLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/PhoneLibrary/PhoneLibraryView.swift; sourceTree = "<group>"; };
-		B10000000000000000000103 /* AppState+PhoneLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState+PhoneLibrary.swift; sourceTree = "<group>"; };
+		B10000000000000000000103 /* AppState+PhoneLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/AppState+PhoneLibrary.swift"; sourceTree = "<group>"; };
 		B10000000000000000000104 /* PhoneLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLibraryTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistErrorSurfacingTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState.swift; sourceTree = "<group>"; };
