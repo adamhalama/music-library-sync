@@ -22,7 +22,8 @@ func TestAgentSubprocessStdoutIsProtocolOnlyNDJSON(t *testing.T) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		return
+		// Exit before the Go test harness can print PASS on protocol stdout.
+		os.Exit(0)
 	}
 
 	command := exec.Command(os.Args[0], "-test.run=TestAgentSubprocessStdoutIsProtocolOnlyNDJSON")
