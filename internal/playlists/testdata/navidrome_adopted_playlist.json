@@ -1,0 +1,7 @@
+{
+  "id": "nd-favs-august",
+  "name": "favs_august",
+  "comment": "phone-editable gig playlist",
+  "owner": "dj",
+  "song_ids": ["nd-song-1", "nd-song-2", "nd-song-3"]
+}

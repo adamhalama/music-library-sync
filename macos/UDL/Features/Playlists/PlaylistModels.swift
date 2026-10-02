@@ -98,6 +98,28 @@ struct PlaylistConfig: Codable, Sendable {
     // `playlists.config.read` returns null here for anyone who has never
     // defined a playlist, which is every fresh install.
     @DefaultEmpty var playlists: [PlaylistDefinition]
+    @DefaultEmpty var syncJobs: [PlaylistSyncJob]
+
+    enum CodingKeys: String, CodingKey {
+        case version, playlists
+        case syncJobs = "sync_jobs"
+    }
+}
+
+struct PlaylistSyncSelector: Codable, Sendable, Equatable {
+    var playlist: String
+    var playlistID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case playlist
+        case playlistID = "playlist_id"
+    }
+}
+
+struct PlaylistSyncJob: Codable, Sendable, Identifiable, Equatable {
+    let id: String
+    var rekordbox: PlaylistSyncSelector
+    var navidrome: PlaylistSyncSelector
 }
 
 struct PlaylistConfigResult: Codable, Sendable {

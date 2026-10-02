@@ -65,6 +65,7 @@ struct AppShellView: View {
         case .freeDL: FreeDLView()
         case .rekordbox: RekordboxView()
         case .playlists: PlaylistsView()
+        case .playlistSync: PlaylistSyncView()
         case .phoneLibrary: PhoneLibraryView()
         case .doctor: DoctorView()
         case .credentials: CredentialsView()

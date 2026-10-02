@@ -62,7 +62,8 @@ interaction reply.
 `session.shutdown` takes no params and returns `{"shutdown":true}` after all
 active runs have been canceled.
 
-Protocol v2 exposes 37 methods:
+Protocol v2 exposes the methods returned by `session.initialize`; clients must
+use that advertised inventory rather than a hard-coded count.
 
 | Group | Methods |
 | --- | --- |
@@ -73,6 +74,7 @@ Protocol v2 exposes 37 methods:
 | Credentials | `credentials.list`, `credentials.save`, `credentials.clear` |
 | Startup/sources | `startup.onboardingState`, `startup.attention`, `sources.capabilities` |
 | Playlists | `playlists.list`, `playlists.providerList`, `playlists.show`, `playlists.refresh`, `playlists.saveDefinition`, `playlists.config.read`, `playlists.config.write` |
+| Paired playlist sync | `playlistSync.inspect`, `playlistSync.plan`, `playlistSync.apply` |
 | Free DL | `freedl.config.read`, `freedl.config.write`, `freedl.plan.start`, `freedl.capture.start`, `freedl.promotionPlan.build`, `freedl.promote.apply` |
 | Rekordbox | `rekordbox.config.read`, `rekordbox.config.write`, `rekordbox.deps.status`, `rekordbox.deps.ensure`, `rekordbox.deps.reset`, `rekordbox.inspect`, `rekordbox.plan`, `rekordbox.apply` |
 | Navidrome | `navidrome.config.read`, `navidrome.config.write`, `navidrome.deps.status`, `navidrome.deps.ensure`, `navidrome.status`, `navidrome.service.control`, `navidrome.setup.plan`, `navidrome.setup.apply`, `navidrome.playlists.refresh`, `navidrome.playlists.deriveGenres`, `navidrome.playlists.saveGenres`, `navidrome.favorites.plan`, `navidrome.favorites.apply`, `navidrome.favorites.list`, `navidrome.backup.create` |
@@ -105,6 +107,9 @@ marked **run** return `{"run_id":"…"}` immediately and terminate through
 | `playlists.saveDefinition` | `definition` | path, definition, and `created` |
 | `playlists.config.read` | `{}` | write path, merged config, content |
 | `playlists.config.write` | `config` | write path, saved config, canonical content |
+| `playlistSync.inspect` | `{}` | configured `jobs` with trusted pair state or a state error; cache/config only |
+| `playlistSync.plan` | `job_id`, explicit `direction`, optional `out_path` | **run** returning a checksummed `plan` and `plan_path` |
+| `playlistSync.apply` | checksummed `plan`, `dry_run` | **run** returning dry-run/no-op flags, optional destination `backup_path`, pair-state path, and provider verification result |
 | `freedl.config.read` | `{}` | write path, merged config, content |
 | `freedl.config.write` | `config` | write path, saved config, canonical content |
 | `freedl.plan.start` | `job_id`, optional plan limit, playlist ID, and selection overrides | **run**, streaming `freedl.planEvent` |
@@ -166,6 +171,13 @@ the configured job. Promotion apply rebuilds the authoritative plan and merges
 selection state only. Rekordbox apply validates plan checksum and completeness
 before runtime or backup overrides; invalid plans include structured blocker
 rows in error `data`.
+
+Paired-playlist `plan` and `apply` use the cancellable run lifecycle. Apply is
+never replayed after a disconnect. It revalidates exact live source and
+destination membership/order before backup, rejects every blocker, and returns
+partial-success exit code 5 with the backup path when a write may have occurred
+but verification or local state completion failed. Directions are exactly
+`rekordbox-to-navidrome` and `navidrome-to-rekordbox`.
 
 ## Notifications and UI requests
 

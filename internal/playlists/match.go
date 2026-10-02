@@ -1,9 +1,10 @@
 package playlists
 
 import (
-	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/jaa/update-downloads/internal/pathidentity"
 )
 
 type MatchStatus string
@@ -60,11 +61,7 @@ func MatchTrack(snapshot Snapshot, localPath, remoteTitle string) Match {
 }
 
 func cleanPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(path)
+	return pathidentity.Canonical(path)
 }
 
 func normalizeText(value string) string {

@@ -32,7 +32,36 @@ var (
 	browserDownloadPollInterval   = 1 * time.Second
 )
 
+// freeDownloadGateHosts are services that hand a media file to the browser once
+// the visitor completes an on-page unlock step. A SoundCloud purchase_url is
+// used for both "Free Download" and "Buy" buttons and the page gives no
+// machine-readable hint which it is, so support is host-driven.
+//
+// Stores and smart links are deliberately excluded: bandcamp.com and beatport
+// sell the track, and found.ee resolves to Spotify/Apple Music. Opening those
+// in a browser can never produce a free file, so they stay classified as
+// unsupported rather than wasting a gate wait on them.
+var freeDownloadGateHosts = []string{
+	"hypeddit.com",
+	"gaterush.me",
+	"droploud.com",
+	"mypresskit.info",
+}
+
 func isHypedditPurchaseURL(raw string) bool {
+	return matchesFreeDownloadGateHost(raw, "hypeddit.com")
+}
+
+func isSupportedFreeDownloadGateURL(raw string) bool {
+	for _, host := range freeDownloadGateHosts {
+		if matchesFreeDownloadGateHost(raw, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesFreeDownloadGateHost(raw string, gateHost string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return false
@@ -45,10 +74,7 @@ func isHypedditPurchaseURL(raw string) bool {
 		return false
 	}
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	if host == "hypeddit.com" {
-		return true
-	}
-	return strings.HasSuffix(host, ".hypeddit.com")
+	return host == gateHost || strings.HasSuffix(host, "."+gateHost)
 }
 
 func defaultBrowserDownloadsDir() (string, error) {

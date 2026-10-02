@@ -11,6 +11,7 @@ final class AppState: ObservableObject {
         case freeDL = "SoundCloud Free DL"
         case rekordbox = "Rekordbox Sync"
         case playlists = "Playlists"
+        case playlistSync = "Playlist Sync"
         case phoneLibrary = "Phone Library"
         case doctor = "Check System"
         case credentials = "Credentials"
@@ -147,9 +148,8 @@ final class AppState: ObservableObject {
     @Published private(set) var syncSources: [SourceCapability] = []
     @Published var syncSourceOptions: [String: SyncSourceOptions] = [:]
     // Every default below comes from `SyncDefaults`, which is the only place
-    // they are written. `startDryRunPlan()` forces dry run on; reaching Run Sync
-    // from the sidebar has to agree with it, and reading one constant is how
-    // these two routes are kept from disagreeing.
+    // they are written. `startDryRunPlan()` explicitly overrides dry run for
+    // Home's preview action; the ordinary Run Sync route starts live.
     @Published var syncDryRun = SyncDefaults.dryRun
     @Published var syncUnlimited = SyncDefaults.unlimited
     @Published var syncPlanLimit = SyncDefaults.planLimit
@@ -167,6 +167,11 @@ final class AppState: ObservableObject {
     @Published private(set) var playlistActiveRunID: String?
     @Published private(set) var playlistStatus: PlaylistStatus?
     @Published private(set) var providerPlaylists: [ProviderPlaylist] = []
+    @Published var playlistSyncJobs: [PlaylistSyncInspectRow] = []
+    @Published var playlistSyncPlan: PlaylistSyncPlanResult?
+    @Published var playlistSyncRunID: String?
+    @Published var playlistSyncOperation: PlaylistSyncOperation?
+    @Published var playlistSyncStatus: WorkflowStatus?
     /// One-shot cross-workflow navigation intents. Keeping the selected
     /// snapshot in AppState lets a handoff survive the destination view being
     /// destroyed and recreated without making it a sticky global selection.
@@ -672,6 +677,9 @@ final class AppState: ObservableObject {
         guard !syncRun.phase.isActive else { return }
         syncCancellationWatchdog?.cancel()
         syncRun = SyncRunState()
+        // A Home preview must not silently turn the next ordinary sync into
+        // another dry run after the user chooses "Configure another run".
+        syncDryRun = SyncDefaults.dryRun
         selectedSyncSourceID = nil
         syncSidebarSelectionIsExplicit = false
     }
@@ -723,6 +731,14 @@ final class AppState: ObservableObject {
             )
             return false
         }
+    }
+
+    /// Writes the shared playlists file for the paired-playlist workflow while
+    /// keeping failures owned by that workflow instead of the snapshot screen.
+    func writePlaylistSyncConfig(_ config: PlaylistConfig) async throws {
+        guard let client else { return }
+        playlistConfig = try await client.writePlaylistsConfig(config)
+        await loadPlaylists()
     }
 
     func refreshPlaylist(_ playlistID: String) async {
@@ -1197,9 +1213,9 @@ final class AppState: ObservableObject {
         planCursorBySource[sourceID] = nil
     }
 
-    /// C17 — restores the values the GUI used to hardcode, so "back to how it
-    /// was" is one click rather than five.
+    /// Restores every option in the Advanced inspector, including preview mode.
     func resetSyncAdvanced() {
+        syncDryRun = SyncDefaults.dryRun
         syncPlanWindow = SyncDefaults.planWindow
         syncAskOnExisting = SyncDefaults.askOnExisting
         syncScanGaps = SyncDefaults.scanGaps
@@ -1421,6 +1437,12 @@ final class AppState: ObservableObject {
                 preservedPreviousSnapshot: true
             )
         }
+        if playlistSyncRunID != nil || playlistSyncOperation != nil {
+            interrupted.append(.playlistSync)
+            playlistSyncRunID = nil
+            playlistSyncOperation = nil
+            playlistSyncStatus = .failure("Backend connection ended. No playlist mirror was resumed or replayed.")
+        }
         pendingPrompt = nil
         notResumed.formUnion(interrupted)
         backendRecovery = BackendRecovery(
@@ -1444,6 +1466,11 @@ final class AppState: ObservableObject {
         playlistConfig = nil
         playlistActiveRunID = nil
         providerPlaylists = []
+        playlistSyncJobs = []
+        playlistSyncPlan = nil
+        playlistSyncRunID = nil
+        playlistSyncOperation = nil
+        playlistSyncStatus = nil
         freeDLConfig = nil
         freeDLRunID = nil
         freeDLOperation = nil
@@ -1483,7 +1510,7 @@ final class AppState: ObservableObject {
 
     private func applySyncFinished(_ finished: RunFinishedNotification) {
         syncCancellationWatchdog?.cancel()
-        syncRun.finish(exitCode: finished.exitCode, error: finished.error)
+        syncRun.finish(exitCode: finished.exitCode, error: finished.error, dryRun: syncDryRun)
         planSelectionOverrides = [:]
         planCursorBySource = [:]
     }
@@ -1503,6 +1530,11 @@ final class AppState: ObservableObject {
         if finished.runID == rekordboxRunID || (rekordboxRunID == nil && rekordboxOperation != nil) {
             rekordboxRunID = finished.runID
             applyRekordboxFinished(finished)
+            return
+        }
+        if finished.runID == playlistSyncRunID || (playlistSyncRunID == nil && playlistSyncOperation != nil) {
+            playlistSyncRunID = finished.runID
+            applyPlaylistSyncFinished(finished)
             return
         }
         if finished.runID == phoneLibraryRunID || (phoneLibraryRunID == nil && phoneLibraryOperation != nil) {
@@ -1528,6 +1560,8 @@ final class AppState: ObservableObject {
             applyFreeDLFinished(finished)
         } else if rekordboxOperation != nil {
             applyRekordboxFinished(finished)
+        } else if playlistSyncOperation != nil {
+            applyPlaylistSyncFinished(finished)
         } else if phoneLibraryOperation != nil {
             applyPhoneLibraryFinished(finished)
         } else {

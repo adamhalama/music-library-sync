@@ -239,6 +239,10 @@ func (s *Syncer) runSpotifyDeemix(
 	})
 
 	runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
+	metadataResolver := newSpotifyMetadataResolver(auth.SpotifyCredentials{
+		ClientID:     sourceForExec.SpotifyClientID,
+		ClientSecret: sourceForExec.SpotifyClientSecret,
+	})
 	sourceFailed := false
 	var sourceFailureMessage string
 	var sourceFailureDetails map[string]any
@@ -279,7 +283,7 @@ func (s *Syncer) runSpotifyDeemix(
 		spec.Dir = runtimeDir
 
 		if trackID != "" && strings.TrimSpace(runtimeDir) != "" {
-			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata)
+			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata, metadataResolver)
 			if metadataErr != nil {
 				_ = s.Emitter.Emit(output.Event{
 					Timestamp: s.Now(),
@@ -288,6 +292,26 @@ func (s *Syncer) runSpotifyDeemix(
 					SourceID:  source.ID,
 					Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
 				})
+			} else if strings.TrimSpace(metadata.ISRC) == "" {
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message: fmt.Sprintf(
+						"[%s] no ISRC resolved for %s; deemix cannot match it on Deezer and will report it unavailable",
+						source.ID, trackID,
+					),
+				})
+				if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelWarn,
+						Event:     output.EventSourcePreflight,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
+					})
+				}
 			} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
 				_ = s.Emitter.Emit(output.Event{
 					Timestamp: s.Now(),
@@ -556,6 +580,7 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 			return plan, err
 		}
 	}
+	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks, newSpotifyMetadataResolver(spotifyCreds))
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
 	state, stateStore, err := loadSpotifySyncState(stateFilePath)

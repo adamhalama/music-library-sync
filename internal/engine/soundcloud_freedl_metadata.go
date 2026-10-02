@@ -273,17 +273,47 @@ func runSoundCloudMetadataFFmpeg(
 	metadata soundCloudFreeDownloadMetadata,
 	artworkPath string,
 ) error {
+	args := soundCloudMetadataFFmpegArgs(inputPath, outputPath, metadata, artworkPath)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		_ = os.Remove(outputPath)
+		trimmedOutput := strings.TrimSpace(string(output))
+		if trimmedOutput == "" {
+			return runErr
+		}
+		return fmt.Errorf("%v: %s", runErr, trimmedOutput)
+	}
+	return nil
+}
+
+func soundCloudMetadataFFmpegArgs(
+	inputPath string,
+	outputPath string,
+	metadata soundCloudFreeDownloadMetadata,
+	artworkPath string,
+) []string {
+	// ffmpeg attributes options positionally: anything between two -i flags is read
+	// as an input option for the second one. Every input must therefore be declared
+	// before the first output option, or -map/-codec are rejected with
+	// "cannot be applied to input url".
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
 		"-y",
 		"-i", inputPath,
-		"-map", "0",
-		"-codec", "copy",
 	}
-	if strings.TrimSpace(artworkPath) != "" {
+	hasArtwork := strings.TrimSpace(artworkPath) != ""
+	if hasArtwork {
 		args = append(args, "-i", artworkPath)
+	}
+	args = append(args, "-map", "0")
+	if hasArtwork {
 		args = append(args, "-map", "1:0")
+	}
+	args = append(args, "-codec", "copy")
+	if hasArtwork {
 		args = append(args, "-c:v", "mjpeg", "-disposition:v:0", "attached_pic")
 	}
 	if title := strings.TrimSpace(metadata.Title); title != "" {
@@ -300,18 +330,7 @@ func runSoundCloudMetadataFFmpeg(
 		args = append(args, "-metadata", "comment="+sourceURL)
 	}
 	args = append(args, outputPath)
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, runErr := cmd.CombinedOutput()
-	if runErr != nil {
-		_ = os.Remove(outputPath)
-		trimmedOutput := strings.TrimSpace(string(output))
-		if trimmedOutput == "" {
-			return runErr
-		}
-		return fmt.Errorf("%v: %s", runErr, trimmedOutput)
-	}
-	return nil
+	return args
 }
 
 func downloadSoundCloudArtwork(ctx context.Context, rawURL string, tempDir string) (string, error) {

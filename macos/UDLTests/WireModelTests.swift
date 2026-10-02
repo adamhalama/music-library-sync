@@ -495,10 +495,10 @@ final class WireModelTests: XCTestCase {
 
     /// `SyncDefaults` is the only place a sync default is written. A second copy
     /// is how `dryRun` once ended up claiming one value in a comment and another
-    /// in the initialiser, so this pins the constants themselves — including
-    /// C1's `dryRun: true`, without which the sidebar route offers a live run.
+    /// in the initialiser, so this pins the constants themselves. The ordinary
+    /// Run Sync route is live; Home opts into its preview explicitly.
     func testSyncDefaultsAreTheDocumentedC1AndC17Values() throws {
-        XCTAssertTrue(SyncDefaults.dryRun)
+        XCTAssertFalse(SyncDefaults.dryRun)
         XCTAssertFalse(SyncDefaults.unlimited)
         XCTAssertEqual(SyncDefaults.planLimit, 50)
         XCTAssertEqual(SyncDefaults.timeoutSeconds, 0)
@@ -528,7 +528,7 @@ final class WireModelTests: XCTestCase {
         let encoded = try JSONSerialization.jsonObject(
             with: JSONEncoder.agent.encode(params)
         ) as? [String: Any]
-        XCTAssertEqual(encoded?["dry_run"] as? Bool, true)
+        XCTAssertEqual(encoded?["dry_run"] as? Bool, false)
         XCTAssertEqual(encoded?["plan_limit"] as? Int, 50)
         XCTAssertEqual(encoded?["plan_window"] as? String, "first")
         XCTAssertEqual(encoded?["ask_on_existing_set"] as? Bool, false)
@@ -550,17 +550,31 @@ final class WireModelTests: XCTestCase {
         XCTAssertEqual(state.syncNoPreflight, SyncDefaults.noPreflight)
         XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
 
+        state.syncDryRun = true
         state.syncPlanWindow = .latest
         state.syncAskOnExisting = .ask
         state.syncScanGaps = true
         state.syncNoPreflight = true
         state.syncTrackStatus = .names
         state.resetSyncAdvanced()
+        XCTAssertEqual(state.syncDryRun, SyncDefaults.dryRun)
         XCTAssertEqual(state.syncPlanWindow, SyncDefaults.planWindow)
         XCTAssertEqual(state.syncAskOnExisting, SyncDefaults.askOnExisting)
         XCTAssertEqual(state.syncScanGaps, SyncDefaults.scanGaps)
         XCTAssertEqual(state.syncNoPreflight, SyncDefaults.noPreflight)
         XCTAssertEqual(state.syncTrackStatus, SyncDefaults.trackStatus)
+    }
+
+    /// Home deliberately starts a preview, but "Configure another run" must
+    /// not let that one-shot choice leak into the next ordinary sync.
+    @MainActor
+    func testResetSyncRunRestoresLiveDefaultAfterPreview() {
+        let state = AppState()
+        state.syncDryRun = true
+
+        state.resetSyncRun()
+
+        XCTAssertFalse(state.syncDryRun)
     }
 
     func testSyncCancellationRequestedBeforeRunIDIsSentExactlyOnceWhenIDArrives() {
@@ -695,6 +709,13 @@ final class WireModelTests: XCTestCase {
         var explicit = SyncRunState(runID: "run-2", phase: .running)
         explicit.finish(exitCode: 1, error: "backend detail")
         XCTAssertEqual(explicit.terminalMessage, "backend detail")
+
+        var preview = SyncRunState(runID: "run-3", phase: .running)
+        preview.finish(exitCode: 0, error: nil, dryRun: true)
+        XCTAssertEqual(
+            preview.terminalMessage,
+            "Dry run completed successfully. No tracks were downloaded and no state was changed."
+        )
     }
 
     /// The defaults must reproduce exactly what the GUI sent before C17, so
@@ -1432,12 +1453,13 @@ final class WireModelTests: XCTestCase {
         let sources = try decode(SourceCapabilitiesResult.self, #"{"sources": null}"#)
         let playlistList = try decode(PlaylistListResult.self, #"{"playlists": null}"#)
         let providerList = try decode(ProviderPlaylistListResult.self, #"{"playlists": null}"#)
-        let playlistConfig = try decode(PlaylistConfig.self, #"{"version": 1, "playlists": null}"#)
+        let playlistConfig = try decode(PlaylistConfig.self, #"{"version": 1, "playlists": null, "sync_jobs": null}"#)
         XCTAssertTrue(credentials.credentials.isEmpty)
         XCTAssertTrue(sources.sources.isEmpty)
         XCTAssertTrue(playlistList.playlists.isEmpty)
         XCTAssertTrue(providerList.playlists.isEmpty)
         XCTAssertTrue(playlistConfig.playlists.isEmpty)
+        XCTAssertTrue(playlistConfig.syncJobs.isEmpty)
 
         let freeDL = try decode(FreeDLConfig.self, """
         {"version": 1,
@@ -1491,6 +1513,44 @@ final class WireModelTests: XCTestCase {
         """)
         XCTAssertTrue(snapshot.rows.isEmpty)
         XCTAssertTrue(snapshot.activity.isEmpty)
+    }
+
+    func testPlaylistSyncWireModelsAcceptNullCollectionsAndFutureActions() throws {
+        let inspect = try JSONDecoder.agent.decode(
+            PlaylistSyncInspectResult.self,
+            from: #"{"jobs":null}"#.data(using: .utf8)!
+        )
+        XCTAssertTrue(inspect.jobs.isEmpty)
+
+        let preconditions = try JSONDecoder.agent.decode(
+            PlaylistSyncPreconditions.self,
+            from: #"{"source_provider_ids":null,"source_normalized_paths":null,"destination_provider_ids":null,"destination_normalized_paths":null,"final_destination_provider_ids":null,"matched":null}"#.data(using: .utf8)!
+        )
+        XCTAssertTrue(preconditions.sourceProviderIDs.isEmpty)
+        XCTAssertTrue(preconditions.matched.isEmpty)
+
+        let row = try JSONDecoder.agent.decode(
+            PlaylistSyncPlanRow.self,
+            from: #"{"title":"Track","raw_path":"/Music/Track.flac","normalized_path":"/Music/Track.flac","action":"future-action"}"#.data(using: .utf8)!
+        )
+        XCTAssertEqual(row.action, "future-action")
+        XCTAssertEqual(row.actionLabel, "Future-Action")
+    }
+
+    @MainActor
+    func testPlaylistSyncPartialFailureKeepsBackupRecoveryPath() throws {
+        let state = AppState()
+        state.playlistSyncOperation = .apply(dryRun: false)
+        let value = try JSONDecoder.agent.decode(
+            JSONValue.self,
+            from: #"{"dry_run":false,"no_op":false,"backup_path":"/backups/navidrome-before-sync.db"}"#.data(using: .utf8)!
+        )
+        state.applyPlaylistSyncFinished(RunFinishedNotification(
+            runID: "pair-apply", result: value, error: "verification failed", exitCode: 5
+        ))
+        XCTAssertTrue(state.playlistSyncStatus?.message.contains("verification failed") == true)
+        XCTAssertTrue(state.playlistSyncStatus?.message.contains("/backups/navidrome-before-sync.db") == true)
+        XCTAssertNil(state.playlistSyncOperation)
     }
 
     /// A duplicate cannot reuse the id: the id names the state file, so two

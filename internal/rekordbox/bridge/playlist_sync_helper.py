@@ -39,10 +39,15 @@ def inspect_db(db_dir_raw: str) -> Dict[str, Any]:
 
         contents = []
         for row in db.get_content().all():
+            artist = getattr(getattr(row, "Artist", None), "Name", "")
+            album = getattr(getattr(row, "Album", None), "Name", "")
             contents.append(
                 {
                     "id": str(row.ID),
                     "title": str(row.Title or ""),
+                    "artist": str(artist or ""),
+                    "album": str(album or ""),
+                    "duration_seconds": int(row.Length or 0),
                     "folder_path": str(row.FolderPath or ""),
                 }
             )

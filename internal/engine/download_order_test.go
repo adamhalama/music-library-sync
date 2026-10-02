@@ -1,6 +1,10 @@
 package engine
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jaa/update-downloads/internal/config"
+)
 
 func TestNormalizeDownloadOrderUsesSharedDefaultAndPreservesExplicitValues(t *testing.T) {
 	if DefaultDownloadOrder != DownloadOrderOldestFirst {
@@ -63,5 +67,32 @@ func assertExecutionIndices(t *testing.T, manifest ExecutionManifest, order Down
 		if manifest.Execution[i].Index != index || manifest.Execution[i].ExecutionSlot != i+1 {
 			t.Fatalf("execution[%d] = %+v, want index %d slot %d", i, manifest.Execution[i], index, i+1)
 		}
+	}
+}
+
+func TestSupportsPlanCoversEveryRegisteredPlanAdapter(t *testing.T) {
+	// Free DL capture runs through plan mode, so a registered plan provider that
+	// SupportsPlan rejects makes the source skip silently instead of downloading.
+	syncer := NewSyncer(map[string]Adapter{}, nil, nil)
+	for _, tc := range []struct {
+		sourceType  config.SourceType
+		adapterKind string
+	}{
+		{config.SourceTypeSoundCloud, "scdl"},
+		{config.SourceTypeSoundCloud, "scdl-freedl"},
+		{config.SourceTypeSpotify, "deemix"},
+	} {
+		source := config.Source{Type: tc.sourceType, Adapter: config.AdapterSpec{Kind: tc.adapterKind}}
+		if syncer.PlanRegistry.ProviderFor(tc.adapterKind) == nil {
+			t.Fatalf("expected a registered plan provider for %q", tc.adapterKind)
+		}
+		if !SupportsPlan(source) {
+			t.Errorf("SupportsPlan(%s/%s) = false, want true", tc.sourceType, tc.adapterKind)
+		}
+	}
+
+	unsupported := config.Source{Type: config.SourceTypeSpotify, Adapter: config.AdapterSpec{Kind: "spotdl"}}
+	if SupportsPlan(unsupported) {
+		t.Error("SupportsPlan(spotify/spotdl) = true, want false")
 	}
 }

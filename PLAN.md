@@ -1,156 +1,237 @@
-# Navidrome Likes to Rekordbox, and a Diagnosable GUI
+# Rekordbox and Navidrome Directional Playlist Sync
 
 - **Status:** Planned
-- **Target:** Likes made on the phone reach Rekordbox, and the native app
-  reports why a playlist operation failed
-- **Last updated:** 2026-08-05
+- **Target:** Safely mirror one paired playlist in either direction between
+  Rekordbox and Navidrome, preserving membership and order
+- **Last updated:** 2026-08-07
 - **Implementation tracker:** [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 - **Predecessor:**
-  [plans/archive/navidrome-phone-library-plan.md](./plans/archive/navidrome-phone-library-plan.md)
+  [plans/archive/navidrome-likes-rekordbox-plan.md](./plans/archive/navidrome-likes-rekordbox-plan.md)
 
 ## Purpose
 
-Two problems, discovered together while working on `feature/swiftui-gui`. They
-are unrelated in mechanism but coupled in practice: the second one is why the
-first is hard to observe.
+The working pattern is gig-oriented:
 
-**Likes only flow one way.** The phone library initiative delivered a complete,
-hardened Apple Music → Navidrome star import. It never delivered the return
-path. A track favourited on the phone in Amperfy is canonical in Navidrome and
-stops there — it never becomes a UDL snapshot and never reaches Rekordbox. That
-was a deliberate v1 scope cut, recorded in the predecessor plan. This plan lifts
-it, one way only.
+1. Curate a Rekordbox playlist such as `favs_august` from the larger favourites
+   library.
+2. Send that playlist to Navidrome so it is available in the phone client.
+3. Add, remove, or reorder tracks on the phone.
+4. Bring the Navidrome playlist back into the paired Rekordbox playlist.
 
-**The GUI cannot report playlist failures.** Every other feature in the native
-app surfaces the backend's error text. The playlist handler alone discards it,
-and downgrades a hard failure to a warning that says nothing happened. The
-backend already produces an actionable message; the UI throws it away. The
-result is a class of failure that is invisible by construction.
+This is deliberately an **explicit directional mirror**, not an automatic
+merge. Each run names its source, previews the exact replacement, and applies
+only after confirmation. The selected source controls both membership and
+order for that run.
 
 ## Current State
 
-The pieces that already exist, and the exact seam each one stops at:
+The repository already has most of the safe primitives:
 
-| Capability | Where | Stops at |
-| --- | --- | --- |
-| Apple Music → Navidrome star import | `internal/navidrome/favorites.go` | Complete: checksummed plan, mandatory DB backup, parity verify, compensating un-star |
-| Subsonic `getStarred2` / `star` / `unstar` | `internal/navidrome/client.go` | `Starred` is called from exactly one place — the parity check inside `ApplyFavoritePlan` |
-| `Favourites (Navidrome)` smart playlist | `internal/navidrome/smartplaylists.go` | `.nsp` rule `{"is": {"loved": true}}`; depends on the server importing the file and on `VerifyPlaylistOwnership` |
-| Navidrome playlist provider | `internal/playlists/navidrome_provider.go` | `NavidromeClient` deliberately omits the star methods |
-| Snapshot → Rekordbox pipeline | `internal/app/rekordbox_playlist_sync.go` | Works today for any snapshot; needs no change |
-| GUI error surfacing | `macos/UDL/Model/AppState.swift` | Sync, Free DL, Rekordbox and Phone Library surface `finished.error`; playlists does not |
+- Rekordbox inspection exposes playlists, ordered content IDs, and library
+  paths through the pyrekordbox bridge.
+- The existing Rekordbox mirror uses checksummed plans, precondition checks,
+  mandatory backups, a transactional rewrite, and post-apply verification.
+- Navidrome exposes real library paths and ordered playlist contents through
+  the Subsonic API, with credentials kept in Keychain.
+- Standalone playlist snapshots and the native app already establish
+  cache-first reads, explicit refreshes, cancellable agent runs, and on-screen
+  workflow errors.
 
-So the Rekordbox half of the delivery is already built. What is missing is a read
-path that turns Navidrome stars into a snapshot.
-
-## Evidence
-
-Driving `bin/udl agent --working-dir /Users/jaa` over the wire, exactly as the
-app does:
-
-- `playlists.list` returns the `favorites` definition **and** its snapshot.
-- `playlists.providerList {"provider":"apple_music"}` returns `Favourites`
-  (`70C641CA78BB0F3C`, 167 tracks) among six playlists.
-
-Config discovery, the home working directory, and the AppleScript reader are all
-healthy when the agent is spawned from a terminal. The differentiator is *who
-spawns it*: AppleEvents from the child `udl` process are attributed to the
-responsible process, `UDL.app`, which needs its own Automation → Music grant.
-The Xcode embed phase copies the backend into the bundle without signing it,
-so grants keyed on the bundle's code signature do not survive a rebuild.
-
-This is a strong hypothesis, not a proven cause — it cannot be confirmed until
-the GUI stops swallowing the error. That ordering drives the plan.
+The missing pieces are a Rekordbox playlist source model, a writable Navidrome
+playlist client, a direction-neutral mirror planner, durable pair bindings, and
+CLI/agent/native-app surfaces for the complete workflow.
 
 ## Product Decisions
 
-1. **Likes flow one way: Navidrome → UDL → Rekordbox.** Bidirectional
-   Apple ↔ Navidrome favourite synchronisation stays deferred. It needs a
-   conflict policy and a write path into Music.app, and this repo's Music
-   integration is deliberately read-only.
-2. **Read stars directly, not through the smart playlist.** Use `getStarred2`.
-   The `.nsp` route works only once the server has imported the file and the
-   playlist passes ownership verification, and that round trip is the one link
-   the predecessor tracker never validated. The smart playlist stays in place
-   for Amperfy's own browsing; it is no longer load-bearing for UDL.
-3. **Apple and Navidrome favourites stay permanently separate.** Carried
-   forward unchanged from the predecessor plan. `navidrome-favorites` gets its
-   own Rekordbox target; the existing `favorites` → `fav_imports` flow is not
-   touched, not merged, and not migrated.
-4. **The snapshot format does not change.** Stars are represented as
-   *membership* of the `navidrome-favorites` snapshot, not as a field on a
-   track. Adding a starred field would change the checksum inputs and
-   invalidate every existing `apple_music` snapshot.
-5. **Refreshing stars is an explicit user action.** Post-sync stays scan-only.
-   A star refresh is not a side effect of downloading music.
-6. **A failure must name its cause.** The GUI shows the backend's message
-   verbatim. A refresh that fails still preserves the previous valid snapshot —
-   that guarantee is unchanged — but the message says why it failed rather than
-   implying nothing happened.
-7. **Fix observability before fixing the cause.** The signing change is the
-   likely fix for the Automation failure, but shipping it first would mean
-   guessing. Error surfacing lands first so the next failure identifies itself.
+1. **Direction is selected for every run.** Supported values are
+   `rekordbox-to-navidrome` and `navidrome-to-rekordbox`. There is no automatic
+   three-way merge or last-writer-wins rule.
+2. **The source controls membership and order.** A successful apply makes the
+   destination exactly match the selected source.
+3. **Every mutation is plan then apply.** Plans are checksummed, human-readable,
+   saveable, and revalidated immediately before the destination changes.
+4. **Matching is exact normalized real path only.** No artist/title fallback is
+   allowed; a plausible wrong match is worse than a refused sync.
+5. **Partial mirrors are forbidden.** Empty sources, missing matches, ambiguous
+   paths, and duplicate canonical tracks block apply.
+6. **Existing exact-name destinations are adoptable.** The first plan previews
+   their complete replacement. Multiple exact-name matches are ambiguous and
+   block planning.
+7. **Missing destinations may be created.** The source must always exist; the
+   plan explicitly identifies a destination creation before apply.
+8. **Only normal, writable Navidrome playlists qualify.** UDL-managed smart
+   playlists and playlists owned by another account are never overwritten.
+9. **Sync remains manual.** Scheduling, background polling, and implicit sync
+   after download or scan are deferred.
+10. **Existing one-way workflows stay compatible.** Standalone snapshots,
+    favourites, and `udl rekordbox playlist-sync` keep their current formats and
+    behavior.
+
+## Configuration and State
+
+Add optional paired jobs to `playlists.yaml` without changing the existing
+configuration version:
+
+```yaml
+version: 1
+
+sync_jobs:
+  - id: favs-august
+    rekordbox:
+      playlist: favs_august
+      playlist_id: "" # optional stable selector
+    navidrome:
+      playlist: favs_august
+      playlist_id: "" # optional stable selector
+```
+
+- Job IDs are unique and use the existing safe identifier rules.
+- Both playlist names are required because either side may need to be created
+  as a destination; provider IDs are optional stable selectors.
+- A successful apply atomically records the resolved IDs, configuration
+  fingerprint, last direction, timestamp, and verified final checksum under
+  `state_dir/playlist-sync/jobs/<job-id>.json`.
+- Saved bindings survive external playlist renames. A changed job
+  configuration invalidates the old binding and forces fresh selector
+  resolution and adoption preview.
+- Operational state informs selection and status only; it never chooses a
+  direction or bypasses live preconditions.
+
+## User Interfaces
+
+### CLI
+
+```text
+udl playlist sync list
+udl playlist sync plan --job favs-august \
+  --direction rekordbox-to-navidrome [--out <file>]
+udl playlist sync plan --job favs-august \
+  --direction navidrome-to-rekordbox [--out <file>]
+udl playlist sync show --plan-file <file>
+udl playlist sync apply --plan-file <file> [--force]
+```
+
+- `--direction` accepts only the two explicit values above.
+- Global `--json`, `--dry-run`, and `--no-input` retain their existing meaning.
+- Interactive apply names the source and destination and reports additions,
+  removals, moves, unchanged tracks, and final count before confirmation.
+- Non-interactive apply requires `--force`; primary results go to stdout and
+  progress/errors to stderr.
+- Existing exit-code conventions remain, including `5` for a mutation whose
+  outcome needs reconciliation and `130` for interruption.
+
+### Agent protocol and native app
+
+Add `playlistSync.inspect`, `playlistSync.plan`, and `playlistSync.apply` run
+methods. The native app gets a dedicated **Playlist Sync** workspace with:
+
+- configured jobs and last verified status in the sidebar;
+- explicit “Send Rekordbox to phone” and “Bring phone edits to Rekordbox”
+  direction choices;
+- a row-level add/remove/move/keep/blocked preview;
+- inline blockers and disabled-control explanations;
+- a confirmation that names the destination, removals, final count, and backup;
+- workflow-owned success, failure, cancellation, and partial-state messages.
+
+## Safety and Apply Semantics
+
+Every plan records the job configuration fingerprint, resolved selectors,
+ordered source and destination memberships, matched ID/path pairs, destination
+creation intent, blockers, preconditions, and checksum.
+
+Immediately before writing, apply must:
+
+1. Verify the plan version and checksum.
+2. Reload the job and reject a changed configuration fingerprint.
+3. Re-read both playlists and all matched library records.
+4. Reject any source or destination change since planning.
+5. Confirm that Rekordbox is closed and has no live database sidecars whenever
+   its database is read or written.
+6. Create the destination-specific mandatory backup.
+
+For Rekordbox destinations, reuse the existing full database-directory backup,
+transactional playlist rewrite, and committed-state verification.
+
+For Navidrome destinations, use its own database backup command, replace the
+complete ordered song list through the supported Subsonic `createPlaylist`
+operation, and read the playlist back for exact ordered verification. Prefer
+form-encoded POST when supported so large playlists do not place credentials or
+song lists in an oversized URL. Creation-by-name is never blindly retried after
+an uncertain network result; reconcile by exact-name lookup and planned
+membership instead.
+
+Pair state advances only after exact destination parity is verified. A failure
+or cancellation never claims success, and any uncertain write reports the
+backup path and reconciliation steps.
+
+Security behavior remains unchanged: the password stays in Keychain, auth
+tokens and query strings are redacted, plans/state contain no secrets, and the
+managed Navidrome service remains trusted-LAN-only with no port forwarding.
 
 ## Scope
 
-**In scope**
+### In scope
 
-- A direct starred read on the Navidrome provider, producing a deterministic
-  snapshot that the existing Rekordbox pipeline consumes unchanged.
-- A `navidrome-favorites` definition pointed at that read, with its own
-  Rekordbox target.
-- CLI, agent-protocol, and native-app surfaces for reading starred tracks.
-- Playlist error surfacing in the native app.
-- Signing the embedded backend so Automation grants survive rebuilds.
-- A Doctor check that reports Music automation state before a refresh needs it.
+- Reusable paired playlist jobs, not a hard-coded `favs_august` special case.
+- Exact membership and order in both directions.
+- Destination creation or explicit adoption of one unique exact-name playlist.
+- Checksummed plan/show/apply workflow with live preconditions and backups.
+- CLI, agent protocol, and native macOS app support.
+- Unit, integration, isolated Rekordbox, fake-Navidrome, and manual phone
+  acceptance coverage.
 
-**Out of scope**
+### Out of scope
 
-- Bidirectional favourite synchronisation, and any write into Music.app.
-- Merging Apple and Navidrome favourites into one Rekordbox playlist.
-- Ratings, play counts, album and artist starring.
-- Changes to `internal/navidrome/favorites.go` — the Apple → Navidrome import
-  is finished and is not being revisited.
-- Changes to `playlists.Snapshot` / `Track` shape or checksum inputs.
-- Automatic star refresh during sync.
+- Automatic or scheduled synchronization.
+- Simultaneous three-way merging or conflict resolution.
+- Fuzzy metadata matching, downloading missing tracks, or importing files into
+  either library.
+- Syncing stars, ratings, play counts, cue points, comments, colors, or other
+  playlist metadata.
+- Deleting paired playlists or allowing an empty source to clear a destination.
+- Writing UDL-managed Navidrome smart playlists.
+- Changes to Music.app or Apple Music playlists.
 
 ## Exit Criteria
 
-This plan is done when:
+The initiative is delivered when:
 
-- a track starred in Amperfy appears in `udl navidrome favorites list`, becomes
-  a `navidrome-favorites` snapshot after an explicit refresh, and reaches
-  Rekordbox through `rekordbox playlist-sync` against its own target;
-- repeated refreshes with no server-side change produce no snapshot churn;
-- the Apple Music `favorites` definition and its `fav_imports` target are
-  byte-for-byte unaffected;
-- a failing playlist operation in the native app shows the backend's own
-  message, and a revoked Automation permission is identifiable from the UI
-  without reading logs;
-- an Automation grant survives an app rebuild;
-- the carried-forward Phase 7 and 8 items from the predecessor tracker are
-  either closed or explicitly re-deferred with a reason; and
-- [IMPLEMENTATION.md](./IMPLEMENTATION.md) holds the validation evidence and
-  every deviation from this plan.
+- a Rekordbox `favs_august` playlist can create or adopt the paired Navidrome
+  playlist with identical ordered real paths;
+- a phone-side add, removal, and reorder can be planned and reproduced exactly
+  in Rekordbox;
+- re-planning either direction after parity produces a no-op;
+- empty, missing, ambiguous, duplicate, stale, unowned, and smart-playlist cases
+  refuse before writing;
+- every write has a verified backup and exact post-apply readback;
+- interruption or uncertain network delivery cannot advance pair state or hide
+  a potentially changed destination;
+- CLI JSON/human output, agent RPC, and the native app describe the same plan
+  and outcome; and
+- the validation commands and manual round trip are recorded in
+  [IMPLEMENTATION.md](./IMPLEMENTATION.md).
 
-## Risks
+## Risks and Mitigations
 
-- **The Automation hypothesis may be wrong.** Mitigated by ordering: error
-  surfacing lands first and is independently valuable. If the real cause turns
-  out to be different, the signing change is still correct hygiene, and the
-  tracker records the actual cause.
-- **`getStarred2` has no defined ordering.** An unstable order would produce a
-  new checksum on every refresh and endless phantom Rekordbox diffs. Mitigated
-  by sorting on a stable key before building the snapshot.
-- **Verification needs real hardware.** The end-to-end path needs the iPhone,
-  Amperfy, a running server, and a closed Rekordbox. Unit tests cover the
-  logic; the round trip is a manual gate and is tracked as one.
+- **Real-path reporting is disabled or drifts.** Refuse all fuzzy matching and
+  point to the managed Navidrome `DefaultReportRealPath` setting.
+- **A provider changes after planning.** Ordered source/destination and matched
+  path preconditions force regeneration before any write.
+- **Navidrome creation succeeds but the response is lost.** Do not blindly
+  retry; reconcile unique exact-name membership and return partial status when
+  uncertain.
+- **A new field invalidates old Rekordbox plans.** Use a separate mirror plan
+  type/version and leave the existing `playlistsync.Plan` checksum contract
+  untouched.
+- **A local binding write fails after the destination succeeds.** Report partial
+  success, preserve the verified external result, and make the next plan
+  rebuild the binding safely.
 
 ## Deferred
 
-- Bidirectional Apple Music ↔ Navidrome favourite synchronisation.
-- Writing anything back into Music.app.
-- Unioning Apple and Navidrome favourites into a single Rekordbox playlist.
-- Importing ratings, play counts, or cloud-only tracks.
-- Album and artist starring.
-- Internet exposure, reverse proxies, HTTPS, and Tailscale.
+- Automatic three-way sync using a last-successful baseline.
+- Background/scheduled runs and phone push notifications.
+- Per-track conflict resolution or user-selected partial application.
+- Playlist folders and batch mirroring of multiple gig playlists.
+- Metadata and Rekordbox DJ-data synchronization beyond playlist membership and
+  order.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -14,6 +15,9 @@ import (
 
 func newNavidromeAgentServer(t *testing.T) (*Server, string) {
 	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("Navidrome agent fixture saves macOS-only configuration")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, navidrome.ProjectConfigName)
 	cfg := navidrome.DefaultConfig()
@@ -220,6 +224,12 @@ func TestNavidromeConfigReadFallsBackToDefaultsWhenNoFileExists(t *testing.T) {
 
 	server.NavidromeConfigPath = ""
 	value, rpcErr := server.readNavidromeConfig()
+	if runtime.GOOS != "darwin" {
+		if rpcErr == nil || !strings.Contains(rpcErr.Error(), "configuration is invalid") {
+			t.Fatalf("unsupported-platform defaults must be refused: %v", rpcErr)
+		}
+		return
+	}
 	if rpcErr != nil {
 		t.Fatalf("discovery with no file must yield defaults: %v", rpcErr)
 	}

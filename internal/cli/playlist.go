@@ -22,6 +22,7 @@ func newPlaylistCommand(app *AppContext) *cobra.Command {
 	cmd.AddCommand(newPlaylistShowCommand(app))
 	cmd.AddCommand(newPlaylistRefreshCommand(app))
 	cmd.AddCommand(newPlaylistConfigCommand(app))
+	cmd.AddCommand(newPlaylistMirrorCommand(app))
 	return cmd
 }
 

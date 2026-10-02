@@ -26,6 +26,21 @@ var definitionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 type Config struct {
 	Version   int          `yaml:"version" json:"version"`
 	Playlists []Definition `yaml:"playlists" json:"playlists"`
+	SyncJobs  []SyncJob    `yaml:"sync_jobs,omitempty" json:"sync_jobs,omitempty"`
+}
+
+// SyncJob pairs one Rekordbox playlist with one Navidrome playlist. Either
+// provider may be the source of a run, so both names are required even when a
+// stable provider ID is configured.
+type SyncJob struct {
+	ID        string           `yaml:"id" json:"id"`
+	Rekordbox PlaylistSelector `yaml:"rekordbox" json:"rekordbox"`
+	Navidrome PlaylistSelector `yaml:"navidrome" json:"navidrome"`
+}
+
+type PlaylistSelector struct {
+	Playlist   string `yaml:"playlist" json:"playlist"`
+	PlaylistID string `yaml:"playlist_id,omitempty" json:"playlist_id,omitempty"`
 }
 
 type Definition struct {
@@ -103,6 +118,30 @@ func Validate(cfg Config) error {
 			problems = append(problems, fmt.Sprintf("playlist %q must set provider_playlist or provider_playlist_id", playlist.ID))
 		}
 	}
+	syncJobIDs := map[string]string{}
+	for index, job := range cfg.SyncJobs {
+		field := fmt.Sprintf("sync_jobs[%d]", index)
+		if job.ID == "" {
+			problems = append(problems, field+".id must not be empty")
+		} else if !definitionIDPattern.MatchString(job.ID) {
+			problems = append(problems, field+".id has invalid format")
+		} else {
+			// State is commonly stored on a case-insensitive filesystem. Reject
+			// case-only collisions so two jobs can never address the same file.
+			key := strings.ToLower(job.ID)
+			if previous, exists := syncJobIDs[key]; exists {
+				problems = append(problems, fmt.Sprintf("%s.id %q collides with sync job %q", field, job.ID, previous))
+			} else {
+				syncJobIDs[key] = job.ID
+			}
+		}
+		if job.Rekordbox.Playlist == "" {
+			problems = append(problems, field+".rekordbox.playlist must not be empty")
+		}
+		if job.Navidrome.Playlist == "" {
+			problems = append(problems, field+".navidrome.playlist must not be empty")
+		}
+	}
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
 	}
@@ -128,6 +167,21 @@ func (c Config) Definition(id string) (Definition, bool) {
 		}
 	}
 	return Definition{}, false
+}
+
+func (c Config) SyncJob(id string) (SyncJob, bool) {
+	for _, job := range c.SyncJobs {
+		if job.ID == id {
+			return job, true
+		}
+	}
+	return SyncJob{}, false
+}
+
+// ValidID reports whether an ID is safe to use as a configuration identifier
+// and as one component of a state-file path.
+func ValidID(id string) bool {
+	return definitionIDPattern.MatchString(strings.TrimSpace(id))
 }
 
 func UserConfigPath() (string, error) {
@@ -215,6 +269,9 @@ func mergeFile(cfg *Config, path string, required bool) error {
 	if file.Playlists != nil {
 		cfg.Playlists = append([]Definition(nil), file.Playlists...)
 	}
+	if file.SyncJobs != nil {
+		cfg.SyncJobs = append([]SyncJob(nil), file.SyncJobs...)
+	}
 	return nil
 }
 
@@ -231,6 +288,14 @@ func normalizeConfig(cfg *Config) {
 		item.ProviderPlaylistID = strings.TrimSpace(item.ProviderPlaylistID)
 		item.DefaultFreeDLJob = strings.TrimSpace(item.DefaultFreeDLJob)
 		item.DefaultRekordboxTarget = strings.TrimSpace(item.DefaultRekordboxTarget)
+	}
+	for idx := range cfg.SyncJobs {
+		job := &cfg.SyncJobs[idx]
+		job.ID = strings.TrimSpace(job.ID)
+		job.Rekordbox.Playlist = strings.TrimSpace(job.Rekordbox.Playlist)
+		job.Rekordbox.PlaylistID = strings.TrimSpace(job.Rekordbox.PlaylistID)
+		job.Navidrome.Playlist = strings.TrimSpace(job.Navidrome.Playlist)
+		job.Navidrome.PlaylistID = strings.TrimSpace(job.Navidrome.PlaylistID)
 	}
 }
 

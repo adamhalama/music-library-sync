@@ -1,0 +1,10 @@
+version: 1
+playlists: []
+sync_jobs:
+  - id: favs-august
+    rekordbox:
+      playlist: favs_august
+      playlist_id: rb-favs-august
+    navidrome:
+      playlist: favs_august
+      playlist_id: nd-favs-august
