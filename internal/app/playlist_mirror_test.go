@@ -322,3 +322,48 @@ func TestPlaylistMirrorStateFailureFollowsVerifiedWriteAndKeepsBackup(t *testing
 		t.Fatalf("partial result = %#v replace=%d", result, nd.replaceCalls)
 	}
 }
+
+func TestPlaylistMirrorPlanIgnoresUnrelatedNonFileRekordboxRows(t *testing.T) {
+	for _, direction := range []playlists.SyncDirection{playlists.DirectionRekordboxToNavidrome, playlists.DirectionNavidromeToRekordbox} {
+		t.Run(string(direction), func(t *testing.T) {
+			main, cfg, rb, nd := mirrorFixture(t)
+			rb.inspect.Contents = append(rb.inspect.Contents,
+				bridge.Content{ID: "streaming", Title: "Streaming"},
+				bridge.Content{ID: "relative", FolderPath: "Music/unrelated.mp3"},
+				bridge.Content{ID: "service", FolderPath: "beatport://track/123"},
+			)
+			useCase := PlaylistMirrorUseCase{Bridge: rb, Navidrome: nd, CheckClosed: func(context.Context, string) error { return nil }}
+			result, err := useCase.Plan(context.Background(), PlaylistMirrorPlanRequest{
+				Config: main, PlaylistConfig: cfg, JobID: "favs", Direction: direction,
+				RekordboxDBDir: "/rb", NavidromeUser: "dj",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Plan.Summary.Blocked != 0 || result.Plan.Summary.WillAdd != 1 || result.Plan.Summary.WillRemove != 1 {
+				t.Fatalf("unrelated non-file row changed valid playlist planning: %#v", result.Plan)
+			}
+		})
+	}
+}
+
+func TestPlaylistMirrorPlanBlocksSelectedNonFileRekordboxSourceRow(t *testing.T) {
+	for _, path := range []string{"", "Music/unrelated.mp3", "beatport://track/123"} {
+		t.Run(path, func(t *testing.T) {
+			main, cfg, rb, nd := mirrorFixture(t)
+			rb.inspect.Contents = append(rb.inspect.Contents, bridge.Content{ID: "nonfile", Title: "Non-file", FolderPath: path})
+			rb.inspect.Playlists[0].ContentIDs = []string{"c1", "nonfile"}
+			useCase := PlaylistMirrorUseCase{Bridge: rb, Navidrome: nd, CheckClosed: func(context.Context, string) error { return nil }}
+			result, err := useCase.Plan(context.Background(), PlaylistMirrorPlanRequest{
+				Config: main, PlaylistConfig: cfg, JobID: "favs", Direction: playlists.DirectionRekordboxToNavidrome,
+				RekordboxDBDir: "/rb", NavidromeUser: "dj",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Plan.Summary.Blocked != 1 || len(result.Plan.Rows) < 2 || result.Plan.Rows[1].SourceProviderID != "nonfile" || result.Plan.Rows[1].Blocker != "source track does not expose a real path" {
+				t.Fatalf("selected invalid source was not blocked per row: %#v", result.Plan)
+			}
+		})
+	}
+}
