@@ -80,3 +80,6 @@ We are building this together. When you learn something non-obvious, add it here
 - Hypeddit Spotify callbacks can succeed in a reused background tab without an opener: their normal same-origin localStorage signal advances the gate. Verify the callback's success text and the resulting gate slide, and confirm `lifetime_fan_sp == 0` before Connect to preserve the future-song opt-out.
 
 - Navidrome real-server acceptance fixtures that call Darwin-only APFS creation-time helpers must also carry a Darwin build tag. A runtime opt-in skip cannot prevent undefined-helper compilation failures on Linux.
+
+- Checksummed playlist mirror timestamps must stay raw strings in Swift; decoding Go RFC3339Nano into Date loses fractional precision on RPC apply. The Darwin Go regression compiles the real Swift RPC models and verifies the returned Go checksum.
+- Navidrome configuration validates as macOS-only; successful config/setup test fixtures must skip unsupported platforms while portable validation tests explicitly assert rejection without writing files.
