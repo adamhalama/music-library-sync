@@ -2,21 +2,24 @@
 """Minimal NDJSON driver for `udl agent`, used to run the Free DL workflow headlessly."""
 import json, os, subprocess, sys, threading, queue
 
-REPO = "/Users/jaa/dev/utils/update-downloads"
-SCRATCH = os.path.expanduser("~/dev/music-down/statefiles/freedl/upgrade-09-12")
+from pathlib import Path
+from context import read_connection
 
 
 class Agent:
-    def __init__(self, extra_args=None):
-        args = [f"{REPO}/bin/udl",
-                "-c", f"{SCRATCH}/config.yaml",
-                "--freedl-config", f"{SCRATCH}/freedl.yaml",
-                "agent", "--working-dir", SCRATCH]
+    def __init__(self, options, extra_args=None):
+        self.options = options
+        self.connection = read_connection(options)
+        working, binary = self.connection['working_dir'], self.connection['udl']
+        args = [str(binary), '-c', str(self.connection['config'])]
+        if self.connection['freedl_config']:
+            args += ['--freedl-config', str(self.connection['freedl_config'])]
+        args += ['agent', '--working-dir', str(working)]
         env = dict(os.environ)
-        env.setdefault("UDL_FREEDL_BROWSER_IDLE_TIMEOUT", "300s")
+        env.setdefault('UDL_FREEDL_BROWSER_IDLE_TIMEOUT', '300s')
         env.update(extra_args or {})
-        self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=open(f"{SCRATCH}/logs/agent.stderr.log", "ab"),
+        # Inherit stderr instead of creating a log in an assumed scratch root.
+        self.p = subprocess.Popen(args, cwd=working, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   text=True, bufsize=1, env=env)
         self.q = queue.Queue()
         self._id = 0
@@ -26,7 +29,10 @@ class Agent:
         for line in self.p.stdout:
             line = line.strip()
             if line:
-                self.q.put(json.loads(line))
+                try:
+                    self.q.put(json.loads(line))
+                except json.JSONDecodeError:
+                    self.q.put({'error': {'message': 'Backend emitted an invalid JSON frame'}})
         self.q.put(None)
 
     def send(self, method, params=None):
@@ -49,6 +55,8 @@ class Agent:
             frame = self.q.get()
             if frame is None:
                 raise RuntimeError("agent closed the connection")
+            if 'error' in frame and 'id' not in frame:
+                raise RuntimeError(frame['error']['message'])
             if frame.get("id") == want and ("result" in frame or "error" in frame):
                 if "error" in frame:
                     raise RuntimeError(f"{method} failed: {frame['error']}")
@@ -62,13 +70,38 @@ class Agent:
             frame = self.q.get()
             if frame is None:
                 raise RuntimeError("agent closed the connection")
+            if 'error' in frame and 'id' not in frame:
+                raise RuntimeError(frame['error']['message'])
             out = on_frame(frame)
             if out is not None:
                 return out
 
     def close(self):
+        if self.p.poll() is None:
+            self.p.terminate()
+            try:
+                self.p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.p.kill()
+                self.p.wait(timeout=5)
+        self.p.stdin.close()
+        self.p.stdout.close()
+
+    def __enter__(self):
         try:
-            self.call("session.shutdown", {})
-        except Exception:
-            pass
-        self.p.terminate()
+            self.call('session.initialize', {'protocol_version': 2})
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def __exit__(self, *args):
+        self.close()
+
+    def save_context(self, run_dir):
+        from context import Context
+        from preserve import write_evidence
+        ctx = Context.from_plan(run_dir/'capture-plan.json')
+        write_evidence(run_dir/'maintenance-context.json',
+                       {'job_id': ctx.job_id, **{k: str(v) if v else None for k, v in self.connection.items()
+                                               if k != 'udl' or self.options.udl is not None}})

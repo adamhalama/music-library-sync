@@ -1,43 +1,48 @@
 #!/usr/bin/env python3
-"""Run freedl.capture.start for selected rows of a saved capture plan."""
-import json, sys, os
-sys.path.insert(0, "/Users/jaa/dev/utils/update-downloads/.dev/freedl-0912")
-from agent import Agent, SCRATCH
+"""Capture selected remote IDs from a saved Free DL plan (opens authorized gates)."""
+import argparse
+import json
+import sys
+from agent import Agent
+from context import add_context, resolve_context
 
-plan_path = sys.argv[1]
-ids = sys.argv[2:]
-plan = json.load(open(plan_path))
-if ids:
-    keep = set(ids)
-    for r in plan["rows"]:
-        r["selected"] = r["remote_id"] in keep and r.get("selectable", False)
-sel = [r for r in plan["rows"] if r.get("selected")]
-print(f"capturing {len(sel)} row(s):", file=sys.stderr)
-for r in sel:
-    print(f"  {r['index']:>3} {r['title']}  -> {r['free_dl_probe'].get('purchase_url')}", file=sys.stderr)
-if not sel:
-    sys.exit("nothing selected")
 
-a = Agent()
-a.call("session.initialize", {"protocol_version": 2})
-res = a.call("freedl.capture.start", {"plan": plan, "selected_remote_ids": [r["remote_id"] for r in sel]})
-run = res["run_id"]
-print(f"capture run {run}", file=sys.stderr)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_context(parser, require_plan=True)
+    parser.add_argument('--remote-id', action='append', help='Select an exact remote ID; repeat for multiple rows')
+    args = parser.parse_args()
+    ctx = resolve_context(args)
+    plan = ctx.plan
+    known = {r['remote_id'] for r in plan['rows'] or [] if r.get('selectable')}
+    if args.remote_id:
+        unknown = set(args.remote_id)-known
+        if unknown:
+            raise ValueError(f'Unknown/unselectable remote IDs: {sorted(unknown)}')
+        for row in plan['rows']:
+            row['selected'] = row['remote_id'] in args.remote_id and row.get('selectable', False)
+    selected = [r['remote_id'] for r in plan['rows'] or [] if r.get('selected') and r.get('selectable')]
+    if not selected:
+        raise ValueError('Nothing selected')
+    with Agent(args) as agent:
+        resolve_context(args, agent)  # Fail on configuration drift before capture.
+        run = agent.call('freedl.capture.start', {'plan': plan, 'selected_remote_ids': selected})['run_id']
+        def event(frame):
+            method = frame.get('method', '')
+            if method == 'run.finished' and frame['params']['run_id'] == run:
+                return frame['params']
+            if method in ('sync.event', 'sync.progress'):
+                p = frame.get('params') or {}
+                message = (p.get('event') or p).get('message')
+                if message:
+                    print(message, file=sys.stderr)
+            elif method.startswith('ui.'):
+                raise RuntimeError(f'Backend requested {method}; use the native app for interactive capture')
+        finish = agent.pump(event)
+        print(json.dumps(finish, indent=2))
+        if finish.get('exit_code', 0) or finish.get('error'):
+            raise RuntimeError(f'Capture failed: {finish.get("error") or finish.get("exit_code")}')
 
-def on_frame(frame):
-    m = frame.get("method")
-    if m == "run.finished":
-        return frame["params"]
-    if m in ("sync.event", "sync.progress"):
-        p = frame.get("params", {})
-        ev = p.get("event", p)
-        msg = ev.get("message")
-        if msg:
-            print(f"  {msg}", flush=True)
-    elif m and m.startswith("ui."):
-        a.reply(frame["id"], {"confirmed": True})
-    return None
 
-fin = a.pump(on_frame)
-print("\nFINISHED:", json.dumps(fin, indent=2)[:4000])
-a.close()
+if __name__ == '__main__':
+    main()

@@ -2,20 +2,14 @@
 """Repair batch metadata or install an original MP3 without lossy transcoding.
 
 Mutagen is a local maintenance dependency, not a udl runtime dependency.
-All writes are scoped to the September 12 isolated batch. Encoded audio and
+All writes are scoped to the saved Free DL job. Encoded audio and
 artwork hashes plus full decode are checked before atomic replacement.
 """
 import argparse, ctypes, json, os, shutil, sys, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from audit import LIB, SCRATCH, probe, run, stream_hash
-
-
-def scoped(path, root):
-    path = path.resolve()
-    if not path.is_relative_to(root.resolve()):
-        raise ValueError(f'Outside isolated batch: {path}')
-    return path
+from audit import probe, run, stream_hash
+from context import add_context, resolve_context, scoped
 
 
 def restore_birthtime(path, timestamp):
@@ -37,11 +31,12 @@ def preserve(source_tags, destination):
     if source_tags.suffix.lower() == destination.suffix.lower() == '.m4a':
         # ffmpeg and ExifTool silently drop unknown iTunes freeform fields.
         # Mutagen preserves the full MP4 ilst including WWWAUDIOFILE and purl.
-        sys.path.insert(0, str(SCRATCH/'pythonlib'))
         from mutagen.mp4 import MP4
         original, output = MP4(source_tags), MP4(destination)
         output.tags = original.tags
         output.save()
+        if MP4(destination).tags != original.tags:
+            raise ValueError('Complete MP4 metadata verification failed')
         return
     # ffmpeg already maps standard tags and arbitrary TXXX fields into ID3.
     # Validation below refuses replacement if any source field is missing.
@@ -95,35 +90,76 @@ def install_verified(stage, target, output, backup, birthtime, evidence, result)
         raise
     # Keep prepared record: preservation-result.json is the commit marker.
 
+def verify_identity(ctx, args, target):
+    if args.action == 'restore-tags':
+        backup = scoped(args.backup, ctx.backups)
+        pairs = [(r.get('library_path'), r.get('backup_path')) for r in ctx.plan.get('rows') or []
+                 if r.get('selected') and r.get('backup_path')]
+        ledger = ctx.logs/ctx.plan['run_id']/'promotion-result.json'
+        if ledger.exists():
+            pairs += [(r.get('library_path'), r.get('backup_path')) for r in json.loads(ledger.read_text()).get('rows') or []
+                      if r.get('status') == 'replaced']
+        if not any(scoped(local, ctx.library) == target and scoped(original, ctx.backups) == backup
+                   for local, original in pairs if local and original):
+            raise ValueError('Backup/target pair is absent from this run promotion plan or successful result')
+        if not backup.is_file():
+            raise FileNotFoundError(backup)
+    else:
+        from intake import verify_row, parse_state, sha256
+        row, local = verify_row(ctx.plan, args.remote_id)
+        if local != target or target.suffix.lower() != '.m4a':
+            raise ValueError('MP3 migration target must be the exact planned AAC track')
+        source = scoped(args.source, ctx.buffer/ctx.plan['run_id']/'downloads')
+        _, entries, _ = parse_state(ctx.logs/ctx.plan['run_id']/'capture.sync.scdl')
+        name = entries.get(args.remote_id)
+        if not name or scoped(source.parent/name, source.parent) != source:
+            raise ValueError('Source does not match the exact remote ID in native capture state')
+        evidence = ctx.logs/ctx.plan['run_id']/'manual-capture-evidence.json'
+        if evidence.exists():
+            records = [r for r in json.loads(evidence.read_text()).get('tracks', []) if r.get('remote_id') == args.remote_id]
+            if len(records) != 1 or records[0].get('sha256') != sha256(source):
+                raise ValueError('Captured original differs from its provenance evidence')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    add_context(parser, require_plan=True)
     sub = parser.add_subparsers(dest='action', required=True)
     restore = sub.add_parser('restore-tags')
     restore.add_argument('backup', type=Path)
     restore.add_argument('target', type=Path)
+    restore.add_argument('--apply', action='store_true', help='Install verified metadata restoration')
     install = sub.add_parser('install-mp3')
     install.add_argument('source', type=Path)
     install.add_argument('target', type=Path, help='Existing AAC file; becomes .mp3 explicitly')
+    install.add_argument('--remote-id', required=True, help='Exact captured remote ID from the saved plan/state')
+    install.add_argument('--apply', action='store_true', help='Install verified MP3 and remove old AAC')
     args = parser.parse_args()
-    target = scoped(args.target, LIB)
+    ctx = resolve_context(args)
+    target = scoped(args.target, ctx.library)
+    verify_identity(ctx, args, target)
+    if not args.apply:
+        print(json.dumps({'action': args.action, 'apply': False, 'job_id': ctx.job_id,
+                          'target': str(target), 'source': str(args.backup if args.action == 'restore-tags' else args.source)}, indent=2))
+        return
     birthtime = target.stat().st_birthtime if sys.platform == "darwin" else None
     before = probe(target)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
-    evidence = SCRATCH / 'logs' / (stamp+'-'+args.action)
+    evidence = ctx.logs / (stamp+'-'+args.action)
     evidence.mkdir(parents=True)
-    fd, name = tempfile.mkstemp(prefix='.quality-', suffix='.mp3' if args.action == 'install-mp3' else target.suffix, dir=LIB)
+    fd, name = tempfile.mkstemp(prefix='.quality-', suffix='.mp3' if args.action == 'install-mp3' else target.suffix, dir=target.parent)
     os.close(fd)
     stage = Path(name)
     try:
         if args.action == 'restore-tags':
-            tags = scoped(args.backup, SCRATCH/'backups')
+            tags = scoped(args.backup, ctx.backups)
             if sys.platform == 'darwin':
                 birthtime = tags.stat().st_birthtime
             shutil.copy2(target, stage)
             expected_audio = stream_hash(target)
             output = target
         else:
-            source = scoped(args.source, SCRATCH)
+            source = scoped(args.source, ctx.buffer/ctx.plan['run_id']/'downloads')
             source_probe = probe(source, True)
             if source_probe['codec'] != 'mp3' or not source_probe['decode_ok']:
                 raise ValueError('Source must be a decodable original MP3')
@@ -145,7 +181,7 @@ def main():
             raise ValueError(f'Metadata differs: {missing}')
         if stream_hash(stage) != expected_audio or after['artwork'] != expected_tags['artwork'] or not after['decode_ok']:
             raise ValueError('Audio/artwork/decode verification failed')
-        backup_dir = SCRATCH/'backups'/(stamp+'-'+args.action)
+        backup_dir = ctx.backups/(stamp+'-'+args.action)
         backup_dir.mkdir(parents=True)
         backup = backup_dir/target.name
         shutil.copy2(target, backup)
@@ -154,7 +190,7 @@ def main():
         if birthtime is not None:
             restore_birthtime(stage, birthtime)
             restore_birthtime(backup, birthtime)
-        result = {'action':args.action,'before':before,'after':after,'backup':str(backup),
+        result = {'job_id':ctx.job_id,'capture_run_id':ctx.plan['run_id'],'action':args.action,'before':before,'after':after,'backup':str(backup),
                   'encoded_audio_sha256':expected_audio,'tags_verified':True,'artwork_verified':True}
         if args.action == 'install-mp3':
             result['source'] = source_probe

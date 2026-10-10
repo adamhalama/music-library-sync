@@ -41,7 +41,7 @@ integration and is not part of this audit.
 | Unified sync execution | Lossless lifecycle/terminal events, latest-only progress, cancellation/late-ack handling, ordered source execution and cached Spotify state persistence | Integration review; archived queue tracker is code complete |
 | Navidrome/Amperfy phone library | Setup/service controls, date reconciliation, genre allowlist, generated smart playlists, phone connection tracking, favourites and snapshot handoff | External phone/network acceptance retained in archived evidence; this is not the proposed genre-classification workflow |
 | Directional Rekordbox/Navidrome playlist mirror | Separate checksummed plans; exact real-path matching; provider IDs in state; both directions; owned-playlist replacement; backups; drift checks; parity verification; CLI, agent, native workspace and basic name/ID pair editor | Active tracker remains in progress: provider-picker enrichment and editor validation, lifecycle/view matrices, combined CLI acceptance, isolated destructive restore, real phone edit round trip and manual GUI close-out |
-| SoundCloud Free DL upgrades | Registered plan adapter actually executes; artwork input ordering fixed; supported-gate filtering; isolated batch reports 15/15 supported upgrades and 46/46 audio decodes; reusable gate script and provider helpers | Batch wrappers need explicit parameters for another job/library; preservation repair remains a Python maintenance step; new batches still need capture, provenance, preview and quality validation |
+| SoundCloud Free DL upgrades | Registered plan adapter actually executes; artwork input ordering fixed; supported-gate filtering; isolated batch reports 15/15 supported upgrades and 46/46 audio decodes; reusable gate script and provider helpers | General maintenance commands now derive scope/identity from saved plans and configured jobs; preservation repair remains a Python maintenance step; new batches still need capture, provenance, preview and quality validation |
 | Spotify/deemix | Per-track Spotify ISRC enrichment and cache priming prevent false unavailability or incorrect audio; API/public-page fallback limitations documented | Dependency/API availability remains external; integration review |
 | Interactive TUI sync | Scan-gaps and ask-on-existing options carried through interactive workflow | CLI UX integration review |
 | Curated genre workflow / broader music loop | A proposal and historical plan archival only, saved by #26 | Taxonomy decisions, suggestions/review queue, file-tag write/backfill, scheduling, Rekordbox analysis gate and export evaluation are not implemented |
@@ -69,10 +69,18 @@ or private recovery state.
 
 Reusable application fixes live in the Go engine/adapters. The gate userscript
 and URL/tab-parameterized browser helpers can be used on other tracks. The
-Python plan/capture/promotion/intake/audit/preservation wrappers retain fixed
-September 12 job, checkout, library and scratch roots. Generalizing them is a
-separate implementation task that must retain their containment, identity,
-backup, transactional replacement and metadata/decode checks.
+Python maintenance commands now use [`.dev/freedl.py`](../.dev/freedl.py) and
+[the general workflow](freedl-maintenance.md). Saved native plan metadata supplies
+the exact job/library/buffer/backup/log scope and identities; connection context
+retains initial config choices. Containment, backups, transactional restoration,
+encoded-audio/artwork/decode checks and complete MP4 tag preservation remain.
+The wrapper applies metadata restoration after native promotion, but other
+native/app routes do not automatically invoke this Python maintenance layer.
+New validation covers two independent jobs through the real Go backend using
+synthetic media, plus traversal/conflicting-context/nested-path/migration cases.
+All 13 actual legacy plans passed read-only context validation, and legacy status
+still reports 15 upgraded, 0 pending and 31 unavailable tracks. No real-library
+mutation or browser action ran. Linux and macOS CI now run the maintenance tests.
 
 ## CI failures and fresh validation
 

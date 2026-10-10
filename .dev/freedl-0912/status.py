@@ -1,73 +1,76 @@
 #!/usr/bin/env python3
-"""Report which batch tracks are upgraded, pending a gate click, or not upgradable."""
-import json, os, glob, subprocess
+"""Report job-wide upgrades and pending captures from all saved plans and ledgers."""
+import argparse
+import json
+from audit import ledger_files, promotion_ledger, track_key
+from context import add_context, resolve_context, scoped
+from intake import parse_state
 
-SCRATCH = os.path.expanduser("~/dev/music-down/statefiles/freedl/upgrade-09-12")
-LIB = os.path.expanduser("~/Music/downloaded/sc-likes-today-09-12")
 
-plans = sorted(glob.glob(f"{SCRATCH}/logs/*/capture-plan.json"))
-plan = json.load(open(plans[-1]))
-# The likes window includes two tracks absent from this batch. Scope by actual
-# local paths, not enumeration index, so the report describes the 46 files.
-# Explicit original-format migrations retain identity by their logged old path.
-for evidence in sorted(glob.glob(f"{SCRATCH}/logs/*/preservation-result.json")):
-    migration = json.load(open(evidence))
-    if migration.get("action") == "install-mp3":
-        for row in plan["rows"]:
-            if row.get("local_path") == migration["before"]["path"]:
-                row["local_path"] = migration["after"]["path"]
-rows = [r for r in plan["rows"]
-        if r.get("local_path") and os.path.isfile(r["local_path"])
-        and os.path.dirname(os.path.realpath(r["local_path"])) == os.path.realpath(LIB)]
+def report(ctx):
+    migrations = {}
+    for log in ledger_files(ctx.logs, 'preservation-result.json'):
+        record = json.loads(log.read_text())
+        if record.get('action') == 'install-mp3':
+            old = scoped(record['before']['path'], ctx.library)
+            new = scoped(record['after']['path'], ctx.library)
+            if old in migrations and migrations[old] != new:
+                raise ValueError(f'Conflicting migration identity for {old}')
+            migrations[old] = new
+    def current_path(value):
+        path = scoped(value, ctx.library)
+        seen = set()
+        while path in migrations:
+            if path in seen:
+                raise ValueError('Cyclic migration identity in preservation evidence')
+            seen.add(path)
+            path = migrations[path]
+        return str(path)
+    definitions = {}
+    for plan in ctx.plans():
+        for saved in plan.get('rows') or []:
+            row = dict(saved)
+            remote = row.get('remote_id')
+            if row.get('local_path'):
+                row['local_path'] = current_path(row['local_path'])
+            previous = definitions.get(remote)
+            if previous and previous.get('local_path'):
+                if row.get('local_path') and previous['local_path'] != row['local_path']:
+                    raise ValueError(f'Conflicting local identity for remote ID {remote}')
+                if not row.get('local_path'):
+                    row['local_path'] = previous['local_path']
+            definitions[remote] = row
+    captured = set()
+    for path in ledger_files(ctx.logs, 'capture.sync.scdl'):
+        _, entries, _ = parse_state(path)
+        for remote, name in entries.items():
+            staged = scoped(ctx.buffer/path.parent.name/'downloads'/name, ctx.buffer)
+            if staged.is_file():
+                captured.add(remote)
+    promoted = promotion_ledger(ctx=ctx)
+    groups = {'upgraded': [], 'pending': [], 'unavailable': []}
+    for remote, row in definitions.items():
+        local = row.get('local_path')
+        if not local or not scoped(local, ctx.library).is_file():
+            continue
+        if track_key(local, ctx) in promoted:
+            group = 'upgraded'
+        elif (row.get('free_dl_probe') or {}).get('status') == 'available':
+            group = 'pending'
+        else:
+            group = 'unavailable'
+        row['captured'] = remote in captured
+        groups[group].append(row)
+    return {'job_id': ctx.job_id, 'library': str(ctx.library),
+            'counts': {k: len(v) for k, v in groups.items()}, **groups}
 
-captured = {}   # remote_id -> downloaded filename
-for state in sorted(glob.glob(f"{SCRATCH}/logs/*/capture.sync.scdl")):
-    for line in open(state):
-        parts = line.strip().split(None, 2)
-        if len(parts) == 3:
-            captured[parts[1]] = parts[2]
 
-promoted = set()
-for res in sorted(glob.glob(f"{SCRATCH}/logs/*/promotion-result.json")):
-    for r in json.load(open(res))["rows"]:
-        if r["status"] == "replaced":
-            promoted.add(os.path.basename(r["library_path"]))
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_context(parser, require_plan=True)
+    args = parser.parse_args()
+    print(json.dumps(report(resolve_context(args)), indent=2))
 
-for evidence in sorted(glob.glob(f"{SCRATCH}/logs/*/preservation-result.json")):
-    migration = json.load(open(evidence))
-    if migration.get("action") == "install-mp3":
-        promoted.add(os.path.basename(migration["after"]["path"]))
 
-def kbps(path):
-    try:
-        out = subprocess.run(["ffprobe","-hide_banner","-loglevel","error",
-                              "-select_streams","a:0","-show_entries","stream=bit_rate","-of","csv=p=0",path],
-                             capture_output=True, text=True, timeout=10).stdout.strip()
-        return int(out)//1000 if out.isdigit() else 0
-    except Exception:
-        return 0
-
-up, pend, no = [], [], []
-for r in rows:
-    lp = r.get("local_path") or ""
-    name = os.path.basename(lp) if lp else None
-    if name and name in promoted:
-        up.append((r, kbps(lp)))
-    elif r["free_dl_probe"]["status"] == "available":
-        pend.append(r)
-    else:
-        no.append(r)
-
-print(f"UPGRADED ({len(up)})")
-for r, k in up:
-    print(f"  {r['index']:>3}  {k:>4} kbps  {r['title']}")
-print(f"\nPENDING A GATE CLICK ({len(pend)})")
-for r in pend:
-    got = " [captured, not yet promoted]" if r["remote_id"] in captured else ""
-    print(f"  {r['index']:>3}  {r['free_dl_probe']['host']:<16} {r['title']}{got}")
-    print(f"       {r['free_dl_probe']['purchase_url']}")
-print(f"\nNOT UPGRADABLE ({len(no)})")
-from collections import Counter
-c = Counter((r["free_dl_probe"]["status"], r["free_dl_probe"].get("host","")) for r in no)
-for (st, host), n in sorted(c.items(), key=lambda x: -x[1]):
-    print(f"  {n:>3}  {st:<17} {host}")
+if __name__ == '__main__':
+    main()

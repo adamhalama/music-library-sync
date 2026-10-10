@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""Verify a browser original in a fresh, single-track September 12 capture run.
+"""Verify a browser original in a fresh capture run using a saved plan's identity.
 
-Example:
-  python3 intake.py 20260912-205500-manual \
-    --remote-id 2352435620 \
-    --title 'Paolo Doldo x DJ HOTMAIL - Sonic Boom (FREE DOWNLOAD )' \
-    --gate-url http://gaterush.me/5Zaimw \
-    --source ~/Downloads/helium-downloads/PaoloDoldoxDJHOTMAIL-SonicBoom1.wav \
-    --expected-bytes 69699596
-
-The positional run is a read-only plan template. Every intake creates a new run;
-the remote ID/title/gate must agree with that plan. The media name is retained as
-evidence, never used to infer which library track it belongs to.
+Remote ID is required; title and gate URL default to the exact saved row.
 """
 import argparse
 from datetime import datetime, timezone
@@ -27,9 +17,8 @@ import tempfile
 from urllib.parse import urlsplit
 
 
-LIB = (Path.home() / 'Music/downloaded/sc-likes-today-09-12').resolve()
-SCRATCH = (Path.home() / 'dev/music-down/statefiles/freedl/upgrade-09-12').resolve()
-JOB_ID = 'upgrade-09-12'
+from context import add_context, resolve_context, scoped, safe_id
+
 MEDIA = {'.wav', '.flac', '.aiff', '.aif', '.mp3', '.m4a', '.opus'}
 
 
@@ -45,27 +34,26 @@ def gate_key(url):
             parts.query, parts.fragment)
 
 
-def verify_row(plan, remote_id, title, gate_url):
-    job = plan.get('job') or {}
-    if job.get('id') != JOB_ID or Path(job.get('library_dir', '')).expanduser().resolve() != LIB:
-        raise ValueError('Saved plan is not for the isolated September 12 library')
-    for field, expected in [('buffer_dir', SCRATCH/'buffer'),
-                            ('backup_dir', SCRATCH/'backups'), ('log_dir', SCRATCH/'logs')]:
-        if Path(job.get(field, '')).expanduser().resolve() != expected:
-            raise ValueError(f'Saved plan {field} is outside the isolated batch')
-    rows = [r for r in plan.get('rows', []) if str(r.get('remote_id')) == remote_id]
+def resolve_plan(plan):
+    from context import Context
+    return Context.from_job(plan.get('job') or {})
+
+
+def verify_row(plan, remote_id, title=None, gate_url=None):
+    ctx = resolve_plan(plan)
+    rows = [r for r in plan.get('rows') or [] if str(r.get('remote_id')) == remote_id]
     if len(rows) != 1:
         raise ValueError(f'Expected exactly one saved plan row for remote ID {remote_id}')
     row = rows[0]
-    if row.get('title') != title:
+    if title is not None and row.get('title') != title:
         raise ValueError(f'Title disagrees with saved plan: {row.get("title")!r}')
-    local = Path(row.get('local_path') or '').resolve()
-    if local.parent != LIB or not local.is_file():
-        raise ValueError(f'Planned track is absent or outside the 46-file batch: {local}')
+    local = scoped(row.get('local_path') or '', ctx.library)
+    if not local.is_file():
+        raise ValueError(f'Planned track is absent: {local}')
     probe = row.get('free_dl_probe') or {}
     if not row.get('selectable') or probe.get('status') != 'available':
         raise ValueError('Saved plan row is not an available Free DL candidate')
-    if gate_key(probe.get('purchase_url', '')) != gate_key(gate_url):
+    if gate_url is not None and gate_key(probe.get('purchase_url', '')) != gate_key(gate_url):
         raise ValueError('Gate URL disagrees with the saved plan')
     return row, local
 
@@ -163,30 +151,29 @@ def stage_copy(source, destination, expected_bytes, expected_sha256, local_durat
 
 
 def intake(args):
-    if not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z-]*', args.template_run):
-        raise ValueError('Invalid template run ID')
+    ctx = resolve_context(args)
+    plan = ctx.plan
     if not re.fullmatch(r'\d+', args.remote_id):
         raise ValueError('Remote ID must be numeric')
-    template_dir = (SCRATCH/'logs'/args.template_run).resolve()
-    if template_dir.parent != SCRATCH/'logs' or not template_dir.is_dir():
-        raise ValueError('Plan template is outside the isolated batch or does not exist')
-    plan = json.loads((template_dir/'capture-plan.json').read_text())
+    template_run = plan['run_id']
     row, local = verify_row(plan, args.remote_id, args.title, args.gate_url)
+    gate_url = (row.get('free_dl_probe') or {})['purchase_url']
     source = args.source.expanduser().resolve(strict=True)
     if not source.is_file() or source.suffix.lower() not in MEDIA or source.name.endswith('.crdownload'):
         raise ValueError('Source must be a completed supported audio file')
-    if inside(source, LIB) or inside(source, SCRATCH):
+    if any(inside(source, root) for root in (ctx.library, ctx.buffer, ctx.backups, ctx.logs)):
         raise ValueError('Browser original must be outside the library and scratch buffer')
     if any(char.isspace() and char not in ' ' for char in source.name):
         raise ValueError('Download name contains a tab or newline, which capture state cannot encode')
     run_id = args.run_id or datetime.now().strftime('%Y%m%d-%H%M%S-%f')+'-'+args.remote_id
-    if not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z-]*', run_id) or run_id == args.template_run:
+    safe_id(run_id)
+    if run_id == template_run:
         raise ValueError('New run ID is invalid or equals the plan template')
-    run_dir = SCRATCH/'logs'/run_id
-    downloads = SCRATCH/'buffer'/run_id/'downloads'
-    if run_dir.exists() or downloads.parent.exists() or (SCRATCH/'backups'/run_id).exists():
+    run_dir = scoped(ctx.logs/run_id, ctx.logs)
+    downloads = scoped(ctx.buffer/run_id/'downloads', ctx.buffer)
+    if run_dir.exists() or downloads.parent.exists() or scoped(ctx.backups/run_id, ctx.backups).exists():
         raise ValueError(f'Run {run_id} already exists; each intake needs a fresh run')
-    run_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True, exist_ok=False)
     downloads.mkdir(parents=True)
     plan['run_id'] = run_id
     plan['created_at'] = datetime.now(timezone.utc).isoformat()
@@ -196,6 +183,9 @@ def intake(args):
         if key in plan:
             plan[key] = str(value)
     atomic_text(run_dir/'capture-plan.json', json.dumps(plan, indent=2, ensure_ascii=False)+'\n')
+    connection = ctx.logs/template_run/'maintenance-context.json'
+    if connection.exists():
+        atomic_text(run_dir/connection.name, connection.read_text())
     # The native capture-state reader tokenizes whitespace; a browser filename
     # with repeated spaces would no longer resolve to the staged file.
     staged_name = f'{args.remote_id}{source.suffix.lower()}'
@@ -210,10 +200,10 @@ def intake(args):
         if staged_name in paths and paths[staged_name] != args.remote_id:
             raise ValueError('Download name already maps to another remote ID')
         evidence = json.loads(evidence_path.read_text()) if evidence_path.exists() else {
-            'run_id': run_id, 'plan_template_run_id': args.template_run,
+            'run_id': run_id, 'plan_template_run_id': template_run,
             'provenance': 'verified browser gate originals',
-            'verified': True, 'target_scope': str(LIB), 'tracks': []}
-        if evidence.get('run_id') != run_id or Path(evidence.get('target_scope', '')).resolve() != LIB:
+            'verified': True, 'target_scope': str(ctx.library), 'tracks': []}
+        if evidence.get('run_id') != run_id or Path(evidence.get('target_scope', '')).resolve() != ctx.library:
             raise ValueError('Existing evidence belongs to another run or library')
         previous = [r for r in evidence.get('tracks', []) if str(r.get('remote_id')) == args.remote_id]
         if len(previous) > 1:
@@ -223,7 +213,7 @@ def intake(args):
                                                   args.expected_sha256, local_quality['duration_seconds'])
         record = {
             'remote_id': args.remote_id, 'title': row['title'],
-            'remote_url': row.get('remote_url'), 'gate_url': args.gate_url,
+            'remote_url': row.get('remote_url'), 'gate_url': gate_url,
             'gate_final_url': args.final_url, 'source_file': str(source),
             'download_name': source.name, 'staged_name': staged_name,
             'staged_path': str(destination),
@@ -247,11 +237,11 @@ def intake(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('template_run', help='Saved run whose capture plan supplies identity and scope')
+    add_context(parser, require_plan=True)
     parser.add_argument('--run-id', help='New unique run ID; defaults to timestamp plus remote ID')
     parser.add_argument('--remote-id', required=True)
-    parser.add_argument('--title', required=True, help='Exact title from saved capture plan')
-    parser.add_argument('--gate-url', required=True, help='Gate URL from saved capture plan')
+    parser.add_argument('--title', help='Exact title from saved capture plan')
+    parser.add_argument('--gate-url', help='Gate URL from saved capture plan')
     parser.add_argument('--final-url', help='Verified browser download endpoint, if available')
     parser.add_argument('--source', required=True, type=Path, help='Completed browser download')
     parser.add_argument('--expected-bytes', type=int)

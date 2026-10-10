@@ -1,47 +1,36 @@
-# September 12 isolated Free DL batch
+# Free DL tooling and September 12 evidence
 
-These scripts only modify `~/Music/downloaded/sc-likes-today-09-12` and use
-`~/dev/music-down/statefiles/freedl/upgrade-09-12` for originals, backups and evidence.
+The reusable entrypoint is `python .dev/freedl.py`; see the
+[general maintenance guide](../../docs/freedl-maintenance.md) for setup, context,
+commands and validation. Planning, capture, intake, promotion, preservation,
+status and audit now derive job/library/buffer/backup/log roots from saved native
+plans and current configuration. The implementation remains here to preserve
+historical references. No mutation defaults to the September 12 library.
 
-## Reuse on another batch
+The original batch used `~/Music/downloaded/sc-likes-today-09-12` and
+`~/dev/music-down/statefiles/freedl/upgrade-09-12`. Code, regression tests and
+portable results are tracked in Git; original media, private browser evidence
+and rollback backups remain outside Git. All 13 existing saved plans pass the
+new context validation; read-only status still reports 15 upgraded, 0 pending,
+and 31 unavailable tracks.
 
-All scripts, regression tests and portable batch results in this directory are
-tracked in Git. Original media, private browser evidence and rollback backups
-are stored outside Git in the scratch directory above; a clone does not include
-those files.
-
-The production Free DL adapter fixes and artwork-embedding fixes apply to any
-configured Free DL job. The [gate userscript](../userscripts/README.md) and
-parameterized browser helpers (`helium.py`, `soundcloud.py`, `instagram.py`,
-`gaterush.py`, `droploud.py`, `download.py`) can work with other exact gate URLs
-and selected tabs. Browser actions still require authorization and observed
-evidence; OAuth consent and CAPTCHA remain explicit interactions.
-
-The batch wrappers are **not yet a general batch CLI**. `agent.py` contains a
-fixed checkout/scratch path; `plan.py` and `promote.py` fix the job ID;
-`intake.py`, `audit.py`, `status.py` and `preserve.py` use the isolated library
-and scratch roots. Their path guards deliberately prevent writes elsewhere.
-The preservation repair after promotion is a Python maintenance step, not a
-guarantee supplied by every native promotion.
-
-For another batch, create a separate Free DL job in the app's Free DL workflow
-or configuration and use its plan, capture and promotion preview. Reusing this
-additional preservation/audit pipeline requires explicit job, library, state
-and checkout parameters first, with the existing containment, identity,
-backup, decode and metadata checks retained. Do not run these wrappers unchanged
-against a new target or weaken their path guards. This audit documents the gap;
-it does not generalize the scripts or change their mutation scope.
+The production adapter/artwork fixes apply to any configured Free DL job. The
+[gate userscript](../userscripts/README.md) and parameterized browser helpers can
+work with other exact gate URLs and selected tabs. Browser actions still require
+authorization and observed evidence; OAuth consent and CAPTCHA remain explicit.
+Metadata preservation after promotion remains this Python maintenance workflow,
+not a guarantee provided by every other native promotion route.
 
 ## September 12 commands and evidence
 
-- `python3 .dev/freedl-0912/audit.py`: probe every actual media file, fully decode audio,
+- `python .dev/freedl.py audit --plan CAPTURE_PLAN`: probe every actual media file, fully decode audio,
   compare audio bitrate, tags and artwork hashes with the original backup recorded by its successful promotion, and write
   `quality-audit.json` plus `quality-audit.md` in scratch. Bitrate is audio-only;
   container size including artwork is not used as a quality measurement.
-- `preserve.py restore-tags BACKUP TARGET`: restore the entire original MP4 tag set
+- `freedl.py preserve --plan PLAN restore-tags BACKUP TARGET --apply`: restore the entire original MP4 tag set
   including unknown iTunes freeform fields. Verify compressed audio and artwork hashes,
   all ffprobe-visible original tags, and decoding before replacement. Backup first.
-- `preserve.py install-mp3 SOURCE EXISTING_AAC`: explicitly migrate a verified artist
+- `freedl.py preserve --plan PLAN install-mp3 SOURCE EXISTING_AAC --remote-id ID --apply`: explicitly migrate a verified artist
   original to `.mp3`, stream-copying its encoded audio without lossy transcoding. Copy
   existing metadata/artwork, verify duration (within two seconds), compressed audio
   hash and decoding, back up the AAC, then install MP3 and remove old AAC. The caller
@@ -52,7 +41,7 @@ it does not generalize the scripts or change their mutation scope.
 Requirements: Python 3, ffmpeg/ffprobe. MP4 tag preservation also uses Mutagen:
 
 ```sh
-python3 -m pip install --target ~/dev/music-down/statefiles/freedl/upgrade-09-12/pythonlib mutagen==1.48.1
+python -m pip install mutagen==1.48.1
 ```
 
 FFmpeg `-map_metadata` drops the original MP4 `WWWAUDIOFILE` freeform atom; ExifTool
@@ -82,7 +71,7 @@ and backup before resuming. Run isolated regression tests with:
 python3 .dev/freedl-0912/test_quality.py
 ```
 
-`promote.py CAPTURE_RUN --apply` automatically repairs each successfully replaced
+`freedl.py promote --plan CAPTURE_PLAN --apply` automatically repairs each successfully replaced
 row using its native backup/library paths, including successes in partially failed
 runs. It checks Mutagen availability before applying, reports missing backups or
 repair failures with a nonzero exit, and always closes its agent. Native promotion

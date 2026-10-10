@@ -1,6 +1,7 @@
 """Regression tests for evidence classification and rollback; no library writes."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -73,24 +74,24 @@ class QualityTests(unittest.TestCase):
             frame = {'exit_code':1,'result':{'failed':1,'rows':[
                 {'status':'replaced','backup_path':str(backup),'library_path':str(target)},
                 {'status':'failed','library_path':str(root/'other.m4a')}]}}
-            with patch.object(promote,'LIB',root), patch.object(promote,'SCRATCH',root), patch.object(promote.subprocess,'run') as run:
+            with patch.object(promote.subprocess,'run') as run:
                 with self.assertRaisesRegex(RuntimeError,'partially completed'):
-                    promote.repair_replaced_rows(frame)
+                    promote.repair_replaced_rows(frame, SimpleNamespace(library=root, backups=root/'backups', plan_path=root/'plan.json'))
                 self.assertEqual(run.call_count,1)
-                self.assertEqual(run.call_args.args[0][-3:],['restore-tags',str(backup.resolve()),str(target.resolve())])
+                self.assertEqual(run.call_args.args[0][-4:],['restore-tags',str(backup.resolve()),str(target.resolve()),'--apply'])
 
     def test_promotion_missing_backup_reports_failure(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             frame = {'result':{'rows':[{'status':'replaced','backup_path':str(root/'backups/missing.m4a'),'library_path':str(root/'track.m4a')}]}}
-            with patch.object(promote,'LIB',root), patch.object(promote,'SCRATCH',root), patch.object(promote.subprocess,'run') as run:
+            with patch.object(promote.subprocess,'run') as run:
                 with self.assertRaisesRegex(RuntimeError,'missing'):
-                    promote.repair_replaced_rows(frame)
+                    promote.repair_replaced_rows(frame, SimpleNamespace(library=root, backups=root/'backups', plan_path=root/'plan.json'))
                 run.assert_not_called()
 
     def test_promotion_skipped_rows_do_not_trigger_repair(self):
         with patch.object(promote.subprocess,'run') as run:
-            promote.repair_replaced_rows({'exit_code':0,'result':{'rows':[{'status':'skipped'}]}})
+            promote.repair_replaced_rows({'exit_code':0,'result':{'rows':[{'status':'skipped'}]}}, None)
             run.assert_not_called()
 
     def test_original_baseline_wins_over_earlier_named_metadata_repair(self):
