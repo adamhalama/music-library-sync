@@ -40,7 +40,7 @@ integration and is not part of this audit.
 | Native macOS app | SwiftUI shell and workflow screens; configuration/onboarding; credentials; doctor; sync; cached playlists; Free DL; Rekordbox; Go agent v2; development build/install and ad-hoc signing | Foundation PR review; workflow-specific manual parity checks. The old parity document's full-Xcode automation gap is superseded by #24 CI, but manual checks are not automatically closed |
 | Unified sync execution | Lossless lifecycle/terminal events, latest-only progress, cancellation/late-ack handling, ordered source execution and cached Spotify state persistence | Integration review; archived queue tracker is code complete |
 | Navidrome/Amperfy phone library | Setup/service controls, date reconciliation, genre allowlist, generated smart playlists, phone connection tracking, favourites and snapshot handoff | External phone/network acceptance retained in archived evidence; this is not the proposed genre-classification workflow |
-| Directional Rekordbox/Navidrome playlist mirror | Separate checksummed plans; exact real-path matching; provider IDs in state; both directions; owned-playlist replacement; backups; drift checks; parity verification; CLI, agent and native workspace | Active tracker remains in progress: native job editor/provider picker, lifecycle/view matrices, combined CLI acceptance, isolated destructive restore, real phone edit round trip and manual GUI close-out |
+| Directional Rekordbox/Navidrome playlist mirror | Separate checksummed plans; exact real-path matching; provider IDs in state; both directions; owned-playlist replacement; backups; drift checks; parity verification; CLI, agent, native workspace and basic name/ID pair editor | Active tracker remains in progress: provider-picker enrichment and editor validation, lifecycle/view matrices, combined CLI acceptance, isolated destructive restore, real phone edit round trip and manual GUI close-out |
 | SoundCloud Free DL upgrades | Registered plan adapter actually executes; artwork input ordering fixed; supported-gate filtering; isolated batch reports 15/15 supported upgrades and 46/46 audio decodes; reusable gate script and provider helpers | Batch wrappers need explicit parameters for another job/library; preservation repair remains a Python maintenance step; new batches still need capture, provenance, preview and quality validation |
 | Spotify/deemix | Per-track Spotify ISRC enrichment and cache priming prevent false unavailability or incorrect audio; API/public-page fallback limitations documented | Dependency/API availability remains external; integration review |
 | Interactive TUI sync | Scan-gaps and ask-on-existing options carried through interactive workflow | CLI UX integration review |
@@ -49,7 +49,12 @@ integration and is not part of this audit.
 
 Root tracker phases 0–4 are recorded Done and phases 5–9 In progress. Several
 unchecked test/close-out items coexist with later evidence that those cases
-were exercised; reconcile them deliberately. Older `docs/roadmap.md` and
+were exercised; reconcile them deliberately. For example, the basic native pair
+editor is implemented in `PlaylistSyncJobEditor.swift` with name/optional-ID
+fields and guarded configuration saving, although the combined editor/picker
+task remains unchecked. `playlist_mirror_test.go` already covers stale-state,
+backup-failure and post-write state-failure cases; broader acceptance is still
+open. Older `docs/roadmap.md` and
 `docs/swiftui-parity.md` contain stale status statements and must not be treated
 as authoritative evidence that implemented features are absent.
 
