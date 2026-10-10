@@ -83,3 +83,6 @@ We are building this together. When you learn something non-obvious, add it here
 
 - Checksummed playlist mirror timestamps must stay raw strings in Swift; decoding Go RFC3339Nano into Date loses fractional precision on RPC apply. The Darwin Go regression compiles the real Swift RPC models and verifies the returned Go checksum.
 - Navidrome configuration validates as macOS-only; successful config/setup test fixtures must skip unsupported platforms while portable validation tests explicitly assert rejection without writing files.
+
+- A stale `GH_TOKEN` or `GITHUB_TOKEN` can override a healthy `gh` Keychain login. Use `env -u GH_TOKEN -u GITHUB_TOKEN gh ...` to use that stored login without printing or moving credentials. Older `gh pr edit` can fail on deprecated `projectCards`; update PR bodies through `gh api --method PATCH ... --input <JSON file>` instead.
+- `.dev/freedl-0912` stores the batch tools and portable proof in Git, but its planning/promotion/preservation wrappers still hard-code the September 12 job and scoped roots. Reuse of the gate helper does not imply generic batch support or automatic native preservation; retain the containment guards when adding explicit job/library/state parameters.

@@ -3,6 +3,37 @@
 These scripts only modify `~/Music/downloaded/sc-likes-today-09-12` and use
 `~/dev/music-down/statefiles/freedl/upgrade-09-12` for originals, backups and evidence.
 
+## Reuse on another batch
+
+All scripts, regression tests and portable batch results in this directory are
+tracked in Git. Original media, private browser evidence and rollback backups
+are stored outside Git in the scratch directory above; a clone does not include
+those files.
+
+The production Free DL adapter fixes and artwork-embedding fixes apply to any
+configured Free DL job. The [gate userscript](../userscripts/README.md) and
+parameterized browser helpers (`helium.py`, `soundcloud.py`, `instagram.py`,
+`gaterush.py`, `droploud.py`, `download.py`) can work with other exact gate URLs
+and selected tabs. Browser actions still require authorization and observed
+evidence; OAuth consent and CAPTCHA remain explicit interactions.
+
+The batch wrappers are **not yet a general batch CLI**. `agent.py` contains a
+fixed checkout/scratch path; `plan.py` and `promote.py` fix the job ID;
+`intake.py`, `audit.py`, `status.py` and `preserve.py` use the isolated library
+and scratch roots. Their path guards deliberately prevent writes elsewhere.
+The preservation repair after promotion is a Python maintenance step, not a
+guarantee supplied by every native promotion.
+
+For another batch, create a separate Free DL job in the app's Free DL workflow
+or configuration and use its plan, capture and promotion preview. Reusing this
+additional preservation/audit pipeline requires explicit job, library, state
+and checkout parameters first, with the existing containment, identity,
+backup, decode and metadata checks retained. Do not run these wrappers unchanged
+against a new target or weaken their path guards. This audit documents the gap;
+it does not generalize the scripts or change their mutation scope.
+
+## September 12 commands and evidence
+
 - `python3 .dev/freedl-0912/audit.py`: probe every actual media file, fully decode audio,
   compare audio bitrate, tags and artwork hashes with the original backup recorded by its successful promotion, and write
   `quality-audit.json` plus `quality-audit.md` in scratch. Bitrate is audio-only;
