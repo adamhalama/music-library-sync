@@ -18,8 +18,8 @@ The production adapter/artwork fixes apply to any configured Free DL job. The
 [gate userscript](../userscripts/README.md) and parameterized browser helpers can
 work with other exact gate URLs and selected tabs. Browser actions still require
 authorization and observed evidence; OAuth consent and CAPTCHA remain explicit.
-Metadata preservation after promotion remains this Python maintenance workflow,
-not a guarantee provided by every other native promotion route.
+Metadata preservation is now automatic before installation in native app/TUI/CLI
+promotion. The Python tools remain available for manual repair and migration.
 
 ## September 12 commands and evidence
 
@@ -75,8 +75,9 @@ python3 .dev/freedl-0912/test_quality.py
 row using its native backup/library paths, including successes in partially failed
 runs. It checks Mutagen availability before applying, reports missing backups or
 repair failures with a nonzero exit, and always closes its agent. Native promotion
-hashes describe the pre-repair output; the separate preservation ledger records
-the final metadata-restored file. Tag restoration uses the backup's creation time,
+results now include a `preservation` report and final `promoted_sha256`; maintenance
+promotion validates that hash and avoids redundant repair. Legacy-backend repair
+and manual migrations retain a separate preservation ledger. Tag restoration uses the backup's creation time,
 so it also corrects native promotion timestamp drift.
 
 Background browser tools use explicitly selected Helium window/tab IDs and never

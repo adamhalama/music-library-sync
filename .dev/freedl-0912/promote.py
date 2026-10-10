@@ -21,6 +21,12 @@ def repair_replaced_rows(frame, ctx):
             target = scoped(row['library_path'], ctx.library)
             if not backup.is_file() or not target.is_file():
                 raise FileNotFoundError(f'Backup or promoted target missing: {backup} -> {target}')
+            preservation = row.get('preservation') or {}
+            if all(preservation.get(key) for key in ('metadata_verified', 'artwork_verified', 'decode_verified')):
+                from intake import sha256
+                if sha256(target) != preservation.get('file_sha256'):
+                    raise ValueError('Native preserved file differs from its verified result')
+                continue
             subprocess.run([sys.executable, str(Path(__file__).with_name('preserve.py')),
                             *context_args(ctx), 'restore-tags', str(backup), str(target), '--apply'], check=True, capture_output=True, text=True)
         except (KeyError, ValueError, OSError, subprocess.CalledProcessError) as exc:
@@ -61,7 +67,10 @@ def main():
         # Expose exact paths/action/qualities in one JSON document.
         selected = [r for r in plan['rows'] or [] if r.get('selected')]
         if args.apply and selected:
-            from mutagen.mp4 import MP4  # dependency check before native mutation
+            # Older backends still require the maintenance repair dependency;
+            # detect it before any native mutation. Current app/backend needs no Python tags library.
+            if not agent.call('freedl.config.read').get('native_metadata_preservation'):
+                from mutagen.mp4 import MP4  # legacy backend preflight
             fin = finish(agent.call('freedl.promote.apply', {'plan': plan})['run_id'])
             try:
                 repair_replaced_rows(fin, promotion)

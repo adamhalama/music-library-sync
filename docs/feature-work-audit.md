@@ -118,3 +118,13 @@ branch ranges and simulated the genre merge with `git merge-tree --write-tree
 --name-only`; the simulation returned the three documented conflicts without
 changing the worktree. No new full-Xcode, race or destructive/phone acceptance
 run is claimed here; #24 retains its earlier passing CI evidence.
+
+## Native preservation follow-up
+
+The earlier maintenance-only preservation limitation is resolved in the shared
+Go app/TUI/native promotion service and legacy CLI. Complete container metadata is
+restored and checked on the staged file before install; failed verification keeps
+the library and original backup. Python repair remains for earlier backends and
+manual migrations. See `docs/freedl-maintenance.md` for supported container layouts
+and direct app-RPC/native-CLI acceptance commands. Earlier audit entries above are
+historical descriptions, superseded by this follow-up.

@@ -38,3 +38,5 @@ jobs:
           python .dev/freedl-0912/test_context.py
           python .dev/freedl-0912/test_quality.py
           UDL_FREEDL_TEST_BINARY="$RUNNER_TEMP/freedl-validation/udl" python .dev/freedl-0912/test_media.py
+          UDL_FREEDL_TEST_BINARY="$RUNNER_TEMP/freedl-validation/udl" python .dev/freedl-0912/test_native_promotion.py
+          go test ./internal/mediametadata ./internal/freedl -count=1

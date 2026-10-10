@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"github.com/jaa/update-downloads/internal/mediametadata"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,10 @@ func TestPromoteFreeDLPreviewModePlansWithoutWriting(t *testing.T) {
 	origLookPath := lookPathFn
 	origProbe := probeAudioFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		switch strings.ToLower(filepath.Ext(path)) {
@@ -156,6 +161,7 @@ func TestPromoteFreeDLPreviewModePlansWithoutWriting(t *testing.T) {
 		lookPathFn = origLookPath
 		probeAudioFn = origProbe
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}
@@ -203,6 +209,10 @@ func TestPromoteFreeDLApplyWritesToSeparateDirectory(t *testing.T) {
 	origLookPath := lookPathFn
 	origProbe := probeAudioFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		switch strings.ToLower(filepath.Ext(path)) {
@@ -222,6 +232,7 @@ func TestPromoteFreeDLApplyWritesToSeparateDirectory(t *testing.T) {
 		lookPathFn = origLookPath
 		probeAudioFn = origProbe
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}
@@ -272,6 +283,10 @@ func TestPromoteFreeDLApplyTargetFormatMP3WritesMP3Output(t *testing.T) {
 	origLookPath := lookPathFn
 	origProbe := probeAudioFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		switch strings.ToLower(filepath.Ext(path)) {
@@ -294,6 +309,7 @@ func TestPromoteFreeDLApplyTargetFormatMP3WritesMP3Output(t *testing.T) {
 		lookPathFn = origLookPath
 		probeAudioFn = origProbe
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}
@@ -344,6 +360,10 @@ func TestPromoteFreeDLApplyTargetFormatWithoutWriteDirSkipsMismatchedExtensions(
 	origLookPath := lookPathFn
 	origProbe := probeAudioFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		return promoteAudioProbe{Codec: "pcm_s16le", Bitrate: 0}, nil
@@ -356,6 +376,7 @@ func TestPromoteFreeDLApplyTargetFormatWithoutWriteDirSkipsMismatchedExtensions(
 		lookPathFn = origLookPath
 		probeAudioFn = origProbe
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}
@@ -406,6 +427,10 @@ func TestPromoteFreeDLMatchesByTitleInsteadOfFilename(t *testing.T) {
 	origProbe := probeAudioFn
 	origTags := probeTagsFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		switch strings.ToLower(filepath.Ext(path)) {
@@ -430,6 +455,7 @@ func TestPromoteFreeDLMatchesByTitleInsteadOfFilename(t *testing.T) {
 		probeAudioFn = origProbe
 		probeTagsFn = origTags
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}
@@ -478,6 +504,10 @@ func TestPromoteFreeDLReportsAmbiguousMatchSkip(t *testing.T) {
 	origProbe := probeAudioFn
 	origTags := probeTagsFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		switch strings.ToLower(filepath.Ext(path)) {
@@ -502,6 +532,7 @@ func TestPromoteFreeDLReportsAmbiguousMatchSkip(t *testing.T) {
 		probeAudioFn = origProbe
 		probeTagsFn = origTags
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}
@@ -549,6 +580,10 @@ func TestPromoteFreeDLApplyInPlaceAutoReplacesLibraryPath(t *testing.T) {
 	origProbe := probeAudioFn
 	origTags := probeTagsFn
 	origRun := runPromoteFFmpeg
+	origVerify := verifyPromoteMetadata
+	verifyPromoteMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	lookPathFn = func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	probeAudioFn = func(ctx context.Context, path string) (promoteAudioProbe, error) {
 		switch strings.ToLower(filepath.Ext(path)) {
@@ -572,6 +607,7 @@ func TestPromoteFreeDLApplyInPlaceAutoReplacesLibraryPath(t *testing.T) {
 		probeAudioFn = origProbe
 		probeTagsFn = origTags
 		runPromoteFFmpeg = origRun
+		verifyPromoteMetadata = origVerify
 	})
 
 	stdout := &bytes.Buffer{}

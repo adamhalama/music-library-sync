@@ -573,7 +573,9 @@ struct FreeDLView: View {
         let backup = appState.freeDLPromotionPlan?.backupRoot ?? "the job's backup directory"
         return """
         Library files are replaced with the captured versions. Each original is copied to \
-        \(backup) first, and a result log is written to the job's log directory.
+        \(backup) first. Original tags and artwork are restored and checked with the upgraded \
+        audio before replacement; a failed check leaves the library file unchanged. \
+        Creation time is preserved, and a result log is written to the job's log directory.
         """
     }
 

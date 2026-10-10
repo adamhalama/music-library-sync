@@ -110,7 +110,7 @@ marked **run** return `{"run_id":"…"}` immediately and terminate through
 | `playlistSync.inspect` | `{}` | configured `jobs` with trusted pair state or a state error; cache/config only |
 | `playlistSync.plan` | `job_id`, explicit `direction`, optional `out_path` | **run** returning a checksummed `plan` and `plan_path` |
 | `playlistSync.apply` | checksummed `plan`, `dry_run` | **run** returning dry-run/no-op flags, optional destination `backup_path`, pair-state path, and provider verification result |
-| `freedl.config.read` | `{}` | write path, merged config, content |
+| `freedl.config.read` | `{}` | write path, merged config, content, `native_metadata_preservation` support flag |
 | `freedl.config.write` | `config` | write path, saved config, canonical content |
 | `freedl.plan.start` | `job_id`, optional plan limit, playlist ID, and selection overrides | **run**, streaming `freedl.planEvent` |
 | `freedl.capture.start` | capture `plan`, optional selected remote IDs | **run** returning sync result |
@@ -202,3 +202,15 @@ notifications and emitter shutdown without bypassing that 100 ms clock, while
 `sync.event` and `run.finished` are never coalesced. Clients should buffer only
 the newest `sync.progress` frame and keep lossless buffering for every other
 notification.
+
+### Native Free DL preservation
+
+`freedl.promote.apply` restores container metadata from each original backup onto
+the staged promoted audio and verifies complete tags, encoded audio, artwork and
+decoding before installation. Failed verification reports a failed row, preserves
+the library file and retains its original backup. Successful rows add optional
+`preservation` (`metadata_verified`, `artwork_verified`, `decode_verified`,
+`audio_sha256`, `file_sha256`) and `promoted_sha256` fields. The existing `sha256`
+field remains the original-backup checksum. The Free DL config response advertises
+`native_metadata_preservation: true`; older responses omit it. No Python/tag-library
+runtime dependency is introduced.

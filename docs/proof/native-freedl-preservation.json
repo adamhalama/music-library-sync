@@ -1,0 +1,61 @@
+{
+  "tests_run": 6,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "evidence": [
+    {
+      "route": "app RPC",
+      "failure": "installation refused",
+      "library_unchanged": true,
+      "original_backup_exact": true,
+      "failed_rows": 1,
+      "replaced_rows": 0,
+      "stages_cleaned": true
+    },
+    {
+      "route": "app RPC",
+      "container": "MP4",
+      "job": "native-app",
+      "backup_sha256": "303a59432391385c457c76df1c169e69c4a7382d065e8c4c0d1e5b8d7ffb35d1",
+      "original_audio_sha256": "SHA256=628862bf68615d3bdeee1798694f6ba90e92b1d934f96c5f197949a2f05e2ccd",
+      "preservation": {
+        "metadata_verified": true,
+        "audio_sha256": "a57f1d382eae285c3e725f231dc413ef3e999d05b96c4b04d7079a205c806d55",
+        "artwork_verified": true,
+        "decode_verified": true,
+        "file_sha256": "24d3d712ba391218f7384450e4c4d31f507904099b7daa978e9df9875c83c503"
+      },
+      "original_creation_time": 1600000000.123456,
+      "installed_creation_time": 1600000000.123456,
+      "artwork": [
+        "c7ea6bac7cfd7ed314a30eb822e758dbdb542076dfcb80530e42184c2c8bce9d"
+      ],
+      "independent_complete_tags_equal": true
+    },
+    {
+      "route": "app RPC",
+      "container": "MP3",
+      "preservation": {
+        "metadata_verified": true,
+        "audio_sha256": "943345f5425591f06290c88ffd016f34974ab45721ba4c947c0d8ed2d4946368",
+        "artwork_verified": true,
+        "decode_verified": true,
+        "file_sha256": "263e5837f2e98df8b62392a1d7a1649f4942c632834613af88dcce9406259a22"
+      },
+      "independent_complete_tags_equal": true
+    },
+    {
+      "route": "app RPC",
+      "container": "WAV",
+      "preservation": {
+        "metadata_verified": true,
+        "audio_sha256": "34c134741b2d1335ea1403c3a9fefd2668b32e319a79563015c75efa2970284a",
+        "artwork_verified": true,
+        "decode_verified": true,
+        "file_sha256": "16e980cb6a86c9023a43532cc41af22f6442dfd435e70ba0ef9d349a6812520e"
+      },
+      "unknown_ixml_chunk_retained": true
+    }
+  ]
+}

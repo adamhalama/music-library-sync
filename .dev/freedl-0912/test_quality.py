@@ -11,6 +11,31 @@ import promote
 
 
 class QualityTests(unittest.TestCase):
+    def test_verified_native_result_does_not_run_python_repair(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);target=root/'track.m4a';target.write_bytes(b'preserved output')
+            backup=root/'backups/track.m4a';backup.parent.mkdir();backup.write_bytes(b'original')
+            from intake import sha256
+            report={'metadata_verified':True,'artwork_verified':True,'decode_verified':True,'file_sha256':sha256(target)}
+            frame={'exit_code':0,'result':{'rows':[{'status':'replaced','library_path':str(target),
+                    'backup_path':str(backup),'preservation':report}]}}
+            with patch('promote.subprocess.run') as repair:
+                promote.repair_replaced_rows(frame,SimpleNamespace(library=root,backups=root/'backups'))
+                repair.assert_not_called()
+
+    def test_verified_native_hash_drift_is_not_silently_repaired(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);target=root/'track.m4a';target.write_bytes(b'external modification')
+            backup=root/'backups/track.m4a';backup.parent.mkdir();backup.write_bytes(b'original')
+            report={'metadata_verified':True,'artwork_verified':True,'decode_verified':True,'file_sha256':'different'}
+            frame={'exit_code':0,'result':{'rows':[{'status':'replaced','library_path':str(target),
+                    'backup_path':str(backup),'preservation':report}]}}
+            with patch('promote.subprocess.run') as repair:
+                with self.assertRaisesRegex(RuntimeError,'differs from its verified result'):
+                    promote.repair_replaced_rows(frame,SimpleNamespace(library=root,backups=root/'backups'))
+                repair.assert_not_called()
+            self.assertEqual(target.read_bytes(),b'external modification')
+
     def test_metadata_only_change_is_not_upgrade(self):
         before = {'sha256':'old', 'encoded_audio_sha256':'same', 'birthtime':10}
         after = dict(before, sha256='new')

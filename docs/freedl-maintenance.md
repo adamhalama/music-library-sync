@@ -4,14 +4,15 @@
 `status`, and `audit` for any configured SoundCloud Free DL job. The implementation
 remains in `.dev/freedl-0912` beside the historical batch evidence; its job IDs,
 checkout, library, buffer, backup and log roots are no longer fixed to that batch.
-The normal app workflow remains available. This optional maintenance workflow
-adds complete MP4 metadata restoration after native promotion.
+The normal app, TUI and native promotion commands now preserve metadata in the
+shared Go backend before installing upgraded audio. These maintenance commands
+reuse that protection and also provide manual repair, migration and audit tools.
 
 ## Setup
 
 Use Python 3.10+, ffmpeg/ffprobe and the current Go backend (`make build`).
-Preservation requires Mutagen, installed in the Python environment that runs the
-commands; it is not an application runtime dependency:
+Native promotion needs no Python or Mutagen. The optional manual `preserve`
+command, legacy-backend repair and independent test oracle require Mutagen:
 
 ```sh
 python3 -m venv /tmp/udl-freedl-maintenance
@@ -101,13 +102,27 @@ without changing the library. Native preview can write planning evidence in the
 job log directory. Target format comes from the configured job unless overridden
 with `--target-format auto|aac-256|mp3-320|wav`.
 
-Apply verifies the current configured job against the saved plan and checks
-Mutagen before native changes. It restores each successfully replaced file's
-metadata from that row's explicit original backup, even in partially failed runs.
-Any missing backup, failed row or failed preservation returns a nonzero status.
-The separate preservation ledger records the final file; native promotion hashes
-refer to the output before restoration. If restoration fails, inspect both
-ledgers and the original backup before continuing.
+Apply verifies the current configured job against the saved plan. The native
+backend restores opaque container tags from the immutable original backup onto
+the staged upgraded audio, verifies tag bytes, encoded audio, artwork and full
+decode, restores creation time and checks for concurrent library changes before
+replacement. A failed check leaves the original unchanged and retains its backup.
+
+The result ledger includes each successful row's `preservation` report and
+`promoted_sha256` for the final installed file; `sha256` continues to identify its
+original backup. Maintenance promotion checks the final native file hash and
+avoids a second restoration. With an older backend that does not advertise
+`native_metadata_preservation`, it checks Mutagen before applying and retains the
+legacy Python repair path. Failed native or repair rows return nonzero.
+
+Native protection covers MP4/M4A metadata (including unknown iTunes freeforms and
+artwork), MP3/ADTS ID3 and APE tags, and RIFF/WAV metadata including opaque chunks.
+The older `udl promote-freedl` command uses the same verification for in-place and
+separate-directory outputs. Cross-container outputs are refused before
+installation, because opaque metadata cannot be promised intact. Keep the library
+container for native upgrades; use the explicit manual migration workflow below
+when changing a track's container. Fragmented/open-ended MP4 and non-RIFF WAV
+layouts are refused rather than silently dropping metadata.
 
 Manual repairs use the same saved promotion/capture context and exact
 backup/target association. Both commands preview unless `--apply` is present:
@@ -132,8 +147,9 @@ before replacement. It creates a verified backup and durable prepared transactio
 installs atomically, and restores the backup on in-process failure. macOS creation
 time is retained and verified. A process/machine crash can leave `transaction.json`
 without its `preservation-result.json` commit marker; inspect its paths and backup.
-The Python maintenance step is not automatically added to promotions initiated
-through other native/app routes.
+The Python command remains available for repairing earlier promotions and explicit
+MP3 migration. Normal app/TUI/native promotions now provide their own preservation
+and do not execute this Python repair step.
 
 ## Status and audit
 
@@ -170,6 +186,7 @@ python .dev/freedl-0912/test_context.py
 python .dev/freedl-0912/test_quality.py
 go build -o /tmp/udl-freedl-validation ./cmd/udl
 UDL_FREEDL_TEST_BINARY=/tmp/udl-freedl-validation python .dev/freedl-0912/test_media.py
+UDL_FREEDL_TEST_BINARY=/tmp/udl-freedl-validation python .dev/freedl-0912/test_native_promotion.py
 ```
 
 The media tests require ffmpeg/ffprobe and Mutagen. They generate synthetic tracks
@@ -178,3 +195,10 @@ real backend, preview/apply preservation, verify unknown tags/artwork/encoded
 audio/creation time, and check MP3 migration plus audit/status identity. The
 `freedl-tools` CI workflow runs these tests on Linux and macOS. No live capture or
 real library mutations are needed for validation.
+
+Direct native acceptance drives `freedl.promote.apply` (the app's RPC) and the
+legacy CLI without invoking Python repair. It independently checks complete
+MP4/ID3 tags, artwork and unknown WAV chunks; exact backups; upgraded encoded
+audio; creation time; final native hashes; install failure; and refused lossy
+metadata conversion. Fixture generation and the independent tag oracle use
+Mutagen only in tests.
