@@ -1455,8 +1455,11 @@ func TestTUISyncModelBuildSyncRequestUsesWorkflowMode(t *testing.T) {
 	if interactiveReq.PlanLimit != 25 {
 		t.Fatalf("expected interactive sync to keep plan limit, got %d", interactiveReq.PlanLimit)
 	}
-	if interactiveReq.AskOnExisting || interactiveReq.AskOnExistingSet || interactiveReq.ScanGaps || interactiveReq.NoPreflight {
-		t.Fatalf("expected interactive sync to omit standard-only flags: %+v", interactiveReq)
+	if !interactiveReq.AskOnExisting || !interactiveReq.AskOnExistingSet || !interactiveReq.ScanGaps {
+		t.Fatalf("expected interactive sync to pass ask-on-existing and scan-gaps through: %+v", interactiveReq)
+	}
+	if interactiveReq.NoPreflight {
+		t.Fatalf("expected interactive sync to omit no-preflight, which plan mode cannot honour: %+v", interactiveReq)
 	}
 
 	standard := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
@@ -1491,8 +1494,11 @@ func TestTUISyncModelViewIsModeSpecific(t *testing.T) {
 	if strings.Contains(interactiveView, "download_order=") || strings.Contains(interactiveView, "ORDER:") {
 		t.Fatalf("expected interactive sync to hide global download order summary, got: %s", interactiveView)
 	}
-	if strings.Contains(interactiveView, "ask_on_existing=") || strings.Contains(interactiveView, "scan_gaps=") || strings.Contains(interactiveView, "no_preflight=") {
-		t.Fatalf("expected interactive sync to hide standard-only options, got: %s", interactiveView)
+	if !strings.Contains(interactiveView, "ask_on_existing=") || !strings.Contains(interactiveView, "scan_gaps=") {
+		t.Fatalf("expected interactive sync to show ask-on-existing and scan-gaps, got: %s", interactiveView)
+	}
+	if strings.Contains(interactiveView, "no_preflight=") {
+		t.Fatalf("expected interactive sync to hide standard-only no-preflight, got: %s", interactiveView)
 	}
 
 	standard := newTUISyncModel(&AppContext{}, tuiSyncWorkflowStandard)
@@ -3658,14 +3664,36 @@ func TestTUISyncInteractionInputMasksARLPrompt(t *testing.T) {
 func TestTUISyncModelEnterValidatesIncompatiblePlanFlags(t *testing.T) {
 	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
 	m.cfgLoaded = true
-	m.scanGaps = true
+	m.noPreflight = true
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.running {
 		t.Fatalf("expected run not to start on invalid options")
 	}
-	if !strings.Contains(m.validationErr, "scan-gaps") {
-		t.Fatalf("expected validation error mentioning scan-gaps, got %q", m.validationErr)
+	if !strings.Contains(m.validationErr, "no-preflight") {
+		t.Fatalf("expected validation error mentioning no-preflight, got %q", m.validationErr)
+	}
+}
+
+func TestTUIInteractiveSyncTogglesAskOnExistingAndScanGaps(t *testing.T) {
+	m := newTUISyncModel(&AppContext{}, tuiSyncWorkflowInteractive)
+	m.cfgLoaded = true
+	m.sources = []config.Source{
+		{ID: "spotify-slow-techno", Type: config.SourceTypeSpotify, Adapter: config.AdapterSpec{Kind: "deemix"}},
+	}
+	m.selected["spotify-slow-techno"] = true
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if !m.scanGaps || !m.askOnExistingSet || !m.askOnExisting {
+		t.Fatalf("expected g and a to toggle scan-gaps and ask-on-existing in interactive mode, got scanGaps=%t askSet=%t ask=%t", m.scanGaps, m.askOnExistingSet, m.askOnExisting)
+	}
+	if errMsg := validateTUISyncOptions(m); errMsg != "" {
+		t.Fatalf("expected plan mode to accept scan-gaps and ask-on-existing, got %q", errMsg)
+	}
+	req := m.buildSyncRequest([]string{"spotify-slow-techno"})
+	if !req.Plan || !req.ScanGaps || !req.AskOnExistingSet {
+		t.Fatalf("expected plan request to carry scan-gaps and ask-on-existing: %+v", req)
 	}
 }
 

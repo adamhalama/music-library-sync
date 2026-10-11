@@ -292,3 +292,55 @@ func TestAppendSoundCloudFreeDLStuckRecordWritesJSONL(t *testing.T) {
 		t.Fatalf("unexpected decoded record: %+v", decoded)
 	}
 }
+
+func TestIsSupportedFreeDownloadGateURL(t *testing.T) {
+	// Gate services that hand a file to the browser after an unlock step.
+	for _, raw := range []string{
+		"https://hypeddit.com/pichi/pichibofunk",
+		"https://www.hypeddit.com/track/abc",
+		"http://gaterush.me/LrI671",
+		"https://droploud.com/gate/b4742c7d-39b6-4771-84c9-a1a3f642d79e",
+		"https://droploud.com/track/834d0dba-3a52-4570-b407-af41fa852f12",
+		"https://www.mypresskit.info/gate/notpumbaa-who-want-smoke-edit",
+	} {
+		if !isSupportedFreeDownloadGateURL(raw) {
+			t.Errorf("expected %q to be a supported free-download gate", raw)
+		}
+	}
+
+	// Stores and smart links reach the same purchase_url field but never yield a
+	// free file, so they must stay unsupported instead of costing a gate wait.
+	for _, raw := range []string{
+		"https://bcco.bandcamp.com/album/bccova20",
+		"https://xtassyfx.bandcamp.com/track/el-after",
+		"https://found.ee/BSP006",
+		"https://www.beatport.com/track/abc/123",
+		"https://example.com/track/abc",
+	} {
+		if isSupportedFreeDownloadGateURL(raw) {
+			t.Errorf("expected %q to stay unsupported", raw)
+		}
+	}
+
+	// The URL is handed to the OS URL handler, so non-web schemes must never pass
+	// even when the host is on the allowlist.
+	for _, raw := range []string{
+		"ftp://gaterush.me/LrI671",
+		"file://hypeddit.com/track/abc",
+		"javascript:alert(1)",
+	} {
+		if isSupportedFreeDownloadGateURL(raw) {
+			t.Errorf("expected scheme of %q to be rejected", raw)
+		}
+	}
+
+	// A lookalike host must not match by suffix accident.
+	for _, raw := range []string{
+		"https://nothypeddit.com/track/abc",
+		"https://gaterush.me.evil.example/track/abc",
+	} {
+		if isSupportedFreeDownloadGateURL(raw) {
+			t.Errorf("expected lookalike host %q to be rejected", raw)
+		}
+	}
+}

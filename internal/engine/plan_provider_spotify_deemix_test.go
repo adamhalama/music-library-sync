@@ -153,6 +153,68 @@ func TestSpotifyDeemixPlanProviderBuildClassifiesRowsAndDefaultSelection(t *test
 	}
 }
 
+func TestSpotifyDeemixPlanProviderGapOptionsSelectRowsBehindFirstExisting(t *testing.T) {
+	askOnExisting := true
+	cases := []struct {
+		name   string
+		mutate func(*config.Source, *SyncOptions, *int)
+	}{
+		{
+			name: "scan gaps",
+			mutate: func(_ *config.Source, opts *SyncOptions, _ *int) {
+				opts.ScanGaps = true
+			},
+		},
+		{
+			name: "ask on existing from config",
+			mutate: func(source *config.Source, opts *SyncOptions, prompts *int) {
+				source.Sync.AskOnExisting = &askOnExisting
+				opts.AllowPrompt = true
+				opts.PromptOnExisting = func(string, SoundCloudPreflight) (bool, error) {
+					*prompts++
+					return true, nil
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, source, targetDir, statePath := testSpotifyDeemixPlanSource(t)
+			if err := os.WriteFile(statePath, []byte("1abc234def\ttitle=Artist 1 - Track 1\n"), 0o644); err != nil {
+				t.Fatalf("write state: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(targetDir, "Artist 1 - Track 1.mp3"), []byte("x"), 0o644); err != nil {
+				t.Fatalf("write local file: %v", err)
+			}
+			withSpotifyDeemixPlanStubs(t, []spotifyRemoteTrack{
+				{ID: "1abc234def", Title: "Track 1", Artist: "Artist 1"},
+				{ID: "2abc234def", Title: "Track 2", Artist: "Artist 2"},
+				{ID: "3abc234def", Title: "Track 3", Artist: "Artist 3"},
+			})
+			opts := SyncOptions{Plan: true, PlanLimit: 10, PlanWindow: PlanWindowFirst}
+			prompts := 0
+			tc.mutate(&source, &opts, &prompts)
+
+			plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, opts)
+			if err != nil {
+				t.Fatalf("build plan: %v", err)
+			}
+			rows := plan.Rows()
+			if len(rows) != 3 || rows[0].Status != PlanRowAlreadyDownloaded {
+				t.Fatalf("expected first row already downloaded, got %+v", rows)
+			}
+			for _, row := range rows[1:] {
+				if !row.SelectedByDefault {
+					t.Fatalf("expected gap behind first existing track to be preselected: %+v", row)
+				}
+			}
+			if opts.PromptOnExisting != nil && prompts != 1 {
+				t.Fatalf("expected one ask-on-existing prompt, got %d", prompts)
+			}
+		})
+	}
+}
+
 func TestSpotifyDeemixPlanProviderApplySelectionOrdersSpotifyExecution(t *testing.T) {
 	cfg, source, _, statePath := testSpotifyDeemixPlanSource(t)
 	if err := os.WriteFile(statePath, []byte("3abc234def\ttitle=Artist 3 - Track 3\n"), 0o644); err != nil {

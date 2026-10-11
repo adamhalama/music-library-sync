@@ -21,8 +21,8 @@ final class JSONRPCConnectionTests: XCTestCase {
         let second = Task {
             try await connection.callValue("fixture.second", params: JSONValue.object([:]))
         }
-        let requestA = try readJSONObject(from: outbound.fileHandleForReading)
-        let requestB = try readJSONObject(from: outbound.fileHandleForReading)
+        let requestA = try await readJSONObject(from: outbound.fileHandleForReading)
+        let requestB = try await readJSONObject(from: outbound.fileHandleForReading)
         let requests = [requestA, requestB]
         let firstRequest = try XCTUnwrap(requests.first { $0["method"] as? String == "fixture.first" })
         let secondRequest = try XCTUnwrap(requests.first { $0["method"] as? String == "fixture.second" })
@@ -40,6 +40,7 @@ final class JSONRPCConnectionTests: XCTestCase {
         let secondValue = try await second.value
         XCTAssertEqual(firstValue, .object(["value": .string("first")]))
         XCTAssertEqual(secondValue, .object(["value": .string("second")]))
+        try inbound.fileHandleForWriting.close()
         await connection.close()
     }
 
@@ -54,7 +55,7 @@ final class JSONRPCConnectionTests: XCTestCase {
         let pending = Task {
             try await connection.callValue("fixture.pending", params: JSONValue.object([:]))
         }
-        _ = try readJSONObject(from: outbound.fileHandleForReading)
+        _ = try await readJSONObject(from: outbound.fileHandleForReading)
         try inbound.fileHandleForWriting.close()
         do {
             _ = try await pending.value
@@ -90,9 +91,10 @@ final class JSONRPCConnectionTests: XCTestCase {
         let request = try XCTUnwrap(nextRequest)
         XCTAssertEqual(request.kind, .confirm)
         try await connection.respond(to: request, result: .object(["confirmed": .bool(true)]))
-        let reply = try readJSONObject(from: outbound.fileHandleForReading)
+        let reply = try await readJSONObject(from: outbound.fileHandleForReading)
         XCTAssertEqual(reply["id"] as? String, "server-1")
         XCTAssertEqual((reply["result"] as? [String: Any])?["confirmed"] as? Bool, true)
+        try inbound.fileHandleForWriting.close()
         await connection.close()
     }
 
@@ -120,19 +122,19 @@ final class JSONRPCConnectionTests: XCTestCase {
             "params": ["run_id": "run-1", "sequence": 2],
         ], to: inbound.fileHandleForWriting)
 
-        // Let the detached reader enqueue every frame before creating the
-        // iterators, proving that only progress uses newest-only buffering.
-        try await Task.sleep(for: .milliseconds(30))
-        var progress = connection.progressNotifications.makeAsyncIterator()
-        let nextProgress = await progress.next()
-        let latest = try XCTUnwrap(nextProgress)
-        XCTAssertEqual(latest.params.objectValue?["percent"]?.intValue, 30)
-
+        // Receiving terminal is a barrier: the reader has already processed
+        // every preceding progress frame, without relying on a timed sleep.
         var lifecycle = connection.notifications.makeAsyncIterator()
         let firstLifecycle = await lifecycle.next()
         let terminal = await lifecycle.next()
         XCTAssertEqual(firstLifecycle?.method, "sync.event")
         XCTAssertEqual(terminal?.method, "run.finished")
+
+        var progress = connection.progressNotifications.makeAsyncIterator()
+        let nextProgress = await progress.next()
+        let latest = try XCTUnwrap(nextProgress)
+        XCTAssertEqual(latest.params.objectValue?["percent"]?.intValue, 30)
+        try inbound.fileHandleForWriting.close()
         await connection.close()
     }
 
@@ -159,8 +161,9 @@ final class JSONRPCConnectionTests: XCTestCase {
                 to: request,
                 result: .object(["canceled": .bool(false)])
             )
-            let reply = try readJSONObject(from: outbound.fileHandleForReading)
+            let reply = try await readJSONObject(from: outbound.fileHandleForReading)
             XCTAssertEqual(reply["id"] as? String, "server-\(offset)")
+            try inbound.fileHandleForWriting.close()
             await connection.close()
         }
     }
@@ -228,11 +231,12 @@ final class JSONRPCConnectionTests: XCTestCase {
             cancelRun: { await recorder.append("run") }
         )
 
-        let reply = try readJSONObject(from: outbound.fileHandleForReading)
+        let reply = try await readJSONObject(from: outbound.fileHandleForReading)
         XCTAssertEqual(reply["id"] as? String, "plan-1")
         XCTAssertEqual((reply["result"] as? [String: Any])?["canceled"] as? Bool, true)
         let values = await recorder.values
         XCTAssertEqual(values, ["prompt", "run"])
+        try inbound.fileHandleForWriting.close()
         await connection.close()
     }
 
@@ -242,13 +246,24 @@ final class JSONRPCConnectionTests: XCTestCase {
         try handle.write(contentsOf: data)
     }
 
-    private func readJSONObject(from handle: FileHandle) throws -> [String: Any] {
-        var data = Data()
-        while true {
-            let byte = handle.readData(ofLength: 1)
-            if byte.isEmpty { throw JSONRPCConnectionError.disconnected("test pipe EOF") }
-            if byte[0] == 0x0A { break }
-            data.append(byte)
+    private func readJSONObject(from handle: FileHandle) async throws -> [String: Any] {
+        // Blocking pipe reads must not occupy Swift's cooperative executor:
+        // on a small CI runner the tasks that produce these bytes need it too.
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    var data = Data()
+                    while true {
+                        let byte = try handle.read(upToCount: 1) ?? Data()
+                        if byte.isEmpty { throw JSONRPCConnectionError.disconnected("test pipe EOF") }
+                        if byte[0] == 0x0A { break }
+                        data.append(byte)
+                    }
+                    continuation.resume(returning: data)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
         let object = try JSONSerialization.jsonObject(with: data)
         return try XCTUnwrap(object as? [String: Any])

@@ -22,6 +22,7 @@ type setupHarness struct {
 
 func newSetupHarness(t *testing.T) *setupHarness {
 	t.Helper()
+	requireDarwinConfig(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 

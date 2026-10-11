@@ -19,6 +19,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/jaa/update-downloads/internal/fileops"
+	"github.com/jaa/update-downloads/internal/mediametadata"
 	"github.com/spf13/cobra"
 )
 
@@ -36,10 +37,11 @@ const (
 )
 
 var (
-	lookPathFn       = exec.LookPath
-	probeAudioFn     = probePromoteAudio
-	probeTagsFn      = probePromoteTags
-	runPromoteFFmpeg = runPromoteFFmpegCommand
+	lookPathFn            = exec.LookPath
+	probeAudioFn          = probePromoteAudio
+	probeTagsFn           = probePromoteTags
+	runPromoteFFmpeg      = runPromoteFFmpegCommand
+	verifyPromoteMetadata = mediametadata.PreserveAndVerify
 )
 
 type promoteFreeDLOptions struct {
@@ -1027,18 +1029,23 @@ func applyPromoteReplacement(
 		return fmt.Errorf("empty output path")
 	}
 
-	if strings.TrimSpace(opts.WriteDir) != "" {
-		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-			return err
-		}
-		return runPromoteFFmpeg(ctx, opts, assignment, outputPath, decision)
+	creation, err := fileops.ReadCreationTime(assignment.Library.Path)
+	if err != nil {
+		return err
 	}
-
-	tempFile, err := os.CreateTemp(filepath.Dir(assignment.Library.Path), ".udl-promote-*"+filepath.Ext(assignment.Library.Path))
+	originalSHA256, err := mediametadata.FileSHA256(assignment.Library.Path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return err
+	}
+	tempFile, err := os.CreateTemp(filepath.Dir(outputPath), ".udl-promote-*"+filepath.Ext(outputPath))
 	if err != nil {
 		return err
 	}
 	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
 	_ = tempFile.Close()
 	_ = os.Remove(tempPath)
 
@@ -1046,7 +1053,30 @@ func applyPromoteReplacement(
 		_ = os.Remove(tempPath)
 		return err
 	}
-	if err := fileops.ReplaceFileSafely(tempPath, assignment.Library.Path); err != nil {
+	if _, err := verifyPromoteMetadata(ctx, assignment.Library.Path, tempPath); err != nil {
+		return err
+	}
+	if err := fileops.RestoreCreationTime(tempPath, creation); err != nil {
+		return err
+	}
+	info, err := os.Stat(assignment.Library.Path)
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(tempPath, info.Mode().Perm()); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	currentSHA256, err := mediametadata.FileSHA256(assignment.Library.Path)
+	if err != nil {
+		return err
+	}
+	if currentSHA256 != originalSHA256 {
+		return fmt.Errorf("library file changed during promotion")
+	}
+	if err := fileops.ReplaceFileSafely(tempPath, outputPath); err != nil {
 		_ = os.Remove(tempPath)
 		return err
 	}

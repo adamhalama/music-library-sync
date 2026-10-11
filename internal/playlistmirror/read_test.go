@@ -135,3 +135,27 @@ func TestIndexRekordboxCatalogKeepsPathAmbiguityAndRejectsDuplicateIDs(t *testin
 		t.Fatal("expected duplicate content ID refusal")
 	}
 }
+
+func TestIndexRekordboxCatalogSkipsNonFileRowsButValidatesTheirIDs(t *testing.T) {
+	contents := []bridge.Content{
+		{ID: "local", FolderPath: "file:///Music/one.mp3"},
+		{ID: "streaming"},
+		{ID: "relative", FolderPath: "Music/two.mp3"},
+		{ID: "service", FolderPath: "beatport://track/123"},
+	}
+	index, err := IndexRekordboxCatalog(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index) != 1 || len(index["/Music/one.mp3"]) != 1 || index["/Music/one.mp3"][0].ID != "local" {
+		t.Fatalf("non-file rows polluted the catalog: %#v", index)
+	}
+	for _, bad := range [][]bridge.Content{
+		{{ID: ""}},
+		{{ID: "streaming"}, {ID: "streaming", FolderPath: "/Music/one.mp3"}},
+	} {
+		if _, err := IndexRekordboxCatalog(bad); err == nil {
+			t.Fatalf("invalid IDs accepted on non-file rows: %#v", bad)
+		}
+	}
+}

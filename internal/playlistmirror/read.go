@@ -69,7 +69,7 @@ func ReadRekordbox(inspect bridge.InspectResponse, selector playlists.PlaylistSe
 		result.Tracks = append(result.Tracks, Track{
 			Index: index + 1, ProviderID: content.ID, Artist: content.Artist, Title: content.Title, Album: content.Album,
 			Duration: formatDuration(content.DurationSeconds), RawPath: content.FolderPath,
-			NormalizedPath: pathidentity.Canonical(content.FolderPath),
+			NormalizedPath: rekordboxRealPath(content.FolderPath),
 		})
 	}
 	return result, nil
@@ -131,13 +131,23 @@ func IndexRekordboxCatalog(contents []bridge.Content) (RekordboxCatalog, error) 
 			return nil, fmt.Errorf("Rekordbox inspection returned duplicate content ID %q", content.ID)
 		}
 		seenIDs[content.ID] = struct{}{}
-		path := pathidentity.Canonical(content.FolderPath)
-		if path == "" || !filepath.IsAbs(path) {
-			return nil, fmt.Errorf("Rekordbox content %q does not expose an absolute real path", content.ID)
+		path := rekordboxRealPath(content.FolderPath)
+		if path == "" {
+			// Streaming and other non-file rows cannot match a local library path.
+			// Selected source rows are retained by ReadRekordbox and blocked by BuildPlan.
+			continue
 		}
 		index[path] = append(index[path], content)
 	}
 	return index, nil
+}
+
+func rekordboxRealPath(raw string) string {
+	path := pathidentity.Canonical(raw)
+	if !filepath.IsAbs(path) {
+		return ""
+	}
+	return path
 }
 
 func ReadNavidromeCatalog(ctx context.Context, client NavidromeReader) (NavidromeCatalog, error) {

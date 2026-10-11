@@ -61,6 +61,9 @@ func TestNavidromeConfigPathHonoursTheExplicitFlag(t *testing.T) {
 }
 
 func TestNavidromeConfigShowOmitsCredentialFields(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("this command validates macOS-only Navidrome configuration")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "navidrome.yaml")
 	body := "version: 1\nenabled: true\nserver:\n  username: jaa\n"
@@ -162,6 +165,9 @@ func TestNavidromeFavoritesApplyRequiresAPlanFile(t *testing.T) {
 }
 
 func TestNavidromeFavoritesApplyRejectsATamperedPlanFile(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("this command validates macOS-only Navidrome configuration")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.json")
 	if err := os.WriteFile(path, []byte(`{"version":"1","checksum_sha256":"deadbeef"}`), 0o600); err != nil {

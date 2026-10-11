@@ -3,9 +3,17 @@ package navidrome
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func requireDarwinConfig(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("successful Navidrome configuration requires macOS")
+	}
+}
 
 func TestDefaultConfigMatchesPlanDefaults(t *testing.T) {
 	cfg := DefaultConfig()
@@ -148,6 +156,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 }
 
 func TestValidateAcceptsDefaults(t *testing.T) {
+	requireDarwinConfig(t)
 	t.Setenv("HOME", t.TempDir())
 	if err := Validate(DefaultConfig()); err != nil {
 		t.Fatalf("Validate(defaults): %v", err)
@@ -155,6 +164,7 @@ func TestValidateAcceptsDefaults(t *testing.T) {
 }
 
 func TestSaveRoundTrip(t *testing.T) {
+	requireDarwinConfig(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, "navidrome.yaml")
@@ -188,6 +198,7 @@ func TestSaveRoundTrip(t *testing.T) {
 // so it has to survive a save/load. A config that forgets it puts the checklist
 // back to permanently incomplete.
 func TestPhoneAcknowledgementSurvivesASaveAndLoad(t *testing.T) {
+	requireDarwinConfig(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, "navidrome.yaml")
@@ -258,5 +269,23 @@ func TestValidateRejectsAHiddenPlaylistsPath(t *testing.T) {
 func TestDefaultPlaylistsPathIsNotHidden(t *testing.T) {
 	if hiddenSegment(DefaultPlaylistsPath) != "" {
 		t.Fatalf("the default playlists path %q is hidden and would never be scanned", DefaultPlaylistsPath)
+	}
+}
+
+func TestValidateAndSaveRejectUnsupportedPlatform(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("unsupported-platform guard applies outside macOS")
+	}
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "supported on macOS only") {
+		t.Fatalf("unsupported-platform validation = %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "navidrome.yaml")
+	if err := Save(path, cfg); err == nil || !strings.Contains(err.Error(), "supported on macOS only") {
+		t.Fatalf("unsupported-platform save = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("unsupported-platform save wrote a config: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jaa/update-downloads/internal/fileops"
+	"github.com/jaa/update-downloads/internal/mediametadata"
 )
 
 func TestPromotionOutputsPreserveOriginalCreationTime(t *testing.T) {
@@ -37,11 +38,16 @@ func TestPromotionOutputsPreserveOriginalCreationTime(t *testing.T) {
 	assertCreationTime(t, backupPath, created)
 
 	originalRun := runPromotionFFmpeg
+	originalVerify := verifyPromotionMetadata
+	verifyPromotionMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, outputPath string) error {
 		return os.WriteFile(outputPath, []byte("upgraded audio"), 0o644)
 	}
 	t.Cleanup(func() {
 		runPromotionFFmpeg = originalRun
+		verifyPromotionMetadata = originalVerify
 	})
 	if err := applyReplacement(
 		context.Background(),

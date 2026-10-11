@@ -171,7 +171,7 @@ func buildSpotifyDeemixPlan(
 		}
 	}
 	tracks = applySpotifyPlanWindow(tracks, opts.PlanLimit, EffectivePlanWindow(source, opts))
-	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks)
+	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks, newSpotifyMetadataResolver(spotifyCreds))
 
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 

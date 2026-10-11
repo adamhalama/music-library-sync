@@ -148,9 +148,8 @@ final class AppState: ObservableObject {
     @Published private(set) var syncSources: [SourceCapability] = []
     @Published var syncSourceOptions: [String: SyncSourceOptions] = [:]
     // Every default below comes from `SyncDefaults`, which is the only place
-    // they are written. `startDryRunPlan()` forces dry run on; reaching Run Sync
-    // from the sidebar has to agree with it, and reading one constant is how
-    // these two routes are kept from disagreeing.
+    // they are written. `startDryRunPlan()` explicitly overrides dry run for
+    // Home's preview action; the ordinary Run Sync route starts live.
     @Published var syncDryRun = SyncDefaults.dryRun
     @Published var syncUnlimited = SyncDefaults.unlimited
     @Published var syncPlanLimit = SyncDefaults.planLimit
@@ -678,6 +677,9 @@ final class AppState: ObservableObject {
         guard !syncRun.phase.isActive else { return }
         syncCancellationWatchdog?.cancel()
         syncRun = SyncRunState()
+        // A Home preview must not silently turn the next ordinary sync into
+        // another dry run after the user chooses "Configure another run".
+        syncDryRun = SyncDefaults.dryRun
         selectedSyncSourceID = nil
         syncSidebarSelectionIsExplicit = false
     }
@@ -1211,9 +1213,9 @@ final class AppState: ObservableObject {
         planCursorBySource[sourceID] = nil
     }
 
-    /// C17 — restores the values the GUI used to hardcode, so "back to how it
-    /// was" is one click rather than five.
+    /// Restores every option in the Advanced inspector, including preview mode.
     func resetSyncAdvanced() {
+        syncDryRun = SyncDefaults.dryRun
         syncPlanWindow = SyncDefaults.planWindow
         syncAskOnExisting = SyncDefaults.askOnExisting
         syncScanGaps = SyncDefaults.scanGaps
@@ -1508,7 +1510,7 @@ final class AppState: ObservableObject {
 
     private func applySyncFinished(_ finished: RunFinishedNotification) {
         syncCancellationWatchdog?.cancel()
-        syncRun.finish(exitCode: finished.exitCode, error: finished.error)
+        syncRun.finish(exitCode: finished.exitCode, error: finished.error, dryRun: syncDryRun)
         planSelectionOverrides = [:]
         planCursorBySource = [:]
     }

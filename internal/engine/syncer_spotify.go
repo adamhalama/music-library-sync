@@ -239,6 +239,10 @@ func (s *Syncer) runSpotifyDeemix(
 	})
 
 	runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
+	metadataResolver := newSpotifyMetadataResolver(auth.SpotifyCredentials{
+		ClientID:     sourceForExec.SpotifyClientID,
+		ClientSecret: sourceForExec.SpotifyClientSecret,
+	})
 	sourceFailed := false
 	var sourceFailureMessage string
 	var sourceFailureDetails map[string]any
@@ -278,24 +282,32 @@ func (s *Syncer) runSpotifyDeemix(
 		trackSource.DeemixRuntimeDir = runtimeDir
 		spec.Dir = runtimeDir
 
-		if trackID != "" && strings.TrimSpace(runtimeDir) != "" {
-			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata)
+		if trackID != "" {
+			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata, metadataResolver)
 			if metadataErr != nil {
+				sourceFailed = true
+				sourceFailureMessage = fmt.Sprintf("[%s] spotify metadata lookup failed for %s; refusing unprimed deemix execution: %v", source.ID, trackID, metadataErr)
+				outcome.Interrupted = ctx.Err() != nil
+				break
+			}
+			if strings.TrimSpace(metadata.ISRC) == "" {
 				_ = s.Emitter.Emit(output.Event{
 					Timestamp: s.Now(),
 					Level:     output.LevelWarn,
 					Event:     output.EventSourcePreflight,
 					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
+					Message: fmt.Sprintf(
+						"[%s] no ISRC resolved for %s; deemix cannot match it on Deezer and will report it unavailable",
+						source.ID, trackID,
+					),
 				})
-			} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
-				})
+			}
+			// An absent/unwritten cache lets the upstream plugin resolve unrelated
+			// audio. Even a metadata-only entry must be published before invocation.
+			if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
+				sourceFailed = true
+				sourceFailureMessage = fmt.Sprintf("[%s] unable to prime deemix spotify metadata cache for %s; refusing unprimed execution: %v", source.ID, trackID, cacheErr)
+				break
 			}
 		}
 
@@ -438,7 +450,7 @@ func (s *Syncer) runSpotifyDeemix(
 			Message:   sourceFailureMessage,
 			Details:   sourceFailureDetails,
 		})
-		outcome.Stop = !cfg.Defaults.ContinueOnError
+		outcome.Stop = outcome.Interrupted || !cfg.Defaults.ContinueOnError
 		return outcome
 	}
 
@@ -556,6 +568,7 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 			return plan, err
 		}
 	}
+	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks, newSpotifyMetadataResolver(spotifyCreds))
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
 	state, stateStore, err := loadSpotifySyncState(stateFilePath)

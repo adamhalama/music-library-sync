@@ -68,6 +68,10 @@
 		A100000000000000000003D /* ConfigDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003D /* ConfigDraft.swift */; };
 		A100000000000000000003E /* ConfigSourceForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003E /* ConfigSourceForm.swift */; };
 		A100000000000000000003F /* SourceEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000003F /* SourceEditorView.swift */; };
+		A10000000000000000000301 /* PlaylistSyncJobEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000301 /* PlaylistSyncJobEditor.swift */; };
+		A10000000000000000000302 /* PlaylistSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000302 /* PlaylistSyncModels.swift */; };
+		A10000000000000000000303 /* PlaylistSyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000303 /* PlaylistSyncView.swift */; };
+		A10000000000000000000304 /* AppState+PlaylistSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000304 /* AppState+PlaylistSync.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,7 +93,7 @@
 		B10000000000000000000006 /* UDLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/UDLClient.swift; sourceTree = "<group>"; };
 		B10000000000000000000101 /* PhoneLibraryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/PhoneLibrary/PhoneLibraryModels.swift; sourceTree = "<group>"; };
 		B10000000000000000000102 /* PhoneLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/PhoneLibrary/PhoneLibraryView.swift; sourceTree = "<group>"; };
-		B10000000000000000000103 /* AppState+PhoneLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState+PhoneLibrary.swift; sourceTree = "<group>"; };
+		B10000000000000000000103 /* AppState+PhoneLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/AppState+PhoneLibrary.swift"; sourceTree = "<group>"; };
 		B10000000000000000000104 /* PhoneLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLibraryTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistErrorSurfacingTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState.swift; sourceTree = "<group>"; };
@@ -144,6 +148,10 @@
 		B100000000000000000003D /* ConfigDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigDraft.swift; sourceTree = "<group>"; };
 		B100000000000000000003E /* ConfigSourceForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/ConfigSourceForm.swift; sourceTree = "<group>"; };
 		B100000000000000000003F /* SourceEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/ConfigEditor/SourceEditorView.swift; sourceTree = "<group>"; };
+		B10000000000000000000301 /* PlaylistSyncJobEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Features/PlaylistSync/PlaylistSyncJobEditor.swift"; sourceTree = "<group>"; };
+		B10000000000000000000302 /* PlaylistSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Features/PlaylistSync/PlaylistSyncModels.swift"; sourceTree = "<group>"; };
+		B10000000000000000000303 /* PlaylistSyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Features/PlaylistSync/PlaylistSyncView.swift"; sourceTree = "<group>"; };
+		B10000000000000000000304 /* AppState+PlaylistSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/AppState+PlaylistSync.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -164,6 +172,10 @@
 		F10000000000000000000002 /* UDL */ = {
 			isa = PBXGroup;
 			children = (
+				B10000000000000000000304 /* AppState+PlaylistSync.swift */,
+				B10000000000000000000303 /* PlaylistSyncView.swift */,
+				B10000000000000000000302 /* PlaylistSyncModels.swift */,
+				B10000000000000000000301 /* PlaylistSyncJobEditor.swift */,
 				B10000000000000000000001 /* UDLApp.swift */,
 				B10000000000000000000002 /* JSONValue.swift */,
 				B10000000000000000000003 /* WireModels.swift */,
@@ -336,6 +348,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000304 /* AppState+PlaylistSync.swift in Sources */,
+				A10000000000000000000303 /* PlaylistSyncView.swift in Sources */,
+				A10000000000000000000302 /* PlaylistSyncModels.swift in Sources */,
+				A10000000000000000000301 /* PlaylistSyncJobEditor.swift in Sources */,
 				A10000000000000000000001 /* UDLApp.swift in Sources */,
 				A10000000000000000000002 /* JSONValue.swift in Sources */,
 				A10000000000000000000003 /* WireModels.swift in Sources */,
@@ -414,7 +430,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		D10000000000000000000010 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_VERSION = 5.0; }; name = Debug; };
+		D10000000000000000000010 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; ENABLE_TESTABILITY = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_VERSION = 5.0; }; name = Debug; };
 		D10000000000000000000011 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_VERSION = 5.0; }; name = Release; };
 		D10000000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;

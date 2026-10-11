@@ -421,9 +421,6 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			return m, nil
 		case "a":
-			if m.isInteractiveSyncWorkflow() {
-				return m, nil
-			}
 			if m.askOnExistingSet {
 				m.askOnExisting = false
 				m.askOnExistingSet = false
@@ -434,9 +431,6 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 			m.validationErr = ""
 			return m, nil
 		case "g":
-			if m.isInteractiveSyncWorkflow() {
-				return m, nil
-			}
 			m.scanGaps = !m.scanGaps
 			m.validationErr = ""
 			return m, nil
@@ -814,7 +808,7 @@ func (m *tuiSyncModel) handleInteractiveSelectionBrowseKey(key string) bool {
 	filterPhase := m.interactiveFilterPhase()
 	state.syncFilterForPhase(filterPhase)
 	switch key {
-	case "d", "t", "l", "[", "]", "u":
+	case "d", "t", "l", "[", "]", "u", "g":
 		return true
 	}
 	if key == "tab" {
@@ -901,12 +895,14 @@ func (m tuiSyncModel) buildSyncRequest(selectedIDs []string) workflows.SyncReque
 				req.PlanWindowBySource[source.ID] = m.planWindowForSourceID(source.ID)
 			}
 		}
-		return req
 	}
 	req.AskOnExisting = m.askOnExisting
 	req.AskOnExistingSet = m.askOnExistingSet
 	req.ScanGaps = m.scanGaps
-	req.NoPreflight = m.noPreflight
+	// A plan is built from preflight, so no-preflight stays standard-only.
+	if !m.isInteractiveSyncWorkflow() {
+		req.NoPreflight = m.noPreflight
+	}
 	return req
 }
 
@@ -1262,12 +1258,6 @@ func tuiDetailBool(details map[string]any, key string) bool {
 }
 
 func validateTUISyncOptions(m tuiSyncModel) string {
-	if m.isInteractiveSyncWorkflow() && m.scanGaps {
-		return "plan mode cannot be combined with scan-gaps"
-	}
-	if m.isInteractiveSyncWorkflow() && m.askOnExistingSet {
-		return "plan mode cannot be combined with ask-on-existing"
-	}
 	if m.isInteractiveSyncWorkflow() && m.noPreflight {
 		return "plan mode cannot be combined with no-preflight"
 	}

@@ -47,6 +47,8 @@ var (
 	enumerateSpotifyTracksFn              = enumerateSpotifyPlaylistTracks
 	enumerateSpotifyViaPageFn             = enumerateSpotifyPlaylistTracksViaPage
 	fetchSpotifyTrackMetadataFn           = fetchSpotifyTrackMetadataFromPage
+	fetchSpotifyTrackMetadataFromAPIFn    = fetchSpotifyTrackMetadataFromAPI
+	fetchSpotifyAccessTokenFn             = fetchSpotifyAccessToken
 	fetchSoundCloudFreeDownloadMetadataFn = fetchSoundCloudFreeDownloadMetadata
 	applySoundCloudTrackMetadataFn        = applySoundCloudTrackMetadata
 	deemixTitlePattern                    = regexp.MustCompile(`\[(.+?)\]\s+Download(?:ing:\s+[0-9]+(?:\.[0-9]+)?%| complete)`)
@@ -691,14 +693,22 @@ func (s *Syncer) runGenericAdapter(
 		return outcome
 	}
 
+	destinationMessage := fmt.Sprintf("[%s] downloading to %s", source.ID, spec.Dir)
+	commandMessage := fmt.Sprintf("[%s] running %s (download_order=%s)", source.ID, spec.DisplayCommand, downloadOrder)
+	if opts.DryRun {
+		destinationMessage = fmt.Sprintf("[%s] would download to %s (dry run; no files will be written)", source.ID, spec.Dir)
+		commandMessage = fmt.Sprintf("[%s] would run %s (download_order=%s)", source.ID, spec.DisplayCommand, downloadOrder)
+	}
+
 	_ = s.Emitter.Emit(output.Event{
 		Timestamp: s.Now(),
 		Level:     output.LevelInfo,
 		Event:     output.EventSourcePreflight,
 		SourceID:  source.ID,
-		Message:   fmt.Sprintf("[%s] downloading to %s", source.ID, spec.Dir),
+		Message:   destinationMessage,
 		Details: map[string]any{
 			"target_dir": spec.Dir,
+			"dry_run":    opts.DryRun,
 		},
 	})
 
@@ -708,11 +718,12 @@ func (s *Syncer) runGenericAdapter(
 		Level:     output.LevelInfo,
 		Event:     output.EventSourceStarted,
 		SourceID:  source.ID,
-		Message:   fmt.Sprintf("[%s] running %s (download_order=%s)", source.ID, spec.DisplayCommand, downloadOrder),
+		Message:   commandMessage,
 		Details: map[string]any{
 			"command":        spec.DisplayCommand,
 			"dir":            spec.Dir,
 			"download_order": string(downloadOrder),
+			"dry_run":        opts.DryRun,
 		},
 	})
 

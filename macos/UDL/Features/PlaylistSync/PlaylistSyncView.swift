@@ -297,7 +297,7 @@ struct PlaylistSyncView: View {
 
     private var planSubtitle: String {
         guard let plan, planBelongsToSelection else { return "Planning reads live provider state and writes a checksummed file." }
-        return "plan \(plan.version) · \(plan.generatedAt.formatted()) · checksum \(plan.checksumSHA256.prefix(12))"
+        return "plan \(plan.version) · \(plan.generatedAt) · checksum \(plan.checksumSHA256.prefix(12))"
     }
 
     private var applyConfirmationTitle: String {

@@ -54,6 +54,9 @@ func TestFreeDLConfigAndCapturePathsRemainSessionScoped(t *testing.T) {
 		t.Fatal(rpcErr)
 	}
 	read := value.(freeDLConfigResult)
+	if !read.NativeMetadataPreservation {
+		t.Fatal("native preservation support must be advertised")
+	}
 	if read.Path != freePath || len(read.Config.Jobs) != 1 || !strings.Contains(read.Content, "free-job") {
 		t.Fatalf("unexpected Free DL config read: %+v", read)
 	}

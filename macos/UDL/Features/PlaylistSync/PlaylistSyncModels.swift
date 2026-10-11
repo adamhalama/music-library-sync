@@ -149,7 +149,8 @@ struct PlaylistSyncMatchedPair: Codable, Sendable {
 
 struct PlaylistSyncPlan: Codable, Sendable {
     let version: Int
-    let generatedAt: Date
+    // Checksummed Go time.Time text must survive nanosecond precision unchanged.
+    let generatedAt: String
     let jobID: String
     let configFingerprint: String
     let direction: String

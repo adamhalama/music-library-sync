@@ -26,6 +26,7 @@ type spotifyRemoteTrack struct {
 	Title    string
 	Artist   string
 	Album    string
+	ISRC     string
 	URL      string
 	AddedAt  time.Time
 	Position int
@@ -49,6 +50,9 @@ type spotifyPlaylistTrackPage struct {
 				Name string `json:"name"`
 			} `json:"album"`
 			ExternalURLs map[string]string `json:"external_urls"`
+			ExternalIDs  struct {
+				ISRC string `json:"isrc"`
+			} `json:"external_ids"`
 		} `json:"track"`
 	} `json:"items"`
 	Next string `json:"next"`
@@ -158,6 +162,7 @@ func enumerateSpotifyPlaylistTracksWithToken(
 				Title:    title,
 				Artist:   artist,
 				Album:    album,
+				ISRC:     strings.TrimSpace(item.Track.ExternalIDs.ISRC),
 				URL:      trackURL,
 				AddedAt:  addedAt,
 				Position: position,

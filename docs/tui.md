@@ -226,7 +226,7 @@ Config behavior:
 - native edits save to `--freedl-config` when set, otherwise to the user `freedl.yaml`
 - `./udl.freedl.yaml` remains a runtime override; the setup screen warns when that project file exists while editing the user config
 - the starter job is not saveable until `source_url` is set
-- macOS HypeEdit handoff opens Helium by default; `UDL_FREEDL_BROWSER_APP` overrides the browser app
+- macOS free-DL gate handoff opens Helium by default; `UDL_FREEDL_BROWSER_APP` overrides the browser app
 
 ## Playlists Workflow
 

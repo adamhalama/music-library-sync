@@ -24,9 +24,10 @@ import (
 )
 
 type freeDLConfigResult struct {
-	Path    string        `json:"path"`
-	Config  freedl.Config `json:"config"`
-	Content string        `json:"content"`
+	Path                       string        `json:"path"`
+	Config                     freedl.Config `json:"config"`
+	Content                    string        `json:"content"`
+	NativeMetadataPreservation bool          `json:"native_metadata_preservation"`
 }
 
 type freeDLPlanParams struct {
@@ -93,7 +94,7 @@ func (s *Server) readFreeDLConfig() (any, *RPCError) {
 	if content == "" {
 		content = string(canonical)
 	}
-	return freeDLConfigResult{Path: path, Config: cfg, Content: content}, nil
+	return freeDLConfigResult{Path: path, Config: cfg, Content: content, NativeMetadataPreservation: true}, nil
 }
 
 func (s *Server) writeFreeDLConfig(params json.RawMessage) (any, *RPCError) {
@@ -121,7 +122,7 @@ func (s *Server) writeFreeDLConfig(params json.RawMessage) (any, *RPCError) {
 	if err != nil {
 		return nil, freeDLRPCError(err)
 	}
-	return freeDLConfigResult{Path: path, Config: request.Config, Content: string(content)}, nil
+	return freeDLConfigResult{Path: path, Config: request.Config, Content: string(content), NativeMetadataPreservation: true}, nil
 }
 
 func (s *Server) startFreeDLPlan(params json.RawMessage) (any, *RPCError) {
