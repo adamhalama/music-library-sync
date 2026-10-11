@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minimal NDJSON driver for `udl agent`, used to run the Free DL workflow headlessly."""
 import json, os, subprocess, sys, threading, queue
+from collections import deque
 
 from pathlib import Path
 from context import read_connection
@@ -22,6 +23,7 @@ class Agent:
         self.p = subprocess.Popen(args, cwd=working, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   text=True, bufsize=1, env=env)
         self.q = queue.Queue()
+        self.pending = deque()
         self._id = 0
         threading.Thread(target=self._reader, daemon=True).start()
 
@@ -63,11 +65,15 @@ class Agent:
                 return frame["result"]
             if on_notify:
                 on_notify(frame)
+            else:
+                # StartRun can emit lifecycle/terminal events before its response.
+                # Preserve those frames for the workflow's subsequent pump.
+                self.pending.append(frame)
 
     def pump(self, on_frame):
         """Pump frames until on_frame returns a value."""
         while True:
-            frame = self.q.get()
+            frame = self.pending.popleft() if self.pending else self.q.get()
             if frame is None:
                 raise RuntimeError("agent closed the connection")
             if 'error' in frame and 'id' not in frame:

@@ -35,6 +35,7 @@ jobs:
           go build -o "$RUNNER_TEMP/freedl-validation/udl" ./cmd/udl
       - name: Verify context, preservation and native promotion
         run: |
+          python .dev/freedl-0912/test_agent.py
           python .dev/freedl-0912/test_context.py
           python .dev/freedl-0912/test_quality.py
           UDL_FREEDL_TEST_BINARY="$RUNNER_TEMP/freedl-validation/udl" python .dev/freedl-0912/test_media.py

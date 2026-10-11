@@ -171,6 +171,34 @@ class NativePromotionTests(unittest.TestCase):
                           'original_backup_exact':True,'failed_rows':1,'replaced_rows':0,'stages_cleaned':True})
             print('PROOF app RPC failure: original library and backup exact; failed row visible; no staged files left',flush=True)
 
+    def test_app_rpc_refuses_original_adobe_xmp_without_metadata_loss(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve();ctx,target,source,options=self.setup_job(root,'unsupported-xmp')
+            self.audio(target,'aac')
+            payload=(bytes.fromhex('be7acfcb97a942e89c71999491e3afac')+
+                     b'<x:xmpmeta xmlns:x="adobe:ns:meta/">private library annotation</x:xmpmeta>')
+            atom=struct.pack('>I',8+len(payload))+b'uuid'+payload
+            with target.open('ab') as handle:
+                handle.write(atom)
+            original=target.read_bytes()
+            with Agent(options) as agent:
+                fin=self.apply(agent,self.build(agent,ctx))
+            self.assertNotEqual(fin['exit_code'],0,fin)
+            self.assertEqual(fin['result']['failed'],1)
+            self.assertEqual(fin['result']['replaced'],0)
+            row=fin['result']['rows'][0]
+            self.assertEqual(row['status'],'failed')
+            self.assertIn('unsupported original MP4 top-level atom',row['error'])
+            self.assertNotIn('preservation',row)
+            self.assertNotIn('promoted_sha256',row)
+            self.assertEqual(target.read_bytes(),original)
+            self.assertEqual(Path(row['backup_path']).read_bytes(),original)
+            self.assertFalse(list(target.parent.glob('.udl-freedl-promote-*')))
+            PROOF.append({'route':'app RPC','failure':'unsupported original Adobe XMP metadata',
+                          'library_unchanged':True,'original_backup_exact':True,
+                          'failed_rows':1,'replaced_rows':0,'stages_cleaned':True})
+            print('PROOF app RPC: unsupported Adobe XMP refused; original library and backup exact; no preservation claim',flush=True)
+
     def test_legacy_cli_preserves_tags_without_python_repair(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d).resolve();ctx,target,source,options=self.setup_job(root,'legacy-cli')

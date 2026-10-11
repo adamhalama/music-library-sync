@@ -60,6 +60,72 @@ func readAtom(f *os.File, a atom) ([]byte, error) {
 	_, err := f.ReadAt(data, a.offset)
 	return data, err
 }
+
+// Only moov-level udta/meta are restored. Refuse metadata elsewhere rather
+// than report complete preservation after ffmpeg silently discards it.
+func validateOriginalMP4(f *os.File, top []atom) error {
+	for _, a := range top {
+		var size [4]byte
+		if _, err := f.ReadAt(size[:], a.offset); err != nil {
+			return err
+		}
+		if binary.BigEndian.Uint32(size[:]) == 0 {
+			return fmt.Errorf("open-ended original MP4 atom is unsupported")
+		}
+		switch a.kind {
+		case "ftyp", "mdat", "free", "skip", "wide":
+		case "moov":
+			children, err := atoms(f, a.offset+a.header, a.offset+a.size)
+			if err != nil {
+				return err
+			}
+			for _, child := range children {
+				switch child.kind {
+				case "mvhd", "iods", "udta", "meta", "free", "skip":
+				case "trak":
+					if err := validateTrackMetadata(f, child, 0); err != nil {
+						return err
+					}
+				default:
+					return fmt.Errorf("unsupported original MP4 moov atom %q", child.kind)
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported original MP4 top-level atom %q", a.kind)
+		}
+	}
+	return nil
+}
+
+func validateTrackMetadata(f *os.File, container atom, depth int) error {
+	if depth >= 16 {
+		return fmt.Errorf("original MP4 track atom nesting exceeds supported depth")
+	}
+	children, err := atoms(f, container.offset+container.header, container.offset+container.size)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		switch child.kind {
+		case "udta", "meta", "uuid":
+			return fmt.Errorf("unsupported original MP4 track metadata atom %q", child.kind)
+		case "mdia", "minf", "stbl", "edts", "dinf":
+			if err := validateTrackMetadata(f, child, depth+1); err != nil {
+				return err
+			}
+		case "tkhd", "mdhd", "hdlr", "vmhd", "smhd", "hmhd", "nmhd",
+			"stsd", "stts", "ctts", "stsc", "stsz", "stz2", "stco", "co64",
+			"stss", "stsh", "sdtp", "stdp", "padb", "subs", "sgpd", "sbgp",
+			"elst", "dref", "free", "skip":
+			// Sample descriptions/tables, timing, media headers and padding
+			// describe the original audio; the promoted file keeps its own.
+		default:
+			return fmt.Errorf("unsupported original MP4 track atom %q", child.kind)
+		}
+	}
+	return nil
+}
+
 func mp4Metadata(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -107,6 +173,22 @@ func mp4Metadata(path string) ([]byte, error) {
 	return metadata, nil
 }
 func preserveMP4(original, stage string) error {
+	originalFile, err := os.Open(original)
+	if err != nil {
+		return err
+	}
+	info, err := originalFile.Stat()
+	if err == nil {
+		var top []atom
+		top, err = atoms(originalFile, 0, info.Size())
+		if err == nil {
+			err = validateOriginalMP4(originalFile, top)
+		}
+	}
+	_ = originalFile.Close()
+	if err != nil {
+		return err
+	}
 	metadata, err := mp4Metadata(original)
 	if err != nil {
 		return err
@@ -116,7 +198,7 @@ func preserveMP4(original, stage string) error {
 		return err
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	info, err = f.Stat()
 	if err != nil {
 		return err
 	}

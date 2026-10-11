@@ -1,5 +1,11 @@
 # Native Free DL preservation proof — 2026-10-10
 
+The [final review follow-up](freedl-final-review.md) adds a seventh native case
+for safe Adobe XMP refusal and fixes maintenance RPC ordering plus Spotify
+metadata/cache failure handling. [Hosted final report](https://qs3a3srv17.ufs.sh/f/xzO3BGKm3RAfNPFDTYAhdVv8LB1EsXcG49jJ7TZUolkDCrnw)
+and [fresh native measurements](https://qs3a3srv17.ufs.sh/f/xzO3BGKm3RAflnC6jgB8tFMTvn0CzELiNYpUOb9aqmASKx4h)
+supplement the original snapshot below.
+
 Metadata restoration now runs in Go before installation through the app's
 `freedl.promote.apply` RPC, the TUI service, and `udl promote-freedl`. Python
 restoration is not invoked by these routes. FFmpeg/ffprobe remain the existing

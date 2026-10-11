@@ -25,7 +25,7 @@ def main():
         run = agent.call('freedl.plan.start', params)['run_id']
         plans = []
         def event(frame):
-            if frame.get('method') == 'freedl.plan.event' and frame['params']['run_id'] == run:
+            if frame.get('method') == 'freedl.planEvent' and frame['params']['run_id'] == run:
                 ev = frame['params']['event']
                 if ev['kind'] == 'done':
                     plans.append(ev['plan'])

@@ -121,8 +121,10 @@ The older `udl promote-freedl` command uses the same verification for in-place a
 separate-directory outputs. Cross-container outputs are refused before
 installation, because opaque metadata cannot be promised intact. Keep the library
 container for native upgrades; use the explicit manual migration workflow below
-when changing a track's container. Fragmented/open-ended MP4 and non-RIFF WAV
-layouts are refused rather than silently dropping metadata.
+when changing a track's container. Fragmented/open-ended MP4, metadata outside
+MP4's supported movie-level `udta`/`meta` atoms (including Adobe XMP UUID atoms
+and track-level metadata), and non-RIFF WAV layouts are refused rather than
+silently dropping metadata. Refused files retain their original bytes and backup.
 
 Manual repairs use the same saved promotion/capture context and exact
 backup/target association. Both commands preview unless `--apply` is present:
@@ -182,6 +184,7 @@ proof, not personal media or rollback state.
 ## Validation
 
 ```sh
+python .dev/freedl-0912/test_agent.py
 python .dev/freedl-0912/test_context.py
 python .dev/freedl-0912/test_quality.py
 go build -o /tmp/udl-freedl-validation ./cmd/udl
@@ -202,3 +205,9 @@ MP4/ID3 tags, artwork and unknown WAV chunks; exact backups; upgraded encoded
 audio; creation time; final native hashes; install failure; and refused lossy
 metadata conversion. Fixture generation and the independent tag oracle use
 Mutagen only in tests.
+
+The maintenance RPC tests run a synthetic backend that sends plan completion
+and `run.finished` before the start response. They verify notification replay,
+the actual `freedl.planEvent` method and saved connection provenance without
+network access. Engine regressions also refuse deemix invocation when metadata
+lookup or cache publication fails, preserving Spotify state for a retry.

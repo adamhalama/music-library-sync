@@ -83,6 +83,47 @@ func TestMP4RejectsMalformedAndFragmentedStage(t *testing.T) {
 		})
 	}
 }
+func TestMP4RejectsUnsupportedOriginalMetadataBeforeChangingStage(t *testing.T) {
+	xmp := box("uuid", append([]byte{0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac}, []byte("<x:xmpmeta>private library annotation</x:xmpmeta>")...))
+	moov := box("moov", nil)
+	openEnded := box("mdat", []byte("old audio"))
+	binary.BigEndian.PutUint32(openEnded, 0)
+	nested := box("stbl", nil)
+	for i := 0; i < 16; i++ {
+		nested = box("mdia", nested)
+	}
+	for name, raw := range map[string][]byte{
+		"adobe-xmp":           append(append([]byte(nil), moov...), xmp...),
+		"top-level-meta":      append(append([]byte(nil), moov...), box("meta", nil)...),
+		"unknown-top-level":   append(append([]byte(nil), moov...), box("custom", nil)...),
+		"moov-uuid":           box("moov", xmp),
+		"track-udta":          box("moov", box("trak", box("udta", []byte("private tags")))),
+		"nested-track-meta":   box("moov", box("trak", box("mdia", box("meta", nil)))),
+		"track-uuid":          box("moov", box("trak", xmp)),
+		"unknown-track-atom":  box("moov", box("trak", box("cust", []byte("private metadata")))),
+		"excessive-nesting":   box("moov", box("trak", nested)),
+		"fragmented":          append(append([]byte(nil), moov...), box("moof", nil)...),
+		"fragmented-moov":     box("moov", box("mvex", nil)),
+		"open-ended-original": append(append([]byte(nil), moov...), openEnded...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			original := writeFixture(t, "original.m4a", raw)
+			staged := append(box("mdat", []byte("new audio")), moov...)
+			stage := writeFixture(t, "stage.m4a", staged)
+			if err := preserveMP4(original, stage); err == nil {
+				t.Fatal("accepted unsupported original layout")
+			}
+			got, err := os.ReadFile(stage)
+			if err != nil || !bytes.Equal(got, staged) {
+				t.Fatal("stage changed before unsupported original rejection")
+			}
+			got, err = os.ReadFile(original)
+			if err != nil || !bytes.Equal(got, raw) {
+				t.Fatal("original changed")
+			}
+		})
+	}
+}
 func id3(payload []byte) []byte {
 	header := []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}
 	n := len(payload)
