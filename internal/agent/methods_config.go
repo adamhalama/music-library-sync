@@ -58,11 +58,17 @@ func (s *Server) readConfigFile(params json.RawMessage) (any, *RPCError) {
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	cfg, err := config.LoadSingleFile(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, configRPCError(err)
 	}
-	content, err := os.ReadFile(path)
+	return parseConfigFileResult(path, content)
+}
+
+// parseConfigFileResult derives the editable configuration and revision from
+// one capture, even if the destination changes before the response is built.
+func parseConfigFileResult(path string, content []byte) (any, *RPCError) {
+	cfg, err := config.ParseSingleFile(path, content)
 	if err != nil {
 		return nil, configRPCError(err)
 	}

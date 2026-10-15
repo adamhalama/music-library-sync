@@ -205,3 +205,28 @@ func TestConfigConcurrentExpectedSHAAllowsOneWriter(t *testing.T) {
 		t.Fatalf("same revision allowed %d writers, want exactly one", successes)
 	}
 }
+
+func TestConfigFileResultUsesOneCaptureForConfigAndRevision(t *testing.T) {
+	dir := t.TempDir()
+	path := writeAgentTestConfig(t, dir)
+	captured, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadSingleFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Defaults.Threads = 17
+	if _, err := config.SaveSingleFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	value, rpcErr := parseConfigFileResult(path, captured)
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	result := value.(configFileResult)
+	if result.Config.Defaults.Threads != 1 || result.Content != string(captured) || result.ContentSHA256 != contentSHA256(captured) {
+		t.Fatalf("parsed config and revision do not describe the same capture: %+v", result)
+	}
+}
