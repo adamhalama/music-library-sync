@@ -10,11 +10,13 @@ struct PlaylistSyncJobEditor: View {
     @State private var rekordboxID: String
     @State private var navidromeName: String
     @State private var navidromeID: String
+    @State private var expectedContentSHA256: String?
     @State private var isSaving = false
     @State private var saveFailure: AppState.WorkflowStatus?
 
-    init(existing: PlaylistSyncJob? = nil) {
+    init(existing: PlaylistSyncJob? = nil, expectedContentSHA256: String? = nil) {
         self.existing = existing
+        _expectedContentSHA256 = State(initialValue: expectedContentSHA256)
         _id = State(initialValue: existing?.id ?? "")
         _rekordboxName = State(initialValue: existing?.rekordbox.playlist ?? "")
         _rekordboxID = State(initialValue: existing?.rekordbox.playlistID ?? "")
@@ -54,11 +56,12 @@ struct PlaylistSyncJobEditor: View {
                 Button("Reload jobs") {
                     Task {
                         isSaving = true
-                        await appState.loadPlaylistSync()
+                        let reloaded = await appState.loadPlaylistSync()
+                        if reloaded { expectedContentSHA256 = appState.playlistConfig?.contentSHA256 }
                         isSaving = false
                         // Keep the draft visible; saving again merges it into
                         // the newly loaded config after duplicate-ID checks.
-                        self.saveFailure = appState.playlistSyncStatus?.severity == .error ? appState.playlistSyncStatus : nil
+                        self.saveFailure = reloaded ? nil : appState.playlistSyncStatus
                     }
                 }
                 .constrained(by: isSaving ? "Wait for the save to finish before reloading." : nil)
@@ -101,7 +104,7 @@ struct PlaylistSyncJobEditor: View {
         )
         Task {
             let intent: PlaylistSyncJobSaveIntent = existing.map { .edit(originalID: $0.id) } ?? .create
-            let saved = await appState.savePlaylistSyncJob(job, intent: intent)
+            let saved = await appState.savePlaylistSyncJob(job, intent: intent, expectedContentSHA256: expectedContentSHA256)
             isSaving = false
             if saved {
                 dismiss()

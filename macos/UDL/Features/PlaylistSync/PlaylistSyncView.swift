@@ -40,7 +40,7 @@ struct PlaylistSyncView: View {
             }
             .onDisappear { chrome.searchText = "" }
             .sheet(item: $editing) { target in
-                PlaylistSyncJobEditor(existing: target.job).environmentObject(appState)
+                PlaylistSyncJobEditor(existing: target.job, expectedContentSHA256: appState.playlistConfig?.contentSHA256).environmentObject(appState)
             }
             .confirmationDialog(
                 applyConfirmationTitle,

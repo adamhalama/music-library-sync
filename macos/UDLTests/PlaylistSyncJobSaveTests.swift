@@ -88,7 +88,7 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
     func testDisconnectedConfigWriteThrowsInsteadOfClaimingSuccess() async {
         let state = AppState()
         do {
-            try await state.writePlaylistSyncConfig(config([job("new")]))
+            try await state.writePlaylistSyncConfig(config([job("new")]), expectedContentSHA256: nil)
             XCTFail("A write without a backend must fail")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("Backend disconnected"))
@@ -101,7 +101,7 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
 
     func testUnloadedConfigSurfacesWorkflowErrorInsteadOfSilentlyFailing() async {
         let state = AppState()
-        let saved = await state.savePlaylistSyncJob(job("new"), intent: .create)
+        let saved = await state.savePlaylistSyncJob(job("new"), intent: .create, expectedContentSHA256: nil)
         XCTAssertFalse(saved)
         XCTAssertEqual(state.playlistSyncStatus?.severity, .error)
         XCTAssertTrue(state.playlistSyncStatus?.message.contains("configuration is not loaded") == true)
@@ -114,7 +114,13 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
         defer { rpc.closePipes() }
         let state = AppState(client: rpc.client)
         try await reload(state, rpc: rpc, sha: "original-sha", jobs: [job("original")])
-        let save = Task { await state.savePlaylistSyncJob(job("new"), intent: .create) }
+        let editorSHA = state.playlistConfig?.contentSHA256
+        // An automatic refresh must not authorize an already-open draft to
+        // overwrite an external edit with the newly cached SHA.
+        try await reload(state, rpc: rpc, sha: "external-sha", jobs: [job("original", playlist: "External edit")])
+        let save = Task {
+            await state.savePlaylistSyncJob(job("original", playlist: "Stale draft"), intent: .edit(originalID: "original"), expectedContentSHA256: editorSHA)
+        }
         let request = try await rpc.readRequest(.playlistsConfigWrite)
         XCTAssertEqual(request["params"]?.objectValue?["expected_content_sha256"]?.stringValue, "original-sha")
         try rpc.fail(request, code: -32003, message: "playlist config changed outside UDL; reload before saving")
@@ -122,13 +128,13 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
         XCTAssertFalse(saved)
         XCTAssertEqual(state.playlistSyncStatus?.severity, .error)
         XCTAssertTrue(state.playlistSyncStatus?.message.contains("reload before saving") == true)
-        XCTAssertEqual(state.playlistConfig?.contentSHA256, "original-sha")
-        XCTAssertEqual(state.playlistConfig?.config.syncJobs.map(\.id), ["original"])
+        XCTAssertEqual(state.playlistConfig?.contentSHA256, "external-sha")
+        XCTAssertEqual(state.playlistConfig?.config.syncJobs.first?.rekordbox.playlist, "External edit")
         XCTAssertNil(state.alertMessage)
         try await reload(state, rpc: rpc, sha: "external-sha", jobs: [job("external")])
         XCTAssertEqual(state.playlistConfig?.contentSHA256, "external-sha")
         XCTAssertEqual(state.playlistConfig?.config.syncJobs.map(\.id), ["external"])
-        XCTAssertEqual(state.playlistSyncStatus?.severity, .info)
+        XCTAssertEqual(state.playlistSyncStatus?.severity, .error)
         await rpc.connection.close()
     }
 
@@ -139,7 +145,7 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
         let state = AppState(client: rpc.client)
         try await reload(state, rpc: rpc, sha: "read-sha", jobs: [])
         let updated = config([job("new")])
-        let write = Task { try await state.writePlaylistSyncConfig(updated) }
+        let write = Task { try await state.writePlaylistSyncConfig(updated, expectedContentSHA256: state.playlistConfig?.contentSHA256) }
         let request = try await rpc.readRequest(.playlistsConfigWrite)
         XCTAssertEqual(request["params"]?.objectValue?["expected_content_sha256"]?.stringValue, "read-sha")
         try rpc.reply(request, result: configResult(sha: "written-sha", jobs: updated.syncJobs))
@@ -168,6 +174,20 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
         XCTAssertTrue(result.config.syncJobs.isEmpty)
         let params = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(PlaylistConfigWriteParams(config: result.config)))
         XCTAssertNil(params.objectValue?["expected_content_sha256"])
+    }
+
+    func testAutomaticReloadPreservesApplyFailureAndBackupRecoveryPath() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        let message = "Apply failed. The destination backup is at /fixture/recovery."
+        state.playlistSyncStatus = .failure(message)
+        try await reload(state, rpc: rpc, sha: "refreshed-sha", jobs: [])
+        XCTAssertEqual(state.playlistSyncStatus?.message, message)
+        XCTAssertEqual(state.playlistSyncStatus?.severity, .error)
+        XCTAssertEqual(state.playlistConfig?.contentSHA256, "refreshed-sha")
+        await rpc.connection.close()
     }
 
     private func reload(_ state: AppState, rpc: AgentRPCFixture, sha: String, jobs: [PlaylistSyncJob]) async throws {

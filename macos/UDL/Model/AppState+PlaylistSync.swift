@@ -52,8 +52,9 @@ private enum PlaylistSyncJobSaveError: LocalizedError {
 }
 
 extension AppState {
-    func loadPlaylistSync() async {
-        guard let client else { return }
+    @discardableResult
+    func loadPlaylistSync() async -> Bool {
+        guard let client else { return false }
         do {
             let plannedJob = playlistSyncPlan.flatMap { result in
                 playlistSyncJobs.first { $0.id == result.plan.jobID }?.job
@@ -62,9 +63,6 @@ extension AppState {
             let result = try await client.inspectPlaylistSync()
             try await config
             playlistSyncJobs = result.jobs
-            if playlistSyncStatus?.severity == .error {
-                playlistSyncStatus = "Playlist jobs reloaded. Review the current configuration before saving or planning again."
-            }
             if let selected = playlistSyncPlan,
                !result.jobs.contains(where: { $0.id == selected.plan.jobID }) {
                 playlistSyncPlan = nil
@@ -74,8 +72,10 @@ extension AppState {
                 playlistSyncPlan = nil
                 playlistSyncStatus = "Pair configuration changed. The previous plan was discarded; choose a direction again."
             }
+            return true
         } catch {
             playlistSyncStatus = .failure("Playlist sync jobs could not load: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -129,10 +129,10 @@ extension AppState {
         }
     }
 
-    func savePlaylistSyncJob(_ job: PlaylistSyncJob, intent: PlaylistSyncJobSaveIntent) async -> Bool {
+    func savePlaylistSyncJob(_ job: PlaylistSyncJob, intent: PlaylistSyncJobSaveIntent, expectedContentSHA256: String?) async -> Bool {
         do {
             let updated = try intent.updatedConfig(playlistConfig?.config, saving: job)
-            try await writePlaylistSyncConfig(updated)
+            try await writePlaylistSyncConfig(updated, expectedContentSHA256: expectedContentSHA256)
             playlistSyncPlan = nil
             await loadPlaylistSync()
             playlistSyncStatus = WorkflowStatus(message: "Playlist pair saved. Generate a fresh directional plan before applying.", severity: .ok)
