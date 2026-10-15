@@ -82,6 +82,22 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
         }
     }
 
+    /// A disconnected writer used to return normally, so its caller announced
+    /// success and dismissed the editor even though no config reached disk.
+    func testDisconnectedConfigWriteThrowsInsteadOfClaimingSuccess() async {
+        let state = AppState()
+        do {
+            try await state.writePlaylistSyncConfig(config([job("new")]))
+            XCTFail("A write without a backend must fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Backend disconnected"))
+            XCTAssertTrue(error.localizedDescription.contains("not saved"))
+        }
+        XCTAssertNil(state.playlistConfig)
+        XCTAssertNil(state.alertMessage)
+        XCTAssertNil(state.playlistSyncStatus)
+    }
+
     func testUnloadedConfigSurfacesWorkflowErrorInsteadOfSilentlyFailing() async {
         let state = AppState()
         let saved = await state.savePlaylistSyncJob(job("new"), intent: .create)

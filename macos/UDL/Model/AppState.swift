@@ -736,7 +736,9 @@ final class AppState: ObservableObject {
     /// Writes the shared playlists file for the paired-playlist workflow while
     /// keeping failures owned by that workflow instead of the snapshot screen.
     func writePlaylistSyncConfig(_ config: PlaylistConfig) async throws {
-        guard let client else { return }
+        guard let client else {
+            throw JSONRPCConnectionError.disconnected("Playlist pair was not saved. Reconnect the backend and try again.")
+        }
         playlistConfig = try await client.writePlaylistsConfig(config)
         await loadPlaylists()
     }
