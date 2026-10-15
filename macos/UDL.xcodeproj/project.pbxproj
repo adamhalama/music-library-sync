@@ -18,6 +18,7 @@
 		A10000000000000000000103 /* AppState+PhoneLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000103 /* AppState+PhoneLibrary.swift */; };
 		A10000000000000000000104 /* PhoneLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000104 /* PhoneLibraryTests.swift */; };
 		A10000000000000000000201 /* PlaylistErrorSurfacingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */; };
+		A10000000000000000000501 /* SyncTerminalProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000501 /* SyncTerminalProgressTests.swift */; };
 		A10000000000000000000007 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* AppState.swift */; };
 		A10000000000000000000009 /* PendingPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* PendingPromptView.swift */; };
 		A1000000000000000000000A /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* DoctorView.swift */; };
@@ -96,6 +97,7 @@
 		B10000000000000000000103 /* AppState+PhoneLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/AppState+PhoneLibrary.swift"; sourceTree = "<group>"; };
 		B10000000000000000000104 /* PhoneLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLibraryTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistErrorSurfacingTests.swift; sourceTree = "<group>"; };
+		B10000000000000000000501 /* SyncTerminalProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTerminalProgressTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppState.swift; sourceTree = "<group>"; };
 		B10000000000000000000009 /* PendingPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/PendingPromptView.swift; sourceTree = "<group>"; };
 		B1000000000000000000000A /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Doctor/DoctorView.swift; sourceTree = "<group>"; };
@@ -243,6 +245,7 @@
 				B1000000000000000000000D /* WireModelTests.swift */,
 				B10000000000000000000104 /* PhoneLibraryTests.swift */,
 				B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */,
+				B10000000000000000000501 /* SyncTerminalProgressTests.swift */,
 				B1000000000000000000000E /* AgentProcessTests.swift */,
 			);
 			path = UDLTests;
@@ -419,6 +422,7 @@
 				A1000000000000000000000D /* WireModelTests.swift in Sources */,
 				A10000000000000000000104 /* PhoneLibraryTests.swift in Sources */,
 				A10000000000000000000201 /* PlaylistErrorSurfacingTests.swift in Sources */,
+				A10000000000000000000501 /* SyncTerminalProgressTests.swift in Sources */,
 				A1000000000000000000000E /* AgentProcessTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

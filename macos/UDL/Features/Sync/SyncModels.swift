@@ -722,7 +722,9 @@ struct SyncRunState: Sendable {
 
     @discardableResult
     mutating func applyProgress(_ notification: SyncProgressNotification) -> Bool {
-        guard phase != .canceling else { return false }
+        // Progress has its own newest-only consumer and can still be buffered
+        // when the lossless lifecycle consumer has already finished this run.
+        guard exitCode == nil, phase == .starting || phase == .running else { return false }
         progress = notification.progress
         if let row = notification.row {
             mergeProgressRow(sourceID: notification.sourceID, row: row)
