@@ -247,6 +247,15 @@ final class AppState: ObservableObject {
     private var playlistStartingOperation: PlaylistOperation?
     private var pendingWorkCancellation: Set<Destination> = []
     private var bufferedFinished: [String: RunFinishedNotification] = [:]
+    private enum EarlyRunFrame {
+        case event(SyncEventNotification)
+        case progress(SyncProgressNotification)
+        case freeDLPlan(FreeDLPlanEventNotification)
+    }
+    private var earlyRunFrames: [String: [EarlyRunFrame]] = [:]
+    /// Retained for the connection lifetime: a terminal ID cannot own later
+    /// progress, lifecycle events or UI prompts, even after its screen resets.
+    private var finishedRunIDs: Set<String> = []
     private var planSelectionOverrides: [String: [String: Bool]] = [:]
     private var planCursorBySource: [String: String] = [:]
     private var syncSidebarSelectionIsExplicit = false
@@ -1302,8 +1311,8 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func cancelPrompt(for runID: String? = nil) async -> Bool {
-        guard let prompt = pendingPrompt else { return true }
-        if let runID, prompt.request.params.objectValue?["run_id"]?.stringValue != runID { return true }
+        guard let prompt = pendingPrompt else { return false }
+        if let runID, prompt.request.params.objectValue?["run_id"]?.stringValue != runID { return false }
         guard let connection = client?.connection else { return false }
         do {
             try await connection.respond(to: prompt.request, result: prompt.request.kind.canceledResult)
@@ -1323,12 +1332,14 @@ final class AppState: ObservableObject {
     private func sendPendingSyncCancellationIfReady() async {
         guard syncRun.beginCancellationRequest(), let runID = syncRun.runID else { return }
         let promptReplyDelivered = await cancelPrompt(for: runID)
+        guard syncRun.runID == runID, syncRun.exitCode == nil else { return }
         guard let client else {
             syncRun.failCancellation("The backend client is unavailable.")
             return
         }
         do {
             let result = try await client.cancelRun(runID)
+            guard syncRun.runID == runID, syncRun.exitCode == nil else { return }
             guard result.canceled else {
                 syncRun.failCancellation("The backend did not acknowledge the request.")
                 return
@@ -1337,8 +1348,10 @@ final class AppState: ObservableObject {
         } catch JSONRPCConnectionError.remote(let code, _, _) where code == -32002 && promptReplyDelivered {
             // If our pending UI reply reached Go, `run not found` means its
             // terminal path won the race and removed the registry entry.
+            guard syncRun.runID == runID, syncRun.exitCode == nil else { return }
             syncRun.acknowledgeCancellation()
         } catch {
+            guard syncRun.runID == runID, syncRun.exitCode == nil else { return }
             syncRun.failCancellation(error.localizedDescription)
         }
     }
@@ -1406,20 +1419,33 @@ final class AppState: ObservableObject {
         promptTask = Task {
             for await request in connection.uiRequests {
                 guard !Task.isCancelled else { return }
-                pendingPrompt = PendingPrompt(request: request)
+                receivePrompt(request)
             }
             pendingPrompt = nil
         }
     }
 
+    func receivePrompt(_ request: UIRequest) {
+        if let runID = request.params.objectValue?["run_id"]?.stringValue,
+           finishedRunIDs.contains(runID) || bufferedFinished[runID] != nil { return }
+        pendingPrompt = PendingPrompt(request: request)
+    }
+
     func applyFreeDLPlanNotification(_ notification: FreeDLPlanEventNotification) {
-        guard notification.runID == freeDLRunID || (freeDLRunID == nil && freeDLOperation == .planning) else { return }
+        guard !finishedRunIDs.contains(notification.runID), bufferedFinished[notification.runID] == nil else { return }
+        guard notification.runID == freeDLRunID else {
+            if freeDLRunID == nil, freeDLOperation == .planning {
+                earlyRunFrames[notification.runID, default: []].append(.freeDLPlan(notification))
+            }
+            return
+        }
         applyFreeDLPlanEvent(notification.event)
     }
 
-    private func applyLosslessSyncEvent(_ notification: SyncEventNotification) async {
-        if notification.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase.isActive) {
-            syncRun.registerRunID(notification.runID)
+    func applyLosslessSyncEvent(_ notification: SyncEventNotification) {
+        guard !finishedRunIDs.contains(notification.runID), bufferedFinished[notification.runID] == nil else { return }
+        if notification.runID == syncRun.runID {
+            guard syncRun.exitCode == nil else { return }
             let sourceID = notification.event.sourceID ?? notification.source.rows.first?.sourceID ?? ""
             if !sourceID.isEmpty {
                 syncRun.mergeSnapshot(sourceID: sourceID, snapshot: notification.source)
@@ -1434,10 +1460,14 @@ final class AppState: ObservableObject {
             if syncRun.activity.count > 200 {
                 syncRun.activity.removeFirst(syncRun.activity.count - 200)
             }
-            await sendPendingSyncCancellationIfReady()
             return
         }
-        guard notification.runID == freeDLRunID, freeDLOperation == .capture else { return }
+        guard notification.runID == freeDLRunID, freeDLOperation == .capture else {
+            if isWaitingForSyncFrames {
+                earlyRunFrames[notification.runID, default: []].append(.event(notification))
+            }
+            return
+        }
         let sourceID = notification.event.sourceID ?? notification.source.rows.first?.sourceID ?? ""
         if !sourceID.isEmpty {
             freeDLCaptureSources[sourceID] = notification.source
@@ -1448,9 +1478,14 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func applySyncProgress(_ notification: SyncProgressNotification) {
-        if notification.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase.isActive) {
-            syncRun.registerRunID(notification.runID)
+    private var isWaitingForSyncFrames: Bool {
+        (syncRun.runID == nil && syncRun.phase.isActive)
+            || (freeDLRunID == nil && freeDLOperation == .capture)
+    }
+
+    func applySyncProgress(_ notification: SyncProgressNotification) {
+        guard !finishedRunIDs.contains(notification.runID), bufferedFinished[notification.runID] == nil else { return }
+        if notification.runID == syncRun.runID {
             guard syncRun.applyProgress(notification) else { return }
             selectedSyncSourceID = SyncSourceFocus.target(
                 current: selectedSyncSourceID,
@@ -1460,8 +1495,19 @@ final class AppState: ObservableObject {
             )
             return
         }
-        guard notification.runID == freeDLRunID, freeDLOperation == .capture,
-              let row = notification.row else { return }
+        guard notification.runID == freeDLRunID, freeDLOperation == .capture else {
+            if isWaitingForSyncFrames {
+                // Match the newest-only wire stream without bounding lifecycle
+                // delivery. A percentage never establishes run ownership.
+                earlyRunFrames[notification.runID, default: []].removeAll {
+                    if case .progress = $0 { return true }
+                    return false
+                }
+                earlyRunFrames[notification.runID, default: []].append(.progress(notification))
+            }
+            return
+        }
+        guard let row = notification.row else { return }
         let existing = freeDLCaptureSources[notification.sourceID] ?? SourceSnapshot(
             lifecycle: "running",
             confirmed: true,
@@ -1576,6 +1622,8 @@ final class AppState: ObservableObject {
         configConflict = nil
         playlistOperations = [:]
         bufferedFinished = [:]
+        earlyRunFrames = [:]
+        finishedRunIDs = []
         playlistStartingOperation = nil
         pendingWorkCancellation = []
         planSelectionOverrides = [:]
@@ -1593,11 +1641,21 @@ final class AppState: ObservableObject {
     /// A terminal frame may beat its start response. Only a registered run ID
     /// owns it; a workflow still waiting for its ID must not claim another run.
     func routeFinished(_ finished: RunFinishedNotification) {
+        guard !finishedRunIDs.contains(finished.runID) else { return }
+        if pendingPrompt?.request.params.objectValue?["run_id"]?.stringValue == finished.runID {
+            pendingPrompt = nil
+        }
+        let hasOwner = finished.runID == syncRun.runID || finished.runID == freeDLRunID
+            || finished.runID == rekordboxRunID || finished.runID == playlistSyncRunID
+            || finished.runID == phoneLibraryRunID || playlistOperations[finished.runID] != nil
+        guard hasOwner else {
+            bufferedFinished[finished.runID] = finished
+            return
+        }
+        finishedRunIDs.insert(finished.runID)
+        earlyRunFrames[finished.runID] = nil
         if finished.runID == syncRun.runID {
             applySyncFinished(finished)
-            if pendingPrompt?.request.params.objectValue?["run_id"]?.stringValue == finished.runID {
-                pendingPrompt = nil
-            }
         } else if finished.runID == freeDLRunID {
             applyFreeDLFinished(finished)
         } else if finished.runID == rekordboxRunID {
@@ -1608,15 +1666,24 @@ final class AppState: ObservableObject {
             applyPhoneLibraryFinished(finished)
         } else if let operation = playlistOperations.removeValue(forKey: finished.runID) {
             applyPlaylistFinished(finished, operation: operation)
-        } else {
-            bufferedFinished[finished.runID] = finished
         }
     }
 
     /// Called after the starter registers its own ID, never by operation kind.
+    /// Replay lifecycle/progress before the terminal that may have overtaken
+    /// the start response. Already finished IDs are never replayed.
     func consumeBufferedFinished(_ runID: String) {
-        guard let finished = bufferedFinished.removeValue(forKey: runID) else { return }
-        routeFinished(finished)
+        guard !finishedRunIDs.contains(runID) else { return }
+        let finished = bufferedFinished.removeValue(forKey: runID)
+        let frames = earlyRunFrames.removeValue(forKey: runID) ?? []
+        for frame in frames {
+            switch frame {
+            case .event(let event): applyLosslessSyncEvent(event)
+            case .progress(let progress): applySyncProgress(progress)
+            case .freeDLPlan(let event): applyFreeDLPlanNotification(event)
+            }
+        }
+        if let finished { routeFinished(finished) }
     }
 
     /// Internal so the failure-surfacing behaviour can be tested directly. It is

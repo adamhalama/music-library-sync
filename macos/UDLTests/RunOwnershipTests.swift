@@ -251,7 +251,8 @@ final class RunOwnershipTests: XCTestCase {
             row: nil, plan: nil, error: nil, current: nil, total: nil
         )
         state.applyFreeDLPlanNotification(FreeDLPlanEventNotification(runID: "early-plan", event: event))
-        XCTAssertEqual(state.freeDLStage, "Scanning fixture")
+        XCTAssertEqual(state.freeDLStage, "Starting plan…")
+        XCTAssertNil(state.freeDLRunID)
         state.routeFinished(finished("early-plan"))
         try rpc.reply(request, result: .object(["run_id": .string("early-plan")]))
         await task.value
@@ -427,6 +428,196 @@ final class RunOwnershipTests: XCTestCase {
         try await rpc.finishBeforeReply(state, method: .syncStart) { await state.startSync() }
         assertGloballyIdle(state)
         await rpc.connection.close()
+    }
+
+    func testEarlySyncFramesWaitForRegisteredIDAndReplayBeforeTerminal() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        try await loadSyncFixture(state, rpc: rpc)
+        let start = Task { await state.startSync() }
+        let request = try await rpc.readRequest(.syncStart)
+        state.applyLosslessSyncEvent(event("unrelated", message: "Wrong workflow"))
+        state.applySyncProgress(progress("unrelated"))
+        XCTAssertNil(state.syncRun.runID)
+        XCTAssertTrue(state.syncRun.sources.isEmpty)
+        XCTAssertTrue(state.syncRun.activity.isEmpty)
+        state.applyLosslessSyncEvent(event("sync-owned", message: "Owned lifecycle"))
+        state.applySyncProgress(progress("sync-owned"))
+        XCTAssertNil(state.syncRun.runID)
+        XCTAssertNil(state.syncRun.progress)
+        try rpc.reply(request, result: .object(["run_id": .string("sync-owned")]))
+        await start.value
+        XCTAssertEqual(state.syncRun.runID, "sync-owned")
+        XCTAssertEqual(state.syncRun.activity.map(\.message), ["Owned lifecycle"])
+        XCTAssertEqual(state.syncRun.progress?.track.progressPercent, 73)
+        state.routeFinished(finished("sync-owned"))
+        state.resetSyncRun()
+        let next = Task { await state.startSync() }
+        let nextRequest = try await rpc.readRequest(.syncStart)
+        state.applyLosslessSyncEvent(event("sync-owned", message: "Stale lifecycle"))
+        state.applySyncProgress(progress("sync-owned"))
+        state.routeFinished(finished("sync-owned"))
+        XCTAssertNil(state.syncRun.runID)
+        XCTAssertTrue(state.syncRun.activity.isEmpty)
+        try rpc.reply(nextRequest, result: .object(["run_id": .string("next-sync")]))
+        await next.value
+        XCTAssertEqual(state.syncRun.runID, "next-sync")
+        XCTAssertTrue(state.syncRun.sources.isEmpty)
+        state.routeFinished(finished("next-sync"))
+        await rpc.connection.close()
+    }
+
+    func testConcurrentCaptureAndSyncRegisterOnlyTheirOwnEarlyFrames() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        try await rpc.finishBeforeReply(state, method: .freeDLPlanStart, result: capturePlan()) {
+            await state.startFreeDLPlan(jobID: "fixture")
+        }
+        try await loadSyncFixture(state, rpc: rpc)
+        let sync = Task { await state.startSync() }
+        let syncRequest = try await rpc.readRequest(.syncStart)
+        let capture = Task { await state.startFreeDLCapture() }
+        let captureRequest = try await rpc.readRequest(.freeDLCaptureStart)
+        state.applyLosslessSyncEvent(event("capture", message: "Capture lifecycle"))
+        state.applySyncProgress(progress("capture"))
+        state.applyLosslessSyncEvent(event("sync", message: "Sync lifecycle"))
+        state.applySyncProgress(progress("sync"))
+        XCTAssertNil(state.syncRun.runID)
+        XCTAssertNil(state.freeDLRunID)
+        XCTAssertTrue(state.syncRun.activity.isEmpty)
+        XCTAssertTrue(state.freeDLCaptureActivity.isEmpty)
+        try rpc.reply(captureRequest, result: .object(["run_id": .string("capture")]))
+        await capture.value
+        XCTAssertEqual(state.freeDLRunID, "capture")
+        XCTAssertEqual(state.freeDLCaptureActivity.map(\.message), ["Capture lifecycle"])
+        XCTAssertNil(state.syncRun.runID)
+        try rpc.reply(syncRequest, result: .object(["run_id": .string("sync")]))
+        await sync.value
+        XCTAssertEqual(state.syncRun.runID, "sync")
+        XCTAssertEqual(state.syncRun.activity.map(\.message), ["Sync lifecycle"])
+        XCTAssertEqual(state.syncRun.progress?.track.progressPercent, 73)
+        state.routeFinished(finished("capture"))
+        state.routeFinished(finished("sync"))
+        await rpc.connection.close()
+    }
+
+    func testEarlyLifecycleIsRetainedWhenTerminalAlsoBeatsStartReply() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        try await loadSyncFixture(state, rpc: rpc)
+        let start = Task { await state.startSync() }
+        let request = try await rpc.readRequest(.syncStart)
+        state.applyLosslessSyncEvent(event("early-sync", message: "Completed source", lifecycle: "finished"))
+        state.routeFinished(finished("early-sync"))
+        XCTAssertNil(state.syncRun.exitCode)
+        try rpc.reply(request, result: .object(["run_id": .string("early-sync")]))
+        await start.value
+        XCTAssertEqual(state.syncRun.exitCode, 1)
+        XCTAssertEqual(state.syncRun.activity.map(\.message), ["Completed source"])
+        XCTAssertEqual(state.syncRun.sources["fixture"]?.lifecycle, "finished")
+        await rpc.connection.close()
+    }
+
+    func testNotFoundCancellationRequiresDeliveredPromptForSameRun() async throws {
+        for promptRunID in ["other-run", "sync-cancel"] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            let state = AppState(client: rpc.client)
+            try await loadSyncFixture(state, rpc: rpc)
+            let start = Task { await state.startSync() }
+            let request = try await rpc.readRequest(.syncStart)
+            try rpc.reply(request, result: .object(["run_id": .string("sync-cancel")]))
+            await start.value
+            state.receivePrompt(prompt(promptRunID))
+            let stop = Task { await state.cancelActiveSync() }
+            if promptRunID == "sync-cancel" {
+                let response = try await rpc.readRequest()
+                XCTAssertEqual(response["id"], .string("prompt-sync-cancel"))
+            }
+            let cancel = try await rpc.readRequest(.runCancel)
+            try rpc.fail(cancel, code: -32002, message: "run not found")
+            await stop.value
+            XCTAssertEqual(state.syncRun.cancelAcknowledged, promptRunID == "sync-cancel")
+            if promptRunID == "other-run" {
+                XCTAssertNotNil(state.pendingPrompt)
+                XCTAssertTrue(state.syncRun.terminalMessage?.contains("Stop failed") == true)
+            }
+            state.routeFinished(finished("sync-cancel"))
+            await rpc.connection.close()
+            rpc.closePipes()
+        }
+    }
+
+    func testLateCancellationReplyCannotChangeReplacementSync() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        try await loadSyncFixture(state, rpc: rpc)
+        let start = Task { await state.startSync() }
+        let request = try await rpc.readRequest(.syncStart)
+        try rpc.reply(request, result: .object(["run_id": .string("old-sync")]))
+        await start.value
+        state.receivePrompt(prompt("old-sync"))
+        let stop = Task { await state.cancelActiveSync() }
+        _ = try await rpc.readRequest() // canceled prompt reply
+        let cancel = try await rpc.readRequest(.runCancel)
+        state.routeFinished(finished("old-sync"))
+        state.resetSyncRun()
+        let next = Task { await state.startSync() }
+        let nextRequest = try await rpc.readRequest(.syncStart)
+        try rpc.reply(nextRequest, result: .object(["run_id": .string("new-sync")]))
+        await next.value
+        try rpc.fail(cancel, code: -32002, message: "run not found")
+        await stop.value
+        XCTAssertEqual(state.syncRun.runID, "new-sync")
+        XCTAssertFalse(state.syncRun.cancelAcknowledged)
+        XCTAssertNil(state.syncRun.terminalMessage)
+        state.routeFinished(finished("new-sync"))
+        await rpc.connection.close()
+    }
+
+    func testTerminalClearsOnlyItsPromptAndRejectsLatePrompts() {
+        let state = AppState()
+        state.playlistSyncRunID = "pair"
+        state.playlistSyncOperation = .plan
+        state.receivePrompt(prompt("pair"))
+        state.routeFinished(finished("pair"))
+        XCTAssertNil(state.pendingPrompt)
+        state.receivePrompt(prompt("pair"))
+        XCTAssertNil(state.pendingPrompt)
+        state.receivePrompt(prompt("live-other"))
+        state.routeFinished(finished("unknown-terminal"))
+        XCTAssertEqual(state.pendingPrompt?.request.params.objectValue?["run_id"]?.stringValue, "live-other")
+        state.receivePrompt(prompt("unknown-terminal"))
+        XCTAssertEqual(state.pendingPrompt?.request.params.objectValue?["run_id"]?.stringValue, "live-other")
+    }
+
+    private func prompt(_ runID: String) -> UIRequest {
+        UIRequest(id: .string("prompt-\(runID)"), kind: .confirm,
+                  params: .object(["run_id": .string(runID), "message": .string("Continue?")]))
+    }
+
+    private func event(_ runID: String, message: String, lifecycle: String = "running") -> SyncEventNotification {
+        SyncEventNotification(runID: runID,
+            event: OutputEvent(timestamp: nil, level: "info", event: "source_started", sourceID: "fixture", message: message, details: nil),
+            source: SourceSnapshot(lifecycle: lifecycle, confirmed: true, rows: [], activity: []))
+    }
+
+    private func progress(_ runID: String) -> SyncProgressNotification {
+        SyncProgressNotification(runID: runID, sourceID: "fixture", progress: StructuredProgressSnapshot(
+            progress: ProgressModel(
+                source: SourceProgress(id: "fixture", lifecycle: "running", plannedTotal: 1, itemTotal: 1, itemIndex: 1, completed: 0),
+                track: TrackProgress(name: "Fixture", lifecycle: "downloading", progressPercent: 73),
+                global: GlobalProgress(total: 1, completed: 0)),
+            track: StructuredTrackState(name: "Fixture", progressKnown: true, progressPercent: 73, lifecycle: "downloading"),
+            structuredTrackEvents: true), row: nil)
     }
 
     private func loadSyncFixture(_ state: AppState, rpc: AgentRPCFixture) async throws {
