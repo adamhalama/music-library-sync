@@ -51,6 +51,17 @@ struct PlaylistSyncJobEditor: View {
                     .font(.callout)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                Button("Reload jobs") {
+                    Task {
+                        isSaving = true
+                        await appState.loadPlaylistSync()
+                        isSaving = false
+                        // Keep the draft visible; saving again merges it into
+                        // the newly loaded config after duplicate-ID checks.
+                        self.saveFailure = appState.playlistSyncStatus?.severity == .error ? appState.playlistSyncStatus : nil
+                    }
+                }
+                .constrained(by: isSaving ? "Wait for the save to finish before reloading." : nil)
             }
 
             HStack {

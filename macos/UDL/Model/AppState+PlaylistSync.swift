@@ -58,8 +58,13 @@ extension AppState {
             let plannedJob = playlistSyncPlan.flatMap { result in
                 playlistSyncJobs.first { $0.id == result.plan.jobID }?.job
             }
+            async let config: Void = reloadPlaylistConfig()
             let result = try await client.inspectPlaylistSync()
+            try await config
             playlistSyncJobs = result.jobs
+            if playlistSyncStatus?.severity == .error {
+                playlistSyncStatus = "Playlist jobs reloaded. Review the current configuration before saving or planning again."
+            }
             if let selected = playlistSyncPlan,
                !result.jobs.contains(where: { $0.id == selected.plan.jobID }) {
                 playlistSyncPlan = nil

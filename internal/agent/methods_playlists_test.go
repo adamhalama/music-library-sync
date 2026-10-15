@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -217,4 +218,67 @@ func waitForNotifications(t *testing.T, output *synchronizedBuffer, count int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d notifications: %s", count, output.String())
+}
+
+func TestPlaylistsConfigExpectedSHAGuard(t *testing.T) {
+	path := t.TempDir() + "/playlists.yaml"
+	server := &Server{}
+	server.PlaylistsConfigPath = path
+	cfg := playlists.Config{Version: playlists.ConfigVersion}
+	if err := playlists.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	value, rpcErr := server.readPlaylistsConfig()
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	read := value.(playlistConfigResult)
+	if read.ContentSHA256 != contentSHA256([]byte(read.Content)) {
+		t.Fatal("read SHA does not match content")
+	}
+	external := []byte(read.Content + "# external edit\n")
+	if err := os.WriteFile(path, external, 0600); err != nil {
+		t.Fatal(err)
+	}
+	request := map[string]any{"config": cfg, "expected_content_sha256": read.ContentSHA256}
+	_, rpcErr = server.writePlaylistsConfig(mustJSON(t, request))
+	if rpcErr == nil || rpcErr.Code != CodeRunConflict {
+		t.Fatalf("expected conflict, got %+v", rpcErr)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, external) {
+		t.Fatal("conflict overwrote external edit")
+	}
+	request["expected_content_sha256"] = contentSHA256(external)
+	value, rpcErr = server.writePlaylistsConfig(mustJSON(t, request))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	written := value.(playlistConfigResult)
+	after, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.ContentSHA256 != contentSHA256(after) || written.Content != string(after) {
+		t.Fatal("write did not return persisted content and SHA")
+	}
+}
+
+func TestPlaylistsConfigExpectedSHACreatesMissingFile(t *testing.T) {
+	path := t.TempDir() + "/playlists.yaml"
+	server := &Server{}
+	server.PlaylistsConfigPath = path
+	_, rpcErr := server.writePlaylistsConfig(mustJSON(t, map[string]any{
+		"config":                  playlists.Config{Version: playlists.ConfigVersion},
+		"expected_content_sha256": contentSHA256(nil),
+	}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
 }

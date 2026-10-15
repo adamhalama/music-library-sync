@@ -9,7 +9,7 @@ import XCTest
 @MainActor
 final class RunOwnershipTests: XCTestCase {
     func testEveryRekordboxStarterConsumesItsEarlyFinishAndCanStartAgain() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -45,7 +45,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testEveryFreeDLStarterConsumesItsEarlyFinishAndCanStartAgain() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -97,7 +97,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testEveryPhoneLibraryStarterConsumesItsEarlyFinishAndCanStartAgain() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -139,7 +139,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testPlaylistSyncPlanAndApplyConsumeEarlyFinishAndCanStartAgain() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -162,7 +162,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testPlaylistRefreshAndProviderDiscoveryConsumeEarlyFinishAndCanStartAgain() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -182,7 +182,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testSyncAndPreviewConsumeEarlyFinishWithoutLeavingBusyState() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -202,7 +202,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testKnownPairFinishIsNotStolenByNilIDFreeDLSyncOrPhoneStartup() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -240,7 +240,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testEarlyFreeDLPlanEventCannotLetLateStartReplyReviveFinishedRun() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -265,7 +265,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testBufferedFinishIsConsumedOnlyByItsOwnIDWhileFreeDLStarts() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -292,7 +292,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testNonRunPhoneRegistrationDoesNotClaimAnUnrelatedFinish() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -328,7 +328,7 @@ final class RunOwnershipTests: XCTestCase {
         state.playlistSyncOperation = nil
         assertGloballyIdle(state)
 
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let connected = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -359,7 +359,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testGlobalCancellationQueuesUntilEachStartupReceivesItsOwnRunID() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -405,7 +405,7 @@ final class RunOwnershipTests: XCTestCase {
     }
 
     func testPhoneAndPairBusyStatesRejectSyncAndPreviewWithoutChangingOptions() async throws {
-        let rpc = RunOwnershipRPC()
+        let rpc = AgentRPCFixture()
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
@@ -429,7 +429,7 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.close()
     }
 
-    private func loadSyncFixture(_ state: AppState, rpc: RunOwnershipRPC) async throws {
+    private func loadSyncFixture(_ state: AppState, rpc: AgentRPCFixture) async throws {
         let load = Task { await state.loadSyncSources() }
         let request = try await rpc.readRequest(.sourcesCapabilities)
         try rpc.reply(request, result: .object(["sources": .array([.object([
@@ -513,7 +513,7 @@ final class RunOwnershipTests: XCTestCase {
 }
 
 @MainActor
-private final class RunOwnershipRPC {
+final class AgentRPCFixture {
     let inbound = Pipe()
     let outbound = Pipe()
     let connection: JSONRPCConnection
@@ -543,7 +543,7 @@ private final class RunOwnershipRPC {
         await task.value
     }
 
-    func readRequest(_ method: AgentMethod) async throws -> [String: JSONValue] {
+    func readRequest(_ method: AgentMethod? = nil) async throws -> [String: JSONValue] {
         let handle = outbound.fileHandleForReading
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
@@ -564,7 +564,7 @@ private final class RunOwnershipRPC {
             }
         }
         let request = try JSONDecoder().decode([String: JSONValue].self, from: data)
-        XCTAssertEqual(request["method"]?.stringValue, method.rawValue)
+        if let method { XCTAssertEqual(request["method"]?.stringValue, method.rawValue) }
         return request
     }
 
@@ -572,10 +572,10 @@ private final class RunOwnershipRPC {
         try write(["jsonrpc": .string("2.0"), "id": try XCTUnwrap(request["id"]), "result": result])
     }
 
-    func fail(_ request: [String: JSONValue]) throws {
+    func fail(_ request: [String: JSONValue], code: Int = -32000, message: String = "fixture RPC failure") throws {
         try write([
             "jsonrpc": .string("2.0"), "id": try XCTUnwrap(request["id"]),
-            "error": .object(["code": .number(-32000), "message": .string("fixture RPC failure")]),
+            "error": .object(["code": .number(Double(code)), "message": .string(message)]),
         ])
     }
 

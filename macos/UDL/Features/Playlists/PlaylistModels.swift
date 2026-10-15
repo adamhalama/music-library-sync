@@ -126,6 +126,11 @@ struct PlaylistConfigResult: Codable, Sendable {
     let path: String
     let config: PlaylistConfig
     let content: String
+    var contentSHA256: String? = nil
+    enum CodingKeys: String, CodingKey {
+        case path, config, content
+        case contentSHA256 = "content_sha256"
+    }
 }
 
 struct PlaylistIDParams: Codable, Sendable {
@@ -149,6 +154,11 @@ struct PlaylistDefinitionSaveResult: Codable, Sendable {
 
 struct PlaylistConfigWriteParams: Codable, Sendable {
     let config: PlaylistConfig
+    var expectedContentSHA256: String? = nil
+    enum CodingKeys: String, CodingKey {
+        case config
+        case expectedContentSHA256 = "expected_content_sha256"
+    }
 }
 
 struct ProviderPlaylist: Codable, Sendable, Identifiable {

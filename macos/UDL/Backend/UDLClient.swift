@@ -90,8 +90,8 @@ actor UDLClient {
     func readPlaylistsConfig() async throws -> PlaylistConfigResult {
         try await connection.call(.playlistsConfigRead, params: EmptyParams())
     }
-    func writePlaylistsConfig(_ config: PlaylistConfig) async throws -> PlaylistConfigResult {
-        try await connection.call(.playlistsConfigWrite, params: PlaylistConfigWriteParams(config: config))
+    func writePlaylistsConfig(_ config: PlaylistConfig, expectedContentSHA256: String? = nil) async throws -> PlaylistConfigResult {
+        try await connection.call(.playlistsConfigWrite, params: PlaylistConfigWriteParams(config: config, expectedContentSHA256: expectedContentSHA256))
     }
     func inspectPlaylistSync() async throws -> PlaylistSyncInspectResult {
         try await connection.call(.playlistSyncInspect, params: EmptyParams())

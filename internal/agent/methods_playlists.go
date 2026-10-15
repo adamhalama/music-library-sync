@@ -24,9 +24,10 @@ type playlistIDParams struct {
 }
 
 type playlistConfigResult struct {
-	Path    string           `json:"path"`
-	Config  playlists.Config `json:"config"`
-	Content string           `json:"content"`
+	Path          string           `json:"path"`
+	Config        playlists.Config `json:"config"`
+	Content       string           `json:"content"`
+	ContentSHA256 string           `json:"content_sha256,omitempty"`
 }
 
 func (s *Server) listPlaylists() (any, *RPCError) {
@@ -172,12 +173,13 @@ func (s *Server) readPlaylistsConfig() (any, *RPCError) {
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return nil, playlistRPCError(readErr)
 	}
-	return playlistConfigResult{Path: path, Config: cfg, Content: content}, nil
+	return playlistConfigResult{Path: path, Config: cfg, Content: content, ContentSHA256: contentSHA256([]byte(content))}, nil
 }
 
 func (s *Server) writePlaylistsConfig(params json.RawMessage) (any, *RPCError) {
 	var request struct {
-		Config playlists.Config `json:"config"`
+		Config                playlists.Config `json:"config"`
+		ExpectedContentSHA256 string           `json:"expected_content_sha256,omitempty"`
 	}
 	if err := json.Unmarshal(params, &request); err != nil {
 		return nil, NewRPCError(CodeInvalidParams, "invalid playlists.config.write params", nil)
@@ -186,6 +188,20 @@ func (s *Server) writePlaylistsConfig(params json.RawMessage) (any, *RPCError) {
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	if expected := strings.TrimSpace(request.ExpectedContentSHA256); expected != "" {
+		current, err := os.ReadFile(path)
+		// A missing standalone config is read as empty content; guard its first
+		// creation too, without requiring a file on fresh installations.
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, playlistRPCError(err)
+		}
+		actual := contentSHA256(current)
+		if actual != expected {
+			return nil, NewRPCError(CodeRunConflict, "playlist config changed outside UDL; reload before saving", map[string]string{
+				"path": path, "expected_content_sha256": expected, "actual_content_sha256": actual,
+			})
+		}
+	}
 	if err := playlists.Save(path, request.Config); err != nil {
 		return nil, playlistRPCError(err)
 	}
@@ -193,7 +209,7 @@ func (s *Server) writePlaylistsConfig(params json.RawMessage) (any, *RPCError) {
 	if err != nil {
 		return nil, playlistRPCError(err)
 	}
-	return playlistConfigResult{Path: path, Config: request.Config, Content: string(payload)}, nil
+	return playlistConfigResult{Path: path, Config: request.Config, Content: string(payload), ContentSHA256: contentSHA256(payload)}, nil
 }
 
 func (s *Server) loadPlaylistConfigs() (config.Config, playlists.Config, *RPCError) {

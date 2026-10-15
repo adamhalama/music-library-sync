@@ -723,6 +723,13 @@ final class AppState: ObservableObject {
         syncSidebarSelectionIsExplicit = false
     }
 
+    func reloadPlaylistConfig() async throws {
+        guard let client else {
+            throw JSONRPCConnectionError.disconnected("Playlist configuration could not reload. Reconnect the backend and try again.")
+        }
+        playlistConfig = try await client.readPlaylistsConfig()
+    }
+
     func loadPlaylists() async {
         guard let client else { return }
         do {
@@ -759,7 +766,7 @@ final class AppState: ObservableObject {
     func savePlaylistConfig(_ config: PlaylistConfig) async -> Bool {
         guard let client else { return false }
         do {
-            playlistConfig = try await client.writePlaylistsConfig(config)
+            playlistConfig = try await client.writePlaylistsConfig(config, expectedContentSHA256: playlistConfig?.contentSHA256)
             await loadPlaylists()
             return true
         } catch {
@@ -778,7 +785,7 @@ final class AppState: ObservableObject {
         guard let client else {
             throw JSONRPCConnectionError.disconnected("Playlist pair was not saved. Reconnect the backend and try again.")
         }
-        playlistConfig = try await client.writePlaylistsConfig(config)
+        playlistConfig = try await client.writePlaylistsConfig(config, expectedContentSHA256: playlistConfig?.contentSHA256)
         await loadPlaylists()
     }
 
