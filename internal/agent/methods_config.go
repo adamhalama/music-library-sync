@@ -80,6 +80,8 @@ func (s *Server) writeConfigFile(params json.RawMessage) (any, *RPCError) {
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	unlock := s.lockConfigDestination(path)
+	defer unlock()
 	if err := config.Validate(request.Config); err != nil {
 		return nil, configRPCError(err)
 	}

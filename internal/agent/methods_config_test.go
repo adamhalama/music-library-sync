@@ -172,3 +172,36 @@ func mustJSON(t *testing.T, value any) json.RawMessage {
 	}
 	return payload
 }
+
+func TestConfigConcurrentExpectedSHAAllowsOneWriter(t *testing.T) {
+	dir := t.TempDir()
+	path := writeAgentTestConfig(t, dir)
+	server := &Server{WorkingDir: dir, ConfigPath: path}
+	value, rpcErr := server.readConfigFile(nil)
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	read := value.(configFileResult)
+	const writers = 32
+	start := make(chan struct{})
+	results := make(chan *RPCError, writers)
+	for i := 0; i < writers; i++ {
+		cfg := read.Config
+		cfg.Defaults.Threads = i + 2
+		request := mustJSON(t, configFileParams{Path: path, Config: cfg, ExpectedContentSHA256: read.ContentSHA256})
+		go func() { <-start; _, rpcErr := server.writeConfigFile(request); results <- rpcErr }()
+	}
+	close(start)
+	successes := 0
+	for i := 0; i < writers; i++ {
+		rpcErr := <-results
+		if rpcErr == nil {
+			successes++
+		} else if rpcErr.Code != CodeRunConflict {
+			t.Errorf("unexpected write error: %+v", rpcErr)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("same revision allowed %d writers, want exactly one", successes)
+	}
+}
