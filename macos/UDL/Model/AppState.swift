@@ -1510,7 +1510,8 @@ final class AppState: ObservableObject {
             }
             return
         }
-        guard let row = notification.row else { return }
+        guard !Lifecycle(wire: freeDLCaptureSources[notification.sourceID]?.lifecycle ?? "").isTerminal,
+              let row = notification.row else { return }
         let existing = freeDLCaptureSources[notification.sourceID] ?? SourceSnapshot(
             lifecycle: "running",
             confirmed: true,

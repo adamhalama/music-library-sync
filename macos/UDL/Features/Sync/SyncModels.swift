@@ -725,6 +725,8 @@ struct SyncRunState: Sendable {
         // Progress has its own newest-only consumer and can still be buffered
         // when the lossless lifecycle consumer has already finished this run.
         guard exitCode == nil, phase == .starting || phase == .running else { return false }
+        guard !Lifecycle(wire: sources[notification.sourceID]?.lifecycle ?? "").isTerminal,
+              !Lifecycle(wire: sourceTables[notification.sourceID]?.lifecycle ?? "").isTerminal else { return false }
         progress = notification.progress
         if let row = notification.row {
             mergeProgressRow(sourceID: notification.sourceID, row: row)

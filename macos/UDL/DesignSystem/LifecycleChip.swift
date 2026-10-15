@@ -44,6 +44,15 @@ enum Lifecycle: String, CaseIterable, Sendable {
         self == .planning || self == .running
     }
 
+    /// Once a source has an outcome, buffered percentages cannot revive it
+    /// while another source keeps the overall run active.
+    var isTerminal: Bool {
+        switch self {
+        case .done, .failed, .canceled, .skipped, .notRun: true
+        default: false
+        }
+    }
+
     /// Maps the wire's `SourceSnapshot.lifecycle` string.
     init(wire: String) {
         switch wire.lowercased() {

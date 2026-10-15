@@ -55,6 +55,49 @@ final class SyncTerminalProgressTests: XCTestCase {
         }
     }
 
+    func testTerminalSourceRejectsBufferedProgressWhileOtherSourcesStillRun() throws {
+        let notification = try progressNotification()
+        for lifecycle in ["finished", "failed", "canceled", "skipped", "not_run", "completed"] {
+            var run = SyncRunState(runID: "run-1", phase: .running)
+            let row = TrackRow(
+                sourceID: "source-a", sourceLabel: "source-a", remoteID: "older", title: "Older",
+                index: 8, executionSlot: 1, toggleable: true, planStatus: "missing_known_gap",
+                planClass: "known_gap", selected: true, runScope: "included",
+                runtimeStatus: "downloaded", statusLabel: "Downloaded", failureDetail: nil,
+                progressKnown: true, progressPercent: 100
+            )
+            run.mergeSnapshot(sourceID: "source-a", snapshot: SourceSnapshot(
+                lifecycle: lifecycle, confirmed: true, rows: [row], activity: []
+            ))
+            run.mergeSnapshot(sourceID: "source-b", snapshot: SourceSnapshot(
+                lifecycle: "running", confirmed: true, rows: [], activity: []
+            ))
+            XCTAssertFalse(run.applyProgress(notification))
+            XCTAssertNil(run.progress)
+            XCTAssertEqual(run.sources["source-a"]?.lifecycle, lifecycle)
+            XCTAssertEqual(run.sourceTables["source-a"]?.lifecycle, lifecycle)
+            XCTAssertEqual(run.sources["source-a"]?.rows.first?.runtimeStatus, "downloaded")
+            XCTAssertEqual(run.sourceTables["source-a"]?.rows.first?.progressPercent, 100)
+            XCTAssertEqual(run.sources["source-b"]?.lifecycle, "running")
+            XCTAssertEqual(run.phase, .running)
+            XCTAssertNil(run.exitCode)
+        }
+    }
+
+    func testTerminalSourceTableRejectsProgressEvenWithoutSnapshotOrRow() throws {
+        let notification = try progressNotification()
+        let rowless = SyncProgressNotification(runID: notification.runID, sourceID: notification.sourceID,
+                                               progress: notification.progress, row: nil)
+        var run = SyncRunState(runID: "run-1", phase: .running)
+        run.sourceTables["source-a"] = SyncSourceTableState(
+            sourceID: "source-a", planRows: [], selectedIndices: [], downloadOrder: .oldestFirst,
+            planWindow: .first, accepted: true, hasTrackPlan: false, lifecycle: "finished"
+        )
+        XCTAssertFalse(run.applyProgress(rowless))
+        XCTAssertNil(run.progress)
+        XCTAssertTrue(run.sources.isEmpty)
+    }
+
     private func progressNotification() throws -> SyncProgressNotification {
         let payload = """
         {
