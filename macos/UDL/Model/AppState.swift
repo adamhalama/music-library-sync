@@ -244,6 +244,8 @@ final class AppState: ObservableObject {
     private var promptTask: Task<Void, Never>?
     private var syncCancellationWatchdog: Task<Void, Never>?
     private var playlistOperations: [String: PlaylistOperation] = [:]
+    private var playlistStartingOperation: PlaylistOperation?
+    private var pendingWorkCancellation: Set<Destination> = []
     private var bufferedFinished: [String: RunFinishedNotification] = [:]
     private var planSelectionOverrides: [String: [String: Bool]] = [:]
     private var planCursorBySource: [String: String] = [:]
@@ -584,6 +586,10 @@ final class AppState: ObservableObject {
 
     func startSync() async {
         guard let client else { return }
+        guard !isAnythingRunning else {
+            syncValidationMessage = busyReason
+            return
+        }
         let selected = syncSources.filter { syncSourceOptions[$0.id]?.selected == true }
         guard !selected.isEmpty else {
             syncValidationMessage = "Select at least one source."
@@ -634,39 +640,70 @@ final class AppState: ObservableObject {
     /// run, so the shell's primary action starts a reversible dry run whose
     /// per-source `ui.selectRows` prompt *is* the plan surface.
     func startDryRunPlan() async {
+        guard !isAnythingRunning else { return }
         syncDryRun = true
         destination = .sync
         await startSync()
     }
 
-    var isAnythingRunning: Bool {
-        syncRun.phase.isActive || freeDLRunID != nil || rekordboxRunID != nil || playlistActiveRunID != nil
+    private struct ActiveWork {
+        let destination: Destination
+        let runID: String?
+        let reason: String
     }
 
-    /// The one phrase every control disabled by a live run states, naming the
-    /// run that holds it. Derived from exactly the state `isAnythingRunning`
-    /// reads, so the control and its reason cannot disagree; `nil` means
-    /// nothing is running and nothing needs explaining.
-    var busyReason: String? {
-        if syncRun.phase.isActive { return "A sync run is in progress. Stop it to start other work." }
-        if freeDLRunID != nil { return "A Free DL step is running. Stop it to start other work." }
-        if rekordboxRunID != nil { return "A Rekordbox operation is running. Stop it to start other work." }
-        if playlistActiveRunID != nil { return "A playlist operation is running. Stop it to start other work." }
-        return nil
-    }
-
-    /// ⌘. — cancels whichever run is live, preserving the ordered-cancellation
-    /// invariant in each workflow's own cancel path.
-    func cancelActiveWork() async {
+    /// Startup is work too: the operation is set before its start RPC returns.
+    /// All global busy controls and cancellation choose from this same list.
+    private var activeWork: [ActiveWork] {
+        var work: [ActiveWork] = []
         if syncRun.phase.isActive {
-            await cancelActiveSync()
-        } else if freeDLRunID != nil {
-            await cancelFreeDLOperation()
-        } else if rekordboxRunID != nil {
-            await cancelRekordboxOperation()
-        } else if playlistActiveRunID != nil {
-            await cancelPlaylistOperation()
+            work.append(ActiveWork(destination: .sync, runID: syncRun.runID,
+                                   reason: "A sync run is in progress. Stop it to start other work."))
         }
+        if freeDLOperation != nil || freeDLRunID != nil {
+            work.append(ActiveWork(destination: .freeDL, runID: freeDLRunID,
+                                   reason: "A Free DL step is running. Stop it to start other work."))
+        }
+        if rekordboxOperation != nil || rekordboxRunID != nil {
+            work.append(ActiveWork(destination: .rekordbox, runID: rekordboxRunID,
+                                   reason: "A Rekordbox operation is running. Stop it to start other work."))
+        }
+        if playlistStartingOperation != nil || playlistActiveRunID != nil {
+            work.append(ActiveWork(destination: .playlists, runID: playlistActiveRunID,
+                                   reason: "A playlist operation is running. Stop it to start other work."))
+        }
+        if playlistSyncOperation != nil || playlistSyncRunID != nil {
+            work.append(ActiveWork(destination: .playlistSync, runID: playlistSyncRunID,
+                                   reason: "A Playlist Sync operation is running. Stop it to start other work."))
+        }
+        if phoneLibraryOperation != nil || phoneLibraryRunID != nil {
+            work.append(ActiveWork(destination: .phoneLibrary, runID: phoneLibraryRunID,
+                                   reason: "A Phone Library operation is running. Wait for it or stop it before starting other work."))
+        }
+        return work
+    }
+
+    var isAnythingRunning: Bool { !activeWork.isEmpty }
+    var busyReason: String? { activeWork.first?.reason }
+
+    /// ⌘. also records cancellation while a starter is waiting for its run ID.
+    func cancelActiveWork() async {
+        guard let work = activeWork.first else { return }
+        if work.destination == .sync {
+            await cancelActiveSync()
+        } else if let runID = work.runID {
+            await cancelRun(runID)
+        } else if phoneLibraryOperation == .registerPlaylists, work.destination == .phoneLibrary {
+            phoneLibraryStatus = "Snapshot registration is already in progress. Wait for the configuration request to finish."
+        } else {
+            pendingWorkCancellation.insert(work.destination)
+        }
+    }
+
+    func cancelPendingWorkIfReady(_ destination: Destination) async {
+        guard pendingWorkCancellation.remove(destination) != nil,
+              let runID = activeWork.first(where: { $0.destination == destination })?.runID else { return }
+        await cancelRun(runID)
     }
 
     func cancelActiveSync() async {
@@ -746,7 +783,9 @@ final class AppState: ObservableObject {
     }
 
     func refreshPlaylist(_ playlistID: String) async {
-        guard let client, playlistActiveRunID == nil else { return }
+        guard let client, playlistActiveRunID == nil, playlistStartingOperation == nil else { return }
+        playlistStartingOperation = .refresh(playlistID)
+        defer { playlistStartingOperation = nil; pendingWorkCancellation.remove(.playlists) }
         clearNotResumed(.playlists)
         let provider = playlists.first { $0.id == playlistID }?.definition.providerDisplayName ?? "provider"
         playlistStatus = PlaylistStatus(
@@ -758,6 +797,7 @@ final class AppState: ObservableObject {
             playlistActiveRunID = started.runID
             playlistOperations[started.runID] = .refresh(playlistID)
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.playlists)
         } catch {
             playlistStatus = PlaylistStatus(
                 message: "Refresh did not start. The saved snapshot was not changed.",
@@ -788,7 +828,9 @@ final class AppState: ObservableObject {
     }
 
     func discoverProviderPlaylists() async {
-        guard let client, playlistActiveRunID == nil else { return }
+        guard let client, playlistActiveRunID == nil, playlistStartingOperation == nil else { return }
+        playlistStartingOperation = .providerList
+        defer { playlistStartingOperation = nil; pendingWorkCancellation.remove(.playlists) }
         playlistStatus = PlaylistStatus(message: "Requesting playlists from Music…", severity: .info)
         do {
             let started = try await client.listProviderPlaylists(
@@ -797,6 +839,7 @@ final class AppState: ObservableObject {
             playlistActiveRunID = started.runID
             playlistOperations[started.runID] = .providerList
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.playlists)
         } catch {
             playlistStatus = PlaylistStatus(
                 message: "Music playlist discovery did not start. No snapshot was touched.",
@@ -832,7 +875,7 @@ final class AppState: ObservableObject {
     }
 
     func startFreeDLPlan(jobID: String, playlistID: String? = nil) async {
-        guard let client, freeDLRunID == nil else { return }
+        guard let client, freeDLRunID == nil, freeDLOperation == nil else { return }
         freeDLOperation = .planning
         clearNotResumed(.freeDL)
         freeDLRows = []
@@ -850,8 +893,10 @@ final class AppState: ObservableObject {
             ))
             freeDLRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.freeDL)
         } catch {
             freeDLOperation = nil
+            pendingWorkCancellation.remove(.freeDL)
             freeDLStage = nil
             freeDLStatus = .failure("Free DL planning did not start: \(error.localizedDescription)")
         }
@@ -878,7 +923,7 @@ final class AppState: ObservableObject {
     }
 
     func startFreeDLCapture() async {
-        guard let client, var plan = freeDLCapturePlan, freeDLRunID == nil else { return }
+        guard let client, var plan = freeDLCapturePlan, freeDLRunID == nil, freeDLOperation == nil else { return }
         reapplyFreeDLOverrides(to: &plan)
         let selected = plan.rows.filter { $0.selectable && $0.selected }.map(\.remoteID)
         guard !selected.isEmpty else {
@@ -895,8 +940,10 @@ final class AppState: ObservableObject {
             )
             freeDLRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.freeDL)
         } catch {
             freeDLOperation = nil
+            pendingWorkCancellation.remove(.freeDL)
             freeDLStatus = .failure("Capture did not start: \(error.localizedDescription)")
         }
     }
@@ -905,7 +952,7 @@ final class AppState: ObservableObject {
         guard let client,
               let jobID = freeDLCapturePlan?.job.id,
               let captureRunID = freeDLCaptureRunID,
-              freeDLRunID == nil else { return }
+              freeDLRunID == nil, freeDLOperation == nil else { return }
         freeDLOperation = .promotionBuild
         do {
             let started = try await client.buildFreeDLPromotionPlan(
@@ -913,14 +960,16 @@ final class AppState: ObservableObject {
             )
             freeDLRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.freeDL)
         } catch {
             freeDLOperation = nil
+            pendingWorkCancellation.remove(.freeDL)
             freeDLStatus = .failure("Promotion planning did not start: \(error.localizedDescription)")
         }
     }
 
     func applyFreeDLPromotion() async {
-        guard let client, let plan = freeDLPromotionPlan, freeDLRunID == nil else { return }
+        guard let client, let plan = freeDLPromotionPlan, freeDLRunID == nil, freeDLOperation == nil else { return }
         freeDLOperation = .promotionApply
         do {
             let started = try await client.applyFreeDLPromotion(
@@ -928,8 +977,10 @@ final class AppState: ObservableObject {
             )
             freeDLRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.freeDL)
         } catch {
             freeDLOperation = nil
+            pendingWorkCancellation.remove(.freeDL)
             freeDLStatus = .failure("Promotion apply did not start: \(error.localizedDescription)")
         }
     }
@@ -998,7 +1049,7 @@ final class AppState: ObservableObject {
     }
 
     func applyRekordbox(dryRun: Bool) async {
-        guard let client, let plan = rekordboxPlan else { return }
+        guard let client, let plan = rekordboxPlan, rekordboxRunID == nil, rekordboxOperation == nil else { return }
         guard !plan.checksum.isEmpty else {
             rekordboxStatus = .failure("The plan has no checksum and cannot be applied.")
             return
@@ -1016,8 +1067,10 @@ final class AppState: ObservableObject {
             )
             rekordboxRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.rekordbox)
         } catch JSONRPCConnectionError.remote(_, let message, let data) {
             rekordboxOperation = nil
+            pendingWorkCancellation.remove(.rekordbox)
             rekordboxApplyBlockers = parseRekordboxBlockers(data)
             // C9/C10 — `rekordbox.apply` validates the plan synchronously, so
             // this is where checksum drift and a refused partial mirror land.
@@ -1029,6 +1082,7 @@ final class AppState: ObservableObject {
             )
         } catch {
             rekordboxOperation = nil
+            pendingWorkCancellation.remove(.rekordbox)
             rekordboxObstacle = RekordboxObstacle(backendMessage: error.localizedDescription)
             rekordboxStatus = .failure(error.localizedDescription)
         }
@@ -1043,7 +1097,7 @@ final class AppState: ObservableObject {
         _ operation: RekordboxOperation,
         start: (UDLClient) async throws -> RunIDResult
     ) async {
-        guard let client, rekordboxRunID == nil else { return }
+        guard let client, rekordboxRunID == nil, rekordboxOperation == nil else { return }
         clearNotResumed(.rekordbox)
         rekordboxOperation = operation
         rekordboxStatus = "Starting…"
@@ -1051,8 +1105,10 @@ final class AppState: ObservableObject {
             let started = try await start(client)
             rekordboxRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.rekordbox)
         } catch {
             rekordboxOperation = nil
+            pendingWorkCancellation.remove(.rekordbox)
             rekordboxStatus = .failure(error.localizedDescription)
         }
     }
@@ -1419,6 +1475,7 @@ final class AppState: ObservableObject {
         if freeDLOperation != nil || freeDLRunID != nil {
             interrupted.append(.freeDL)
             freeDLOperation = nil
+            pendingWorkCancellation.remove(.freeDL)
             freeDLRunID = nil
             freeDLStage = nil
             freeDLStatus = "Backend connection ended. No Free DL step was resumed or replayed."
@@ -1429,12 +1486,14 @@ final class AppState: ObservableObject {
         if rekordboxOperation != nil || rekordboxRunID != nil {
             interrupted.append(.rekordbox)
             rekordboxOperation = nil
+            pendingWorkCancellation.remove(.rekordbox)
             rekordboxRunID = nil
             rekordboxStatus = "Backend connection ended. No apply was resumed or replayed."
         }
-        if playlistActiveRunID != nil {
+        if playlistActiveRunID != nil || playlistStartingOperation != nil {
             interrupted.append(.playlists)
             playlistActiveRunID = nil
+            playlistStartingOperation = nil
             playlistStatus = PlaylistStatus(
                 message: "Backend connection ended. The previous valid snapshot was preserved.",
                 severity: .error,
@@ -1447,6 +1506,7 @@ final class AppState: ObservableObject {
             playlistSyncOperation = nil
             playlistSyncStatus = .failure("Backend connection ended. No playlist mirror was resumed or replayed.")
         }
+        pendingWorkCancellation = []
         pendingPrompt = nil
         notResumed.formUnion(interrupted)
         backendRecovery = BackendRecovery(
@@ -1507,6 +1567,8 @@ final class AppState: ObservableObject {
         configConflict = nil
         playlistOperations = [:]
         bufferedFinished = [:]
+        playlistStartingOperation = nil
+        pendingWorkCancellation = []
         planSelectionOverrides = [:]
         planCursorBySource = [:]
         pendingPrompt = nil

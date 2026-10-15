@@ -13,7 +13,7 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
-        let starters: [(AgentMethod, () async -> Void)] = [
+        let starters: [(AgentMethod, @MainActor @Sendable () async -> Void)] = [
             (.rekordboxDepsEnsure, { await state.ensureRekordboxRuntime() }),
             (.rekordboxDepsReset, { await state.resetRekordboxRuntime() }),
             (.rekordboxInspect, { await state.inspectRekordbox() }),
@@ -27,7 +27,11 @@ final class RunOwnershipTests: XCTestCase {
         }
         try await rpc.finishBeforeReply(
             state, method: .rekordboxPlan,
-            result: .object(["plan": .object(["checksum_sha256": .string("fixture")]), "plan_path": .string("/fixture/plan")]),
+            result: .object([
+                "resolved": .object([:]),
+                "plan": .object(["checksum_sha256": .string("fixture")]),
+                "plan_path": .string("/fixture/plan"),
+            ]),
             start: { await state.planRekordbox(jobID: "fixture") }
         )
         XCTAssertNotNil(state.rekordboxPlan)
@@ -97,7 +101,7 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
-        let starters: [(AgentMethod, () async -> Void)] = [
+        let starters: [(AgentMethod, @MainActor @Sendable () async -> Void)] = [
             (.navidromeDepsEnsure, { await state.installNavidrome() }),
             (.navidromeServiceControl, { await state.controlNavidromeService("start") }),
             (.navidromeSetupPlan, { await state.planNavidromeSetup() }),
@@ -120,7 +124,7 @@ final class RunOwnershipTests: XCTestCase {
             sourcePlaylist: "fixture", sourceTrackCount: 1, matchedCount: 1, genres: ["House"],
             unmatchedPaths: [], genrelessPaths: [], outsideLibrary: [], currentAllowlist: [], allowlistChanged: true
         )
-        let guarded: [(AgentMethod, () async -> Void)] = [
+        let guarded: [(AgentMethod, @MainActor @Sendable () async -> Void)] = [
             (.navidromeSetupApply, { await state.applyNavidromeSetup() }),
             (.navidromeFavoritesApply, { await state.applyNavidromeFavorites() }),
             (.navidromePlaylistsSaveGenres, { await state.saveNavidromeGenres() }),
@@ -162,7 +166,7 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
-        let starters: [(AgentMethod, () async -> Void)] = [
+        let starters: [(AgentMethod, @MainActor @Sendable () async -> Void)] = [
             (.playlistsRefresh, { await state.refreshPlaylist("fixture") }),
             (.playlistsProviderList, { await state.discoverProviderPlaylists() }),
         ]
@@ -182,16 +186,7 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
-        let load = Task { await state.loadSyncSources() }
-        let request = try await rpc.readRequest(.sourcesCapabilities)
-        try rpc.reply(request, result: .object(["sources": .array([.object([
-            "source_id": .string("fixture"), "source_type": .string("soundcloud"),
-            "adapter": .string("scdl"), "supports_plan": .bool(true),
-            "supports_plan_window": .bool(true), "supports_download_order": .bool(true),
-            "default_plan_window": .string("first"), "default_download_order": .string("newest_first"),
-        ])])]))
-        await load.value
-        XCTAssertEqual(state.syncSources.count, 1)
+        try await loadSyncFixture(state, rpc: rpc)
         for preview in [false, true] {
             try await rpc.finishBeforeReply(state, method: .syncStart) {
                 if preview { await state.startDryRunPlan() } else { await state.startSync() }
@@ -211,11 +206,14 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.start()
         let state = AppState(client: rpc.client)
         defer { rpc.closePipes() }
+        try await loadSyncFixture(state, rpc: rpc)
+        let syncStart = Task { await state.startSync() }
+        let syncRequest = try await rpc.readRequest(.syncStart)
+        XCTAssertNil(state.syncRun.runID)
         let freeStart = Task { await state.startFreeDLPlan(jobID: "fixture") }
         let request = try await rpc.readRequest(.freeDLPlanStart)
         XCTAssertNotNil(state.freeDLOperation)
         XCTAssertNil(state.freeDLRunID)
-        state.syncRun = SyncRunState(phase: .starting)
         state.phoneLibraryOperation = .setupPlan
         state.playlistSyncOperation = .plan
         state.playlistSyncRunID = "known-pair-run"
@@ -230,7 +228,10 @@ final class RunOwnershipTests: XCTestCase {
         XCTAssertNotNil(state.phoneLibraryOperation)
         XCTAssertNil(state.phoneLibraryStatus)
         state.phoneLibraryOperation = nil
-        state.syncRun = SyncRunState()
+        state.routeFinished(finished("sync-run"))
+        try rpc.reply(syncRequest, result: .object(["run_id": .string("sync-run")]))
+        await syncStart.value
+        state.resetSyncRun()
         state.routeFinished(finished("free-run"))
         try rpc.reply(request, result: .object(["run_id": .string("free-run")]))
         await freeStart.value
@@ -313,6 +314,132 @@ final class RunOwnershipTests: XCTestCase {
         await registration.value
         assertPhoneIdle(state)
         await rpc.connection.close()
+    }
+
+    func testStartupOperationsAreGloballyBusyBeforeTheyHaveRunIDs() async throws {
+        let state = AppState()
+        state.phoneLibraryOperation = .setupPlan
+        XCTAssertTrue(state.isAnythingRunning)
+        XCTAssertNotNil(state.busyReason)
+        state.phoneLibraryOperation = nil
+        state.playlistSyncOperation = .plan
+        XCTAssertTrue(state.isAnythingRunning)
+        XCTAssertNotNil(state.busyReason)
+        state.playlistSyncOperation = nil
+        assertGloballyIdle(state)
+
+        let rpc = RunOwnershipRPC()
+        await rpc.connection.start()
+        let connected = AppState(client: rpc.client)
+        defer { rpc.closePipes() }
+        let start = Task { await connected.startFreeDLPlan(jobID: "fixture") }
+        let request = try await rpc.readRequest(.freeDLPlanStart)
+        XCTAssertNil(connected.freeDLRunID)
+        XCTAssertNotNil(connected.freeDLOperation)
+        XCTAssertTrue(connected.isAnythingRunning)
+        XCTAssertNotNil(connected.busyReason)
+        connected.routeFinished(finished("free-run"))
+        try rpc.reply(request, result: .object(["run_id": .string("free-run")]))
+        await start.value
+        assertFreeDLIdle(connected)
+        try await loadSyncFixture(connected, rpc: rpc)
+        let syncStart = Task { await connected.startSync() }
+        let syncRequest = try await rpc.readRequest(.syncStart)
+        XCTAssertNil(connected.syncRun.runID)
+        XCTAssertEqual(connected.syncRun.phase, .starting)
+        XCTAssertTrue(connected.isAnythingRunning)
+        XCTAssertNotNil(connected.busyReason)
+        connected.routeFinished(finished("sync-run"))
+        try rpc.reply(syncRequest, result: .object(["run_id": .string("sync-run")]))
+        await syncStart.value
+        assertGloballyIdle(connected)
+        connected.resetSyncRun()
+        XCTAssertNil(connected.syncRun.runID)
+        await rpc.connection.close()
+    }
+
+    func testGlobalCancellationQueuesUntilEachStartupReceivesItsOwnRunID() async throws {
+        let rpc = RunOwnershipRPC()
+        await rpc.connection.start()
+        let state = AppState(client: rpc.client)
+        defer { rpc.closePipes() }
+        let starters: [(AgentMethod, @MainActor @Sendable () async -> Void)] = [
+            (.freeDLPlanStart, { await state.startFreeDLPlan(jobID: "fixture") }),
+            (.rekordboxInspect, { await state.inspectRekordbox() }),
+            (.playlistSyncPlan, {
+                await state.planPlaylistSync(jobID: "fixture", direction: "rekordbox_to_navidrome")
+            }),
+            (.navidromeSetupPlan, { await state.planNavidromeSetup() }),
+            (.playlistsRefresh, { await state.refreshPlaylist("fixture") }),
+            (.playlistsProviderList, { await state.discoverProviderPlaylists() }),
+        ]
+        for (index, entry) in starters.enumerated() {
+            let (method, start) = entry
+            let task = Task { await start() }
+            let request = try await rpc.readRequest(method)
+            XCTAssertTrue(state.isAnythingRunning)
+            XCTAssertNotNil(state.busyReason)
+            await state.cancelActiveWork()
+            let runID = "cancel-startup-\(index)"
+            try rpc.reply(request, result: .object(["run_id": .string(runID)]))
+            let cancel = try await rpc.readRequest(.runCancel)
+            XCTAssertEqual(cancel["params"]?.objectValue?["run_id"]?.stringValue, runID)
+            try rpc.reply(cancel, result: .object(["canceled": .bool(true)]))
+            await task.value
+            // Cancellation acknowledgement alone is not terminal. Busy clears
+            // only when the matching run finishes, not at the start reply.
+            XCTAssertTrue(state.isAnythingRunning)
+            state.routeFinished(finished(runID))
+            assertGloballyIdle(state)
+            XCTAssertNil(state.freeDLRunID)
+            XCTAssertNil(state.freeDLOperation)
+            XCTAssertNil(state.rekordboxRunID)
+            XCTAssertNil(state.rekordboxOperation)
+            XCTAssertNil(state.playlistSyncRunID)
+            XCTAssertNil(state.playlistSyncOperation)
+            XCTAssertNil(state.phoneLibraryRunID)
+            XCTAssertNil(state.phoneLibraryOperation)
+            XCTAssertNil(state.playlistActiveRunID)
+        }
+        await rpc.connection.close()
+    }
+
+    func testPhoneAndPairBusyStatesRejectSyncAndPreviewWithoutChangingOptions() async throws {
+        let rpc = RunOwnershipRPC()
+        await rpc.connection.start()
+        let state = AppState(client: rpc.client)
+        defer { rpc.closePipes() }
+        try await loadSyncFixture(state, rpc: rpc)
+        for destination in [AppState.Destination.phoneLibrary, .playlistSync] {
+            if destination == .phoneLibrary { state.phoneLibraryOperation = .setupApply }
+            else { state.playlistSyncOperation = .apply(dryRun: false) }
+            let dryRun = state.syncDryRun
+            await state.startSync()
+            XCTAssertEqual(state.syncRun.phase, .idle)
+            XCTAssertEqual(state.syncValidationMessage, state.busyReason)
+            await state.startDryRunPlan()
+            XCTAssertEqual(state.syncRun.phase, .idle)
+            XCTAssertEqual(state.syncDryRun, dryRun)
+            state.phoneLibraryOperation = nil
+            state.playlistSyncOperation = nil
+        }
+        // No rejected start may have sent a hidden RPC or left startup state.
+        try await rpc.finishBeforeReply(state, method: .syncStart) { await state.startSync() }
+        assertGloballyIdle(state)
+        await rpc.connection.close()
+    }
+
+    private func loadSyncFixture(_ state: AppState, rpc: RunOwnershipRPC) async throws {
+        let load = Task { await state.loadSyncSources() }
+        let request = try await rpc.readRequest(.sourcesCapabilities)
+        try rpc.reply(request, result: .object(["sources": .array([.object([
+            "source_id": .string("fixture"), "source_type": .string("soundcloud"),
+            "adapter": .string("scdl"), "supports_plan": .bool(true),
+            "supports_plan_window": .bool(true), "supports_download_order": .bool(true),
+            "default_plan_window": .string("first"), "default_download_order": .string("newest_first"),
+        ])])]))
+        await load.value
+        XCTAssertEqual(state.syncSources.count, 1)
     }
 
     private func finished(_ id: String) -> RunFinishedNotification {

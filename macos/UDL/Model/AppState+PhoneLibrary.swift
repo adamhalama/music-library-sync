@@ -224,11 +224,14 @@ extension AppState {
             let started = try await start(client)
             phoneLibraryRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.phoneLibrary)
         } catch JSONRPCConnectionError.remote(_, let message, _) {
             phoneLibraryOperation = nil
+            await cancelPendingWorkIfReady(.phoneLibrary)
             phoneLibraryStatus = .failure(message)
         } catch {
             phoneLibraryOperation = nil
+            await cancelPendingWorkIfReady(.phoneLibrary)
             phoneLibraryStatus = .failure(error.localizedDescription)
         }
     }

@@ -407,6 +407,7 @@ struct SyncConfigureView: View {
             Button("Check system") { appState.destination = .doctor }
             Button(startLabel) { Task { await appState.startSync() } }
                 .buttonStyle(.borderedProminent)
+                .constrained(by: appState.busyReason)
                 .keyboardShortcut(.defaultAction)
         }
         .task {

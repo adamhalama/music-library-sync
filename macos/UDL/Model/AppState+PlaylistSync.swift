@@ -85,8 +85,10 @@ extension AppState {
             )
             playlistSyncRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.playlistSync)
         } catch {
             playlistSyncOperation = nil
+            await cancelPendingWorkIfReady(.playlistSync)
             playlistSyncRunID = nil
             playlistSyncStatus = .failure("Playlist plan could not start: \(error.localizedDescription)")
         }
@@ -105,8 +107,10 @@ extension AppState {
             )
             playlistSyncRunID = started.runID
             consumeBufferedFinished(started.runID)
+            await cancelPendingWorkIfReady(.playlistSync)
         } catch {
             playlistSyncOperation = nil
+            await cancelPendingWorkIfReady(.playlistSync)
             playlistSyncRunID = nil
             playlistSyncStatus = .failure("Playlist apply could not start: \(error.localizedDescription)")
         }
