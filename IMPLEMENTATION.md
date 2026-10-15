@@ -486,13 +486,16 @@ apply result, and cancellation semantics as the CLI.
 ### Swift validation
 
 - [x] DTO decoding tests, including nil collections and unknown enum values.
-- [x] Exact-ID terminal ownership, terminal-before-start-reply handling for each
-      starter, nil-ID startup busy/cancel behavior, and cross-workflow run
-      isolation (`RunOwnershipTests`).
-- [x] Ignore stale buffered progress after terminal (`SyncTerminalProgressTests`);
+- [x] Exact-ID terminal/progress/lifecycle ownership, early-frame replay only
+      after the matching start reply, terminal-ID retirement and stale-prompt
+      rejection, same-run cancellation replies, nil-ID startup busy/cancel
+      behavior, and cross-workflow isolation (`RunOwnershipTests`).
+- [x] Ignore stale buffered progress after terminal runs and sources, including
+      completed track rows (`SyncTerminalProgressTests`);
       enforce the 8 MiB cap per JSON payload (`JSONRPCFrameLimitTests`).
 - [x] Pair create/edit collision checks and workflow-owned unloaded-config /
-      disconnected-write failures (`PlaylistSyncJobSaveTests`).
+      disconnected-write failures, and refuse saves without a pinned revision
+      with a visible Save constraint/Reload action (`PlaylistSyncJobSaveTests`).
 - [x] Forward the cached expected SHA, retain the returned SHA, surface a config
       conflict on Playlist Sync, reload the cached config, and tolerate older
       wire frames (`PlaylistSyncJobSaveTests`); reject stale hashes without
@@ -510,9 +513,11 @@ apply result, and cancellation semantics as the CLI.
   passed; `make app-test-dev` passed 92/92, including protocol inventory,
   `@DefaultEmpty`, future action values,
   workflow-owned errors, constrained controls, and partial backup rendering.
-- **2026-10-15 review update:** Swift validation passed **126/126** after the
-  destination-file SHA and reload follow-ups (#14), up from the 122-test
-  baseline. #14 remains partial until inherited-entry provenance is protected.
+- **2026-10-15 final review update:** Swift validation passed **138/138**, up
+  from the published PR head's 126-test baseline, after registered-ID traffic
+  ownership, pinned editor revisions, and terminal source/row progress guards.
+  The destination-file SHA follow-ups (#14) remain partial until inherited-entry
+  provenance is protected.
   Local command:
   `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make app-test-dev`.
   `RunOwnershipTests`, `SyncTerminalProgressTests`, `JSONRPCFrameLimitTests`, and
@@ -529,7 +534,14 @@ apply result, and cancellation semantics as the CLI.
   and provider-picker enrichment remain open. Go
   `TestPlaylistsConfigExpectedSHAGuard` and
   `TestPlaylistsConfigExpectedSHACreatesMissingFile` cover stale-hash refusal,
-  returned hashes, and first-save behavior.
+  returned hashes, and first-save behavior. Final-review Go regressions also
+  cover single-capture destination parsing/hash consistency (playlist and main
+  config), preserved required/optional missing-file behavior, and concurrent
+  expected-SHA saves admitting exactly one writer. Managed Navidrome registration
+  and setup share the same playlist transaction lock and session-scoped,
+  non-symlink destination safeguards. A failed Star with a starred readback is
+  explicitly uncertain; the independent writer's star is never compensated or
+  described as fully rolled back.
 - Screenshots/manual notes: **NOVEL UI/DESIGN** is recorded below and in the
   view source. The production Swift module compiles. Rendered/manual coverage,
   provider-picker enrichment, resolved-ID/parity detail, and full AppState race
@@ -594,7 +606,7 @@ recoverable, and one real phone round trip proves exact ordered parity.
   built `bin/udl` and a valid ad-hoc-signed `dist/dev/UDL-Dev.app`. The sandbox
   denied only a nonessential Go module stat-cache temp write during build; the
   build itself completed successfully.
-- **2026-10-15 review update:** Swift validation passed 126/126 as recorded in
+- **2026-10-15 review update:** Swift validation passed 138/138 as recorded in
   Phase 7 above; the 92/92 result here is historical.
   Focused automated regressions do not close any acceptance checkbox below.
 - Real playlists/versions:
