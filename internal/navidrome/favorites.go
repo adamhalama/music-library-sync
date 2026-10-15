@@ -234,6 +234,7 @@ type FavoriteApplyResult struct {
 	FinalStarred    int      `json:"final_starred"`
 	ParityVerified  bool     `json:"parity_verified"`
 	Compensated     []string `json:"compensated"`
+	Uncertain       []string `json:"uncertain,omitempty"`
 	RecoveryCommand string   `json:"recovery_command,omitempty"`
 	Message         string   `json:"message"`
 }
@@ -305,24 +306,22 @@ func ApplyFavoritePlan(ctx context.Context, cfg Config, resolved Resolved, plan 
 			return compensate(ctx, api, result, err)
 		}
 		if err := api.Star(ctx, id); err != nil {
-			// A lost response does not imply the server rejected the star.
-			// Read back before deciding what is safe to undo; if the outcome
-			// remains unknown, stop all mutations rather than guessing.
+			// A lost response does not imply rejection, and a starred readback
+			// cannot establish ownership: an independent client may have starred
+			// the item. Never compensate a failed Star, even if readback finds it.
 			readCtx, cancel := favoriteCleanupContext(ctx)
 			starred, readErr := api.Starred(readCtx)
 			cancel()
-			wasStarred, known := baseline[id]
-			if readErr != nil || !known {
-				result.RecoveryCommand = favoriteRecoveryCommand(result.BackupPath)
-				return result, fmt.Errorf("favorite import failed (%w); star outcome for %s is uncertain (readback: %v, baseline known: %t); no rollback attempted; restore the backup at %s", err, id, readErr, known, result.BackupPath)
-			}
-			if !wasStarred {
-				for _, song := range starred {
-					if song.ID == id {
-						result.NewlyStarred = append(result.NewlyStarred, id)
-						break
-					}
+			_, known := baseline[id]
+			uncertain := readErr != nil || !known
+			for _, song := range starred {
+				if song.ID == id {
+					uncertain = true
+					break
 				}
+			}
+			if uncertain {
+				result.Uncertain = append(result.Uncertain, id)
 			}
 			return compensate(ctx, api, result, err)
 		}
@@ -359,8 +358,8 @@ func ApplyFavoritePlan(ctx context.Context, cfg Config, resolved Resolved, plan 
 	return result, nil
 }
 
-// compensate un-stars only what this attempt added. Anything starred before
-// the run — including favorites made in Amperfy — is left alone.
+// compensate un-stars only successful Star calls on baseline-unstarred items.
+// Failed calls are never undone: readback cannot prove who created a star.
 func compensate(ctx context.Context, api FavoriteAPI, result FavoriteApplyResult, cause error) (FavoriteApplyResult, error) {
 	// The failure may itself be a cancellation; compensation still has to run,
 	// so it gets its own bounded context.
@@ -373,6 +372,12 @@ func compensate(ctx context.Context, api FavoriteAPI, result FavoriteApplyResult
 			continue
 		}
 		result.Compensated = append(result.Compensated, id)
+	}
+	if len(result.Uncertain) > 0 {
+		result.RecoveryCommand = favoriteRecoveryCommand(result.BackupPath)
+		return result, fmt.Errorf(
+			"favorite import failed (%w); star outcomes are uncertain for %s (left untouched); compensated %d of %d successful new stars; %d could not be undone; restore the backup at %s",
+			cause, strings.Join(result.Uncertain, ", "), len(result.Compensated), len(result.NewlyStarred), len(failed), result.BackupPath)
 	}
 	if len(failed) > 0 {
 		result.RecoveryCommand = favoriteRecoveryCommand(result.BackupPath)

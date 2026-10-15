@@ -562,19 +562,15 @@ func TestApplyReconcilesFailedStar(t *testing.T) {
 			if !api.starred["n3"] {
 				t.Fatal("preexisting star removed")
 			}
-			if mode == "unreadable" || mode == "no baseline" {
-				if !strings.Contains(err.Error(), "uncertain") || strings.Contains(err.Error(), "rolled back") || !strings.Contains(result.RecoveryCommand, f.BackupAt) || len(api.unstarCalls) != 0 {
-					t.Fatalf("result=%+v calls=%v error=%v", result, api.unstarCalls, err)
-				}
-			} else {
-				if api.starred["n1"] || api.starred["n2"] || !strings.Contains(err.Error(), "rolled back") {
-					t.Fatalf("stars=%v result=%+v error=%v", api.starred, result, err)
-				}
-				for _, id := range api.unstarCalls {
-					if id == "n3" {
-						t.Fatal("preexisting star unstarred")
-					}
-				}
+			failedID := plan.Rows[1].NavidromeID
+			if !strings.Contains(err.Error(), "uncertain") || !strings.Contains(err.Error(), failedID) || strings.Contains(err.Error(), "rolled back") || !strings.Contains(result.RecoveryCommand, f.BackupAt) {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+			if len(result.Uncertain) != 1 || result.Uncertain[0] != failedID || !api.starred[failedID] {
+				t.Fatalf("failed Star must remain untouched and uncertain: result=%+v stars=%v", result, api.starred)
+			}
+			if len(api.unstarCalls) != 1 || api.unstarCalls[0] != "n1" || api.starred["n1"] || len(result.Compensated) != 1 {
+				t.Fatalf("only successful Star calls may be compensated: result=%+v calls=%v", result, api.unstarCalls)
 			}
 		})
 	}
@@ -604,5 +600,59 @@ func TestFavoriteCleanupContextDetachesAndBounds(t *testing.T) {
 	deadline, ok := cleanup.Deadline()
 	if !ok || time.Until(deadline) > 30*time.Second {
 		t.Fatalf("cleanup deadline=%v, present=%t", deadline, ok)
+	}
+}
+
+// An independent client can star the failed request's item before readback.
+// Observing that star does not establish that this import owns it.
+type independentFavoriteWriterAPI struct {
+	*fakeFavoriteAPI
+}
+
+func (a *independentFavoriteWriterAPI) Star(ctx context.Context, id string) error {
+	err := a.fakeFavoriteAPI.Star(ctx, id)
+	if err != nil {
+		// The import's request was rejected; another client then favorites it.
+		a.starred[id] = true
+	}
+	return err
+}
+
+func TestApplyPreservesIndependentWriterStarAfterFailedRequest(t *testing.T) {
+	f := newFavoriteFixture(t)
+	api := &independentFavoriteWriterAPI{newFakeFavoriteAPI(f.Catalog)}
+	api.failStarAt = 1
+
+	result, err := ApplyFavoritePlan(context.Background(), f.Config, f.Resolved, f.plan(t), f.Apple, api, f.Backup)
+	if !api.starred["n2"] {
+		t.Fatalf("independent writer's star was removed: unstar calls=%v", api.unstarCalls)
+	}
+	if len(api.unstarCalls) != 1 || api.unstarCalls[0] != "n1" || api.starred["n1"] || !api.starred["n3"] {
+		t.Fatalf("only the successful Star may be compensated: calls=%v stars=%v", api.unstarCalls, api.starred)
+	}
+	if err == nil || !strings.Contains(err.Error(), "uncertain") || !strings.Contains(err.Error(), "n2") || strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("uncertain outcome must not claim full rollback: result=%+v error=%v", result, err)
+	}
+	if len(result.Compensated) != 1 || result.Compensated[0] != "n1" || !strings.Contains(result.RecoveryCommand, f.BackupAt) {
+		t.Fatalf("missing compensation or backup recovery details: %+v", result)
+	}
+}
+
+func TestApplyReportsUncertaintyWhenCompensationAlsoFails(t *testing.T) {
+	f := newFavoriteFixture(t)
+	api := newFakeFavoriteAPI(f.Catalog)
+	api.failStarAt = 1
+	api.applyFailedStar = true
+	api.failUnstar["n1"] = true
+
+	result, err := ApplyFavoritePlan(context.Background(), f.Config, f.Resolved, f.plan(t), f.Apple, api, f.Backup)
+	if err == nil || !strings.Contains(err.Error(), "uncertain for n2") || !strings.Contains(err.Error(), "1 could not be undone") || strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("must report both uncertain and failed cleanup outcomes: result=%+v error=%v", result, err)
+	}
+	if len(api.unstarCalls) != 1 || api.unstarCalls[0] != "n1" || !api.starred["n2"] || !api.starred["n3"] {
+		t.Fatalf("failed and preexisting stars must remain untouched: calls=%v stars=%v", api.unstarCalls, api.starred)
+	}
+	if len(result.Uncertain) != 1 || result.Uncertain[0] != "n2" || len(result.Compensated) != 0 || !strings.Contains(result.RecoveryCommand, f.BackupAt) {
+		t.Fatalf("missing uncertain item or recovery details: %+v", result)
 	}
 }
