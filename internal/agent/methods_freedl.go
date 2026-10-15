@@ -154,9 +154,11 @@ func (s *Server) startFreeDLPlan(params json.RawMessage) (any, *RPCError) {
 	}
 	runID, err := s.StartRun(func(ctx context.Context, runID string) (any, error, int) {
 		ops := s.freeDLOperations()
-		events := ops.BuildCapturePlanProgress(ctx, main, job)
+		var events <-chan freedl.CapturePlanEvent
 		if snapshot != nil {
 			events = ops.BuildCapturePlanForPlaylist(ctx, main, job, *snapshot)
+		} else {
+			events = ops.BuildCapturePlanProgress(ctx, main, job)
 		}
 		for event := range events {
 			transport := capturePlanTransportEvent(event, request.SelectionOverrides)

@@ -216,10 +216,17 @@ func (s *Server) loadPlaylistConfigs() (config.Config, playlists.Config, *RPCErr
 }
 
 func (s *Server) playlistService() playlists.Service {
+	service := playlists.Service{}
 	if s.PlaylistService != nil {
-		return *s.PlaylistService
+		service = *s.PlaylistService
 	}
-	return playlists.Service{}
+	if service.NavidromeLoadOptions.ExplicitPath == "" {
+		service.NavidromeLoadOptions.ExplicitPath = s.NavidromeConfigPath
+	}
+	if service.NavidromeLoadOptions.WorkingDir == "" {
+		service.NavidromeLoadOptions.WorkingDir = s.WorkingDir
+	}
+	return service
 }
 
 func (s *Server) resolvePlaylistsWritePath() (string, *RPCError) {

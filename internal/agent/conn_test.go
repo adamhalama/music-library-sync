@@ -248,3 +248,22 @@ func TestConnConvertsHandlerPanicToProtocolError(t *testing.T) {
 		t.Fatalf("panic detail leaked into protocol error: %q", rpcErr.Message)
 	}
 }
+
+func TestConnOversizedReplyReturnsSameIDError(t *testing.T) {
+	for _, id := range []string{`"large-result"`, `42`} {
+		t.Run(id, func(t *testing.T) {
+			var output bytes.Buffer
+			conn := NewConn(strings.NewReader(""), &output)
+			conn.handleRequest(envelope{JSONRPC: "2.0", ID: json.RawMessage(id), Method: "large"}, func(string, json.RawMessage) (any, *RPCError) {
+				return strings.Repeat("x", MaxFrameBytes), nil
+			})
+			var reply envelope
+			if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &reply); err != nil {
+				t.Fatalf("missing bounded response: %v", err)
+			}
+			if string(reply.ID) != id || reply.Error == nil || reply.Error.Code != CodeFrameTooLarge || len(output.Bytes()) > MaxFrameBytes {
+				t.Fatalf("unexpected reply: %+v (%d bytes)", reply, len(output.Bytes()))
+			}
+		})
+	}
+}

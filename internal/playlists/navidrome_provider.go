@@ -37,7 +37,13 @@ type NavidromeProvider struct {
 // NewNavidromeProvider builds a provider from the feature config and the
 // Keychain-stored password. It never reads the password from configuration.
 func NewNavidromeProvider() (NavidromeProvider, error) {
-	cfg, err := navidrome.Load(navidrome.LoadOptions{})
+	return NewNavidromeProviderWithOptions(navidrome.LoadOptions{})
+}
+
+// NewNavidromeProviderWithOptions uses the caller's configuration discovery
+// context while retaining the shared credential resolver.
+func NewNavidromeProviderWithOptions(opts navidrome.LoadOptions) (NavidromeProvider, error) {
+	cfg, err := navidrome.Load(opts)
 	if err != nil {
 		return NavidromeProvider{}, err
 	}

@@ -13,12 +13,17 @@ import (
 // fakeFavoriteAPI is an in-memory Navidrome whose star operations can be made
 // to fail at a chosen point, which is what the compensation path needs.
 type fakeFavoriteAPI struct {
-	catalog     []Song
-	starred     map[string]bool
-	failStarAt  int
-	starCalls   int
-	failUnstar  map[string]bool
-	unstarCalls []string
+	catalog         []Song
+	starred         map[string]bool
+	failStarAt      int
+	starCalls       int
+	failUnstar      map[string]bool
+	unstarCalls     []string
+	starredErr      error
+	omitStarred     string
+	applyFailedStar bool
+	starredContexts []error
+	unstarContexts  []error
 }
 
 func newFakeFavoriteAPI(catalog []Song) *fakeFavoriteAPI {
@@ -40,10 +45,17 @@ func (f *fakeFavoriteAPI) Songs(context.Context) ([]Song, error) {
 	return out, nil
 }
 
-func (f *fakeFavoriteAPI) Starred(context.Context) ([]Song, error) {
+func (f *fakeFavoriteAPI) Starred(ctx context.Context) ([]Song, error) {
+	f.starredContexts = append(f.starredContexts, ctx.Err())
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if f.starredErr != nil {
+		return nil, f.starredErr
+	}
 	out := []Song{}
 	for _, song := range f.catalog {
-		if f.starred[song.ID] {
+		if f.starred[song.ID] && song.ID != f.omitStarred {
 			copySong := song
 			copySong.Starred = true
 			out = append(out, copySong)
@@ -55,13 +67,20 @@ func (f *fakeFavoriteAPI) Starred(context.Context) ([]Song, error) {
 func (f *fakeFavoriteAPI) Star(_ context.Context, id string) error {
 	f.starCalls++
 	if f.failStarAt >= 0 && f.starCalls > f.failStarAt {
+		if f.applyFailedStar {
+			f.starred[id] = true
+		}
 		return errors.New("server refused the star")
 	}
 	f.starred[id] = true
 	return nil
 }
 
-func (f *fakeFavoriteAPI) Unstar(_ context.Context, id string) error {
+func (f *fakeFavoriteAPI) Unstar(ctx context.Context, id string) error {
+	f.unstarContexts = append(f.unstarContexts, ctx.Err())
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.unstarCalls = append(f.unstarCalls, id)
 	if f.failUnstar[id] {
 		return errors.New("server refused the unstar")
@@ -479,5 +498,111 @@ func TestApplyNeverTouchesAppleMusic(t *testing.T) {
 		if f.Apple[i] != before[i] {
 			t.Fatalf("the Apple favorite set was mutated at %d", i)
 		}
+	}
+}
+
+func TestApplyCompensatesVerificationFailures(t *testing.T) {
+	for _, mode := range []string{"readback", "parity", "cleanup failure"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFavoriteFixture(t)
+			api := newFakeFavoriteAPI(f.Catalog)
+			if mode == "parity" {
+				api.omitStarred = "n2"
+			} else {
+				api.starredErr = errors.New("readback unavailable")
+			}
+			if mode == "cleanup failure" {
+				api.failUnstar["n2"] = true
+			}
+			result, err := ApplyFavoritePlan(context.Background(), f.Config, f.Resolved, f.plan(t), f.Apple, api, f.Backup)
+			if err == nil || result.ParityVerified {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+			if len(api.unstarCalls) != 2 || api.starred["n1"] || !api.starred["n3"] {
+				t.Fatalf("cleanup calls=%v stars=%v", api.unstarCalls, api.starred)
+			}
+			if mode == "cleanup failure" {
+				if result.RecoveryCommand == "" || strings.Contains(err.Error(), "rolled back") {
+					t.Fatalf("result=%+v error=%v", result, err)
+				}
+			} else if api.starred["n2"] || len(result.Compensated) != 2 || !strings.Contains(err.Error(), "rolled back") {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestApplyReconcilesFailedStar(t *testing.T) {
+	for _, mode := range []string{"applied", "preexisting", "no baseline", "unreadable"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFavoriteFixture(t)
+			api := newFakeFavoriteAPI(f.Catalog)
+			api.failStarAt = 1
+			api.applyFailedStar = true
+			plan := f.plan(t)
+			if mode == "preexisting" {
+				plan.Rows[1].NavidromeID = "n3"
+				if err := SignFavoritePlan(&plan); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "no baseline" {
+				plan.Rows[1].NavidromeID = "unknown"
+				if err := SignFavoritePlan(&plan); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "unreadable" {
+				api.starredErr = errors.New("readback unavailable")
+			}
+			result, err := ApplyFavoritePlan(context.Background(), f.Config, f.Resolved, plan, f.Apple, api, f.Backup)
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			if !api.starred["n3"] {
+				t.Fatal("preexisting star removed")
+			}
+			if mode == "unreadable" || mode == "no baseline" {
+				if !strings.Contains(err.Error(), "uncertain") || strings.Contains(err.Error(), "rolled back") || !strings.Contains(result.RecoveryCommand, f.BackupAt) || len(api.unstarCalls) != 0 {
+					t.Fatalf("result=%+v calls=%v error=%v", result, api.unstarCalls, err)
+				}
+			} else {
+				if api.starred["n1"] || api.starred["n2"] || !strings.Contains(err.Error(), "rolled back") {
+					t.Fatalf("stars=%v result=%+v error=%v", api.starred, result, err)
+				}
+				for _, id := range api.unstarCalls {
+					if id == "n3" {
+						t.Fatal("preexisting star unstarred")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestApplyCompensatesCancellationAtVerification(t *testing.T) {
+	f := newFavoriteFixture(t)
+	api := newFakeFavoriteAPI(f.Catalog)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	count := 0
+	wrapped := &cancelAfterAPI{fakeFavoriteAPI: api, after: 2, cancel: cancel, count: &count}
+	result, err := ApplyFavoritePlan(ctx, f.Config, f.Resolved, f.plan(t), f.Apple, wrapped, f.Backup)
+	if !errors.Is(err, context.Canceled) || len(result.Compensated) != 2 || api.starred["n1"] || api.starred["n2"] || !api.starred["n3"] {
+		t.Fatalf("result=%+v stars=%v error=%v", result, api.starred, err)
+	}
+}
+
+func TestFavoriteCleanupContextDetachesAndBounds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cleanup, stop := favoriteCleanupContext(ctx)
+	defer stop()
+	cancel()
+	if cleanup.Err() != nil {
+		t.Fatalf("cleanup canceled with parent: %v", cleanup.Err())
+	}
+	deadline, ok := cleanup.Deadline()
+	if !ok || time.Until(deadline) > 30*time.Second {
+		t.Fatalf("cleanup deadline=%v, present=%t", deadline, ok)
 	}
 }

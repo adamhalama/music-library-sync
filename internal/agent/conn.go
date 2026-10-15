@@ -136,8 +136,12 @@ func (c *Conn) handleRequest(msg envelope, handler Handler) {
 			reply.Result = payload
 		}
 	}
-	_ = c.writeEnvelope(reply)
-	if after != nil {
+	err := c.writeEnvelope(reply)
+	var rpcWriteErr *RPCError
+	if errors.As(err, &rpcWriteErr) && rpcWriteErr.Code == CodeFrameTooLarge {
+		err = c.writeEnvelope(envelope{JSONRPC: "2.0", ID: msg.ID, Error: NewRPCError(CodeFrameTooLarge, "response exceeds frame limit", nil)})
+	}
+	if err == nil && after != nil {
 		after()
 	}
 }

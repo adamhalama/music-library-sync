@@ -161,11 +161,12 @@ func (i *Interaction) callUI(method string, params, result any) error {
 	if i == nil || i.Conn == nil || i.Runs == nil || strings.TrimSpace(i.RunID) == "" {
 		return fmt.Errorf("agent interaction is not initialized")
 	}
-	if _, ok := i.Runs.Context(i.RunID); !ok {
+	runCtx, ok := i.Runs.Context(i.RunID)
+	if !ok {
 		return NewRPCError(CodeRunNotFound, "run not found", map[string]string{"run_id": i.RunID})
 	}
 	requestID := fmt.Sprintf("%s-ui-%d", i.RunID, i.nextUIRequestID.Add(1))
-	callCtx, cancelCall := context.WithCancel(context.Background())
+	callCtx, cancelCall := context.WithCancel(runCtx)
 	if err := i.Runs.SetPendingUI(i.RunID, requestID, cancelCall); err != nil {
 		cancelCall()
 		return err

@@ -295,20 +295,45 @@ func ApplyFavoritePlan(ctx context.Context, cfg Config, resolved Resolved, plan 
 		return result, fmt.Errorf("the Navidrome database backup at %s is missing or empty; refusing to change favorites", created.Path)
 	}
 
+	baseline := make(map[string]bool, len(catalog))
+	for _, song := range catalog {
+		baseline[song.ID] = song.Starred
+	}
 	result.AlreadyStarred = plan.Counts.AlreadyStarred
 	for _, id := range plan.StarIDs() {
 		if err := ctx.Err(); err != nil {
 			return compensate(ctx, api, result, err)
 		}
 		if err := api.Star(ctx, id); err != nil {
+			// A lost response does not imply the server rejected the star.
+			// Read back before deciding what is safe to undo; if the outcome
+			// remains unknown, stop all mutations rather than guessing.
+			readCtx, cancel := favoriteCleanupContext(ctx)
+			starred, readErr := api.Starred(readCtx)
+			cancel()
+			wasStarred, known := baseline[id]
+			if readErr != nil || !known {
+				result.RecoveryCommand = favoriteRecoveryCommand(result.BackupPath)
+				return result, fmt.Errorf("favorite import failed (%w); star outcome for %s is uncertain (readback: %v, baseline known: %t); no rollback attempted; restore the backup at %s", err, id, readErr, known, result.BackupPath)
+			}
+			if !wasStarred {
+				for _, song := range starred {
+					if song.ID == id {
+						result.NewlyStarred = append(result.NewlyStarred, id)
+						break
+					}
+				}
+			}
 			return compensate(ctx, api, result, err)
 		}
-		result.NewlyStarred = append(result.NewlyStarred, id)
+		if wasStarred, known := baseline[id]; known && !wasStarred {
+			result.NewlyStarred = append(result.NewlyStarred, id)
+		}
 	}
 
 	starred, err := api.Starred(ctx)
 	if err != nil {
-		return result, fmt.Errorf("verify favorite parity: %w", err)
+		return compensate(ctx, api, result, fmt.Errorf("verify favorite parity: %w", err))
 	}
 	result.FinalStarred = len(starred)
 
@@ -326,8 +351,8 @@ func ApplyFavoritePlan(ctx context.Context, cfg Config, resolved Resolved, plan 
 		}
 	}
 	if len(missing) > 0 {
-		return result, fmt.Errorf("favorite parity check failed: %d expected tracks are not starred (for example %s); the backup is at %s",
-			len(missing), missing[0], result.BackupPath)
+		return compensate(ctx, api, result, fmt.Errorf("favorite parity check failed: %d expected tracks are not starred (for example %s); the backup is at %s",
+			len(missing), missing[0], result.BackupPath))
 	}
 	result.ParityVerified = true
 	result.Message = fmt.Sprintf("starred %d tracks; %d were already starred", len(result.NewlyStarred), result.AlreadyStarred)
@@ -339,12 +364,8 @@ func ApplyFavoritePlan(ctx context.Context, cfg Config, resolved Resolved, plan 
 func compensate(ctx context.Context, api FavoriteAPI, result FavoriteApplyResult, cause error) (FavoriteApplyResult, error) {
 	// The failure may itself be a cancellation; compensation still has to run,
 	// so it gets its own bounded context.
-	cleanupCtx := ctx
-	if ctx.Err() != nil {
-		var cancel context.CancelFunc
-		cleanupCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-	}
+	cleanupCtx, cancel := favoriteCleanupContext(ctx)
+	defer cancel()
 	failed := []string{}
 	for _, id := range result.NewlyStarred {
 		if err := api.Unstar(cleanupCtx, id); err != nil {
@@ -354,14 +375,23 @@ func compensate(ctx context.Context, api FavoriteAPI, result FavoriteApplyResult
 		result.Compensated = append(result.Compensated, id)
 	}
 	if len(failed) > 0 {
-		result.RecoveryCommand = fmt.Sprintf(
-			"stop the service, restore %s over the Navidrome database, then start it again", result.BackupPath)
+		result.RecoveryCommand = favoriteRecoveryCommand(result.BackupPath)
 		return result, fmt.Errorf(
 			"favorite import failed (%w) and %d of %d new stars could not be undone; restore the backup at %s",
 			cause, len(failed), len(result.NewlyStarred), result.BackupPath)
 	}
 	result.NewlyStarred = []string{}
 	return result, fmt.Errorf("favorite import failed and was rolled back: %w", cause)
+}
+
+// Cleanup must survive cancellation of the import and stay bounded even if
+// cancellation arrives after cleanup has begun.
+func favoriteCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+}
+
+func favoriteRecoveryCommand(path string) string {
+	return fmt.Sprintf("stop the service, restore %s over the Navidrome database, then start it again", path)
 }
 
 // SignFavoritePlan computes and stores the plan checksum.

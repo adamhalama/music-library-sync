@@ -32,8 +32,6 @@ func ShouldRequestNavidromeScan(req SyncRequest, result engine.SyncResult, runEr
 	switch {
 	case req.DryRun:
 		return false, "dry run made no changes"
-	case req.Plan:
-		return false, "planning made no changes"
 	case runErr != nil:
 		return false, "the sync did not finish"
 	case result.Interrupted:
