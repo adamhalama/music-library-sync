@@ -266,6 +266,21 @@ func (p Planner) Apply(ctx context.Context, cfg Config, plan SetupPlan) (ApplyRe
 	if !plan.Applicable() {
 		return result, fmt.Errorf("setup plan has unresolved blockers: %s", strings.Join(plan.Blockers, "; "))
 	}
+	// The checksum pins the plan, not the configuration supplied at apply time.
+	// Rebuild the desired state read-only before trusting any planned mutation:
+	// otherwise we could write the old TOML/paths and restart a different service
+	// location resolved from the new configuration. Dependency failures must also
+	// fail closed rather than leave us unable to verify the rendered content.
+	current, err := p.Plan(ctx, cfg, plan.ConfigPath)
+	if err != nil {
+		return result, fmt.Errorf("cannot revalidate setup plan: %w; regenerate the plan", err)
+	}
+	if !current.Applicable() {
+		return result, fmt.Errorf("setup plan revalidation has blockers: %s; regenerate the plan", strings.Join(current.Blockers, "; "))
+	}
+	if !sameSetupTarget(plan, current) {
+		return result, fmt.Errorf("setup configuration or dependencies changed since the plan was generated; regenerate the plan")
+	}
 	resolved, err := Resolve(cfg)
 	if err != nil {
 		return result, err
@@ -328,6 +343,31 @@ func (p Planner) Apply(ctx context.Context, cfg Config, plan SetupPlan) (ApplyRe
 	}
 	result.Message = fmt.Sprintf("Navidrome is managed by UDL at %s", resolved.ConfigFile)
 	return result, nil
+}
+
+// sameSetupTarget compares desired state only. On-disk file preconditions are
+// checked separately by Apply; generation time, warnings and observed service
+// state may legitimately change without changing what the user approved.
+func sameSetupTarget(planned, current SetupPlan) bool {
+	if planned.Port != current.Port || planned.MusicDir != current.MusicDir ||
+		planned.DataDir != current.DataDir || planned.BinaryPath != current.BinaryPath ||
+		planned.ServerVersion != current.ServerVersion || planned.Service.Label != current.Service.Label ||
+		len(planned.Directories) != len(current.Directories) || len(planned.Files) != len(current.Files) {
+		return false
+	}
+	for i, dir := range planned.Directories {
+		if dir.Path != current.Directories[i].Path || dir.Label != current.Directories[i].Label {
+			return false
+		}
+	}
+	for i, file := range planned.Files {
+		other := current.Files[i]
+		if file.Path != other.Path || file.Label != other.Label || file.Mode != other.Mode ||
+			file.Content != other.Content || file.ContentSHA256 != other.ContentSHA256 {
+			return false
+		}
+	}
+	return true
 }
 
 // SignSetupPlan computes and stores the plan checksum.
