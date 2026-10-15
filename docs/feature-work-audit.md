@@ -3,6 +3,35 @@
 This is a dated audit, not a replacement for the active `PLAN.md` and
 `IMPLEMENTATION.md`. PR CI and merge status can change after publication.
 
+## Dated follow-up — 2026-10-15
+
+The branch counts, failing-CI statements, and recommended merge order below
+remain the **2026-10-10 snapshot**, not current instructions. PR #24 merged into
+the GUI branch on 2026-10-11 as `4a919e3`; #25's reviewed baseline then had nine
+commits above master and seven green checks. The app workflow already targets
+`master` and runs app build/XCTest with Xcode 16.4. Subsequent local review fixes
+need their own validation; baseline CI is not evidence for an unpushed change.
+
+The active root plan/tracker describe directional playlist sync, not unified
+queue work. The native pair editor has explicit create/edit intent and rejects
+case-insensitive ID collisions; it fails honestly for unloaded config or a
+missing backend. Expected-SHA protection is now implemented by review fix #14:
+Go returns read/write content hashes and refuses stale expected hashes, the
+client forwards the cached hash, and the editor surfaces conflicts with an
+on-screen “Reload jobs” action that refreshes cached config. This new evidence,
+not the historical “guarded configuration saving” phrase below, establishes the
+guard. Provider-picker enrichment and manual editor acceptance remain open.
+
+Review regressions cover exact-ID terminal routing, terminal-before-start replies,
+startup busy/cancel isolation, stale terminal progress, per-payload frame limits,
+and pair create/edit failures, expected-SHA forwarding/retention, conflict
+surfacing, cache reload, and older-wire compatibility. Final Swift validation:
+**125 passing tests**, up from the 122-test baseline before #14. See the dated evidence in
+[IMPLEMENTATION.md](../IMPLEMENTATION.md) for test names and scope. No manual
+native acceptance, destructive apply/restore, or real phone round trip is closed
+by these automated regressions. Earlier audit details are retained below without
+rewriting their historical claims.
+
 ## Repository state and PRs
 
 The repository has one registered worktree, checked out on

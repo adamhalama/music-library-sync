@@ -63,6 +63,16 @@
 - [ ] Future: bundled per-platform adapter toolchain (full version pinning + rollback), including release asset strategy and signature verification.
 
 ## Track C: Rekordbox Date Added ordering (planned)
+
+**2026-10-15 clarification:** The implemented `udl rekordbox playlist-sync
+plan|show|apply` workflow already has checksummed plans, process/sidecar safety
+gates, backups, drift checks, and CLI/engine/bridge coverage; recovery is
+documented in [rekordbox-recovery.md](rekordbox-recovery.md). Directional
+Rekordbox/Navidrome playlist mirroring is tracked in [PLAN.md](../PLAN.md) and
+[IMPLEMENTATION.md](../IMPLEMENTATION.md). Neither implements the distinct
+SoundCloud-origin **Date Added** `udl rekordbox order` proposal below. Its
+checkboxes remain open rather than borrowing playlist-sync evidence.
+
 - [ ] Add `udl rekordbox order plan|apply|show` command family.
 - [ ] Implement SoundCloud-only origin ordering in v1.
 - [ ] Add plan artifact schema + checksum validation.

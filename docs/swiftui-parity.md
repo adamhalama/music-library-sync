@@ -8,8 +8,10 @@ frontend. The plan and evidence for that work are archived under
 The completed visual-design pass over these same surfaces is archived under
 `plans/archive/gui-redesign-plan.md` and
 `plans/archive/gui-redesign-implementation.md`. The current root `PLAN.md` and
-`IMPLEMENTATION.md` track the next sync reliability and unified-queue work; this
-document must be updated when that work changes a surface described below. The
+`IMPLEMENTATION.md` track directional Rekordbox/Navidrome playlist sync. Sync
+reliability and unified-queue evidence is archived in
+`plans/archive/reliable-unified-sync-queue-implementation.md`; this document
+must be updated when the active work changes a surface described below. The
 sections below carry a **Redesigned surface** block naming the constraint each
 screen now makes visible.
 
@@ -76,10 +78,10 @@ Status: implemented; it is the default destination.
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Xcode project | Implemented, validation pending full Xcode | Checked-in app and unit-test targets, Debug/Release configurations, shared app/test schemes, macOS 14 deployment target |
+| Xcode project | Implemented, CI validated | Checked-in app and unit-test targets, Debug/Release configurations, shared app/test schemes, macOS 14 deployment target; CI builds and tests with pinned Xcode 16.4 |
 | Backend process | Implemented | Development binary override, embedded resource lookup, explicit working directory, login-shell PATH plus Homebrew fallbacks, bounded/redacted stderr |
 | JSON-RPC transport | Implemented | Actor isolation, 8 MiB NDJSON framing, correlation, out-of-order replies, typed notification/UI streams, disconnect cleanup |
-| Typed client | In progress | Centralized 37-method inventory; Doctor, Credentials, and interactive Sync use typed DTOs. Later workflow slices retain forward-compatible `JSONValue` surfaces |
+| Typed client | In progress | Centralized 56-method inventory; Doctor, Credentials, and interactive Sync use typed DTOs. Later workflow slices retain forward-compatible `JSONValue` surfaces |
 | Recovery | Implemented | Unexpected exit and EOF surface as recoverable state; restart never replays mutating requests |
 
 ## Doctor
@@ -391,9 +393,25 @@ Redesigned onboarding surface:
   deliberate backend exit, and shut down cleanly.
 - Project file: `plutil -lint` passed.
 - Shared schemes: XML validation passed.
-- Full `xcodebuild build`, `xcodebuild test`, XCTest compilation, and Thread
-  Sanitizer are pending because this machine currently has only Command Line
-  Tools selected and no `Xcode.app`; `xcodebuild` reports that a full Xcode
-  developer directory is required. Ad-hoc inside-out bundle signing and strict
-  signature verification pass; Developer ID and notarization are deliberately
-  out of scope.
+- **2026-10-15 correction:** Full-Xcode app build and XCTest execution are
+  covered by `.github/workflows/macos-app.yml` using Xcode 16.4; the earlier
+  local Command Line Tools limitation is not a project-wide automation gap.
+  The workflow runs on pull requests and pushes to `master`. Thread Sanitizer
+  and manual visual/workflow acceptance are not established by those CI steps.
+- **2026-10-15 local review validation:** 125 Swift tests passed after the
+  expected-SHA config-save follow-up (#14), up from the 122-test baseline. On
+  this Command Line Tools host, use
+  `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make app-test-dev`;
+  this harness does not substitute for full-Xcode or manual acceptance.
+- Review coverage includes exact-ID terminal ownership and terminal-before-start
+  replies (`RunOwnershipTests`), stale progress after terminal
+  (`SyncTerminalProgressTests`), per-payload 8 MiB framing
+  (`JSONRPCFrameLimitTests`), and create/edit collision plus disconnected/unloaded
+  config failures (`PlaylistSyncJobSaveTests`). The same save suite verifies
+  expected-SHA forwarding, returned-SHA retention, workflow-owned conflicts,
+  cache reload, and compatibility with older wire frames. The editor offers
+  “Reload jobs” on screen; provider-picker enrichment remains open. These are
+  bounded regression claims, not a completed lifecycle/view or backend-recovery
+  matrix.
+- Ad-hoc inside-out bundle signing and strict signature verification pass;
+  Developer ID and notarization are deliberately out of scope.

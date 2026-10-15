@@ -2,7 +2,7 @@
 
 - **Overall status:** In progress
 - **Plan:** [PLAN.md](./PLAN.md)
-- **Last updated:** 2026-08-07
+- **Last updated:** 2026-10-15
 - **Archived predecessor:**
   [plans/archive/navidrome-likes-rekordbox-implementation.md](./plans/archive/navidrome-likes-rekordbox-implementation.md)
 
@@ -461,8 +461,10 @@ apply result, and cancellation semantics as the CLI.
       last verified time, parity status, and corrupt/missing-state status.
 - [x] Add explicit “Send Rekordbox to phone” and “Bring phone edits to
       Rekordbox” direction controls; do not infer direction from last run.
-- [ ] Add job editor/provider pickers that save through the existing guarded
-      config-write path and surface external-file conflicts.
+- [x] Add a job editor with explicit create/edit intent that saves through the
+      expected-SHA-guarded config-write path, surfaces external-file conflicts
+      on the workflow, and offers “Reload jobs” to refresh cached config.
+- [ ] Enrich the job editor with provider playlist pickers.
 - [x] Render plan header, add/remove/move/keep/blocked filters, searchable row
       table, source/destination metadata, preconditions, and backup expectation.
 - [x] Use `.constrained(by:)` for every disabled plan/apply/editor control and
@@ -478,17 +480,47 @@ apply result, and cancellation semantics as the CLI.
 ### Swift validation
 
 - [x] DTO decoding tests, including nil collections and unknown enum values.
-- [ ] AppState run lifecycle, cancellation race, late reply, backend recovery,
-      config conflict, and workflow-error routing tests.
+- [x] Exact-ID terminal ownership, terminal-before-start-reply handling for each
+      starter, nil-ID startup busy/cancel behavior, and cross-workflow run
+      isolation (`RunOwnershipTests`).
+- [x] Ignore stale buffered progress after terminal (`SyncTerminalProgressTests`);
+      enforce the 8 MiB cap per JSON payload (`JSONRPCFrameLimitTests`).
+- [x] Pair create/edit collision checks and workflow-owned unloaded-config /
+      disconnected-write failures (`PlaylistSyncJobSaveTests`).
+- [x] Forward the cached expected SHA, retain the returned SHA, surface a config
+      conflict on Playlist Sync, reload the cached config, and tolerate older
+      wire frames (`PlaylistSyncJobSaveTests`); reject stale hashes without
+      overwriting the file (Go `TestPlaylistsConfigExpectedSHAGuard`).
+- [ ] Complete remaining AppState lifecycle/cancellation race, backend recovery,
+      broader config-conflict and workflow-error routing matrices; the
+      focused regressions above do not establish the entire matrix.
 - [x] SourceRuleTests for disabled controls and alert allowlist.
 - [ ] View/model tests for each status, direction, blocker, no-op, adoption,
       creation, confirmation, and partial result.
 
 ### Evidence
 
-- Tests: agent method inventory/dispatch tests pass; `make app-test-dev` passes
-  92/92, including protocol inventory, `@DefaultEmpty`, future action values,
+- Original phase evidence (2026-08-07): agent method inventory/dispatch tests
+  passed; `make app-test-dev` passed 92/92, including protocol inventory,
+  `@DefaultEmpty`, future action values,
   workflow-owned errors, constrained controls, and partial backup rendering.
+- **2026-10-15 review update:** Swift validation passed **125/125** after the
+  expected-SHA config-save follow-up (#14), up from the 122-test baseline.
+  Local command:
+  `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make app-test-dev`.
+  `RunOwnershipTests`, `SyncTerminalProgressTests`, `JSONRPCFrameLimitTests`, and
+  `PlaylistSyncJobSaveTests` support the focused checked items above. Prompt
+  ownership is covered in `JSONRPCConnectionTests`; Go
+  `TestPendingUIRejectsCancellationBetweenLookupAndRegistration` and
+  `TestInteractionInheritsRunParentCancellation` cover the UI-call cancellation
+  boundary. `TestConnOversizedReplyReturnsSameIDError` and
+  `TestOversizedTerminalStillFinishesRun` cover bounded oversized-frame fallbacks.
+  No manual, destructive, real-phone, or full lifecycle-matrix completion is
+  inferred from these tests. Guarded editor saves and focused conflict/reload
+  behavior are covered; provider-picker enrichment remains open. Go
+  `TestPlaylistsConfigExpectedSHAGuard` and
+  `TestPlaylistsConfigExpectedSHACreatesMissingFile` cover stale-hash refusal,
+  returned hashes, and first-save behavior.
 - Screenshots/manual notes: **NOVEL UI/DESIGN** is recorded below and in the
   view source. The production Swift module compiles. Rendered/manual coverage,
   provider-picker enrichment, resolved-ID/parity detail, and full AppState race
@@ -548,11 +580,14 @@ recoverable, and one real phone round trip proves exact ordered parity.
 
 ### Evidence
 
-- Automated command outputs: `go test ./...`, `go vet ./...`, and
+- Original phase evidence (2026-08-07): `go test ./...`, `go vet ./...`, and
   `go test -race ./...` passed; `make app-test-dev` passed 92/92; `make app-dev`
   built `bin/udl` and a valid ad-hoc-signed `dist/dev/UDL-Dev.app`. The sandbox
   denied only a nonessential Go module stat-cache temp write during build; the
   build itself completed successfully.
+- **2026-10-15 review update:** Swift validation passed 125/125 as recorded in
+  Phase 7 above; the 92/92 result here is historical.
+  Focused automated regressions do not close any acceptance checkbox below.
 - Real playlists/versions:
 - Backup paths:
 - Before/after checksums and ordered counts:

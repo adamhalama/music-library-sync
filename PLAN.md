@@ -1,9 +1,9 @@
 # Rekordbox and Navidrome Directional Playlist Sync
 
-- **Status:** Planned
+- **Status:** In progress
 - **Target:** Safely mirror one paired playlist in either direction between
   Rekordbox and Navidrome, preserving membership and order
-- **Last updated:** 2026-08-07
+- **Last updated:** 2026-10-15
 - **Implementation tracker:** [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 - **Predecessor:**
   [plans/archive/navidrome-likes-rekordbox-plan.md](./plans/archive/navidrome-likes-rekordbox-plan.md)
@@ -37,9 +37,13 @@ The repository already has most of the safe primitives:
   cache-first reads, explicit refreshes, cancellable agent runs, and on-screen
   workflow errors.
 
-The missing pieces are a Rekordbox playlist source model, a writable Navidrome
-playlist client, a direction-neutral mirror planner, durable pair bindings, and
-CLI/agent/native-app surfaces for the complete workflow.
+**2026-10-15 status update:** The Rekordbox playlist source model, writable
+Navidrome playlist client, direction-neutral planner, durable pair bindings, and
+CLI/agent/native workspace are implemented. This initiative is not Delivered:
+provider-picker enrichment, remaining lifecycle/view coverage, combined CLI
+acceptance, isolated destructive apply/restore, a real phone edit round trip, and
+manual native validation remain tracked in [IMPLEMENTATION.md](./IMPLEMENTATION.md).
+Automated review regressions do not close those acceptance gates.
 
 ## Product Decisions
 
