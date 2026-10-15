@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/playlists"
@@ -242,5 +243,48 @@ func TestNavidromeConfigReadFallsBackToDefaultsWhenNoFileExists(t *testing.T) {
 	}
 	if _, err := os.Stat(read.Path); err == nil {
 		t.Fatalf("reading the config must not create %s", read.Path)
+	}
+}
+
+func TestNavidromeRegistrationSharesPlaylistDestinationTransaction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "playlists.yaml")
+	server := &Server{WorkingDir: dir, PlaylistsConfigPath: path}
+	unlock := server.lockConfigDestination(path)
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+	started := make(chan struct{})
+	done := make(chan *RPCError, 1)
+	go func() { close(started); _, rpcErr := server.navidromePlaylistsRegister(); done <- rpcErr }()
+	<-started
+	select {
+	case rpcErr := <-done:
+		t.Fatalf("registration bypassed destination transaction: %+v", rpcErr)
+	case <-time.After(50 * time.Millisecond):
+	}
+	// This is a guarded writer's commit while it owns the same destination lock.
+	cfg := playlists.Config{Version: 1, SyncJobs: []playlists.SyncJob{{ID: "saved-draft", Rekordbox: playlists.PlaylistSelector{Playlist: "RB"}, Navidrome: playlists.PlaylistSelector{Playlist: "ND"}}}}
+	if err := playlists.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	unlock = nil
+	select {
+	case rpcErr := <-done:
+		if rpcErr != nil {
+			t.Fatal(rpcErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registration did not finish after destination was released")
+	}
+	after, err := playlists.Load(playlists.LoadOptions{ExplicitPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.SyncJobs) != 1 || after.SyncJobs[0].ID != "saved-draft" || len(after.Playlists) == 0 {
+		t.Fatalf("registration lost the committed draft: %+v", after)
 	}
 }

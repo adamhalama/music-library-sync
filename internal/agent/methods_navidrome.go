@@ -167,7 +167,7 @@ func (s *Server) navidromeSetupApply(params json.RawMessage) (any, *RPCError) {
 		// A managed definition nobody wrote down cannot be refreshed, so setup
 		// registers them. Failing to register is not a reason to fail an
 		// otherwise successful setup, so it is reported as a warning.
-		if _, defErr := playlists.WriteNavidromeDefinitions(s.PlaylistsConfigPath, s.WorkingDir); defErr != nil {
+		if _, defErr := s.writeNavidromeDefinitions(); defErr != nil {
 			result.Message = strings.TrimSpace(result.Message +
 				" Managed playlist definitions were not registered: " + defErr.Error())
 		}
@@ -198,7 +198,7 @@ func (s *Server) navidromePlaylistsRefresh() (any, *RPCError) {
 }
 
 func (s *Server) navidromePlaylistsRegister() (any, *RPCError) {
-	added, err := playlists.WriteNavidromeDefinitions(s.PlaylistsConfigPath, s.WorkingDir)
+	added, err := s.writeNavidromeDefinitions()
 	if err != nil {
 		return nil, asRPCError(err)
 	}
@@ -380,4 +380,16 @@ func (s *Server) navidromeServiceControl(params json.RawMessage) (any, *RPCError
 
 func navidromeRPCError(err error) *RPCError {
 	return NewRPCError(CodeInternalError, "navidrome operation failed", map[string]string{"detail": err.Error()})
+}
+
+// Setup and explicit registration mutate the same destination as the editor,
+// so they must share its read/merge/write transaction lock.
+func (s *Server) writeNavidromeDefinitions() ([]string, error) {
+	path, rpcErr := s.resolvePlaylistsWritePath()
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	unlock := s.lockConfigDestination(path)
+	defer unlock()
+	return playlists.WriteNavidromeDefinitions(path, s.WorkingDir)
 }
