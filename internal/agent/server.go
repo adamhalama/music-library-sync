@@ -14,6 +14,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/doctor"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/jaa/update-downloads/internal/freedl"
 	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
@@ -343,7 +344,13 @@ func (s *Server) StartRun(work RunWork) (string, error) {
 		if runErr != nil {
 			finished.Error = runErr.Error()
 		}
-		_ = s.Conn.Notify("run.finished", finished)
+		if err := s.Conn.Notify("run.finished", finished); err != nil {
+			var rpcErr *RPCError
+			if errors.As(err, &rpcErr) && rpcErr.Code == CodeFrameTooLarge {
+				// Never leave the frontend waiting for a terminal frame that cannot fit.
+				_ = s.Conn.Notify("run.finished", runFinishedParams{RunID: runID, ExitCode: exitcode.RuntimeFailure, Error: "run result exceeds frame limit"})
+			}
+		}
 	}()
 	return runID, nil
 }
