@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 )
 
@@ -78,6 +79,8 @@ type Service struct {
 	// ProviderFactory overrides how a named provider is constructed.
 	ProviderFactory func(provider string) (Provider, error)
 	Now             func() time.Time
+	// NavidromeLoadOptions selects the config used by the default Navidrome provider.
+	NavidromeLoadOptions navidrome.LoadOptions
 }
 
 type RefreshResult struct {
@@ -144,7 +147,7 @@ func (s Service) providerFor(provider string) (Provider, error) {
 	case ProviderAppleMusic:
 		return AppleMusicProvider{}, nil
 	case ProviderNavidrome:
-		return NewNavidromeProvider()
+		return NewNavidromeProviderWithOptions(s.NavidromeLoadOptions)
 	default:
 		return nil, fmt.Errorf("playlist provider %q is unsupported", provider)
 	}
