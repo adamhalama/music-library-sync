@@ -313,6 +313,9 @@ struct SelectRowsResult: Codable, Sendable {
 
 struct TrackRow: Codable, Sendable, Identifiable {
     var id: String { "\(sourceID):\(index)" }
+    var isTerminal: Bool {
+        ["downloaded", "failed", "skipped"].contains(runtimeStatus)
+    }
     let sourceID: String
     let sourceLabel: String
     let remoteID: String
@@ -727,6 +730,13 @@ struct SyncRunState: Sendable {
         guard exitCode == nil, phase == .starting || phase == .running else { return false }
         guard !Lifecycle(wire: sources[notification.sourceID]?.lifecycle ?? "").isTerminal,
               !Lifecycle(wire: sourceTables[notification.sourceID]?.lifecycle ?? "").isTerminal else { return false }
+        if let row = notification.row {
+            // Lossless outcomes can overtake newest-only percentages for an
+            // earlier track even while this source continues with its queue.
+            let isTerminalRow: (TrackRow) -> Bool = { $0.id == row.id && $0.isTerminal }
+            guard sources[notification.sourceID]?.rows.contains(where: isTerminalRow) != true,
+                  sourceTables[notification.sourceID]?.rows.contains(where: isTerminalRow) != true else { return false }
+        }
         progress = notification.progress
         if let row = notification.row {
             mergeProgressRow(sourceID: notification.sourceID, row: row)

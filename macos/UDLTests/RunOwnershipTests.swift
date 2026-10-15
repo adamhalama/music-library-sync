@@ -505,6 +505,39 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.close()
     }
 
+    func testCaptureTerminalRowsRejectProgressWithoutBlockingNextTrack() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        try await rpc.finishBeforeReply(state, method: .freeDLPlanStart, result: capturePlan()) {
+            await state.startFreeDLPlan(jobID: "fixture")
+        }
+        let capture = Task { await state.startFreeDLCapture() }
+        let request = try await rpc.readRequest(.freeDLCaptureStart)
+        try rpc.reply(request, result: .object(["run_id": .string("capture")]))
+        await capture.value
+        func row(_ index: Int, status: String) -> TrackRow {
+            TrackRow(sourceID: "fixture", sourceLabel: "fixture", remoteID: "track-\(index)", title: "Fixture",
+                index: index, executionSlot: index + 1, toggleable: true, planStatus: "missing_new",
+                planClass: "new", selected: true, runScope: "included", runtimeStatus: status,
+                statusLabel: status, failureDetail: status == "failed" ? "Fixture failure" : nil,
+                progressKnown: true, progressPercent: status == "downloading" ? 73 : 100)
+        }
+        for status in ["downloaded", "failed", "skipped"] {
+            state.applyLosslessSyncEvent(event("capture", message: "Track outcome", rows: [row(0, status: status)]))
+            state.applySyncProgress(progress("capture", row: row(0, status: "downloading")))
+            XCTAssertEqual(state.freeDLCaptureSources["fixture"]?.rows.first?.runtimeStatus, status)
+            XCTAssertEqual(state.freeDLCaptureSources["fixture"]?.rows.first?.progressPercent, 100)
+            state.applySyncProgress(progress("capture", row: row(1, status: "downloading")))
+            XCTAssertEqual(state.freeDLCaptureSources["fixture"]?.rows.first?.runtimeStatus, status)
+            XCTAssertEqual(state.freeDLCaptureSources["fixture"]?.rows.last?.runtimeStatus, "downloading")
+            XCTAssertEqual(state.freeDLCaptureSources["fixture"]?.rows.count, 2)
+        }
+        state.routeFinished(finished("capture"))
+        await rpc.connection.close()
+    }
+
     func testEarlyLifecycleIsRetainedWhenTerminalAlsoBeatsStartReply() async throws {
         let rpc = AgentRPCFixture()
         await rpc.connection.start()
@@ -604,20 +637,20 @@ final class RunOwnershipTests: XCTestCase {
                   params: .object(["run_id": .string(runID), "message": .string("Continue?")]))
     }
 
-    private func event(_ runID: String, message: String, lifecycle: String = "running") -> SyncEventNotification {
+    private func event(_ runID: String, message: String, lifecycle: String = "running", rows: [TrackRow] = []) -> SyncEventNotification {
         SyncEventNotification(runID: runID,
             event: OutputEvent(timestamp: nil, level: "info", event: "source_started", sourceID: "fixture", message: message, details: nil),
-            source: SourceSnapshot(lifecycle: lifecycle, confirmed: true, rows: [], activity: []))
+            source: SourceSnapshot(lifecycle: lifecycle, confirmed: true, rows: rows, activity: []))
     }
 
-    private func progress(_ runID: String) -> SyncProgressNotification {
+    private func progress(_ runID: String, row: TrackRow? = nil) -> SyncProgressNotification {
         SyncProgressNotification(runID: runID, sourceID: "fixture", progress: StructuredProgressSnapshot(
             progress: ProgressModel(
                 source: SourceProgress(id: "fixture", lifecycle: "running", plannedTotal: 1, itemTotal: 1, itemIndex: 1, completed: 0),
                 track: TrackProgress(name: "Fixture", lifecycle: "downloading", progressPercent: 73),
                 global: GlobalProgress(total: 1, completed: 0)),
             track: StructuredTrackState(name: "Fixture", progressKnown: true, progressPercent: 73, lifecycle: "downloading"),
-            structuredTrackEvents: true), row: nil)
+            structuredTrackEvents: true), row: row)
     }
 
     private func loadSyncFixture(_ state: AppState, rpc: AgentRPCFixture) async throws {

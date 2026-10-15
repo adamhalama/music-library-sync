@@ -98,6 +98,61 @@ final class SyncTerminalProgressTests: XCTestCase {
         XCTAssertTrue(run.sources.isEmpty)
     }
 
+    func testTerminalRowsRejectBufferedProgressWhileSameSourceRunsNextTrack() throws {
+        let stale = try progressNotification()
+        let nextRow = TrackRow(
+            sourceID: "source-a", sourceLabel: "source-a", remoteID: "next", title: "Older",
+            index: 9, executionSlot: 2, toggleable: true, planStatus: "missing_known_gap",
+            planClass: "known_gap", selected: true, runScope: "included", runtimeStatus: "downloading",
+            statusLabel: "24%", failureDetail: nil, progressKnown: true, progressPercent: 24
+        )
+        // Same title, different canonical row identity: do not lock an entire
+        // source or use track-name matching to protect the previous outcome.
+        let nextProgress = StructuredProgressSnapshot(
+            progress: ProgressModel(source: stale.progress.progress.source,
+                track: TrackProgress(name: "Older", lifecycle: "downloading", progressPercent: 24),
+                global: stale.progress.progress.global),
+            track: StructuredTrackState(name: "Older", progressKnown: true, progressPercent: 24, lifecycle: "downloading"),
+            structuredTrackEvents: true
+        )
+        let next = SyncProgressNotification(runID: stale.runID, sourceID: stale.sourceID,
+                                            progress: nextProgress, row: nextRow)
+        for status in ["downloaded", "failed", "skipped"] {
+            for storage in ["snapshot", "table", "both"] {
+                var run = SyncRunState(runID: "run-1", phase: .running)
+                let terminal = TrackRow(
+                    sourceID: "source-a", sourceLabel: "source-a", remoteID: "older", title: "Older",
+                    index: 8, executionSlot: 1, toggleable: true, planStatus: "missing_known_gap",
+                    planClass: "known_gap", selected: true, runScope: "included", runtimeStatus: status,
+                    statusLabel: "Terminal", failureDetail: status == "failed" ? "Fixture failure" : nil,
+                    progressKnown: true, progressPercent: 100
+                )
+                run.mergeSnapshot(sourceID: "source-a", snapshot: SourceSnapshot(
+                    lifecycle: "running", confirmed: true, rows: [terminal], activity: []
+                ))
+                if storage == "snapshot" { run.sourceTables["source-a"] = nil }
+                if storage == "table" { run.sources["source-a"] = nil }
+                XCTAssertFalse(run.applyProgress(stale))
+                XCTAssertNil(run.progress)
+                if storage != "table" {
+                    XCTAssertEqual(run.sources["source-a"]?.rows.first?.runtimeStatus, status)
+                    XCTAssertEqual(run.sources["source-a"]?.rows.first?.progressPercent, 100)
+                }
+                if storage != "snapshot" {
+                    XCTAssertEqual(run.sourceTables["source-a"]?.rows.first?.runtimeStatus, status)
+                    XCTAssertEqual(run.sourceTables["source-a"]?.rows.first?.progressPercent, 100)
+                }
+                XCTAssertTrue(run.applyProgress(next))
+                XCTAssertEqual(run.progress?.track.progressPercent, 24)
+                XCTAssertFalse(run.applyProgress(stale))
+                XCTAssertEqual(run.progress?.track.progressPercent, 24)
+                XCTAssertEqual(run.sources["source-a"]?.rows.last?.id, nextRow.id)
+                XCTAssertEqual(run.sourceTables["source-a"]?.rows.last?.id, nextRow.id)
+                XCTAssertEqual(run.phase, .running)
+            }
+        }
+    }
+
     private func progressNotification() throws -> SyncProgressNotification {
         let payload = """
         {

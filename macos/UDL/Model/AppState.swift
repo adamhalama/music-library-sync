@@ -1518,6 +1518,7 @@ final class AppState: ObservableObject {
             rows: [],
             activity: []
         )
+        guard !existing.rows.contains(where: { $0.id == row.id && $0.isTerminal }) else { return }
         freeDLCaptureSources[notification.sourceID] = existing.merging(row)
     }
 
