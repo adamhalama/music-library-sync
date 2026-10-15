@@ -60,13 +60,37 @@ type LoadOptions struct {
 }
 
 func Load(opts LoadOptions) (Config, error) {
+	return load(opts, os.ReadFile)
+}
+
+// LoadWithCapturedFile preserves merged configuration semantics while parsing
+// the destination from the same capture used for its revision token. A nil
+// payload represents a missing optional destination.
+func LoadWithCapturedFile(opts LoadOptions, path string, payload []byte) (Config, error) {
+	captured, err := filepath.Abs(path)
+	if err != nil {
+		return Config{}, err
+	}
+	return load(opts, func(candidate string) ([]byte, error) {
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if absolute == captured {
+			return payload, nil
+		}
+		return os.ReadFile(candidate)
+	})
+}
+
+func load(opts LoadOptions, readFile func(string) ([]byte, error)) (Config, error) {
 	cfg := Config{Version: ConfigVersion}
 	env := opts.Env
 	if env == nil {
 		env = osEnvMap()
 	}
 	if explicit := firstNonEmpty(strings.TrimSpace(opts.ExplicitPath), strings.TrimSpace(env[EnvConfigPath])); explicit != "" {
-		if err := mergeFile(&cfg, explicit, true); err != nil {
+		if err := mergeFileWithReader(&cfg, explicit, true, readFile); err != nil {
 			return Config{}, err
 		}
 		normalizeConfig(&cfg)
@@ -76,7 +100,7 @@ func Load(opts LoadOptions) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if err := mergeFile(&cfg, userPath, false); err != nil {
+	if err := mergeFileWithReader(&cfg, userPath, false, readFile); err != nil {
 		return Config{}, err
 	}
 	wd := strings.TrimSpace(opts.WorkingDir)
@@ -86,7 +110,7 @@ func Load(opts LoadOptions) (Config, error) {
 			return Config{}, fmt.Errorf("resolve working directory: %w", err)
 		}
 	}
-	if err := mergeFile(&cfg, ProjectConfigPath(wd), false); err != nil {
+	if err := mergeFileWithReader(&cfg, ProjectConfigPath(wd), false, readFile); err != nil {
 		return Config{}, err
 	}
 	normalizeConfig(&cfg)
@@ -245,11 +269,15 @@ func Marshal(cfg Config) ([]byte, error) {
 }
 
 func mergeFile(cfg *Config, path string, required bool) error {
+	return mergeFileWithReader(cfg, path, required, os.ReadFile)
+}
+
+func mergeFileWithReader(cfg *Config, path string, required bool, readFile func(string) ([]byte, error)) error {
 	expanded, err := config.ExpandPath(path)
 	if err != nil {
 		return err
 	}
-	payload, err := os.ReadFile(expanded)
+	payload, err := readFile(expanded)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !required {
 			return nil

@@ -157,12 +157,6 @@ func (s *Server) savePlaylistDefinition(params json.RawMessage) (any, *RPCError)
 }
 
 func (s *Server) readPlaylistsConfig() (any, *RPCError) {
-	cfg, err := playlists.Load(playlists.LoadOptions{
-		ExplicitPath: s.PlaylistsConfigPath, WorkingDir: s.WorkingDir,
-	})
-	if err != nil {
-		return nil, playlistRPCError(err)
-	}
 	path, rpcErr := s.resolvePlaylistsWritePath()
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -172,6 +166,12 @@ func (s *Server) readPlaylistsConfig() (any, *RPCError) {
 		content = string(payload)
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return nil, playlistRPCError(readErr)
+	}
+	cfg, err := playlists.LoadWithCapturedFile(playlists.LoadOptions{
+		ExplicitPath: s.PlaylistsConfigPath, WorkingDir: s.WorkingDir,
+	}, path, []byte(content))
+	if err != nil {
+		return nil, playlistRPCError(err)
 	}
 	return playlistConfigResult{Path: path, Config: cfg, Content: content, ContentSHA256: contentSHA256([]byte(content))}, nil
 }

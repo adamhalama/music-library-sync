@@ -282,3 +282,31 @@ func TestLoadPairStateRejectsTamperedChecksum(t *testing.T) {
 		t.Fatalf("tampered state error = %v", err)
 	}
 }
+
+func TestLoadWithCapturedFileUsesRevisionBytesAndPreservesInheritance(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv(EnvConfigPath, "")
+	user := filepath.Join(home, "udl", "playlists.yaml")
+	if err := Save(user, Config{Version: 1, SyncJobs: []SyncJob{{ID: "inherited", Rekordbox: PlaylistSelector{Playlist: "RB"}, Navidrome: PlaylistSelector{Playlist: "ND"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	destination := ProjectConfigPath(project)
+	captured := []byte("version: 1\nplaylists:\n  - id: captured\n    name: Captured\n    provider: apple_music\n    provider_playlist: Captured\n")
+	// The disk revision changes after capture. It must not leak into the config
+	// paired with the captured bytes and their SHA.
+	if err := os.WriteFile(destination, []byte("version: 99\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithCapturedFile(LoadOptions{WorkingDir: project}, destination, captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Playlists) != 1 || cfg.Playlists[0].ID != "captured" || len(cfg.SyncJobs) != 1 || cfg.SyncJobs[0].ID != "inherited" {
+		t.Fatalf("capture/inheritance mismatch: %+v", cfg)
+	}
+	cfg, err = LoadWithCapturedFile(LoadOptions{ExplicitPath: destination}, destination, captured)
+	if err != nil || len(cfg.Playlists) != 1 || len(cfg.SyncJobs) != 0 {
+		t.Fatalf("explicit capture mismatch: %+v, %v", cfg, err)
+	}
+}
