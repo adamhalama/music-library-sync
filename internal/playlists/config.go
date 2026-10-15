@@ -77,6 +77,9 @@ func LoadWithCapturedFile(opts LoadOptions, path string, payload []byte) (Config
 			return nil, err
 		}
 		if absolute == captured {
+			if payload == nil {
+				return nil, os.ErrNotExist
+			}
 			return payload, nil
 		}
 		return os.ReadFile(candidate)

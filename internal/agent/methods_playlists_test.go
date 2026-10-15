@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -313,5 +314,33 @@ func TestPlaylistsConfigConcurrentExpectedSHAAllowsOneWriter(t *testing.T) {
 	}
 	if successes != 1 {
 		t.Fatalf("same revision allowed %d writers, want exactly one", successes)
+	}
+}
+
+func TestPlaylistsConfigReadPreservesMissingDestinationSemantics(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv(playlists.EnvConfigPath, "")
+	path := filepath.Join(dir, "missing.yaml")
+	server := &Server{WorkingDir: dir, PlaylistsConfigPath: path}
+	if _, rpcErr := server.readPlaylistsConfig(); rpcErr == nil || !strings.Contains(rpcErr.Message, "does not exist") {
+		t.Fatalf("missing explicit config must fail, got %+v", rpcErr)
+	}
+	server.PlaylistsConfigPath = ""
+	value, rpcErr := server.readPlaylistsConfig()
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	read := value.(playlistConfigResult)
+	if read.Config.Version != playlists.ConfigVersion || read.Content != "" || read.ContentSHA256 != contentSHA256(nil) {
+		t.Fatalf("missing optional destination: %+v", read)
+	}
+	// An existing zero-byte explicit config is not the same as a missing file.
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server.PlaylistsConfigPath = path
+	if _, rpcErr := server.readPlaylistsConfig(); rpcErr != nil {
+		t.Fatalf("existing empty destination: %+v", rpcErr)
 	}
 }
