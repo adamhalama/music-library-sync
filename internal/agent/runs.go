@@ -75,6 +75,9 @@ func (r *RunRegistry) SetPendingUI(runID, requestID string, cancelUI func()) err
 	if !ok {
 		return NewRPCError(CodeRunNotFound, "run not found", map[string]string{"run_id": runID})
 	}
+	if run.lifecycle == runLifecycleCanceling || run.ctx.Err() != nil {
+		return context.Canceled
+	}
 	if run.pending != nil {
 		return NewRPCError(CodeRunConflict, "run already has a pending UI request", map[string]string{"run_id": runID})
 	}

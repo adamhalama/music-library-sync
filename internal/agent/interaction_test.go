@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,5 +215,55 @@ func TestInteractionKindsFailWhenClientDisconnects(t *testing.T) {
 			}
 			_ = serverSide.Close()
 		})
+	}
+}
+
+func TestPendingUIRejectsCancellationBetweenLookupAndRegistration(t *testing.T) {
+	registry := NewRunRegistry()
+	runID, _, err := registry.Register(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookedUp := make(chan struct{})
+	canceled := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		if _, ok := registry.Context(runID); !ok {
+			done <- errors.New("run missing")
+			return
+		}
+		close(lookedUp)
+		<-canceled
+		done <- registry.SetPendingUI(runID, "prompt", func() {})
+	}()
+	<-lookedUp
+	registry.Cancel(runID)
+	close(canceled)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("registration after cancellation = %v, want context.Canceled", err)
+	}
+}
+
+func TestInteractionInheritsRunParentCancellation(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := NewRunRegistry()
+	runID, _, err := registry.Register(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := &synchronizedBuffer{}
+	interaction := &Interaction{Conn: NewConn(strings.NewReader(""), output), Runs: registry, RunID: runID}
+	done := make(chan error, 1)
+	go func() { done <- interaction.callUI("ui.confirm", nil, nil) }()
+	waitForNotifications(t, output, 1)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("call error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UI call did not inherit parent cancellation")
 	}
 }
