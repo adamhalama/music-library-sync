@@ -97,15 +97,23 @@ actor JSONRPCConnection {
                     return
                 }
                 buffer.append(chunk)
-                if buffer.count > Self.maximumFrameBytes {
-                    await self?.fail(JSONRPCConnectionError.frameTooLarge)
-                    return
-                }
                 while let newline = buffer.firstIndex(of: 0x0A) {
+                    // The limit applies to each JSON payload, not its newline
+                    // or the other frames returned by the same read.
+                    guard buffer.distance(from: buffer.startIndex, to: newline) <= Self.maximumFrameBytes else {
+                        await self?.fail(JSONRPCConnectionError.frameTooLarge)
+                        return
+                    }
                     let frame = Data(buffer[..<newline])
                     buffer.removeSubrange(...newline)
                     guard !frame.isEmpty else { continue }
                     await self?.consume(frame)
+                }
+                // Bound an unfinished frame too, even before its delimiter
+                // arrives, without charging it for preceding complete frames.
+                if buffer.count > Self.maximumFrameBytes {
+                    await self?.fail(JSONRPCConnectionError.frameTooLarge)
+                    return
                 }
             }
         }
