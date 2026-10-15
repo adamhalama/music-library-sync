@@ -1,5 +1,56 @@
 import Foundation
 
+/// Creation must never replace a pair; editing must still refer to the pair
+/// originally opened by the editor, even if the config changed in the meantime.
+enum PlaylistSyncJobSaveIntent {
+    case create
+    case edit(originalID: String)
+
+    func updatedConfig(_ current: PlaylistConfig?, saving job: PlaylistSyncJob) throws -> PlaylistConfig {
+        guard let current else { throw PlaylistSyncJobSaveError.configUnavailable }
+        var jobs = current.syncJobs
+        switch self {
+        case .create:
+            guard !jobs.contains(where: { $0.id.caseInsensitiveCompare(job.id) == .orderedSame }) else {
+                throw PlaylistSyncJobSaveError.duplicateID(job.id)
+            }
+            jobs.append(job)
+        case .edit(let originalID):
+            guard job.id == originalID else { throw PlaylistSyncJobSaveError.changedID }
+            guard let index = jobs.firstIndex(where: { $0.id == originalID }) else {
+                throw PlaylistSyncJobSaveError.missingOriginal(originalID)
+            }
+            guard !jobs.enumerated().contains(where: {
+                $0.offset != index && $0.element.id.caseInsensitiveCompare(job.id) == .orderedSame
+            }) else {
+                throw PlaylistSyncJobSaveError.duplicateID(job.id)
+            }
+            jobs[index] = job
+        }
+        return PlaylistConfig(version: current.version, playlists: current.playlists, syncJobs: jobs)
+    }
+}
+
+private enum PlaylistSyncJobSaveError: LocalizedError {
+    case configUnavailable
+    case duplicateID(String)
+    case changedID
+    case missingOriginal(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .configUnavailable:
+            "Playlist configuration is not loaded. Reload it before saving a pair."
+        case .duplicateID(let id):
+            "A playlist pair with ID ‘\(id)’ already exists (IDs are case-insensitive). Choose a different ID or edit the existing pair."
+        case .changedID:
+            "The pair ID cannot be changed because it names its binding state file."
+        case .missingOriginal(let id):
+            "The original playlist pair ‘\(id)’ no longer exists. Reload the configuration before editing."
+        }
+    }
+}
+
 extension AppState {
     func loadPlaylistSync() async {
         guard let client else { return }
@@ -69,16 +120,9 @@ extension AppState {
         }
     }
 
-    func savePlaylistSyncJob(_ job: PlaylistSyncJob) async -> Bool {
-        guard let current = playlistConfig?.config else { return false }
-        var jobs = current.syncJobs
-        if let index = jobs.firstIndex(where: { $0.id.caseInsensitiveCompare(job.id) == .orderedSame }) {
-            jobs[index] = job
-        } else {
-            jobs.append(job)
-        }
-        let updated = PlaylistConfig(version: current.version, playlists: current.playlists, syncJobs: jobs)
+    func savePlaylistSyncJob(_ job: PlaylistSyncJob, intent: PlaylistSyncJobSaveIntent) async -> Bool {
         do {
+            let updated = try intent.updatedConfig(playlistConfig?.config, saving: job)
             try await writePlaylistSyncConfig(updated)
             playlistSyncPlan = nil
             await loadPlaylistSync()

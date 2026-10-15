@@ -11,6 +11,7 @@ struct PlaylistSyncJobEditor: View {
     @State private var navidromeName: String
     @State private var navidromeID: String
     @State private var isSaving = false
+    @State private var saveFailure: AppState.WorkflowStatus?
 
     init(existing: PlaylistSyncJob? = nil) {
         self.existing = existing
@@ -45,6 +46,13 @@ struct PlaylistSyncJobEditor: View {
             }
             .formStyle(.grouped)
 
+            if let saveFailure {
+                Text(saveFailure.message)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack {
                 Button("Cancel", role: .cancel) { dismiss() }
                 Spacer()
@@ -68,6 +76,7 @@ struct PlaylistSyncJobEditor: View {
 
     private func save() {
         isSaving = true
+        saveFailure = nil
         let job = PlaylistSyncJob(
             id: id.trimmed,
             rekordbox: PlaylistSyncSelector(
@@ -80,9 +89,14 @@ struct PlaylistSyncJobEditor: View {
             )
         )
         Task {
-            let saved = await appState.savePlaylistSyncJob(job)
+            let intent: PlaylistSyncJobSaveIntent = existing.map { .edit(originalID: $0.id) } ?? .create
+            let saved = await appState.savePlaylistSyncJob(job, intent: intent)
             isSaving = false
-            if saved { dismiss() }
+            if saved {
+                dismiss()
+            } else {
+                saveFailure = appState.playlistSyncStatus
+            }
         }
     }
 }
