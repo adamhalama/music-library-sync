@@ -114,7 +114,7 @@ func buildSpotifyDeemixPlan(
 			KnownIDs: map[string]struct{}{},
 			Entries:  map[string]spotifyStateEntry{},
 		},
-		DownloadOrder: DownloadOrderNewestFirst,
+		DownloadOrder: DefaultDownloadOrder,
 	}
 
 	stateFilePath, err := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
@@ -171,7 +171,7 @@ func buildSpotifyDeemixPlan(
 		}
 	}
 	tracks = applySpotifyPlanWindow(tracks, opts.PlanLimit, EffectivePlanWindow(source, opts))
-	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks)
+	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks, newSpotifyMetadataResolver(spotifyCreds))
 
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 

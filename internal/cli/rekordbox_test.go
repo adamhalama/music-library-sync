@@ -170,3 +170,21 @@ sync:
 		}
 	}
 }
+
+// The snapshot source is opt-in: without --playlist-id the plan still reads
+// Music.app, and an unknown id fails before anything touches Rekordbox.
+func TestPlaylistSyncPlanRejectsAnUnknownPlaylistID(t *testing.T) {
+	app := &AppContext{
+		Build: BuildInfo{Version: "test"},
+		IO:    IOStreams{In: strings.NewReader(""), Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+	}
+	root := newRootCommand(app)
+	root.SetArgs([]string{"rekordbox", "playlist-sync", "plan", "--playlist-id", "no-such-playlist"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected an error for an unconfigured playlist id")
+	}
+	if !strings.Contains(err.Error(), "no-such-playlist") {
+		t.Fatalf("the error must name the id: %v", err)
+	}
+}

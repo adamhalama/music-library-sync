@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Home</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.hero{padding:22px 24px 18px;border-bottom:.5px solid var(--sep)}
+.hero h1{font-family:var(--display);font-size:22px;font-weight:680;letter-spacing:-.025em;margin:0 0 5px}
+.hero p{margin:0;font-size:12.5px;color:var(--text-2);line-height:1.5}
+.hero .row{display:flex;align-items:center;gap:12px;margin-top:14px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:18px 24px}
+.wcard{background:var(--win);border:.5px solid var(--sep);border-radius:10px;padding:13px 14px;
+  display:flex;gap:12px;align-items:flex-start;text-decoration:none;color:inherit;transition:.14s}
+.wcard:hover{border-color:var(--sep-2);background:var(--sunken)}
+.wcard .g{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;
+  background:var(--fill);color:var(--text-2);flex:0 0 30px}
+.wcard h4{margin:0 0 3px;font-size:13px;font-weight:620}
+.wcard p{margin:0;font-size:11.5px;color:var(--text-3);line-height:1.45}
+.wcard .st{margin-top:7px;display:flex;gap:6px;align-items:center}
+.attn{margin:0 24px 18px;border:.5px solid var(--sep);border-radius:10px;overflow:hidden}
+.attn-head{padding:9px 13px;background:var(--sunken);border-bottom:.5px solid var(--sep);
+  font-size:12px;font-weight:620;display:flex;align-items:center;gap:8px}
+.arow{display:grid;grid-template-columns:16px 1fr auto;gap:10px;align-items:center;padding:9px 13px;
+  border-bottom:.5px solid var(--sep);font-size:12.5px}
+.arow:last-child{border-bottom:none}
+.arow .d{font-size:11.5px;color:var(--text-3);margin-top:2px}
+.runline{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:7px 0;
+  border-bottom:.5px solid var(--sep);font-size:12px}
+.runline:last-child{border-bottom:none}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">udl</div><div class="tb-sub">4 sources · <span class="mono">~/.config/udl/config.yaml</span></div></div>
+    <div class="spacer"></div>
+    <a class="tb-btn" href="settings.html">⚙ Settings</a>
+    <button class="tb-btn" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="center">
+      <div class="scroll">
+        <div class="hero">
+          <h1>26 tracks waiting across 3 sources</h1>
+          <p>Last sync finished 2 days ago — 34 downloaded, 1 failed. One credential is missing, so
+             Spotify sources will be skipped until you fix it.</p>
+          <div class="row">
+            <a class="btn primary" href="sync-plan.html">Review sync plan</a>
+            <a class="btn" href="doctor.html">Check system</a>
+            <span class="summary">or press <span class="kbd">⌘R</span> to run with defaults</span>
+          </div>
+        </div>
+
+        <div class="cards">
+          <a class="wcard" href="sync-plan.html">
+            <span class="g">⇣</span>
+            <div style="flex:1">
+              <h4>Run Sync</h4>
+              <p>Download new tracks from SoundCloud and Spotify sources into your library.</p>
+              <div class="st"><span class="pill ok"><i class="dot"></i>26 new</span><span class="pill">6 known gaps</span></div>
+            </div>
+          </a>
+          <a class="wcard" href="freedl.html">
+            <span class="g">✦</span>
+            <div style="flex:1">
+              <h4>SoundCloud Free DL</h4>
+              <p>Find tracks you own in low quality that offer a free lossless download, then promote them.</p>
+              <div class="st"><span class="pill ok"><i class="dot"></i>6 upgrades</span><span class="pill">2 jobs enabled</span></div>
+            </div>
+          </a>
+          <a class="wcard" href="rekordbox.html">
+            <span class="g">▤</span>
+            <div style="flex:1">
+              <h4>Rekordbox Sync</h4>
+              <p>Mirror a Music.app playlist into Rekordbox with a checksummed, fail-closed plan.</p>
+              <div class="st"><span class="pill err"><i class="dot"></i>3 apply blockers</span><span class="pill warn">Rekordbox open</span></div>
+            </div>
+          </a>
+          <a class="wcard" href="playlists.html">
+            <span class="g">♫</span>
+            <div style="flex:1">
+              <h4>Playlists</h4>
+              <p>Cached Apple Music snapshots you can hand off to Free DL or Rekordbox.</p>
+              <div class="st"><span class="pill">4 playlists</span><span class="pill warn">1 never refreshed</span></div>
+            </div>
+          </a>
+        </div>
+
+        <div class="attn">
+          <div class="attn-head"><span class="sev warn">!</span>Needs attention <span class="spacer"></span>
+            <a class="btn sm plain" href="doctor.html">Open Check System</a></div>
+          <div id="attnRows"></div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">Library</div>
+        <div class="field"><label>Sources</label><span class="val">4 · 3 enabled</span></div>
+        <div class="field"><label>Tracks on disk</label><span class="val">1,284</span></div>
+        <div class="field"><label>Library size</label><span class="val">142.6 GB</span></div>
+        <div class="field"><label>Last sync</label><span class="val">28 Jul, 14:22</span></div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Recent runs</div>
+        <div class="runline"><span class="nowrap">28 Jul · 3 sources</span><span class="pill ok">34</span><span class="pill err">1</span></div>
+        <div class="runline"><span class="nowrap">25 Jul · dry run</span><span class="pill">18</span><span class="pill">0</span></div>
+        <div class="runline"><span class="nowrap">21 Jul · 2 sources</span><span class="pill ok">12</span><span class="pill">0</span></div>
+        <div class="runline"><span class="nowrap">19 Jul · Free DL</span><span class="pill ok">4</span><span class="pill">0</span></div>
+        <a class="btn sm plain" style="margin-top:8px;padding-left:0" href="sync-run.html">Open last run report</a>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Paths</div>
+        <div class="path"><b>Config</b>~/.config/udl/config.yaml</div>
+        <div class="path"><b>State dir</b>~/dev/music-down/statefiles</div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="status"></div>
+    <div class="spacer"></div>
+    <a class="btn" href="config.html">Edit config</a>
+    <a class="btn primary" href="sync-plan.html">Review sync plan</a>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Home</h3>
+  <p>Outcome-first landing screen. It answers "what is waiting for me and what is broken" before offering navigation, so the sidebar is a second-class path rather than the only one.</p>
+  <dl>
+    <dt>NavigationSplitView(sidebar:content:detail:)</dt><dd>Sidebar holds workflows + contextual list + a pinned System section, the same on every screen.</dd>
+    <dt>LazyVGrid(columns: 2)</dt><dd>Workflow cards. Each is a <code>NavigationLink</code>, so ⌘[ / ⌘] back-forward works for free.</dd>
+    <dt>GroupBox "Needs attention"</dt><dd>Fed by the same <code>doctor.Report</code> the Check System view renders — one source of truth, two presentations.</dd>
+    <dt>.inspector</dt><dd>Library totals and recent runs; collapsible, remembered per window.</dd>
+    <dt>.keyboardShortcut("r", modifiers:.command)</dt><dd>⌘R runs sync with saved defaults, skipping the plan screen.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+Shell.init({page:"home", note:"Everything udl writes is reversible except a Rekordbox apply."});
+document.getElementById("attnRows").innerHTML = UDL.checks
+  .filter(c=>c.sev==="err"||c.sev==="warn")
+  .map(c=>`<div class="arow">
+    <span class="sev ${c.sev}">${c.sev==="err"?"✕":"!"}</span>
+    <div><div>${c.msg}</div><div class="d">${c.detail}</div></div>
+    <a class="btn sm" href="${c.fix==="credentials"?"credentials.html":"doctor.html"}">${c.fix==="credentials"?"Add credential":"Details"}</a>
+  </div>`).join("");
+const err = UDL.checks.filter(c=>c.sev==="err").length, warn = UDL.checks.filter(c=>c.sev==="warn").length;
+document.getElementById("status").innerHTML =
+  `Doctor: <span class="err">${err} error</span> · <span class="warn">${warn} warnings</span> · <b>${UDL.checks.filter(c=>c.sev==="ok").length}</b> checks passed`;
+</script>
+</body>
+</html>

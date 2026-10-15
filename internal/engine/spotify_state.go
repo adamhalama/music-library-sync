@@ -33,6 +33,114 @@ type spotifyStateBackfillEntry struct {
 	LocalPath   string
 }
 
+// spotifyStateWriter keeps the parsed line layout for a whole source run.
+// Every mutation still rewrites through the existing atomic rename boundary,
+// but no completed track rereads or reparses the state file.
+type spotifyStateWriter struct {
+	path       string
+	mode       os.FileMode
+	prefix     []byte
+	lines      []string
+	firstByID  map[string]int
+	duplicates map[string][]int
+	removed    map[int]bool
+}
+
+var readSpotifyStateWriterFileFn = os.ReadFile
+
+func newSpotifyStateWriter(path string) (*spotifyStateWriter, error) {
+	stateDir := filepath.Dir(path)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return nil, err
+	}
+	payload, err := readSpotifyStateWriterFileFn(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	prefix, lines := splitSpotifyStatePayload(payload)
+	if len(payload) == 0 {
+		prefix = []byte("# udl spotify state v2\n")
+	}
+	writer := &spotifyStateWriter{
+		path: path, mode: mode, prefix: prefix, lines: lines,
+		firstByID: map[string]int{}, duplicates: map[string][]int{}, removed: map[int]bool{},
+	}
+	for index, line := range lines {
+		id, _ := parseSpotifyStateLine(line)
+		if id == "" {
+			continue
+		}
+		if _, exists := writer.firstByID[id]; !exists {
+			writer.firstByID[id] = index
+		} else {
+			writer.duplicates[id] = append(writer.duplicates[id], index)
+		}
+	}
+	return writer, nil
+}
+
+func (w *spotifyStateWriter) Upsert(id, displayName, localPath string) error {
+	if w == nil {
+		return errors.New("spotify state writer is nil")
+	}
+	trackID := extractSpotifyTrackID(id)
+	if trackID == "" {
+		return errors.New("spotify track id must not be empty")
+	}
+	entry := spotifyStateEntry{
+		DisplayName: strings.TrimSpace(displayName),
+		LocalPath:   normalizeSpotifyStatePath(localPath),
+	}
+	if index, exists := w.firstByID[trackID]; exists {
+		_, existing := parseSpotifyStateLine(w.lines[index])
+		if entry.DisplayName != "" {
+			existing.DisplayName = entry.DisplayName
+		}
+		if entry.LocalPath != "" {
+			existing.LocalPath = entry.LocalPath
+		}
+		w.lines[index] = formatSpotifyStateLine(trackID, existing)
+		for _, duplicate := range w.duplicates[trackID] {
+			w.removed[duplicate] = true
+		}
+	} else {
+		w.firstByID[trackID] = len(w.lines)
+		w.lines = append(w.lines, formatSpotifyStateLine(trackID, entry))
+	}
+	return w.persist()
+}
+
+func (w *spotifyStateWriter) persist() error {
+	last := len(w.lines) - 1
+	for last >= 0 && (w.removed[last] || strings.TrimSpace(w.lines[last]) == "") {
+		last--
+	}
+	lineCount := 0
+	for index := 0; index <= last; index++ {
+		if !w.removed[index] {
+			lineCount++
+		}
+	}
+	var payload bytes.Buffer
+	payload.Grow(len(w.prefix) + lineCount*64)
+	payload.Write(w.prefix)
+	if payload.Len() > 0 && w.prefix[len(w.prefix)-1] != '\n' {
+		payload.WriteByte('\n')
+	}
+	for index := 0; index <= last; index++ {
+		if w.removed[index] {
+			continue
+		}
+		payload.WriteString(w.lines[index])
+		payload.WriteByte('\n')
+	}
+	return writeSpotifyStateAtomically(w.path, payload.Bytes(), w.mode)
+}
+
 func parseSpotifySyncState(path string) (spotifySyncState, error) {
 	state := spotifySyncState{
 		KnownIDs: map[string]struct{}{},
@@ -241,67 +349,11 @@ func appendSpotifySyncStateID(path string, id string) error {
 }
 
 func upsertSpotifySyncStateEntry(path string, id string, displayName string, localPath string) error {
-	trackID := extractSpotifyTrackID(id)
-	if trackID == "" {
-		return errors.New("spotify track id must not be empty")
-	}
-
-	stateDir := filepath.Dir(path)
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	writer, err := newSpotifyStateWriter(path)
+	if err != nil {
 		return err
 	}
-
-	payload, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
-		mode = info.Mode().Perm()
-	}
-
-	prefix, lines := splitSpotifyStatePayload(payload)
-	updatedLines := make([]string, 0, len(lines)+2)
-	replaced := false
-	newEntry := spotifyStateEntry{
-		DisplayName: strings.TrimSpace(displayName),
-		LocalPath:   normalizeSpotifyStatePath(localPath),
-	}
-	for _, line := range lines {
-		existingID, existingEntry := parseSpotifyStateLine(line)
-		if existingID != trackID {
-			updatedLines = append(updatedLines, line)
-			continue
-		}
-		if replaced {
-			continue
-		}
-		if newEntry.DisplayName != "" {
-			existingEntry.DisplayName = newEntry.DisplayName
-		}
-		if newEntry.LocalPath != "" {
-			existingEntry.LocalPath = newEntry.LocalPath
-		}
-		updatedLines = append(updatedLines, formatSpotifyStateLine(trackID, existingEntry))
-		replaced = true
-	}
-	if !replaced {
-		updatedLines = append(updatedLines, formatSpotifyStateLine(trackID, newEntry))
-	}
-
-	for len(updatedLines) > 0 && strings.TrimSpace(updatedLines[len(updatedLines)-1]) == "" {
-		updatedLines = updatedLines[:len(updatedLines)-1]
-	}
-	if len(prefix) == 0 && len(updatedLines) == 1 {
-		updatedLines = append([]string{"# udl spotify state v2"}, updatedLines...)
-	}
-	updatedPayload := append([]byte(nil), prefix...)
-	if len(updatedPayload) > 0 && updatedPayload[len(updatedPayload)-1] != '\n' {
-		updatedPayload = append(updatedPayload, '\n')
-	}
-	updatedPayload = append(updatedPayload, []byte(strings.Join(updatedLines, "\n")+"\n")...)
-	return writeSpotifyStateAtomically(path, updatedPayload, mode)
+	return writer.Upsert(id, displayName, localPath)
 }
 
 func splitSpotifyStatePayload(payload []byte) ([]byte, []string) {
@@ -359,6 +411,17 @@ func appendSpotifyStateBackfillEntries(path string, entries []spotifyStateBackfi
 	if len(entries) == 0 {
 		return 0, nil
 	}
+	writer, err := newSpotifyStateWriter(path)
+	if err != nil {
+		return 0, err
+	}
+	return appendSpotifyStateBackfillEntriesWithWriter(writer, entries, state)
+}
+
+func appendSpotifyStateBackfillEntriesWithWriter(writer *spotifyStateWriter, entries []spotifyStateBackfillEntry, state *spotifySyncState) (int, error) {
+	if len(entries) == 0 {
+		return 0, nil
+	}
 	if state.KnownIDs == nil {
 		state.KnownIDs = map[string]struct{}{}
 	}
@@ -371,7 +434,7 @@ func appendSpotifyStateBackfillEntries(path string, entries []spotifyStateBackfi
 		if _, exists := state.KnownIDs[id]; exists {
 			continue
 		}
-		if err := upsertSpotifySyncStateEntry(path, id, entry.DisplayName, entry.LocalPath); err != nil {
+		if err := writer.Upsert(id, entry.DisplayName, entry.LocalPath); err != nil {
 			return written, err
 		}
 		mergeSpotifyStateEntry(state, id, spotifyStateEntry{

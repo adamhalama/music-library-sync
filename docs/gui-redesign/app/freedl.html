@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — SoundCloud Free DL</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.phasebar{display:flex;align-items:center;gap:0;padding:12px 18px;border-bottom:.5px solid var(--sep)}
+.ph{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-3);cursor:default}
+.ph .b{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--sep-2);display:grid;place-items:center;
+  font-size:10px;font-weight:700;color:var(--text-3)}
+.ph.done .b{background:var(--accent);border-color:transparent;color:#fff}
+.ph.done{color:var(--text-2)}
+.ph.now .b{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+.ph.now{color:var(--text);font-weight:600}
+.phline{width:38px;height:1.5px;background:var(--sep-2);margin:0 11px}
+.phline.fill{background:var(--accent)}
+.thead,.row{grid-template-columns:30px 34px 1fr 104px 96px 74px 92px}
+.q{font-family:var(--mono);font-size:11px}
+.q.low{color:var(--warn)}.q.hi{color:var(--ok)}
+.score{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums}
+.arrow{color:var(--text-3);margin:0 4px}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">SoundCloud Free DL</div><div class="tb-sub" id="tbSub"></div></div>
+    <div class="spacer"></div>
+    <button class="tb-btn" id="editJob">Edit job…</button>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="center">
+      <div class="phasebar">
+        <div class="ph" data-p="0"><span class="b">1</span>Plan</div><div class="phline" id="l1"></div>
+        <div class="ph" data-p="1"><span class="b">2</span>Capture</div><div class="phline" id="l2"></div>
+        <div class="ph" data-p="2"><span class="b">3</span>Promote</div>
+        <div class="spacer" style="flex:1"></div>
+        <span class="summary" id="phaseNote"></span>
+      </div>
+
+      <div class="thead" id="thead"></div>
+      <div class="tbody" id="tbody"></div>
+    </main>
+
+    <aside class="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">Job settings</div>
+        <div class="field"><label>Plan limit</label>
+          <div class="stepper"><input class="txt num" id="limit" value="50" /><div class="arrows"><button id="up">▲</button><button id="down">▼</button></div></div></div>
+        <div class="field"><label>Unlimited</label><div class="switch" id="unlimited" role="switch" aria-checked="false"></div></div>
+        <div class="field"><label>Download order</label>
+          <div class="seg sm" id="order"><button aria-pressed="true" data-v="oldest_first">Oldest</button><button aria-pressed="false" data-v="newest_first">Newest</button></div></div>
+        <div class="field"><label>Target format</label>
+          <div class="seg sm" id="fmt"><button aria-pressed="true" data-v="auto">Auto</button><button aria-pressed="false" data-v="flac">FLAC</button><button aria-pressed="false" data-v="wav">WAV</button></div></div>
+        <div class="field"><label>Min match score</label><input class="txt num" id="minScore" value="72" /></div>
+        <div class="field"><label>Ambiguity gap</label><input class="txt num" value="8" /></div>
+        <div class="field"><label>Replace limit</label><input class="txt num" value="0" /></div>
+        <div class="hint">Rows below the minimum match score can still be inspected but never auto-promote.</div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Directories</div>
+        <div class="path"><b>Library</b><span id="dLib"></span></div>
+        <div class="path"><b>Buffer</b><span id="dBuf"></span></div>
+        <div class="path"><b>Backup</b><span id="dBak"></span></div>
+        <div class="path"><b>Logs</b><span id="dLog"></span></div>
+        <div class="hint">Originals are copied to Backup before any replacement. Nothing in Library is overwritten in place.</div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Feature config</div>
+        <div class="path"><b>File</b>~/.config/udl/freedl.yaml</div>
+        <button class="btn sm" style="width:100%;justify-content:center" id="yamlBtn">Show canonical YAML</button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <button class="btn" id="backBtn">Back</button>
+    <button class="btn primary" id="go"></button>
+  </div>
+</div>
+
+<div class="backdrop" id="mConfirm">
+  <div class="modal">
+    <h4 id="cTitle">Promote 4 tracks?</h4>
+    <p id="cText"></p>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" data-close id="cOk">Promote</button>
+    </div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>SoundCloud Free DL</h3>
+  <p>Three phases in one screen instead of three screens. The table is the constant; the columns and the primary action change per phase, so you never lose your place. Progressive rows appear immediately and fill in as the quality and availability checks finish.</p>
+  <dl>
+    <dt>Stepper header + single Table</dt><dd>Phase is <code>@State</code>, not navigation — going back to Plan keeps your selection.</dd>
+    <dt>AsyncStream → row updates</dt><dd>SoundCloud rows stream first; local quality and Free DL availability arrive later and replace the <code>ProgressView</code> in that cell.</dd>
+    <dt>Table with mixed cells</dt><dd>Quality columns are monospaced and colour-coded; the match score column is the raw number, not a stars metaphor.</dd>
+    <dt>.confirmationDialog before promote</dt><dd>Promotion replaces library files, so it always confirms and always states the backup path.</dd>
+    <dt>Inspector = job form</dt><dd>Editing job settings here writes <code>freedl.yaml</code> with the same form pattern as Advanced Config.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let job=0, phase=0, checking=true;
+const rows=JSON.parse(JSON.stringify(UDL.freedlRows));
+rows.forEach(r=>{r.pending=r.i>4; r.sel=r.state==="upgrade"&&r.i<=6;});
+const captured=[1,2,5,6];
+
+function sidebarHTML(){
+  return UDL.freedlJobs.map((j,i)=>`<div class="sb-item ${i===job?"on":""} ${j.enabled?"":"dim"}" data-j="${i}">
+    <span class="glyph sc">SC</span>
+    <span><span class="nm">${j.id}</span><span class="sb-sub">${j.targetFormat} · limit ${j.planLimit}</span></span>
+    <span class="badge ${j.enabled?"":""}">${j.enabled?"on":"off"}</span></div>`).join("")+
+    `<div class="sb-item" data-add><span class="g">+</span><span class="nm">Add job…</span><span></span></div>`;
+}
+
+function headHTML(){
+  if(phase===2) return `<div><input type="checkbox" id="selAll" /></div><div class="num">#</div><div>Track</div>
+    <div>Was</div><div>Now</div><div class="num">Score</div><div>Action</div>`;
+  return `<div><input type="checkbox" id="selAll" /></div><div class="num">#</div><div>Track</div>
+    <div>Local</div><div>Free DL</div><div class="num">Score</div><div>Status</div>`;
+}
+
+function rowsHTML(){
+  const list = phase===2 ? rows.filter(r=>captured.includes(r.i)) : rows;
+  return list.map(r=>{
+    const st=UDL.freedlState[r.state];
+    const can=r.state==="upgrade";
+    if(phase===2){
+      return `<div class="row ${r.sel?"on":""}" data-i="${r.i}">
+        <div><input type="checkbox" ${r.sel?"checked":""} /></div>
+        <div class="idx">${r.i}</div>
+        <div>${r.title} <span class="sub">— ${r.artist}</span></div>
+        <div class="q low">${r.local}</div>
+        <div class="q hi">${r.avail}</div>
+        <div class="num score">${r.score}</div>
+        <div><span class="pill ok"><i class="dot"></i>Ready</span></div></div>`;
+    }
+    const availCell = r.pending&&checking
+      ? `<span class="spin"></span> <span class="dim" style="font-size:11px">checking</span>`
+      : `<span class="q ${r.avail==="—"?"":"hi"}">${r.avail}</span>`;
+    return `<div class="row ${r.sel?"on":""} ${can?"":"locked"}" data-i="${r.i}">
+      <div><input type="checkbox" ${r.sel?"checked":""} ${can?"":"disabled"} /></div>
+      <div class="idx">${r.i}</div>
+      <div>${r.title} <span class="sub">— ${r.artist}</span></div>
+      <div class="q ${r.localKbps&&r.localKbps<320?"low":""}">${r.local}</div>
+      <div>${availCell}</div>
+      <div class="num score">${r.score}</div>
+      <div><span class="pill ${st.pill}"><i class="dot"></i>${st.label}</span></div></div>`;
+  }).join("");
+}
+
+function render(){
+  const j=UDL.freedlJobs[job];
+  $("tbSub").innerHTML=`${j.id} · <span class="mono">${j.sourceURL.replace("https://soundcloud.com/","")}</span>`;
+  $("dLib").textContent=j.libraryDir;$("dBuf").textContent=j.bufferDir;
+  $("dBak").textContent=j.backupDir;$("dLog").textContent=j.logDir;
+  $("limit").value=j.planLimit;$("minScore").value=j.minMatchScore;
+
+  document.querySelectorAll(".ph").forEach(p=>{
+    const i=+p.dataset.p;p.className="ph "+(i<phase?"done":i===phase?"now":"");
+    p.querySelector(".b").textContent=i<phase?"✓":i+1;});
+  $("l1").className="phline "+(phase>0?"fill":"");
+  $("l2").className="phline "+(phase>1?"fill":"");
+
+  $("thead").innerHTML=headHTML();
+  $("tbody").innerHTML=rowsHTML();
+
+  const sel=rows.filter(r=>r.sel&&(phase!==2||captured.includes(r.i))).length;
+  const up=rows.filter(r=>r.state==="upgrade").length;
+  if(phase===0){
+    $("phaseNote").innerHTML=checking?`<span class="spin"></span> checking Free DL availability for 6 of 10 rows`:`10 rows planned · ${up} upgrades found`;
+    $("summary").innerHTML=`<b>${sel}</b> selected for capture · <b>${up}</b> upgrades available · <b>${rows.length-up}</b> no gain or no free DL`;
+    $("go").textContent=`Capture ${sel} tracks`;$("go").disabled=sel===0;
+    $("backBtn").textContent="Choose job";
+  }else if(phase===1){
+    $("phaseNote").innerHTML=`downloading into the buffer directory — nothing in your library has changed yet`;
+    $("summary").innerHTML=`<span class="ok">4 captured</span> · <b>0</b> failed · buffer <span class="mono">${(148).toFixed(0)} MB</span>`;
+    $("go").textContent="Build promotion plan";$("go").disabled=false;
+    $("backBtn").textContent="Back to plan";
+  }else{
+    $("phaseNote").innerHTML=`originals are copied to the backup directory before replacement`;
+    $("summary").innerHTML=`<b>${sel}</b> of 4 captured tracks will replace library files · target <b>auto</b>`;
+    $("go").textContent=`Promote ${sel} tracks`;$("go").disabled=sel===0;
+    $("backBtn").textContent="Back to capture";
+  }
+  const sb=$("sbContext"); if(sb) sb.innerHTML=sidebarHTML();
+  wireTable();
+}
+
+function wireTable(){
+  $("selAll").onclick=()=>{
+    const list=phase===2?rows.filter(r=>captured.includes(r.i)):rows.filter(r=>r.state==="upgrade");
+    const allOn=list.every(r=>r.sel);list.forEach(r=>r.sel=!allOn);render();};
+}
+
+Shell.init({page:"freedl",contextual:{title:"Free DL jobs",html:sidebarHTML()},
+  note:"Capture writes to a buffer. Promotion is the only step that touches your library."});
+Shell.wireDismiss();
+
+$("tbody").addEventListener("click",e=>{
+  const row=e.target.closest(".row");if(!row)return;
+  const r=rows.find(x=>x.i===+row.dataset.i);
+  if(phase!==2&&r.state!=="upgrade"){
+    Shell.toast(r.state==="nomatch"?`Match score ${r.score} is below the minimum of ${UDL.freedlJobs[job].minMatchScore}.`
+      :r.state==="nofree"?"This track has no Free DL link on SoundCloud."
+      :"Your local copy is already at or above the free download quality.");return;}
+  r.sel=!r.sel;render();});
+
+document.querySelector(".phasebar").addEventListener("click",e=>{
+  const p=e.target.closest(".ph");if(!p)return;const i=+p.dataset.p;if(i<=phase||i===phase+1){phase=i;render();}});
+document.getElementById("sidebar").addEventListener("click",e=>{
+  if(e.target.closest("[data-add]")){Shell.toast("New job form opens with <code>source_url</code> required before saving.");return;}
+  const it=e.target.closest("[data-j]");if(!it)return;job=+it.dataset.j;phase=0;render();});
+
+$("go").onclick=()=>{
+  if(phase===0){phase=1;render();Shell.toast("Capturing into <code>~/Music/.udl-freedl/buffer</code> — library untouched.");}
+  else if(phase===1){phase=2;render();}
+  else{
+    $("cTitle").textContent=`Promote ${rows.filter(r=>r.sel&&captured.includes(r.i)).length} tracks?`;
+    $("cText").innerHTML=`Library files are replaced with the captured versions. Originals are copied to
+      <span class="mono">~/Music/.udl-freedl/backup</span> first, and a result log is written to the job log directory.`;
+    Shell.open("mConfirm");}
+};
+$("cOk").onclick=()=>Shell.toast("Promoted 4 tracks · originals backed up · <code>result.json</code> written.");
+$("backBtn").onclick=()=>{if(phase>0){phase--;render();}else Shell.toast("Pick another job from the sidebar.");};
+$("editJob").onclick=()=>Shell.toast("Job settings are editable in the inspector; <code>freedl.yaml</code> is written on save.");
+$("yamlBtn").onclick=()=>Shell.toast("Canonical <code>freedl.yaml</code> preview — same read-only pattern as Advanced Config.");
+$("unlimited").onclick=e=>{const on=e.currentTarget.getAttribute("aria-checked")!=="true";
+  e.currentTarget.setAttribute("aria-checked",on);$("limit").disabled=on;$("limit").value=on?"∞":UDL.freedlJobs[job].planLimit;};
+["order","fmt"].forEach(id=>$(id).addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+  [...$(id).children].forEach(x=>x.setAttribute("aria-pressed",x===b));
+  if(id==="fmt")Shell.toast(`Target format set to <code>${b.dataset.v}</code>.`);}));
+
+render();
+setTimeout(()=>{checking=false;rows.forEach(r=>r.pending=false);render();
+  Shell.toast("Free DL availability resolved for all 10 rows.");},2600);
+</script>
+</body>
+</html>

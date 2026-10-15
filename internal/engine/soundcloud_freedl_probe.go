@@ -17,10 +17,10 @@ const (
 )
 
 type SoundCloudFreeDLProbe struct {
-	Status      SoundCloudFreeDLStatus
-	PurchaseURL string
-	Host        string
-	Err         string
+	Status      SoundCloudFreeDLStatus `json:"status"`
+	PurchaseURL string                 `json:"purchase_url,omitempty"`
+	Host        string                 `json:"host,omitempty"`
+	Err         string                 `json:"error,omitempty"`
 }
 
 func ProbeSoundCloudFreeDL(ctx context.Context, row PlanRow) SoundCloudFreeDLProbe {
@@ -41,7 +41,7 @@ func ProbeSoundCloudFreeDL(ctx context.Context, row PlanRow) SoundCloudFreeDLPro
 		PurchaseURL: sanitizeSoundCloudFreeDownloadURL(metadata.PurchaseURL),
 		Host:        freeDLHostLabel(metadata.PurchaseURL),
 	}
-	if !isHypedditPurchaseURL(metadata.PurchaseURL) {
+	if !isSupportedFreeDownloadGateURL(metadata.PurchaseURL) {
 		probe.Status = SoundCloudFreeDLUnsupportedHost
 	}
 	return probe

@@ -19,9 +19,9 @@ type WritePathOptions struct {
 }
 
 type WritePathResolution struct {
-	Path   string
-	Kind   string
-	Exists bool
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	Exists bool   `json:"exists"`
 }
 
 type marshalConfig struct {

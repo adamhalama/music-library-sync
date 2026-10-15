@@ -12,16 +12,23 @@ type PlanWindow string
 const (
 	DownloadOrderNewestFirst DownloadOrder = "newest_first"
 	DownloadOrderOldestFirst DownloadOrder = "oldest_first"
+	// DefaultDownloadOrder is the single fallback for sync planning and
+	// execution. Standalone Free DL owns its separate string default.
+	DefaultDownloadOrder DownloadOrder = DownloadOrderOldestFirst
 
 	PlanWindowFirst  PlanWindow = "first"
 	PlanWindowLatest PlanWindow = "latest"
 )
 
 func NormalizeDownloadOrder(order DownloadOrder) DownloadOrder {
-	if order == DownloadOrderOldestFirst {
+	switch order {
+	case DownloadOrderNewestFirst:
+		return DownloadOrderNewestFirst
+	case DownloadOrderOldestFirst:
 		return DownloadOrderOldestFirst
+	default:
+		return DefaultDownloadOrder
 	}
-	return DownloadOrderNewestFirst
 }
 
 func NormalizePlanWindow(window PlanWindow) PlanWindow {
@@ -55,7 +62,11 @@ func SupportsPlanWindow(source config.Source) bool {
 }
 
 func SupportsPlan(source config.Source) bool {
-	return source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind == "scdl" ||
+	// Keep this in step with the providers registered in NewSyncer: the SCDL plan
+	// provider serves both scdl and scdl-freedl, and Free DL capture runs entirely
+	// through plan mode, so omitting scdl-freedl here silently skips the source.
+	return source.Type == config.SourceTypeSoundCloud &&
+		(source.Adapter.Kind == "scdl" || source.Adapter.Kind == "scdl-freedl") ||
 		source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix"
 }
 

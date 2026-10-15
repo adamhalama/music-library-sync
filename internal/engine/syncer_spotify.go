@@ -27,6 +27,46 @@ type spotifyDeemixExecutionPlan struct {
 	DownloadOrder    DownloadOrder
 }
 
+var snapshotSpotifyMediaFilesFn = snapshotMediaFiles
+
+type spotifyMediaSnapshotTracker struct {
+	dir      string
+	baseline map[string]mediaFileSnapshot
+	enabled  bool
+}
+
+func newSpotifyMediaSnapshotTracker(dir string) (*spotifyMediaSnapshotTracker, error) {
+	tracker := &spotifyMediaSnapshotTracker{dir: strings.TrimSpace(dir)}
+	if tracker.dir == "" {
+		return tracker, nil
+	}
+	baseline, err := snapshotSpotifyMediaFilesFn(tracker.dir)
+	if err != nil {
+		return tracker, err
+	}
+	tracker.baseline = baseline
+	tracker.enabled = true
+	return tracker, nil
+}
+
+// Advance performs exactly one post-invocation walk and moves the baseline
+// even when the caller later classifies the invocation as unavailable/failed.
+func (t *spotifyMediaSnapshotTracker) Advance() (string, error) {
+	if t == nil || !t.enabled {
+		return "", nil
+	}
+	after, err := snapshotSpotifyMediaFilesFn(t.dir)
+	if err != nil {
+		// Without a trustworthy new baseline, disable attribution so a failed
+		// invocation's files cannot be blamed on a later successful track.
+		t.enabled = false
+		return "", err
+	}
+	changed := detectUpdatedMediaPath(t.baseline, after)
+	t.baseline = after
+	return changed, nil
+}
+
 func (s *Syncer) runSpotifyDeemix(
 	ctx context.Context,
 	cfg config.Config,
@@ -92,7 +132,18 @@ func (s *Syncer) runSpotifyDeemix(
 		return outcome
 	}
 
-	backfilledCount, backfillErr := appendSpotifyStateBackfillEntries(plan.StateWritePath, plan.BackfillEntries, &plan.State)
+	stateWriter, writerErr := newSpotifyStateWriter(plan.StateWritePath)
+	if writerErr != nil {
+		outcome.Attempted++
+		outcome.Failed++
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(), Level: output.LevelError, Event: output.EventSourceFailed, SourceID: source.ID,
+			Message: fmt.Sprintf("[%s] failed to load spotify state writer: %v", source.ID, writerErr),
+		})
+		outcome.Stop = !cfg.Defaults.ContinueOnError
+		return outcome
+	}
+	backfilledCount, backfillErr := appendSpotifyStateBackfillEntriesWithWriter(stateWriter, plan.BackfillEntries, &plan.State)
 	if backfillErr != nil {
 		outcome.Attempted++
 		outcome.Failed++
@@ -188,6 +239,10 @@ func (s *Syncer) runSpotifyDeemix(
 	})
 
 	runtimeDir := strings.TrimSpace(sourceForExec.DeemixRuntimeDir)
+	metadataResolver := newSpotifyMetadataResolver(auth.SpotifyCredentials{
+		ClientID:     sourceForExec.SpotifyClientID,
+		ClientSecret: sourceForExec.SpotifyClientSecret,
+	})
 	sourceFailed := false
 	var sourceFailureMessage string
 	var sourceFailureDetails map[string]any
@@ -196,6 +251,13 @@ func (s *Syncer) runSpotifyDeemix(
 	if targetDirErr != nil {
 		sourceFailed = true
 		sourceFailureMessage = fmt.Sprintf("[%s] resolve target_dir: %v", source.ID, targetDirErr)
+	}
+	mediaTracker, mediaTrackerErr := newSpotifyMediaSnapshotTracker(spotifyTargetDir)
+	if mediaTrackerErr != nil {
+		_ = s.Emitter.Emit(output.Event{
+			Timestamp: s.Now(), Level: output.LevelWarn, Event: output.EventSourcePreflight, SourceID: source.ID,
+			Message: fmt.Sprintf("[%s] unable to initialize target media snapshot: %v", source.ID, mediaTrackerErr),
+		})
 	}
 	for idx, trackID := range plannedTrackIDs {
 		if sourceFailed {
@@ -220,24 +282,32 @@ func (s *Syncer) runSpotifyDeemix(
 		trackSource.DeemixRuntimeDir = runtimeDir
 		spec.Dir = runtimeDir
 
-		if trackID != "" && strings.TrimSpace(runtimeDir) != "" {
-			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata)
+		if trackID != "" {
+			metadata, metadataErr := resolveSpotifyTrackMetadataForExecution(ctx, trackID, plan.TrackMetadata, metadataResolver)
 			if metadataErr != nil {
+				sourceFailed = true
+				sourceFailureMessage = fmt.Sprintf("[%s] spotify metadata lookup failed for %s; refusing unprimed deemix execution: %v", source.ID, trackID, metadataErr)
+				outcome.Interrupted = ctx.Err() != nil
+				break
+			}
+			if strings.TrimSpace(metadata.ISRC) == "" {
 				_ = s.Emitter.Emit(output.Event{
 					Timestamp: s.Now(),
 					Level:     output.LevelWarn,
 					Event:     output.EventSourcePreflight,
 					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
+					Message: fmt.Sprintf(
+						"[%s] no ISRC resolved for %s; deemix cannot match it on Deezer and will report it unavailable",
+						source.ID, trackID,
+					),
 				})
-			} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
-				})
+			}
+			// An absent/unwritten cache lets the upstream plugin resolve unrelated
+			// audio. Even a metadata-only entry must be published before invocation.
+			if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
+				sourceFailed = true
+				sourceFailureMessage = fmt.Sprintf("[%s] unable to prime deemix spotify metadata cache for %s; refusing unprimed execution: %v", source.ID, trackID, cacheErr)
+				break
 			}
 		}
 
@@ -259,23 +329,14 @@ func (s *Syncer) runSpotifyDeemix(
 			}
 		}
 
-		var mediaBefore map[string]mediaFileSnapshot
-		if trackID != "" {
-			before, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
-			if snapshotErr != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to snapshot target directory before track run: %v", source.ID, snapshotErr),
-				})
-			} else {
-				mediaBefore = before
-			}
-		}
-
 		execResult := s.Runner.Run(ctx, spec)
+		changedMediaPath, snapshotErr := mediaTracker.Advance()
+		if snapshotErr != nil {
+			_ = s.Emitter.Emit(output.Event{
+				Timestamp: s.Now(), Level: output.LevelWarn, Event: output.EventSourcePreflight, SourceID: source.ID,
+				Message: fmt.Sprintf("[%s] unable to advance target media snapshot: %v", source.ID, snapshotErr),
+			})
+		}
 		s.flushFlowParser(&flow, source)
 		if execResult.Interrupted {
 			_ = cleanupRuntimeDir(runtimeDir)
@@ -339,18 +400,12 @@ func (s *Syncer) runSpotifyDeemix(
 			if entryLabel == "" {
 				entryLabel = deemixTrackDisplayName(execResult)
 			}
-			localPath := ""
-			if mediaBefore != nil {
-				after, snapshotErr := snapshotMediaFiles(spotifyTargetDir)
-				if snapshotErr == nil {
-					localPath = detectUpdatedMediaPath(mediaBefore, after)
-				}
-			}
+			localPath := changedMediaPath
 			doneMessage := fmt.Sprintf("[%s] [done] %s", source.ID, trackID)
 			if entryLabel != "" {
 				doneMessage = fmt.Sprintf("[%s] [done] %s (%s)", source.ID, trackID, entryLabel)
 			}
-			if appendErr := upsertSpotifySyncStateEntry(plan.StateWritePath, trackID, entryLabel, localPath); appendErr != nil {
+			if appendErr := stateWriter.Upsert(trackID, entryLabel, localPath); appendErr != nil {
 				sourceFailed = true
 				sourceFailureMessage = fmt.Sprintf("[%s] failed to update spotify state file: %v", source.ID, appendErr)
 				break
@@ -395,7 +450,7 @@ func (s *Syncer) runSpotifyDeemix(
 			Message:   sourceFailureMessage,
 			Details:   sourceFailureDetails,
 		})
-		outcome.Stop = !cfg.Defaults.ContinueOnError
+		outcome.Stop = outcome.Interrupted || !cfg.Defaults.ContinueOnError
 		return outcome
 	}
 
@@ -513,6 +568,7 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 			return plan, err
 		}
 	}
+	tracks = enrichSpotifyRemoteTrackMetadata(ctx, tracks, newSpotifyMetadataResolver(spotifyCreds))
 	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
 	state, stateStore, err := loadSpotifySyncState(stateFilePath)
@@ -545,7 +601,7 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 	}
 
 	plan.Preflight = &preflight
-	plan.DownloadOrder = DownloadOrderNewestFirst
+	plan.DownloadOrder = DefaultDownloadOrder
 	plan.PlannedTrackIDs = orderForExecution(plannedTrackIDs, plan.DownloadOrder)
 	plan.ExistingTrackIDs = existingTrackIDs
 	plan.BackfillEntries = backfills

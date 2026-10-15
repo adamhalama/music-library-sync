@@ -29,9 +29,12 @@ type Playlist struct {
 }
 
 type Content struct {
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	FolderPath string `json:"folder_path"`
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Artist          string `json:"artist,omitempty"`
+	Album           string `json:"album,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	FolderPath      string `json:"folder_path"`
 }
 
 type InspectResponse struct {

@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>udl — Option 4 · Console</title>
+<script src="plan-data.js"></script>
+<style>
+:root{
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --bg:#131316; --panel:#1a1a1e; --chrome:#202025; --rail:#171719;
+  --line:rgba(255,255,255,.075); --line-2:rgba(255,255,255,.15);
+  --text:#e9e9ee; --text-2:#9696a0; --text-3:#63636d;
+  --accent:#ff8f2e; --accent-dim:rgba(255,143,46,.16);
+  --new:#5ed37f; --gap:#ffbe4d; --have:#6f6f79;
+  --sel:rgba(255,143,46,.11);
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f7f7f5; --panel:#ffffff; --chrome:#efeeeb; --rail:#f2f1ee;
+    --line:rgba(0,0,0,.09); --line-2:rgba(0,0,0,.17);
+    --text:#1a1a1c; --text-2:#5f5f68; --text-3:#93939c;
+    --accent:#c95c00; --accent-dim:rgba(201,92,0,.1);
+    --new:#177a3e; --gap:#8d5c05; --have:#84848d; --sel:rgba(201,92,0,.08);
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:var(--font);font-size:13px;color:var(--text);background:#08080a;
+  display:flex;align-items:center;justify-content:center;padding:26px;-webkit-font-smoothing:antialiased}
+@media (prefers-color-scheme: light){body{background:#cfcec9}}
+
+.window{width:min(1240px,100%);height:min(770px,100%);background:var(--bg);border-radius:10px;overflow:hidden;
+  display:flex;flex-direction:column;box-shadow:0 22px 66px rgba(0,0,0,.6),0 0 0 .5px var(--line-2)}
+.titlebar{flex:0 0 40px;height:40px;background:var(--chrome);border-bottom:.5px solid var(--line);
+  display:flex;align-items:center;gap:10px;padding:0 13px}
+.lights{display:flex;gap:8px;margin-right:4px}
+.light{width:11px;height:11px;border-radius:50%}
+.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
+.tt{font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.tt span{color:var(--text-3);font-weight:400;font-family:var(--mono);font-size:11px;margin-left:7px}
+.spacer{flex:1}
+.tbtn{height:23px;padding:0 9px;border-radius:5px;border:.5px solid transparent;background:transparent;
+  color:var(--text-2);font:inherit;font-size:12px;cursor:default}
+.tbtn:hover{background:rgba(140,140,150,.16);color:var(--text)}
+.tbtn.on{background:var(--accent-dim);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+
+/* control strip */
+.strip{flex:0 0 38px;height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;
+  background:var(--panel);border-bottom:.5px solid var(--line)}
+.grp{display:flex;align-items:center;gap:6px;padding-right:10px;border-right:.5px solid var(--line);height:22px}
+.grp:last-of-type{border-right:none}
+.lab{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-3);font-weight:600}
+.mini{height:22px;border-radius:5px;border:.5px solid var(--line-2);background:var(--bg);color:var(--text);
+  font:inherit;font-family:var(--mono);font-size:11.5px;padding:0 7px;text-align:right;width:52px;outline:none}
+.mini:focus{border-color:var(--accent);box-shadow:0 0 0 2.5px var(--accent-dim)}
+.step{display:flex;flex-direction:column;border:.5px solid var(--line-2);border-radius:4px;overflow:hidden}
+.step button{width:15px;height:10px;border:none;background:var(--chrome);color:var(--text-2);font-size:6px;cursor:default;padding:0;line-height:1}
+.step button:active{background:var(--accent);color:#111}
+.step button:first-child{border-bottom:.5px solid var(--line)}
+.seg{display:inline-flex;background:rgba(140,140,150,.14);border-radius:5px;padding:1.5px;gap:1.5px}
+.seg button{border:none;background:transparent;color:var(--text-2);font:inherit;font-size:11px;padding:2.5px 8px;border-radius:3.5px;cursor:default}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--text);font-weight:600;box-shadow:0 .5px 2px rgba(0,0,0,.4)}
+.seg.dis{opacity:.35;pointer-events:none}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:default}
+.box{width:14px;height:14px;border-radius:3.5px;border:.5px solid var(--line-2);display:grid;place-items:center;
+  color:transparent;font-size:9px;font-weight:900;background:var(--bg)}
+.chk.on .box{background:var(--accent);border-color:transparent;color:#1a1200}
+.chk.on{color:var(--text)}
+.find{display:flex;align-items:center;gap:6px;height:22px;background:var(--bg);border:.5px solid var(--line-2);
+  border-radius:5px;padding:0 8px;width:190px;color:var(--text-3);font-family:var(--mono);font-size:11px}
+.find input{border:none;background:none;font:inherit;font-family:var(--mono);font-size:11.5px;color:var(--text);outline:none;width:100%}
+
+/* main */
+.main{flex:1;display:flex;min-height:0}
+.rail{width:172px;flex:0 0 172px;background:var(--rail);border-right:.5px solid var(--line);padding:8px 6px;overflow:auto}
+.rl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3);font-weight:700;padding:7px 7px 5px}
+.si{display:grid;grid-template-columns:14px 1fr auto;align-items:center;gap:8px;padding:5px 7px;border-radius:5px;cursor:default;font-size:12px}
+.si:hover{background:rgba(140,140,150,.1)}
+.si.focus{background:var(--accent-dim);color:var(--accent)}
+.si .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si .c{font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+.si.off .nm,.si.off .c{opacity:.4}
+.railnote{font-size:10.5px;color:var(--text-3);line-height:1.5;padding:8px 8px;font-family:var(--mono)}
+
+.tablewrap{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+.hd{display:grid;grid-template-columns:26px 40px 1fr 190px 108px 96px 118px 54px;height:23px;flex:0 0 23px;
+  background:var(--chrome);border-bottom:.5px solid var(--line);font-size:10.5px;color:var(--text-2);
+  text-transform:uppercase;letter-spacing:.055em;font-weight:600}
+.hd>div{display:flex;align-items:center;gap:4px;padding:0 8px;border-right:.5px solid var(--line);cursor:default;user-select:none}
+.hd>div:last-child{border-right:none}
+.hd>div:hover{background:rgba(140,140,150,.12);color:var(--text)}
+.hd>div.sorted{color:var(--accent)}
+.hd .num{justify-content:flex-end}
+.tb{flex:1;overflow:auto;outline:none;font-family:var(--mono);font-size:11.5px}
+.tr{display:grid;grid-template-columns:26px 40px 1fr 190px 108px 96px 118px 54px;height:22px;align-items:center;cursor:default}
+.tr:nth-child(odd){background:rgba(140,140,150,.035)}
+.tr>div{padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr.on{background:var(--sel)}
+.tr.cursor{box-shadow:inset 0 0 0 1.5px var(--accent);background:var(--accent-dim)}
+.tr.locked{color:var(--text-3)}
+.tr .n{text-align:right;color:var(--text-3)}
+.tr .ti{font-family:var(--font);font-size:12.5px;font-weight:450}
+.tr .ar{font-family:var(--font);font-size:12px;color:var(--text-2)}
+.tr .st{font-weight:600;font-size:11px;letter-spacing:.02em}
+.st.new{color:var(--new)}.st.gap{color:var(--gap)}.st.have{color:var(--have)}
+.tr .sr{color:var(--text-3);font-size:10.5px}
+.tr .id{color:var(--text-3)}
+.tr .du{text-align:right;color:var(--text-3)}
+.mk{color:var(--accent);font-weight:800}
+.mk.off{color:var(--text-3);font-weight:400}
+.mk.lock{color:var(--text-3);opacity:.55}
+
+/* detail bar */
+.detail{flex:0 0 30px;height:30px;background:var(--panel);border-top:.5px solid var(--line);
+  display:flex;align-items:center;gap:16px;padding:0 12px;font-family:var(--mono);font-size:11px;color:var(--text-2);overflow:hidden}
+.detail b{color:var(--text-3);font-weight:600;text-transform:uppercase;font-size:9.5px;letter-spacing:.06em;margin-right:5px}
+.detail span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* command bar */
+.cmdbar{flex:0 0 34px;height:34px;background:#0d0d10;border-top:.5px solid var(--line);
+  display:flex;align-items:center;gap:9px;padding:0 12px;font-family:var(--mono);font-size:11.5px;color:var(--text-2)}
+@media (prefers-color-scheme: light){.cmdbar{background:#e9e8e4}}
+.cmdbar .p{color:var(--accent);font-weight:700}
+.cmdbar .c{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.cmdbar .c b{color:var(--accent);font-weight:500}
+.copy{height:20px;padding:0 8px;border-radius:4px;border:.5px solid var(--line-2);background:transparent;
+  color:var(--text-2);font:inherit;font-family:var(--mono);font-size:10.5px;cursor:default}
+.copy:hover{color:var(--text);background:rgba(140,140,150,.14)}
+
+/* footer */
+.foot{flex:0 0 42px;height:42px;background:var(--chrome);border-top:.5px solid var(--line);
+  display:flex;align-items:center;gap:14px;padding:0 12px}
+.counts{font-size:12px;color:var(--text-2);font-family:var(--mono)}
+.counts b{color:var(--text)}
+.counts .a{color:var(--accent)}
+.keys{display:flex;gap:5px;align-items:center;font-size:10.5px;color:var(--text-3)}
+.k{font-family:var(--mono);font-size:10px;background:rgba(140,140,150,.18);border:.5px solid var(--line);
+  border-radius:3.5px;padding:1px 5px;color:var(--text-2)}
+.run{height:26px;padding:0 16px;border-radius:6px;border:none;cursor:default;font:inherit;font-size:12.5px;font-weight:650;
+  background:var(--accent);color:#1a1000;box-shadow:0 1px 5px rgba(255,143,46,.28)}
+.run:hover{filter:brightness(1.08)}
+.run:disabled{opacity:.35;box-shadow:none}
+.ghost{height:26px;padding:0 12px;border-radius:6px;border:.5px solid var(--line-2);background:transparent;
+  color:var(--text);font:inherit;font-size:12.5px;cursor:default}
+.ghost:hover{background:rgba(140,140,150,.14)}
+
+.toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,16px);opacity:0;background:#000;border:.5px solid var(--line-2);
+  color:#fff;padding:9px 15px;border-radius:7px;font-family:var(--mono);font-size:11.5px;transition:.2s;z-index:60;pointer-events:none;
+  box-shadow:0 14px 40px rgba(0,0,0,.6)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast code{color:var(--accent)}
+.drawer{position:fixed;right:0;top:0;height:100%;width:344px;background:var(--panel);z-index:70;border-left:.5px solid var(--line-2);
+  box-shadow:-22px 0 60px rgba(0,0,0,.55);transform:translateX(100%);transition:transform .26s cubic-bezier(.32,.72,0,1);padding:22px;overflow:auto}
+.drawer.open{transform:none}
+.drawer h3{margin:0 0 6px;font-size:16px}
+.drawer p{color:var(--text-2);font-size:12.5px;line-height:1.6}
+.drawer dt{font-family:var(--mono);font-size:11.5px;color:var(--accent);margin-top:15px}
+.drawer dd{margin:3px 0 0;font-size:12px;color:var(--text-2);line-height:1.55}
+.drawer .x{position:absolute;top:14px;right:16px}
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <div class="tt">Sync Plan<span>3 sources · 48 rows</span></div>
+    <div class="spacer"></div>
+    <button class="tbtn" id="swiftBtn">ⓘ Swift mapping</button>
+    <button class="tbtn on" id="cmdToggle">Command bar</button>
+  </div>
+
+  <div class="strip">
+    <div class="grp">
+      <span class="lab">Limit</span>
+      <input class="mini" id="limit" value="25" />
+      <div class="step"><button id="up">▲</button><button id="down">▼</button></div>
+      <label class="chk" id="unlimited"><span class="box">✓</span>∞</label>
+    </div>
+    <div class="grp">
+      <span class="lab">Window</span>
+      <div class="seg" id="win"><button aria-pressed="true" data-w="latest">latest</button><button aria-pressed="false" data-w="first">first</button></div>
+    </div>
+    <div class="grp">
+      <span class="lab">Timeout</span>
+      <input class="mini" id="timeout" value="10m" style="width:46px" />
+    </div>
+    <div class="grp">
+      <label class="chk on" id="dry"><span class="box">✓</span>dry-run</label>
+      <label class="chk" id="gaps"><span class="box">✓</span>scan-gaps</label>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" id="filter">
+      <button aria-pressed="true" data-f="all">all</button>
+      <button aria-pressed="false" data-f="missing_new">new</button>
+      <button aria-pressed="false" data-f="missing_known_gap">gap</button>
+      <button aria-pressed="false" data-f="already_downloaded">have</button>
+    </div>
+    <div class="find">/ <input id="q" placeholder="filter…" /></div>
+  </div>
+
+  <div class="main">
+    <aside class="rail">
+      <div class="rl">Sources</div>
+      <div id="srcList"></div>
+      <div class="rl" style="margin-top:8px">Legend</div>
+      <div class="railnote">
+        <span style="color:var(--new)">new</span> — not in state<br />
+        <span style="color:var(--gap)">gap</span> — seen, never got<br />
+        <span style="color:var(--have)">have</span> — in state, locked
+      </div>
+    </aside>
+
+    <div class="tablewrap">
+      <div class="hd" id="hd">
+        <div data-sort="sel" style="justify-content:center"><span class="mk">•</span></div>
+        <div class="num" data-sort="index">#</div>
+        <div data-sort="title">Title</div>
+        <div data-sort="artist">Artist</div>
+        <div data-sort="status">Status</div>
+        <div data-sort="source">Source</div>
+        <div data-sort="remoteId">Remote ID</div>
+        <div class="num" data-sort="duration">Time</div>
+      </div>
+      <div class="tb" id="tb" tabindex="0"></div>
+      <div class="detail" id="detail"></div>
+    </div>
+  </div>
+
+  <div class="cmdbar" id="cmdbar">
+    <span class="p">$</span><span class="c" id="cmd"></span>
+    <button class="copy" id="copy">copy</button>
+  </div>
+
+  <div class="foot">
+    <div class="counts" id="counts"></div>
+    <div class="spacer"></div>
+    <div class="keys">
+      <span class="k">j</span><span class="k">k</span> move
+      <span class="k">space</span> toggle
+      <span class="k">a</span> all
+      <span class="k">n</span> none
+      <span class="k">g</span> gaps
+      <span class="k">/</span> find
+      <span class="k">⏎</span> run
+    </div>
+    <button class="ghost" id="reset">Reset</button>
+    <button class="run" id="run">Run dry-run ⏎</button>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tbtn x" id="drawerClose">✕</button>
+  <h3>Option 4 — Console</h3>
+  <p>The TUI, promoted. Dense, sortable, keyboard-driven, one flat table across every source, and a live command bar that shows exactly which <code>udl</code> invocation the GUI is about to run. Fastest for someone who already knows the tool.</p>
+  <dl>
+    <dt>Table(selection:sortOrder:)</dt><dd>SwiftUI <code>Table</code> with <code>KeyPathComparator</code> sorting — column headers sort natively, no custom code.</dd>
+    <dt>.monospaced() / .font(.system(.body, design:.monospaced))</dt><dd>Numeric and identifier columns stay aligned; titles stay in SF for readability.</dd>
+    <dt>.onKeyPress / .keyboardShortcut</dt><dd>macOS 14 <code>onKeyPress</code> gives the j/k/space/a/n bindings from the TUI verbatim.</dd>
+    <dt>.toolbar(.automatic) control strip</dt><dd>All run options live in one 38pt strip as <code>Stepper</code>, <code>Picker(.segmented)</code>, <code>Toggle(.checkbox)</code>. No panel, no popover.</dd>
+    <dt>Bottom “formula bar”</dt><dd>Detail line for the focused row — remote URL, target path, status reason. Replaces per-row disclosure.</dd>
+    <dt>Command bar</dt><dd>Copyable text of the equivalent CLI call. Keeps the GUI honest and teaches the CLI.</dd>
+  </dl>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const S={enabled:new Set(["sc-favorites","sc-dnb-crate","sp-liked"]),selected:{},filter:"all",q:"",cursor:0,
+  sort:{key:"source",dir:1},limit:25,unlimited:false,window:"latest",dry:true,scanGaps:false,focusSource:null};
+UDL.sources.forEach(s=>S.selected[s.id]=new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index)));
+const $=id=>document.getElementById(id);
+const ORDER={missing_new:0,missing_known_gap:1,already_downloaded:2};
+
+function flat(){
+  let out=[];
+  UDL.sources.filter(s=>S.enabled.has(s.id)).forEach(s=>{
+    UDL.rows[s.id].forEach(r=> out.push(Object.assign({},r,{source:s.id,sLabel:s.label,sType:s.type,sAdapter:s.adapter,sDir:s.targetDir,sState:s.stateFile})));
+  });
+  if(S.focusSource) out=out.filter(r=>r.source===S.focusSource);
+  if(S.filter!=="all") out=out.filter(r=>r.status===S.filter);
+  if(S.q){const q=S.q.toLowerCase(); out=out.filter(r=>(r.title+" "+r.artist+" "+r.remoteId).toLowerCase().includes(q));}
+  const k=S.sort.key, d=S.sort.dir;
+  out.sort((a,b)=>{
+    let av,bv;
+    if(k==="status"){av=ORDER[a.status];bv=ORDER[b.status];}
+    else if(k==="sel"){av=S.selected[a.source].has(a.index)?0:1;bv=S.selected[b.source].has(b.index)?0:1;}
+    else if(k==="source"){av=a.source+String(a.index).padStart(3,"0");bv=b.source+String(b.index).padStart(3,"0");}
+    else {av=a[k];bv=b[k];}
+    if(typeof av==="string") return av.localeCompare(bv)*d;
+    return (av-bv)*d;
+  });
+  return out;
+}
+
+function renderRail(){
+  $("srcList").innerHTML=UDL.sources.map(s=>{
+    const on=S.enabled.has(s.id);
+    const c=UDL.counts(UDL.rows[s.id]);
+    return `<div class="si ${S.focusSource===s.id?"focus":""} ${on?"":"off"}" data-s="${s.id}">
+      <span class="mk ${on?"":"off"}" data-en="${s.id}">${on?"◉":"○"}</span>
+      <span class="nm">${s.label}</span>
+      <span class="c">${on?S.selected[s.id].size:"–"}/${c.missing_new+c.missing_known_gap}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderTable(){
+  const rows=flat();
+  if(S.cursor>=rows.length) S.cursor=Math.max(0,rows.length-1);
+  $("tb").innerHTML=rows.map((r,i)=>{
+    const on=S.selected[r.source].has(r.index);
+    const k=r.status===UDL.STATUS.NEW?"new":r.status===UDL.STATUS.GAP?"gap":"have";
+    const mark=!r.toggleable?`<span class="mk lock">▪</span>`:on?`<span class="mk">✓</span>`:`<span class="mk off">·</span>`;
+    return `<div class="tr ${on?"on":""} ${r.toggleable?"":"locked"} ${i===S.cursor?"cursor":""}" data-i="${i}">
+      <div style="text-align:center">${mark}</div>
+      <div class="n">${r.index}</div>
+      <div class="ti">${r.title}</div>
+      <div class="ar">${r.artist}</div>
+      <div class="st ${k}">${UDL.statusMeta[r.status].short}</div>
+      <div class="sr">${r.source}</div>
+      <div class="id">${r.remoteId}</div>
+      <div class="du">${r.duration}</div>
+    </div>`;
+  }).join("")||`<div style="padding:34px;text-align:center;color:var(--text-3);font-family:var(--font)">No rows match.</div>`;
+  const cur=rows[S.cursor];
+  $("detail").innerHTML = cur
+    ? `<span><b>url</b>${cur.remoteURL}</span><span><b>target</b>${cur.sDir}</span><span><b>state</b>${cur.sState}</span><span><b>why</b>${UDL.statusMeta[cur.status].hint}</span>`
+    : `<span>—</span>`;
+  const el=$("tb").children[S.cursor]; if(el&&el.scrollIntoView) el.scrollIntoView({block:"nearest"});
+}
+
+function renderFoot(){
+  let sel=0,tog=0,have=0;
+  UDL.sources.filter(s=>S.enabled.has(s.id)).forEach(s=>{
+    sel+=S.selected[s.id].size;
+    UDL.rows[s.id].forEach(r=>r.toggleable?tog++:have++);
+  });
+  $("counts").innerHTML=`selected <b class="a">${sel}</b>/${tog} · skipped <b>${tog-sel}</b> · locked <b>${have}</b> · rows <b>${flat().length}</b>`;
+  $("run").textContent=(S.dry?"Run dry-run":"Run sync")+" ⏎";
+  $("run").disabled=sel===0;
+  $("limit").value=S.unlimited?"∞":S.limit; $("limit").disabled=S.unlimited;
+  $("unlimited").classList.toggle("on",S.unlimited);
+  $("dry").classList.toggle("on",S.dry);
+  $("gaps").classList.toggle("on",S.scanGaps);
+  const anySp=UDL.sources.some(s=>S.enabled.has(s.id)&&s.supportsWindow);
+  $("win").classList.toggle("dis",!anySp);
+  $("cmd").innerHTML=`udl sync <b>--plan</b> ${[...S.enabled].map(i=>`--source ${i}`).join(" ")} <b>--plan-limit</b> ${S.unlimited?0:S.limit}`
+    +(anySp?` <b>--plan-window</b> ${S.window}`:``)+(S.scanGaps?` <b>--scan-gaps</b>`:``)
+    +` <b>--timeout</b> ${$("timeout").value}`+(S.dry?` <b>--dry-run</b>`:``);
+  [...$("hd").children].forEach(h=>h.classList.toggle("sorted",h.dataset.sort===S.sort.key));
+}
+function render(){renderRail();renderTable();renderFoot();}
+
+$("srcList").addEventListener("click",e=>{
+  const en=e.target.closest("[data-en]");
+  if(en){const id=en.dataset.en; S.enabled.has(id)?S.enabled.delete(id):S.enabled.add(id);
+    if(S.focusSource===id&&!S.enabled.has(id))S.focusSource=null; render(); return;}
+  const si=e.target.closest("[data-s]"); if(!si)return;
+  S.focusSource = S.focusSource===si.dataset.s ? null : si.dataset.s;
+  S.cursor=0; render();
+});
+$("tb").addEventListener("click",e=>{
+  const tr=e.target.closest(".tr"); if(!tr)return;
+  S.cursor=+tr.dataset.i; toggleCursor(false); renderTable(); renderFoot(); renderRail();
+});
+function toggleCursor(silent){
+  const r=flat()[S.cursor]; if(!r)return;
+  if(!r.toggleable){ if(!silent) toast(`<code>${r.title}</code> — already_downloaded, locked`); return; }
+  const s=S.selected[r.source]; s.has(r.index)?s.delete(r.index):s.add(r.index);
+}
+$("hd").addEventListener("click",e=>{
+  const h=e.target.closest("[data-sort]"); if(!h)return;
+  const k=h.dataset.sort;
+  S.sort = S.sort.key===k ? {key:k,dir:-S.sort.dir} : {key:k,dir:1};
+  render();
+});
+$("filter").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+  S.filter=b.dataset.f;[...$("filter").children].forEach(x=>x.setAttribute("aria-pressed",x===b));S.cursor=0;render();});
+$("win").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.window=b.dataset.w;
+  [...$("win").children].forEach(x=>x.setAttribute("aria-pressed",x===b));renderFoot();});
+$("q").addEventListener("input",e=>{S.q=e.target.value;S.cursor=0;render();});
+$("up").onclick=()=>{if(!S.unlimited){S.limit+=5;renderFoot();}};
+$("down").onclick=()=>{if(!S.unlimited){S.limit=Math.max(0,S.limit-5);renderFoot();}};
+$("limit").onchange=e=>{S.limit=Math.max(0,parseInt(e.target.value)||0);renderFoot();};
+$("timeout").onchange=()=>renderFoot();
+$("unlimited").onclick=()=>{S.unlimited=!S.unlimited;renderFoot();};
+$("dry").onclick=()=>{S.dry=!S.dry;renderFoot();};
+$("gaps").onclick=()=>{S.scanGaps=!S.scanGaps;renderFoot();
+  toast(S.scanGaps?"<code>--scan-gaps</code> on — re-checks archive drift before planning":"<code>--scan-gaps</code> off");};
+$("cmdToggle").onclick=e=>{const b=$("cmdbar");b.style.display=b.style.display==="none"?"flex":"none";e.currentTarget.classList.toggle("on");};
+$("copy").onclick=()=>toast("Command copied to clipboard");
+$("reset").onclick=()=>{UDL.sources.forEach(s=>S.selected[s.id]=new Set(UDL.rows[s.id].filter(r=>r.selectedByDefault).map(r=>r.index)));render();toast("Reset to plan defaults");};
+$("run").onclick=()=>{let n=0;S.enabled.forEach(id=>n+=S.selected[id].size);toast(`${S.dry?"dry-run":"sync"} started · <code>${n}</code> tracks`);};
+$("swiftBtn").onclick=()=>$("drawer").classList.add("open");
+$("drawerClose").onclick=()=>$("drawer").classList.remove("open");
+
+document.addEventListener("keydown",e=>{
+  if(document.activeElement===$("q")){ if(e.key==="Escape"){$("q").blur();} return; }
+  if(e.target.tagName==="INPUT")return;
+  const rows=flat();
+  if(e.key==="j"||e.key==="ArrowDown"){S.cursor=Math.min(rows.length-1,S.cursor+1);renderTable();e.preventDefault();}
+  else if(e.key==="k"||e.key==="ArrowUp"){S.cursor=Math.max(0,S.cursor-1);renderTable();e.preventDefault();}
+  else if(e.key===" "){toggleCursor();render();e.preventDefault();}
+  else if(e.key==="a"){rows.forEach(r=>r.toggleable&&S.selected[r.source].add(r.index));render();}
+  else if(e.key==="n"){rows.forEach(r=>S.selected[r.source].delete(r.index));render();}
+  else if(e.key==="g"){rows.filter(r=>r.status===UDL.STATUS.GAP).forEach(r=>S.selected[r.source].add(r.index));render();toast("known gaps selected");}
+  else if(e.key==="/"){$("q").focus();e.preventDefault();}
+  else if(e.key==="Enter"){$("run").click();}
+});
+
+let tid;function toast(h){const t=$("toast");t.innerHTML=h;t.classList.add("show");clearTimeout(tid);tid=setTimeout(()=>t.classList.remove("show"),2400);}
+render();$("tb").focus();
+</script>
+</body>
+</html>

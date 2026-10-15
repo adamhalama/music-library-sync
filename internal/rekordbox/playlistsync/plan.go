@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,13 +13,12 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/pathidentity"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/music"
 	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
-	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -959,22 +957,7 @@ func CreateBackup(ctx context.Context, dbDir, backupRoot string, now time.Time) 
 }
 
 func NormalizePath(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return ""
-	}
-	if strings.HasPrefix(trimmed, "file:") {
-		// url.Parse already percent-decodes Path; unescaping it again would
-		// corrupt any path containing a literal percent sign.
-		if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
-			trimmed = parsed.Path
-		}
-	}
-	cleaned := filepath.Clean(trimmed)
-	if utf8.ValidString(cleaned) {
-		cleaned = norm.NFC.String(cleaned)
-	}
-	return cleaned
+	return pathidentity.Canonical(raw)
 }
 
 func planChecksum(plan Plan) (string, error) {
@@ -1162,9 +1145,13 @@ func rekordboxProcesses(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect running processes: %w", err)
 	}
+	return rekordboxProcessNames(string(out)), nil
+}
+
+func rekordboxProcessNames(output string) []string {
 	found := []string{}
 	seen := map[string]struct{}{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(output, "\n") {
 		lower := strings.ToLower(line)
 		if strings.Contains(lower, "rekordbox") {
 			name := strings.TrimSpace(filepath.Base(line))
@@ -1178,7 +1165,7 @@ func rekordboxProcesses(ctx context.Context) ([]string, error) {
 		}
 	}
 	sort.Strings(found)
-	return found, nil
+	return found
 }
 
 func copyDir(src, dest string) error {

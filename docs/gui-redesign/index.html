@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>udl — GUI design options</title>
+<style>
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+  --display:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --bg:#f5f5f7;--card:#fff;--line:rgba(0,0,0,.1);--line2:rgba(0,0,0,.17);
+  --text:#151517;--text2:#5d5d67;--text3:#96969f;--accent:#0a6cf0;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#101012;--card:#1a1a1d;--line:rgba(255,255,255,.09);--line2:rgba(255,255,255,.17);
+  --text:#f2f2f5;--text2:#a2a2ab;--text3:#6d6d77;--accent:#4d97ff}
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;
+  -webkit-font-smoothing:antialiased;padding:56px 24px 80px}
+.wrap{max-width:1080px;margin:0 auto}
+.eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--text3)}
+h1{font-family:var(--display);font-size:38px;font-weight:700;letter-spacing:-.03em;margin:10px 0 12px}
+.lede{font-size:16px;color:var(--text2);line-height:1.6;max-width:66ch;margin:0}
+.lede code{font-family:var(--mono);font-size:13px;background:var(--card);border:.5px solid var(--line);padding:1px 6px;border-radius:5px}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:36px}
+a.card{display:block;text-decoration:none;color:inherit;background:var(--card);border:.5px solid var(--line);
+  border-radius:14px;padding:18px;transition:.16s;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+a.card:hover{transform:translateY(-2px);border-color:var(--line2);box-shadow:0 10px 26px rgba(0,0,0,.1)}
+.n{font-family:var(--mono);font-size:11.5px;color:var(--accent);font-weight:600}
+.card h2{font-family:var(--display);font-size:19px;font-weight:660;letter-spacing:-.02em;margin:6px 0 6px}
+.card p{margin:0;font-size:13px;color:var(--text2);line-height:1.55}
+.tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.tag{font-size:11px;padding:3px 9px;border-radius:20px;background:rgba(120,120,128,.14);color:var(--text2)}
+.tag.good{background:rgba(30,160,80,.14);color:#1a8a48}
+.tag.warn{background:rgba(200,140,20,.15);color:#8d5c05}
+@media (prefers-color-scheme:dark){.tag.good{color:#5cd085}.tag.warn{color:#e8ae4e}}
+
+/* wireframe */
+.wf{height:104px;border-radius:9px;border:.5px solid var(--line);overflow:hidden;display:flex;flex-direction:column;
+  background:linear-gradient(180deg,rgba(120,120,128,.05),transparent);margin-bottom:14px}
+.wf .bar{height:12px;background:rgba(120,120,128,.16);flex:0 0 12px}
+.wf .row{flex:1;display:flex;min-height:0}
+.wf .col{border-right:.5px solid var(--line);padding:5px}
+.wf .col:last-child{border-right:none}
+.wf .l{height:4px;border-radius:2px;background:rgba(120,120,128,.26);margin-bottom:4px}
+.wf .l.a{background:color-mix(in srgb,var(--accent) 55%,transparent)}
+.wf .l.s{width:60%}.wf .l.m{width:80%}
+.wf .foot{height:13px;flex:0 0 13px;background:rgba(120,120,128,.13);display:flex;align-items:center;justify-content:flex-end;padding-right:5px}
+.wf .btn{width:26px;height:6px;border-radius:3px;background:var(--accent)}
+.wf .tiles{display:flex;gap:4px;padding:5px}
+.wf .tile{flex:1;height:20px;border-radius:4px;background:rgba(120,120,128,.16)}
+.wf .steps{height:14px;flex:0 0 14px;display:flex;align-items:center;gap:4px;justify-content:center;background:rgba(120,120,128,.1)}
+.wf .dot{width:6px;height:6px;border-radius:50%;background:rgba(120,120,128,.3)}
+.wf .dot.a{background:var(--accent)}
+
+table{width:100%;border-collapse:collapse;margin-top:44px;font-size:13px}
+th,td{text-align:left;padding:11px 12px;border-bottom:.5px solid var(--line);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);font-weight:700}
+td:first-child{font-weight:600;white-space:nowrap}
+td code{font-family:var(--mono);font-size:12px;color:var(--text2)}
+.note{margin-top:34px;font-size:13px;color:var(--text2);line-height:1.65;border-left:2px solid var(--accent);padding-left:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">udl · native macOS app</div>
+  <h1>Sync planning — five design directions</h1>
+  <p class="lede">Each page is a working mockup of the same screen: the interactive plan selector that today lives behind
+  <code>udl sync --plan</code>. Same data model in all five (<code>PlanRow</code> with <code>missing_new</code> /
+  <code>missing_known_gap</code> / <code>already_downloaded</code>, per-source target dir and state file, plan limit,
+  plan window, dry-run). Selection, filters, sorting and options are live — click around.
+  Every page has an <b>ⓘ Swift mapping</b> button listing the native components it assumes.</p>
+
+  <div class="grid">
+    <a class="card" href="option-1-inspector.html">
+      <div class="wf">
+        <div class="bar"></div>
+        <div class="row">
+          <div class="col" style="flex:0 0 22%"><div class="l m"></div><div class="l s"></div><div class="l m"></div></div>
+          <div class="col" style="flex:1"><div class="l a"></div><div class="l"></div><div class="l a"></div><div class="l"></div><div class="l a"></div></div>
+          <div class="col" style="flex:0 0 26%"><div class="l s"></div><div class="l m"></div><div class="l s"></div></div>
+        </div>
+        <div class="foot"><div class="btn"></div></div>
+      </div>
+      <div class="n">Option 1</div>
+      <h2>Inspector</h2>
+      <p>Three columns: sources, a sortable table, a persistent options inspector. Everything visible at once, Xcode/Finder shape.</p>
+      <div class="tags"><span class="tag good">Tune &amp; re-scan fast</span><span class="tag">Densest info</span><span class="tag warn">Needs a wide window</span></div>
+    </a>
+
+    <a class="card" href="option-2-focus.html">
+      <div class="wf">
+        <div class="bar"></div>
+        <div class="row">
+          <div class="col" style="flex:0 0 20%"><div class="l m"></div><div class="l s"></div><div class="l m"></div></div>
+          <div class="col" style="flex:1"><div class="l" style="width:40%;height:7px"></div><div class="l a"></div><div class="l"></div><div class="l a"></div><div class="l"></div></div>
+        </div>
+        <div class="foot"><div class="btn"></div></div>
+      </div>
+      <div class="n">Option 2</div>
+      <h2>Focus</h2>
+      <p>One list for the whole run with sticky per-source headers. Options hidden in a toolbar popover. Dark, Music.app-like.</p>
+      <div class="tags"><span class="tag good">Reads as one queue</span><span class="tag">Least chrome</span><span class="tag warn">Options one click away</span></div>
+    </a>
+
+    <a class="card" href="option-3-review.html">
+      <div class="wf">
+        <div class="bar"></div>
+        <div class="tiles"><div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div></div>
+        <div class="row"><div class="col" style="flex:1"><div class="l m"></div><div class="l a"></div><div class="l"></div><div class="l a"></div></div></div>
+        <div class="foot"><div class="btn"></div></div>
+      </div>
+      <div class="n">Option 3</div>
+      <h2>Review</h2>
+      <p>A single centred document: headline counts as filters, collapsible source cards, plain-language summary before you commit.</p>
+      <div class="tags"><span class="tag good">Hardest to misread</span><span class="tag">Good for gaps</span><span class="tag warn">Most scrolling</span></div>
+    </a>
+
+    <a class="card" href="option-4-console.html">
+      <div class="wf">
+        <div class="bar"></div>
+        <div class="row">
+          <div class="col" style="flex:0 0 16%"><div class="l m"></div><div class="l s"></div></div>
+          <div class="col" style="flex:1;padding:3px">
+            <div class="l a" style="margin-bottom:2px"></div><div class="l" style="margin-bottom:2px"></div>
+            <div class="l a" style="margin-bottom:2px"></div><div class="l" style="margin-bottom:2px"></div>
+            <div class="l a" style="margin-bottom:2px"></div><div class="l" style="margin-bottom:2px"></div>
+          </div>
+        </div>
+        <div class="foot"><div class="btn"></div></div>
+      </div>
+      <div class="n">Option 4</div>
+      <h2>Console</h2>
+      <p>The TUI promoted to a GUI. Flat sortable table across all sources, full keyboard control, live copyable <code>udl</code> command bar.</p>
+      <div class="tags"><span class="tag good">Fastest for you</span><span class="tag">Keyboard-first</span><span class="tag warn">Unfriendly to new users</span></div>
+    </a>
+
+    <a class="card" href="option-5-guided.html">
+      <div class="wf">
+        <div class="bar"></div>
+        <div class="steps"><div class="dot"></div><div class="dot"></div><div class="dot a"></div><div class="dot"></div></div>
+        <div class="row"><div class="col" style="flex:1"><div class="l m"></div><div class="l a"></div><div class="l"></div><div class="l a"></div></div></div>
+        <div class="foot"><div class="btn"></div></div>
+      </div>
+      <div class="n">Option 5</div>
+      <h2>Guided</h2>
+      <p>One source per page with a step bar, matching how <code>--plan</code> actually loops. Settings shown as editable value chips.</p>
+      <div class="tags"><span class="tag good">Best first run</span><span class="tag">Fewest decisions</span><span class="tag warn">Slow with 5+ sources</span></div>
+    </a>
+  </div>
+
+  <table>
+    <tr><th>Direction</th><th>Primary layout</th><th>Where run options live</th><th>Scales to many sources</th><th>Keyboard</th></tr>
+    <tr><td>1 Inspector</td><td><code>NavigationSplitView</code> ×3</td><td>Always-visible inspector</td><td>Good — sidebar list</td><td>Arrow/space in table</td></tr>
+    <tr><td>2 Focus</td><td>Sidebar + grouped <code>List</code></td><td>Toolbar popover</td><td>Very good — one queue</td><td>Standard list nav</td></tr>
+    <tr><td>3 Review</td><td>Single scrolling column</td><td>Collapsed summary card</td><td>Fair — long scroll</td><td>Standard</td></tr>
+    <tr><td>4 Console</td><td>Flat <code>Table</code> + rail</td><td>Inline control strip</td><td>Excellent — sort/filter</td><td>Full j/k/space/a/n//</td></tr>
+    <tr><td>5 Guided</td><td>Paged <code>TabView</code></td><td>Value chips + popovers</td><td>Poor past ~4 sources</td><td>⏎ / arrows</td></tr>
+  </table>
+
+  <p class="note">These mock the plan-selection screen only. Once a direction is picked, the same shell extends to
+  Run Sync progress, Free DL, Rekordbox, Credentials and Doctor — the sidebar/toolbar/footer decisions made here
+  determine all of those, which is why it's worth choosing on this screen first.</p>
+</div>
+</body>
+</html>

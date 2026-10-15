@@ -30,49 +30,49 @@ type LoadOptions struct {
 }
 
 type Config struct {
-	Version  int
-	Defaults Defaults
-	Sync     Sync
-	Warnings []string
+	Version  int      `json:"version"`
+	Defaults Defaults `json:"defaults"`
+	Sync     Sync     `json:"sync"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type Defaults struct {
-	DBDir           string
-	PythonBin       string
-	PythonPath      string
-	BackupDir       string
-	Mode            string
-	CreateFolders   bool
-	CreatePlaylists bool
+	DBDir           string `json:"db_dir"`
+	PythonBin       string `json:"python_bin,omitempty"`
+	PythonPath      string `json:"python_path,omitempty"`
+	BackupDir       string `json:"backup_dir"`
+	Mode            string `json:"mode"`
+	CreateFolders   bool   `json:"create_folders"`
+	CreatePlaylists bool   `json:"create_playlists"`
 }
 
 type Sync struct {
-	Folders []FolderMapping
-	Jobs    []PlaylistJob
+	Folders []FolderMapping `json:"folders"`
+	Jobs    []PlaylistJob   `json:"jobs"`
 }
 
 type FolderMapping struct {
-	ID                string
-	MusicFolder       string
-	MusicFolderID     string
-	RekordboxFolder   string
-	RekordboxFolderID string
-	PlaylistNameMap   map[string]string
-	IncludePlaylists  []string
-	ExcludePlaylists  []string
-	OnMissingTracks   string
-	CreateFolders     *bool
-	CreatePlaylists   *bool
+	ID                string            `json:"id"`
+	MusicFolder       string            `json:"music_folder,omitempty"`
+	MusicFolderID     string            `json:"music_folder_id,omitempty"`
+	RekordboxFolder   string            `json:"rekordbox_folder,omitempty"`
+	RekordboxFolderID string            `json:"rekordbox_folder_id,omitempty"`
+	PlaylistNameMap   map[string]string `json:"playlist_name_map,omitempty"`
+	IncludePlaylists  []string          `json:"include_playlists,omitempty"`
+	ExcludePlaylists  []string          `json:"exclude_playlists,omitempty"`
+	OnMissingTracks   string            `json:"on_missing_tracks"`
+	CreateFolders     *bool             `json:"create_folders,omitempty"`
+	CreatePlaylists   *bool             `json:"create_playlists,omitempty"`
 }
 
 type PlaylistJob struct {
-	ID                  string
-	MusicPlaylist       string
-	MusicPlaylistID     string
-	RekordboxPlaylist   string
-	RekordboxPlaylistID string
-	Mode                string
-	CreatePlaylist      *bool
+	ID                  string `json:"id"`
+	MusicPlaylist       string `json:"music_playlist,omitempty"`
+	MusicPlaylistID     string `json:"music_playlist_id,omitempty"`
+	RekordboxPlaylist   string `json:"rekordbox_playlist,omitempty"`
+	RekordboxPlaylistID string `json:"rekordbox_playlist_id,omitempty"`
+	Mode                string `json:"mode,omitempty"`
+	CreatePlaylist      *bool  `json:"create_playlist,omitempty"`
 }
 
 type fileConfig struct {

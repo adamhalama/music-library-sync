@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Check System</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.sumbar{display:flex;gap:9px;padding:14px 18px;border-bottom:.5px solid var(--sep);align-items:stretch}
+.stat{flex:1;background:var(--sunken);border:.5px solid var(--sep);border-radius:9px;padding:10px 12px;cursor:default}
+.stat:hover{border-color:var(--sep-2)}
+.stat[aria-pressed=true]{border-color:currentColor;box-shadow:0 0 0 2px color-mix(in srgb,currentColor 20%,transparent)}
+.stat .n{font-size:22px;font-weight:680;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
+.stat .l{font-size:11.5px;color:var(--text-2);margin-top:4px}
+.stat.e{color:var(--err)}.stat.w{color:var(--warn)}.stat.i{color:var(--info)}.stat.o{color:var(--ok)}
+.stat .l{color:var(--text-2)}
+.crow{display:grid;grid-template-columns:16px 1fr 88px;gap:11px;align-items:center;padding:9px 18px;
+  border-bottom:.5px solid var(--sep);cursor:default;font-size:12.5px}
+.crow:hover{background:var(--hover)}
+.crow.on{background:var(--sel)}
+.crow .d{font-size:11.5px;color:var(--text-3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crow .cat{font-family:var(--mono);font-size:10.5px;color:var(--text-3);text-align:right}
+.ghead{padding:9px 18px 5px;font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.055em;
+  color:var(--text-3);background:var(--sunken);border-bottom:.5px solid var(--sep)}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">Check System</div><div class="tb-sub" id="tbSub">last run 30 Jul, 15:02</div></div>
+    <div class="spacer"></div>
+    <button class="tb-btn" id="rerun">↻ Re-run checks</button>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="center">
+      <div class="sumbar">
+        <button class="stat e" aria-pressed="false" data-f="err"><div class="n" id="nErr">0</div><div class="l">Errors</div></button>
+        <button class="stat w" aria-pressed="false" data-f="warn"><div class="n" id="nWarn">0</div><div class="l">Warnings</div></button>
+        <button class="stat i" aria-pressed="false" data-f="info"><div class="n" id="nInfo">0</div><div class="l">Info</div></button>
+        <button class="stat o" aria-pressed="false" data-f="ok"><div class="n" id="nOk">0</div><div class="l">Passed</div></button>
+      </div>
+      <div class="scroll" id="checks"></div>
+    </main>
+
+    <aside class="inspector" id="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">Check</div>
+        <div id="detail"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <a class="btn" href="credentials.html">Open Credentials</a>
+    <a class="btn primary" href="sync-plan.html" id="nextStep">Continue to sync</a>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Check System</h3>
+  <p>Renders <code>doctor.Report</code>. The list is severity-ordered, every row is selectable, and the inspector turns the selected check into one concrete next action. Same pattern serves <code>validate</code> and the Rekordbox precondition list.</p>
+  <dl>
+    <dt>List(selection:) + Section</dt><dd>Grouped by severity; category filter lives in the sidebar so the toolbar stays quiet.</dd>
+    <dt>Button tiles as filters</dt><dd>Counts double as filters — <code>@State var severity: Severity?</code>.</dd>
+    <dt>.inspector detail</dt><dd>Message, category, resolved path, and a single fix button that deep-links into Credentials or Config.</dd>
+    <dt>.task { await doctor.run() }</dt><dd>Checks run automatically on appear, exactly like the TUI's Check System workflow.</dd>
+    <dt>Labeled next step</dt><dd>The status bar's primary button changes wording based on the worst severity found.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const cats=[...new Set(UDL.checks.map(c=>c.name))];
+let filter=null, cat=null, sel=0;
+const SEVO={err:0,warn:1,info:2,ok:3};
+const SEVL={err:"Errors",warn:"Warnings",info:"Info",ok:"Passed"};
+
+function sidebarHTML(){
+  return `<div class="sb-item ${cat===null?"on":""}" data-cat=""><span class="g">◈</span><span class="nm">All categories</span><span class="badge">${UDL.checks.length}</span></div>`+
+  cats.map(k=>{
+    const list=UDL.checks.filter(c=>c.name===k);
+    const worst=list.reduce((a,c)=>Math.min(a,SEVO[c.sev]),9);
+    const kind=worst===0?"err":worst===1?"warn":"";
+    return `<div class="sb-item ${cat===k?"on":""}" data-cat="${k}"><span class="g">·</span>
+      <span class="nm">${k}</span><span class="badge ${kind}">${list.length}</span></div>`;
+  }).join("");
+}
+function list(){
+  return UDL.checks.map((c,i)=>Object.assign({},c,{i}))
+    .filter(c=>(!filter||c.sev===filter)&&(!cat||c.name===cat))
+    .sort((a,b)=>SEVO[a.sev]-SEVO[b.sev]);
+}
+function render(){
+  const rows=list();
+  let html="",last=null;
+  rows.forEach(c=>{
+    if(c.sev!==last){html+=`<div class="ghead">${SEVL[c.sev]}</div>`;last=c.sev;}
+    html+=`<div class="crow ${c.i===sel?"on":""}" data-i="${c.i}">
+      <span class="sev ${c.sev}">${c.sev==="err"?"✕":c.sev==="warn"?"!":c.sev==="ok"?"✓":"i"}</span>
+      <div style="min-width:0"><div class="nowrap">${c.msg}</div><div class="d">${c.detail}</div></div>
+      <div class="cat">${c.name}</div></div>`;
+  });
+  $("checks").innerHTML=html||`<div class="empty"><div class="big">✓</div><h4>Nothing here</h4><p>No checks match this filter.</p></div>`;
+  const c=UDL.checks[sel];
+  $("detail").innerHTML=`
+    <div class="rowflex" style="margin-bottom:9px"><span class="sev ${c.sev}">${c.sev==="err"?"✕":c.sev==="warn"?"!":c.sev==="ok"?"✓":"i"}</span>
+      <span style="font-size:12.5px;font-weight:600">${c.msg}</span></div>
+    <div class="field"><label>Category</label><span class="val mono">${c.name}</span></div>
+    <div class="field"><label>Severity</label><span class="pill ${c.sev}"><i class="dot"></i>${SEVL[c.sev]}</span></div>
+    <div class="hint" style="margin:8px 0 12px">${c.detail}</div>
+    ${c.fix==="credentials"?`<a class="btn primary" href="credentials.html" style="width:100%;justify-content:center">Add Deezer ARL…</a>`:""}
+    ${c.fix==="upgrade"?`<button class="btn" style="width:100%;justify-content:center" onclick="Shell.toast('Run <code>brew upgrade scdl</code> in Terminal — udl never installs on your behalf.')">How to upgrade scdl</button>`:""}
+    ${c.fix==="quit-rb"?`<button class="btn" style="width:100%;justify-content:center" onclick="Shell.toast('Quit Rekordbox, then re-run checks.')">Re-check Rekordbox</button>`:""}
+    ${!c.fix?`<div class="hint">No action needed.</div>`:""}`;
+  const n={err:0,warn:0,info:0,ok:0};UDL.checks.forEach(c=>n[c.sev]++);
+  $("nErr").textContent=n.err;$("nWarn").textContent=n.warn;$("nInfo").textContent=n.info;$("nOk").textContent=n.ok;
+  $("summary").innerHTML=`<b>${UDL.checks.length}</b> checks · <span class="err">${n.err} error</span> · <span class="warn">${n.warn} warnings</span> · <span class="ok">${n.ok} passed</span>`;
+  $("nextStep").textContent=n.err?"Continue anyway (Spotify will be skipped)":"Continue to sync";
+  const sb=$("sbContext"); if(sb) sb.innerHTML=sidebarHTML();
+}
+
+Shell.init({page:"doctor",contextual:{title:"Categories",html:sidebarHTML()},
+  note:"udl reports problems and tells you the command to fix them; it never installs software for you."});
+$("checks").addEventListener("click",e=>{const r=e.target.closest(".crow");if(!r)return;sel=+r.dataset.i;render();});
+document.querySelector(".sumbar").addEventListener("click",e=>{
+  const b=e.target.closest(".stat");if(!b)return;
+  filter=filter===b.dataset.f?null:b.dataset.f;
+  document.querySelectorAll(".stat").forEach(x=>x.setAttribute("aria-pressed",x.dataset.f===filter));
+  render();});
+document.getElementById("sidebar").addEventListener("click",e=>{
+  const it=e.target.closest("[data-cat]");if(!it)return;cat=it.dataset.cat||null;render();});
+$("rerun").onclick=()=>{$("tbSub").innerHTML=`<span class="spin"></span> running 12 checks…`;
+  setTimeout(()=>{$("tbSub").textContent="last run just now";Shell.toast("12 checks re-run — 1 error, 2 warnings.");},1100);};
+render();
+</script>
+</body>
+</html>

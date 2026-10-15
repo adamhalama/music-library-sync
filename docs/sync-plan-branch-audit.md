@@ -83,9 +83,9 @@ Implemented behavior:
 
 ### Planning docs that are now historical, not current work items
 
-- `docs/plans/architecture-sequencing.md`
-- `docs/plans/sync-first-plan.md`
-- `docs/plans/three-stage-big-plan.md`
+- `plans/archive/architecture-sequencing.md`
+- `plans/archive/sync-first-plan.md`
+- `plans/archive/three-stage-big-plan.md`
 
 These are still useful as design history, but they should not read like active current-state specs.
 

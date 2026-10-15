@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Settings</title>
+<link rel="stylesheet" href="shell.css" />
+<style>
+.settings-wrap{max-width:680px;margin:0 auto;padding:22px 28px 40px}
+.settings-wrap h1{font-family:var(--display);font-size:21px;letter-spacing:-.025em;margin:0 0 18px}
+.prefgroup{border:.5px solid var(--sep);border-radius:10px;background:var(--win);overflow:hidden;margin-bottom:18px}
+.prefhead{font-size:11px;font-weight:650;color:var(--text-3);text-transform:uppercase;letter-spacing:.055em;margin:0 0 7px 2px}
+.pref{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:11px 13px;border-bottom:.5px solid var(--sep)}
+.pref:last-child{border-bottom:0}.pref b{display:block;font-size:12.5px;font-weight:560}.pref small{display:block;color:var(--text-3);font-size:11px;line-height:1.45;margin-top:2px;max-width:52ch}
+.select{height:25px;border:.5px solid var(--sep-2);border-radius:6px;background:var(--win);color:var(--text);font:inherit;font-size:12px;padding:0 25px 0 8px}
+.keyrow{display:flex;gap:7px;align-items:center}.keyrow .kbd{min-width:48px;text-align:center}
+.aboutmark{width:38px;height:38px;border-radius:10px;background:linear-gradient(145deg,#1c78ec,#064da9);color:white;display:grid;place-items:center;font-weight:750;font-size:15px;box-shadow:inset 0 1px rgba(255,255,255,.3)}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">Settings</div><div class="tb-sub">app preferences · workflow configuration stays in YAML</div></div>
+    <div class="spacer"></div>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="center"><div class="scroll"><div class="settings-wrap">
+      <h1>Settings</h1>
+      <div class="prefhead">General</div>
+      <div class="prefgroup">
+        <div class="pref"><div><b>Open Home at launch</b><small>Return to the outcome summary instead of reopening the last workflow.</small></div><div class="switch" role="switch" aria-checked="true" data-toggle></div></div>
+        <div class="pref"><div><b>Confirm before starting a sync</b><small>Show the plan even when running with saved defaults.</small></div><div class="switch" role="switch" aria-checked="true" data-toggle></div></div>
+        <div class="pref"><div><b>Show completed tracks in live runs</b><small>Keep successful rows visible rather than collapsing them into the counter.</small></div><div class="switch" role="switch" aria-checked="false" data-toggle></div></div>
+      </div>
+      <div class="prefhead">Appearance</div>
+      <div class="prefgroup">
+        <div class="pref"><div><b>Appearance</b><small>Follow macOS by default; the prototype supports both palettes.</small></div><select class="select"><option>System</option><option>Light</option><option>Dark</option></select></div>
+        <div class="pref"><div><b>Inspector</b><small>Remember its visibility separately for each workflow.</small></div><select class="select"><option>Remember per view</option><option>Always show</option><option>Always hide</option></select></div>
+        <div class="pref"><div><b>Reduce motion</b><small>Also follows the macOS accessibility preference.</small></div><div class="switch" role="switch" aria-checked="false" data-toggle></div></div>
+      </div>
+      <div class="prefhead">Notifications</div>
+      <div class="prefgroup">
+        <div class="pref"><div><b>Notify when a run finishes</b><small>Includes downloaded, skipped, and failed counts.</small></div><div class="switch" role="switch" aria-checked="true" data-toggle></div></div>
+        <div class="pref"><div><b>Notify only when udl is in the background</b></div><div class="switch" role="switch" aria-checked="true" data-toggle></div></div>
+        <div class="pref"><div><b>Play completion sound</b></div><div class="switch" role="switch" aria-checked="false" data-toggle></div></div>
+      </div>
+      <div class="prefhead">Keyboard</div>
+      <div class="prefgroup">
+        <div class="pref"><div><b>Review sync plan</b></div><div class="keyrow"><span class="kbd">⌘ R</span></div></div>
+        <div class="pref"><div><b>Stop current run</b></div><div class="keyrow"><span class="kbd">⌘ .</span></div></div>
+        <div class="pref"><div><b>Toggle inspector</b></div><div class="keyrow"><span class="kbd">⌥ ⌘ I</span></div></div>
+      </div>
+      <div class="prefhead">About</div>
+      <div class="prefgroup"><div class="pref">
+        <div class="rowflex"><div class="aboutmark">udl</div><div><b>update-downloads 1.0.0</b><small>Go engine · native macOS prototype · config schema v1</small></div></div>
+        <button class="btn" id="updates">Check for Updates…</button>
+      </div></div>
+    </div></div></main>
+  </div>
+  <div class="statusbar"><div class="summary" id="summary">Preferences save automatically</div><div class="spacer"></div><a class="btn" href="config.html">Open Advanced Config</a><a class="btn primary" href="home.html">Done</a></div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Settings</h3>
+  <p>This screen owns app-level preferences only: window behavior, appearance, notifications, and shortcuts. Workflow behavior remains explicit and portable in the YAML editors.</p>
+  <dl>
+    <dt>Settings scene</dt><dd>In SwiftUI this becomes a dedicated <code>Settings</code> scene, accessible from the app menu with the standard shortcut.</dd>
+    <dt>@AppStorage</dt><dd>Lightweight preferences persist automatically without touching workflow configuration.</dd>
+    <dt>System integrations</dt><dd>Notifications and updates request permission only when first used; no background agent is installed implicitly.</dd>
+  </dl>
+</div>
+<script src="shell.js"></script>
+<script>
+Shell.init({page:"settings",note:"Settings affect the app UI. Download, playlist, and Rekordbox behavior remains in versionable YAML files."});
+document.querySelectorAll(".switch").forEach(sw=>sw.addEventListener("switched",()=>{document.getElementById("summary").innerHTML=`<span class="ok">Saved</span> · preferences update automatically`;Shell.toast("Preference saved.");}));
+document.querySelectorAll("select").forEach(s=>s.onchange=()=>Shell.toast(`Preference changed to <code>${s.value}</code>.`));
+document.getElementById("updates").onclick=()=>Shell.toast("udl 1.0.0 is the newest available version.");
+</script>
+</body>
+</html>

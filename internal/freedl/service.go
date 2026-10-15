@@ -20,6 +20,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/fileops"
+	"github.com/jaa/update-downloads/internal/mediametadata"
 	"github.com/jaa/update-downloads/internal/playlists"
 )
 
@@ -39,6 +40,7 @@ var (
 	readPromotionCreationTime    = fileops.ReadCreationTime
 	restorePromotionCreationTime = fileops.RestoreCreationTime
 	runPromotionFFmpeg           = runFFmpeg
+	verifyPromotionMetadata      = mediametadata.PreserveAndVerify
 )
 
 type Quality struct {
@@ -133,12 +135,14 @@ type PromotionResult struct {
 }
 
 type PromotionRowResult struct {
-	Index       int    `json:"index"`
-	LibraryPath string `json:"library_path"`
-	BackupPath  string `json:"backup_path,omitempty"`
-	Status      string `json:"status"`
-	Error       string `json:"error,omitempty"`
-	SHA256      string `json:"sha256,omitempty"`
+	Index          int                   `json:"index"`
+	LibraryPath    string                `json:"library_path"`
+	BackupPath     string                `json:"backup_path,omitempty"`
+	Status         string                `json:"status"`
+	Error          string                `json:"error,omitempty"`
+	SHA256         string                `json:"sha256,omitempty"`
+	Preservation   *mediametadata.Report `json:"preservation,omitempty"`
+	PromotedSHA256 string                `json:"promoted_sha256,omitempty"`
 }
 
 type mediaFile struct {
@@ -313,7 +317,8 @@ func (s Service) ApplyPromotionPlan(ctx context.Context, plan PromotionPlan) Pro
 			continue
 		}
 		rowResult.SHA256 = sum
-		if err := applyReplacement(ctx, plan, row, creation); err != nil {
+		preservation, err := applyVerifiedReplacement(ctx, plan, row, creation, sum)
+		if err != nil {
 			rowResult.Status = "failed"
 			rowResult.Error = "replace failed: " + err.Error()
 			result.Failed++
@@ -321,6 +326,8 @@ func (s Service) ApplyPromotionPlan(ctx context.Context, plan PromotionPlan) Pro
 			continue
 		}
 		rowResult.Status = "replaced"
+		rowResult.Preservation = &preservation
+		rowResult.PromotedSHA256 = preservation.FileSHA256
 		result.Replaced++
 		result.Rows = append(result.Rows, rowResult)
 	}
@@ -835,26 +842,67 @@ func backupOriginal(sourcePath, backupPath string, creation fileops.CreationTime
 }
 
 func applyReplacement(ctx context.Context, plan PromotionPlan, row PromotionRow, creation fileops.CreationTime) error {
+	_, err := applyVerifiedReplacement(ctx, plan, row, creation, "")
+	return err
+}
+
+func applyVerifiedReplacement(ctx context.Context, plan PromotionPlan, row PromotionRow, creation fileops.CreationTime, originalSHA256 string) (mediametadata.Report, error) {
+	var report mediametadata.Report
 	tempFile, err := os.CreateTemp(filepath.Dir(row.LibraryPath), ".udl-freedl-promote-*"+filepath.Ext(row.LibraryPath))
 	if err != nil {
-		return err
+		return report, err
 	}
 	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
 	_ = tempFile.Close()
 	_ = os.Remove(tempPath)
 	if err := runPromotionFFmpeg(ctx, plan, row, tempPath); err != nil {
 		_ = os.Remove(tempPath)
-		return err
+		return report, err
+	}
+	original := row.BackupPath
+	if original == "" {
+		original = row.LibraryPath
+	}
+	report, err = verifyPromotionMetadata(ctx, original, tempPath)
+	if err != nil {
+		return report, err
 	}
 	if err := restorePromotionCreationTime(tempPath, creation); err != nil {
 		_ = os.Remove(tempPath)
-		return err
+		return report, err
+	}
+	info, err := os.Stat(row.LibraryPath)
+	if err != nil {
+		return report, err
+	}
+	if err := os.Chmod(tempPath, info.Mode().Perm()); err != nil {
+		return report, err
+	}
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
+	if originalSHA256 != "" {
+		backupSHA256, err := mediametadata.FileSHA256(original)
+		if err != nil {
+			return report, err
+		}
+		if backupSHA256 != originalSHA256 {
+			return report, fmt.Errorf("original backup changed during promotion")
+		}
+		current, err := mediametadata.FileSHA256(row.LibraryPath)
+		if err != nil {
+			return report, err
+		}
+		if current != originalSHA256 {
+			return report, fmt.Errorf("library file changed during promotion; original backup retained")
+		}
 	}
 	if err := fileops.ReplaceFileSafely(tempPath, row.LibraryPath); err != nil {
 		_ = os.Remove(tempPath)
-		return err
+		return report, err
 	}
-	return nil
+	return report, nil
 }
 
 func runFFmpeg(ctx context.Context, plan PromotionPlan, row PromotionRow, outputPath string) error {

@@ -2,27 +2,17 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	workflows "github.com/jaa/update-downloads/internal/app"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 )
 
-type planSourceDetails struct {
-	SourceID   string
-	SourceType string
-	Adapter    string
-	URL        string
-	TargetDir  string
-	StateFile  string
-	PlanLimit  int
-	PlanWindow engine.PlanWindow
-	DryRun     bool
-}
+type planSourceDetails = workflows.PlanSourceDetails
 
 type planSelectorModel struct {
 	sourceID string
@@ -283,41 +273,5 @@ func defaultPlanSelectorKeys() planSelectorKeys {
 }
 
 func buildPlanSourceDetails(source config.Source, defaults config.Defaults, planLimit int, planWindow engine.PlanWindow, dryRun bool) planSourceDetails {
-	targetDir := strings.TrimSpace(source.TargetDir)
-	if expanded, err := config.ExpandPath(targetDir); err == nil && strings.TrimSpace(expanded) != "" {
-		targetDir = expanded
-	}
-
-	stateFile := strings.TrimSpace(source.StateFile)
-	if resolved, err := config.ResolveStateFile(defaults.StateDir, source.StateFile); err == nil && strings.TrimSpace(resolved) != "" {
-		stateFile = resolved
-	}
-
-	url := strings.TrimSpace(source.URL)
-	if targetDir != "" {
-		targetDir = filepath.Clean(targetDir)
-	}
-	if stateFile != "" {
-		stateFile = filepath.Clean(stateFile)
-	}
-	return planSourceDetails{
-		SourceID:   strings.TrimSpace(source.ID),
-		SourceType: string(source.Type),
-		Adapter:    strings.TrimSpace(source.Adapter.Kind),
-		URL:        sanitizePlanURL(url),
-		TargetDir:  targetDir,
-		StateFile:  stateFile,
-		PlanLimit:  planLimit,
-		PlanWindow: engine.NormalizePlanWindow(planWindow),
-		DryRun:     dryRun,
-	}
-}
-
-func sanitizePlanURL(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return trimmed
-	}
-	parts := strings.SplitN(trimmed, "?", 2)
-	return parts[0]
+	return workflows.BuildPlanSourceDetails(source, defaults, planLimit, planWindow, dryRun)
 }

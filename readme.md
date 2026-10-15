@@ -25,6 +25,7 @@ Runtime tools:
 - SoundCloud sync requires external `scdl` + `yt-dlp`
 - Spotify still relies on external `deemix` or `spotdl` plus credentials
 - Rekordbox sync uses a private Python environment managed by `udl rekordbox deps`; Homebrew supplies `python@3.12`
+- The Navidrome phone library needs `navidrome` **and `ffmpeg`**. Without ffmpeg every format a client will not take raw (m4a, wav, flac) fails to stream or download with `Internal Server Error: invalid argument`; only mp3 plays. `udl navidrome status` reports it on the `Transcoder:` line
 
 Dependency policy:
 - Homebrew installs `udl` with `python@3.12`, `scdl`, and `yt-dlp` as formula dependencies.
@@ -39,6 +40,9 @@ Environment:
 
 Build tooling:
 - Go 1.22+
+- Apple Command Line Tools with Swift 6 for `make app-dev`
+- Full Xcode only for the Xcode project, XCTest/TSan, and universal Swift
+  release build
 
 ## Install
 
@@ -51,10 +55,33 @@ brew install udl
 
 The Homebrew formula installs `udl` and depends on `python@3.12`, `scdl`, and `yt-dlp`. Rekordbox Python packages are installed into UDL's private environment rather than the global Homebrew Python environment.
 
+Native SwiftUI releases are also published as universal macOS ZIPs. They use a
+free ad-hoc signature rather than Apple Developer ID/notarization, so macOS
+requires a one-time unidentified-developer approval. Verify the release
+checksum and follow [the macOS app install guide](docs/install-macos-app.md).
+The app and Homebrew CLI coexist but are installed separately.
+
 Local development install:
 
 ```bash
 make install
+```
+
+Build and open the native development app without full Xcode:
+
+```bash
+make app-dev-open
+```
+
+This writes an ad-hoc-signed, current-architecture app to
+`dist/dev/UDL-Dev.app`. See
+[the macOS app release guide](docs/release-macos-app.md) for Spotlight
+installation and the optional full-Xcode workflow.
+
+Build, install, and register the development app with Spotlight:
+
+```bash
+make app-dev-install
 ```
 
 Legacy script install (optional during migration):
@@ -88,6 +115,8 @@ udl sync
 udl validate
 udl playlist list
 udl playlist show favorites
+udl playlist sync list
+udl playlist sync plan --job favs-august --direction rekordbox-to-navidrome
 udl rekordbox deps status
 udl rekordbox playlist-sync plan
 ```
@@ -99,6 +128,7 @@ udl [global flags] <command>
 
 Commands:
   tui
+  agent
   doctor
   sync
   validate
@@ -110,11 +140,16 @@ Commands:
   help
 ```
 
+`agent` runs the persistent JSON-RPC backend for the native macOS frontend.
+Its stdin/stdout are protocol-only NDJSON; diagnostics are written to stderr.
+Use `--working-dir <path>` to select the project/config discovery directory.
+
 Global flags:
 - `-c, --config <path>`
 - `--freedl-config <path>` (SoundCloud Free DL feature config; also `UDL_FREEDL_CONFIG`)
 - `--playlists-config <path>` (standalone playlist config; also `UDL_PLAYLISTS_CONFIG`)
 - `--rekordbox-config <path>` (Rekordbox sync config; also `UDL_REKORDBOX_CONFIG`)
+- `--navidrome-config <path>` (Navidrome phone-library config; also `UDL_NAVIDROME_CONFIG`)
 - `--json`
 - `-q, --quiet`
 - `-v, --verbose`
@@ -152,6 +187,67 @@ Global flags:
 - Opening the TUI playlist screen is cache-only. Failed or canceled refreshes preserve the last valid checksummed snapshot.
 - Snapshot comparison counts duplicate track occurrences, so repeated playlist items are not collapsed.
 
+Likes from the phone reach Rekordbox through the ordinary playlist pipeline:
+
+1. Star a track in Amperfy. It is canonical in Navidrome immediately.
+2. `udl navidrome favorites list` shows it.
+3. `udl playlist refresh navidrome-favorites` reads the server's stars directly
+   and writes them into the `navidrome-favorites` snapshot. The read is
+   path-sorted, so a refresh that changed nothing reports no changes rather than
+   churning the checksum.
+4. `udl rekordbox playlist-sync plan --playlist-id navidrome-favorites`, then
+   apply with Rekordbox closed. `--playlist-id` plans from a saved UDL snapshot
+   instead of reading Music.app, which is what lets a Navidrome-backed playlist
+   — one Music.app knows nothing about — reach Rekordbox. The definition's
+   `default_rekordbox_target` picks the destination unless you name one.
+
+Apple Music favourites and Navidrome stars are two separate sets, by design, and
+they are never merged. `favorites` (Apple Music) targets the `fav_imports`
+Rekordbox playlist; `navidrome-favorites` targets `nav_fav_imports`. Nothing is
+deduplicated between them and neither one is migrated into the other. The flow
+is one-way in each direction: Apple favourites can be imported into Navidrome,
+and Navidrome stars can be read out to Rekordbox, but nothing is ever written
+back into Music.app.
+
+Reading Apple Music needs an Automation grant. Under the native app the
+AppleEvent is attributed to `UDL.app`, so the grant lives under System Settings
+→ Privacy & Security → Automation → UDL → Music. `udl doctor` reports the state
+of that grant before a refresh needs it, and a failed refresh in the app now
+names the cause rather than reporting that nothing happened. The embedded
+backend is codesigned with the app, so a grant survives a rebuild.
+
+`navidrome` commands (macOS only; serves `~/Music/downloaded` to Amperfy on the
+home network):
+
+- `udl navidrome config path|show`: inspect the selected Navidrome feature configuration. The account password is never part of it.
+- `udl navidrome deps status`: report Homebrew and Navidrome availability without changing anything.
+- `udl navidrome deps ensure --confirm`: install or upgrade Navidrome through Homebrew. Refuses without `--confirm`.
+- `udl navidrome status`: report dependency, service, account, library, playlist, and backup state.
+- `udl navidrome setup plan [--plan-file <path>]`: build a checksummed plan of every file and service change. Writes nothing.
+- `udl navidrome setup apply --plan-file <path>`: revalidate the plan and apply it. Refuses to overwrite any file that is not UDL-managed.
+- `udl navidrome playlists refresh`: regenerate the managed `.nsp` files and ask Navidrome to re-import them.
+- `udl navidrome playlists derive-genres`: preview the HARD BOUNCE genre allowlist derived from the Apple Music playlist.
+- `udl navidrome playlists save-genres --genre <name> ...`: persist an approved allowlist and rewrite the playlists.
+- `udl navidrome favorites import plan [--plan-file <path>]`: classify every Apple Music favorite. Apple Music is only read.
+- `udl navidrome favorites import apply --plan-file <path>`: back up the database, star exact path matches, and verify parity.
+- `udl navidrome favorites list [--json]`: list what is starred on the server right now. This is the return path — a like made on the phone in Amperfy is canonical in Navidrome, and this is how it reaches UDL. Apple Music is not consulted, so it works without a Music automation grant.
+- `udl navidrome phone [--connected=false]`: record — or withdraw — the acknowledgement that Amperfy on the phone reaches this Mac. It is self-reported: nothing here can observe the phone, and marking it changes only the setup checklist (the app's Connect Amperfy card has the same button). `udl navidrome status` shows it on the `Phone connected:` line.
+- `udl navidrome backup create` / `list`: manage Navidrome database backups.
+- v1 is trusted-LAN HTTP only. Never port-forward the Navidrome port.
+- `udl navidrome dates reconcile`: rewrite Navidrome's Date Added from each
+  file's recorded APFS creation time. Verified against 0.63.2, `dateadded` is
+  otherwise when the scanner first saw the file, so an imported back catalogue
+  sorts in scan order. The reconcile fixes both the managed smart playlists and
+  a client's own "Date Added" sort, takes a database backup first, is
+  idempotent, survives quick and full rescans, and is safe to run while the
+  server is running. Re-run it after adding a batch of older files.
+- The managed playlists directory must not be hidden. Navidrome skips hidden
+  folders silently, so a `.`-prefixed `playlists_path` imports nothing; UDL
+  refuses one.
+- Genre matching is case-sensitive, so the derived allowlist keeps every
+  distinct spelling (`Hard Bounce` and `HARD BOUNCE` are two entries).
+- The account password lives only in macOS Keychain. It never appears in configuration, plans, logs, or command arguments.
+
 `rekordbox` commands:
 
 - `udl rekordbox config path|show`: inspect the standalone Rekordbox configuration.
@@ -164,6 +260,50 @@ Global flags:
 - Plan SHA-256 values are integrity checks, not cryptographic signatures.
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
+- Recovery from the reported full-directory backup is documented in
+  [`docs/rekordbox-recovery.md`](docs/rekordbox-recovery.md); validate the
+  procedure on an isolated copy, never the live library.
+
+Directional paired-playlist commands:
+
+- Define pairs in `playlists.yaml` under `sync_jobs`. Each pair names one
+  Rekordbox playlist and one normal Navidrome playlist; optional provider IDs
+  pin the selector while durable resolved bindings remain in state, not config.
+- `udl playlist sync list` shows configured pairs and their last verified
+  direction. `plan --job <id> --direction
+  <rekordbox-to-navidrome|navidrome-to-rekordbox> [--out <path>]` reads both
+  providers and saves a checksummed preview. `show --plan-file <path>` verifies
+  and displays it. `apply --plan-file <path> [--force]` re-reads both sides,
+  backs up only the destination, replaces its complete membership and order,
+  and verifies exact parity. Use global `--dry-run` for full revalidation with
+  no backup or write; non-interactive apply requires `--force`.
+- Direction is always explicit. This is a manual mirror, never a merge or a
+  downloader: the selected source controls all destination membership and
+  order. Empty sources, missing/relative real paths, ambiguous path matches,
+  duplicate tracks/targets, managed smart playlists, and another user's
+  Navidrome playlist block the entire apply. An already identical pair is a
+  successful no-op with no backup.
+- A missing destination is created; one existing exact-name normal destination
+  is adopted. Multiple exact-name matches are refused. Path identity is exact
+  after file-URL decoding, path cleaning, and Unicode NFC normalization; there
+  is no artist/title fallback and case is preserved.
+- Example configuration:
+
+  ```yaml
+  version: 1
+  playlists: []
+  sync_jobs:
+    - id: favs-august
+      rekordbox:
+        playlist: Favs August
+      navidrome:
+        playlist: Favs August
+  ```
+
+- If apply reports partial/uncertain status, do not blindly retry. Inspect the
+  reported backup and live destination, then generate a fresh plan. Navidrome
+  recovery is documented in
+  [`docs/navidrome-playlist-recovery.md`](docs/navidrome-playlist-recovery.md).
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)
@@ -325,11 +465,12 @@ Notes:
 - If no enabled Free DL jobs exist, the TUI opens setup automatically. Existing jobs can be managed from the Free DL job list with `e`, and new jobs can be added with `a`.
 - A Free DL TUI run chooses a plan limit first, streams the plan table as SoundCloud rows, local quality, and Free DL availability arrive, captures selected downloads into a configured buffer directory, builds a promotion plan from successful downloads, then confirms selected replacements. Originals are copied into the configured backup directory before any library file is replaced.
 - `scdl-freedl` keeps deterministic preflight/state/archive behavior but skips tracks that do not expose a free-download link.
-- `scdl-freedl` currently downloads only HypeEdit free-DL links (browser handoff opens the gate URL and waits for a completed file in `~/Downloads`). Non-HypeEdit free-DL hosts are skipped.
+- `scdl-freedl` downloads from a host allowlist of free-download gate services: `hypeddit.com`, `gaterush.me`, `droploud.com`, and `mypresskit.info` (browser handoff opens the gate URL and waits for a completed file in `~/Downloads`). Other free-DL hosts are skipped as `unsupported-free-download-host`.
+- A SoundCloud `purchase_url` backs both the `FREE DL` and `Buy` buttons and the page does not say which, so support is host-driven. Stores and smart links (`bandcamp.com`, `beatport.com`, `found.ee`) are deliberately excluded: opening them can never yield a free file, so they are skipped instead of costing a gate wait.
 - `scdl-freedl` tags downloaded files with track metadata and attempts to embed SoundCloud artwork thumbnails into the resulting media file.
 - Override watched browser download directory with `UDL_FREEDL_BROWSER_DOWNLOAD_DIR`.
-- On macOS, HypeEdit handoff opens Helium by default. Set `UDL_FREEDL_BROWSER_APP` to force another browser app.
-- HypeEdit browser handoff now uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
+- On macOS, gate handoff opens Helium by default. Set `UDL_FREEDL_BROWSER_APP` to force another browser app.
+- Gate browser handoff uses idle-timeout behavior: default idle wait is 1 minute (even if source command timeout is higher), and active partial download activity (`.crdownload`, `.download`, `.part`, etc.) keeps the wait alive up to the source max timeout.
 - Override idle timeout with `UDL_FREEDL_BROWSER_IDLE_TIMEOUT` (Go duration format, for example `45s` or `90s`).
 - Browser launch/wait/post-processing failures are persisted for manual follow-up in `defaults.state_dir/<source-id>.freedl-stuck.jsonl`.
 - Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.

@@ -1,13 +1,13 @@
 package cli
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/output"
+	"github.com/jaa/update-downloads/internal/runstate"
 )
 
 func newEmptyTUIInteractiveSelectionState() *tuiInteractiveSelectionState {
@@ -837,54 +837,19 @@ func (s *tuiInteractiveSelectionState) toggleActivity(layout tuiShellLayout) {
 }
 
 func tuiRuntimeStatusFromPlanStatus(status engine.PlanRowStatus) tuiTrackRuntimeStatus {
-	switch status {
-	case engine.PlanRowAlreadyDownloaded:
-		return tuiTrackStatusIdle
-	default:
-		return tuiTrackStatusQueued
-	}
+	return runstate.RuntimeStatusFromPlanStatus(status)
 }
 
 func tuiTrackPlanClassFromPlanStatus(status engine.PlanRowStatus) tuiTrackPlanClass {
-	switch status {
-	case engine.PlanRowMissingKnownGap:
-		return tuiTrackPlanClassKnownGap
-	case engine.PlanRowAlreadyDownloaded:
-		return tuiTrackPlanClassAlreadyHave
-	default:
-		return tuiTrackPlanClassNew
-	}
+	return runstate.TrackPlanClassFromPlanStatus(status)
 }
 
 func tuiTrackRunScopeForRow(toggleable, selected bool) tuiTrackRunScope {
-	if !toggleable {
-		return tuiTrackRunScopeLocked
-	}
-	if selected {
-		return tuiTrackRunScopeIncluded
-	}
-	return tuiTrackRunScopeExcluded
+	return runstate.TrackRunScopeForRow(toggleable, selected)
 }
 
 func tuiDisplayRowFromPlanRow(row tuiPlanTrackRow, selected bool) tuiTrackRowState {
-	runtimeStatus := tuiRuntimeStatusFromPlanStatus(row.PlanStatus)
-	return tuiTrackRowState{
-		SourceID:        row.SourceID,
-		SourceLabel:     row.SourceLabel,
-		RemoteID:        row.RemoteID,
-		Title:           row.Title,
-		Index:           row.Index,
-		Toggleable:      row.Toggleable,
-		PlanStatus:      row.PlanStatus,
-		PlanClass:       row.PlanClass,
-		Selected:        row.Toggleable && selected,
-		RunScope:        tuiTrackRunScopeForRow(row.Toggleable, selected),
-		RuntimeStatus:   runtimeStatus,
-		StatusLabel:     tuiTrackStatusLabel(runtimeStatus, 0, false, ""),
-		FailureDetail:   "",
-		ProgressKnown:   false,
-		ProgressPercent: 0,
-	}
+	return runstate.DisplayRowFromPlanRow(row, selected)
 }
 
 func containsTUITrackFilter(filters []tuiPlanPromptFilter, filter tuiPlanPromptFilter) bool {
@@ -901,29 +866,5 @@ func indexOfTUITrackFilter(filters []tuiPlanPromptFilter, filter tuiPlanPromptFi
 }
 
 func tuiTrackStatusLabel(status tuiTrackRuntimeStatus, percent float64, progressKnown bool, failureDetail string) string {
-	switch status {
-	case tuiTrackStatusIdle:
-		return "idle"
-	case tuiTrackStatusQueued:
-		return "pending"
-	case tuiTrackStatusDownloading:
-		if progressKnown {
-			return fmt.Sprintf("downloading %.0f%%", percent)
-		}
-		return "downloading"
-	case tuiTrackStatusDownloaded:
-		return "downloaded"
-	case tuiTrackStatusSkipped:
-		if strings.TrimSpace(failureDetail) != "" {
-			return "skipped: " + strings.TrimSpace(failureDetail)
-		}
-		return "skipped"
-	case tuiTrackStatusFailed:
-		if strings.TrimSpace(failureDetail) != "" {
-			return "failed: " + strings.TrimSpace(failureDetail)
-		}
-		return "failed"
-	default:
-		return string(status)
-	}
+	return runstate.TrackStatusLabel(status, percent, progressKnown, failureDetail)
 }

@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,66 @@ func TestRekordboxPlaylistSyncUseCasePlansFromStandaloneSnapshot(t *testing.T) {
 	}
 	if result.Plan.MusicPlaylist.Name != "Favorites" || result.Plan.Summary.MatchedByPath != 1 {
 		t.Fatalf("unexpected snapshot plan: %+v", result.Plan)
+	}
+}
+
+// Apple Music favourites and Navidrome stars are separate sets that must never
+// land in the same Rekordbox playlist. The definition's target is what keeps
+// them apart, and an explicit option still overrides it.
+func TestSnapshotPlanUsesTheDefinitionsRekordboxTarget(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Defaults.StateDir = filepath.Join(tmp, "state")
+	if _, err := playlists.WriteSnapshot(cfg.Defaults.StateDir, playlists.Snapshot{
+		PlaylistID: "navidrome-favorites", Name: "Favourites (Navidrome)",
+		Provider: playlists.ProviderNavidrome, ProviderPlaylist: "Favourites (Navidrome)",
+		RefreshedAt: time.Date(2026, 5, 21, 11, 0, 0, 0, time.UTC),
+		Tracks:      []playlists.Track{{Index: 1, ProviderID: "track-1", Title: "Track", Artist: "Artist", Path: "/Music/Track.mp3"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := playlists.LoadSnapshot(cfg.Defaults.StateDir, "navidrome-favorites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newUseCase := func() (RekordboxPlaylistSyncUseCase, *fakeRekordboxBridge) {
+		rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
+			Playlists: []bridge.Playlist{
+				{ID: "3150438241", Name: "fav_imports", Attribute: 0},
+				{ID: "3150438242", Name: "nav_fav_imports", Attribute: 0},
+			},
+			Contents: []bridge.Content{{ID: "content-1", Title: "Track", FolderPath: "/Music/Track.mp3"}},
+		}}
+		return RekordboxPlaylistSyncUseCase{
+			Bridge:      rb,
+			Now:         func() time.Time { return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC) },
+			CheckClosed: func(context.Context, string) error { return nil },
+		}, rb
+	}
+
+	useCase, _ := newUseCase()
+	result, err := useCase.Plan(context.Background(), RekordboxPlaylistSyncPlanRequest{
+		Config: cfg, Snapshot: &snapshot, SnapshotRekordboxTarget: "nav_fav_imports",
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if result.Plan.RekordboxPlaylist.Name != "nav_fav_imports" {
+		t.Fatalf("target = %q, want nav_fav_imports (the Apple favourites playlist must not be touched)",
+			result.Plan.RekordboxPlaylist.Name)
+	}
+
+	// An explicitly named target wins over the definition's default.
+	useCase, _ = newUseCase()
+	result, err = useCase.Plan(context.Background(), RekordboxPlaylistSyncPlanRequest{
+		Config: cfg, Snapshot: &snapshot, SnapshotRekordboxTarget: "nav_fav_imports",
+		Options: playlistsync.Options{RekordboxPlaylist: "fav_imports"},
+	})
+	if err != nil {
+		t.Fatalf("Plan with explicit target: %v", err)
+	}
+	if result.Plan.RekordboxPlaylist.Name != "fav_imports" {
+		t.Fatalf("explicit target = %q, want fav_imports", result.Plan.RekordboxPlaylist.Name)
 	}
 }
 
@@ -276,6 +338,33 @@ func TestRekordboxPlaylistSyncUseCaseApplyBacksUpBeforeWrite(t *testing.T) {
 	}
 	if len(sequence) != 2 || sequence[0] != "backup" || sequence[1] != "apply" {
 		t.Fatalf("expected backup before apply, got %v", sequence)
+	}
+}
+
+func TestRekordboxPlaylistSyncUseCaseBackupFailurePreventsWrite(t *testing.T) {
+	plan := testRekordboxApplyPlan(t)
+	rb := &fakeRekordboxBridge{inspect: bridge.InspectResponse{
+		Playlists: []bridge.Playlist{{ID: "3150438241", Name: "fav_imports", Attribute: 0}},
+		Contents:  []bridge.Content{{ID: "content-1", Title: "Track", FolderPath: "/Music/Track.mp3"}},
+	}}
+	useCase := RekordboxPlaylistSyncUseCase{
+		Bridge: rb,
+		CheckClosed: func(context.Context, string) error {
+			return nil
+		},
+		CreateBackup: func(context.Context, string, string, time.Time) (string, error) {
+			return "", errors.New("backup volume unavailable")
+		},
+	}
+	_, err := useCase.Apply(context.Background(), RekordboxPlaylistSyncApplyRequest{
+		Config: config.DefaultConfig(),
+		Plan:   plan,
+	})
+	if err == nil || !strings.Contains(err.Error(), "backup volume unavailable") {
+		t.Fatalf("expected backup failure, got %v", err)
+	}
+	if rb.applyCalls != 0 {
+		t.Fatalf("database apply ran after backup failure: %d calls", rb.applyCalls)
 	}
 }
 

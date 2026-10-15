@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Advanced Config</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.formpad{padding:16px 20px;max-width:640px}
+.frow{display:grid;grid-template-columns:132px 1fr;gap:12px;align-items:center;min-height:30px;margin-bottom:8px}
+.frow>label{font-size:12px;color:var(--text-2);text-align:right}
+.frow .ctl{display:flex;align-items:center;gap:8px}
+.frow .ctl .txt{flex:1;height:26px}
+.frow .hint{margin:0}
+.sub{font-size:11.5px;color:var(--text-3);grid-column:2;margin:-4px 0 8px;line-height:1.45}
+.sect{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.055em;color:var(--text-3);
+  margin:20px 0 10px;padding-bottom:5px;border-bottom:.5px solid var(--sep)}
+.sect:first-child{margin-top:0}
+select.txt{height:26px;padding:0 6px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);
+  background-position:calc(100% - 12px) 11px,calc(100% - 8px) 11px;background-size:4px 4px;background-repeat:no-repeat;padding-right:24px}
+.issue{display:grid;grid-template-columns:16px 1fr;gap:8px;font-size:11.5px;line-height:1.45;margin-bottom:9px;color:var(--text-2)}
+.argrow{display:flex;gap:6px;margin-bottom:5px}
+.dirty{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;margin-right:5px}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">Advanced Config</div>
+      <div class="tb-sub"><span class="mono">~/.config/udl/config.yaml</span> · edits one file, not the merged view</div></div>
+    <div class="spacer"></div>
+    <div class="seg sm" id="mode">
+      <button aria-pressed="true" data-v="form">Form</button>
+      <button aria-pressed="false" data-v="yaml">YAML</button>
+    </div>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="center">
+      <div class="scroll" id="pane"></div>
+    </main>
+
+    <aside class="inspector">
+      <div class="ins-sec">
+        <div class="ins-title">Validation</div>
+        <div id="issues"></div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">File</div>
+        <div class="path"><b>Target</b>~/.config/udl/config.yaml</div>
+        <div class="field"><label>Version</label><span class="val mono">1</span></div>
+        <div class="field"><label>Sources</label><span class="val" id="iSrcCount"></span></div>
+        <div class="field"><label>Last saved</label><span class="val mono">28 Jul 13:07</span></div>
+        <div class="hint">Saving rewrites canonical YAML. Hand-written comments and key order are not preserved.</div>
+      </div>
+      <div class="ins-sec">
+        <div class="ins-title">Other config files</div>
+        <a class="btn sm" style="width:100%;justify-content:flex-start;margin-bottom:6px" href="freedl.html">freedl.yaml — 3 jobs</a>
+        <a class="btn sm" style="width:100%;justify-content:flex-start;margin-bottom:6px" href="playlists.html">playlists.yaml — 4 playlists</a>
+        <a class="btn sm" style="width:100%;justify-content:flex-start" href="rekordbox.html">rekordbox.yaml — 2 mappings</a>
+        <div class="hint">Feature configs are edited in their own workflow, using this same form + YAML pattern.</div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <button class="btn" id="revert">Revert</button>
+    <button class="btn primary" id="save">Save <span class="kbd" style="margin-left:4px">⌘S</span></button>
+  </div>
+</div>
+
+<div class="backdrop" id="mDelete">
+  <div class="modal">
+    <h4>Delete this source?</h4>
+    <p id="delText"></p>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn destructive" data-close id="delOk">Delete source</button>
+    </div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Advanced Config</h3>
+  <p>The one screen that writes YAML. Sidebar is the object list, centre is a Form, inspector is live validation. The same three-part shape is reused for <code>freedl.yaml</code>, <code>playlists.yaml</code> and <code>rekordbox.yaml</code>, so there is only one editor to learn.</p>
+  <dl>
+    <dt>Form { Section }</dt><dd>macOS <code>.formStyle(.grouped)</code> with right-aligned labels — the System Settings layout.</dd>
+    <dt>Picker for tri-state</dt><dd><code>*bool</code> policy fields become Default / Yes / No pickers, so "unset" stays visible instead of collapsing to false.</dd>
+    <dt>List(selection:) with reorder</dt><dd>Sources support drag reorder, duplicate and delete — <code>.onMove</code>, matching the TUI's <code>[</code> / <code>]</code> / <code>d</code> / <code>D</code>.</dd>
+    <dt>Form ⇄ source toggle</dt><dd>The YAML tab shows the canonical output for the whole file before saving; it is read-only on purpose.</dd>
+    <dt>@FocusState + validation</dt><dd>Issues update as you type and block Save when any error remains.</dd>
+    <dt>NSSavePanel / .fileImporter</dt><dd>"Choose…" next to directory fields opens a real picker and stores a sandbox bookmark.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const cfg={defaults:{stateDir:"~/dev/music-down/statefiles",archiveFile:"archive.txt",threads:1,continueOnError:true,timeout:900},
+  sources:JSON.parse(JSON.stringify(UDL.sources))};
+let sel="src:0", dirty=false, view="form";
+const tri=v=>v===undefined||v===null?"default":v?"true":"false";
+
+function sidebarHTML(){
+  return `<div class="sb-item ${sel==="defaults"?"on":""}" data-sel="defaults">
+      <span class="g">⚙</span><span class="nm">Defaults</span><span></span></div>`+
+    cfg.sources.map((s,i)=>`<div class="sb-item ${sel==="src:"+i?"on":""} ${s.enabled?"":"dim"}" data-sel="src:${i}">
+      <span class="glyph ${s.type==="spotify"?"sp":"sc"}">${s.type==="spotify"?"S":"SC"}</span>
+      <span><span class="nm">${s.id}</span><span class="sb-sub">${s.adapter}</span></span>
+      <span class="badge ${s.enabled?"":""}">${s.enabled?"on":"off"}</span></div>`).join("")+
+    `<div class="sb-item" data-add><span class="g">+</span><span class="nm">Add source…</span><span></span></div>`;
+}
+
+function yamlView(){
+  const q=s=>`"${s}"`;
+  let y=`<span class="k">version</span>: 1\n<span class="k">defaults</span>:\n`+
+    `  <span class="k">state_dir</span>: <span class="s">${q(cfg.defaults.stateDir)}</span>\n`+
+    `  <span class="k">archive_file</span>: <span class="s">${q(cfg.defaults.archiveFile)}</span>\n`+
+    `  <span class="k">threads</span>: ${cfg.defaults.threads}\n`+
+    `  <span class="k">continue_on_error</span>: ${cfg.defaults.continueOnError}\n`+
+    `  <span class="k">command_timeout_seconds</span>: ${cfg.defaults.timeout}\n\n<span class="k">sources</span>:\n`;
+  cfg.sources.forEach(s=>{
+    y+=`  - <span class="k">id</span>: <span class="s">${q(s.id)}</span>\n`+
+       `    <span class="k">type</span>: <span class="s">${q(s.type)}</span>\n`+
+       `    <span class="k">enabled</span>: ${s.enabled}\n`+
+       `    <span class="k">target_dir</span>: <span class="s">${q(s.targetDir)}</span>\n`+
+       `    <span class="k">url</span>: <span class="s">${q(s.url)}</span>\n`+
+       `    <span class="k">state_file</span>: <span class="s">${q(s.stateFile)}</span>\n`;
+    const sy=[];
+    if(s.sync.breakOnExisting!==undefined)sy.push(`      <span class="k">break_on_existing</span>: ${s.sync.breakOnExisting}`);
+    if(s.sync.askOnExisting!==undefined)sy.push(`      <span class="k">ask_on_existing</span>: ${s.sync.askOnExisting}`);
+    if(s.sync.localIndexCache!==undefined)sy.push(`      <span class="k">local_index_cache</span>: ${s.sync.localIndexCache}`);
+    if(sy.length)y+=`    <span class="k">sync</span>:\n`+sy.join("\n")+"\n";
+    y+=`    <span class="k">adapter</span>:\n      <span class="k">kind</span>: <span class="s">${q(s.adapter)}</span>\n`;
+    if(s.extraArgs&&s.extraArgs.length)
+      y+=`      <span class="k">extra_args</span>:\n`+s.extraArgs.map(a=>`        - <span class="s">${q(a)}</span>`).join("\n")+"\n";
+  });
+  return `<div class="pad"><div class="callout"><span>ℹ</span><div>Read-only preview of exactly what will be written. <b>Save</b> replaces the file atomically and creates <span class="mono">defaults.state_dir</span> if it is missing.</div></div><pre class="yaml">${y}</pre></div>`;
+}
+
+function defaultsForm(){
+  const d=cfg.defaults;
+  return `<div class="formpad">
+    <div class="sect">Global defaults</div>
+    <div class="frow"><label>State directory</label><div class="ctl">
+      <input class="txt mono" value="${d.stateDir}" data-d="stateDir" /><button class="btn sm" onclick="Shell.toast('Opens NSOpenPanel and stores a security-scoped bookmark.')">Choose…</button></div></div>
+    <div class="sub">Where per-source state files live. Created on save if missing.</div>
+    <div class="frow"><label>Archive file</label><div class="ctl"><input class="txt mono" value="${d.archiveFile}" data-d="archiveFile" style="max-width:200px" /></div></div>
+    <div class="frow"><label>Threads</label><div class="ctl">
+      <div class="stepper"><input class="txt num" value="${d.threads}" data-d="threads" /><div class="arrows"><button>▲</button><button>▼</button></div></div>
+      <span class="hint">1 keeps scdl and deemix stable; higher values are untested.</span></div></div>
+    <div class="frow"><label>Continue on error</label><div class="ctl">
+      <div class="switch" role="switch" aria-checked="${d.continueOnError}" data-d="continueOnError"></div>
+      <span class="hint">Keep going when one source fails.</span></div></div>
+    <div class="frow"><label>Command timeout</label><div class="ctl">
+      <input class="txt num" value="${d.timeout}" data-d="timeout" style="width:80px" /><span class="hint">seconds per external command</span></div></div>
+  </div>`;
+}
+
+function sourceForm(i){
+  const s=cfg.sources[i];
+  const opt=(v,cur)=>`<option value="${v}" ${cur===v?"selected":""}>${v==="default"?"Default":v==="true"?"Yes":"No"}</option>`;
+  return `<div class="formpad">
+    <div class="sect">Identity</div>
+    <div class="frow"><label>ID</label><div class="ctl"><input class="txt mono" value="${s.id}" data-s="id" style="max-width:260px" /></div></div>
+    <div class="sub">Used by <span class="mono">--source</span>, state file names and log lines. Must be unique.</div>
+    <div class="frow"><label>Type</label><div class="ctl">
+      <div class="seg sm" data-type><button aria-pressed="${s.type==="soundcloud"}" data-v="soundcloud">SoundCloud</button><button aria-pressed="${s.type==="spotify"}" data-v="spotify">Spotify</button></div>
+      ${s.type==="spotify"?`<span class="pill warn"><i class="dot"></i>beta</span>`:""}</div></div>
+    <div class="frow"><label>Enabled</label><div class="ctl"><div class="switch" role="switch" aria-checked="${s.enabled}" data-s="enabled"></div>
+      <span class="hint">Disabled sources are skipped by <span class="mono">udl sync</span> unless named explicitly.</span></div></div>
+
+    <div class="sect">Location</div>
+    <div class="frow"><label>Source URL</label><div class="ctl"><input class="txt mono" value="${s.url}" data-s="url" /></div></div>
+    <div class="frow"><label>Target directory</label><div class="ctl"><input class="txt mono" value="${s.targetDir}" data-s="targetDir" />
+      <button class="btn sm" onclick="Shell.toast('Opens NSOpenPanel and stores a security-scoped bookmark.')">Choose…</button></div></div>
+    <div class="frow"><label>State file</label><div class="ctl"><input class="txt mono" value="${s.stateFile}" data-s="stateFile" /></div></div>
+    <div class="sub">Relative names resolve inside <span class="mono">defaults.state_dir</span>.</div>
+
+    <div class="sect">Sync policy</div>
+    <div class="frow"><label>Break on existing</label><div class="ctl">
+      <select class="txt" data-p="breakOnExisting" style="width:110px">${opt("default",tri(s.sync.breakOnExisting))}${opt("true",tri(s.sync.breakOnExisting))}${opt("false",tri(s.sync.breakOnExisting))}</select>
+      <span class="hint">Stop paging once a known track appears.</span></div></div>
+    <div class="frow"><label>Ask on existing</label><div class="ctl">
+      <select class="txt" data-p="askOnExisting" style="width:110px">${opt("default",tri(s.sync.askOnExisting))}${opt("true",tri(s.sync.askOnExisting))}${opt("false",tri(s.sync.askOnExisting))}</select>
+      <span class="hint">Prompt before overwriting a file that is already there.</span></div></div>
+    <div class="frow"><label>Local index cache</label><div class="ctl">
+      <select class="txt" data-p="localIndexCache" style="width:110px">${opt("default",tri(s.sync.localIndexCache))}${opt("true",tri(s.sync.localIndexCache))}${opt("false",tri(s.sync.localIndexCache))}</select>
+      <span class="hint">Faster planning, slightly staler view of the folder.</span></div></div>
+
+    <div class="sect">Adapter</div>
+    <div class="frow"><label>Kind</label><div class="ctl"><input class="txt mono" value="${s.adapter}" data-s="adapter" style="max-width:140px" />
+      <span class="hint">${s.type==="soundcloud"?"scdl + yt-dlp must be on PATH":"deemix needs a Deezer ARL"}</span></div></div>
+    <div class="frow"><label>Extra arguments</label><div class="ctl" style="flex-direction:column;align-items:stretch">
+      ${(s.extraArgs.length?s.extraArgs:[""]).map(a=>`<div class="argrow"><input class="txt mono" value="${a}" style="flex:1" placeholder="--flag" /><button class="btn sm">−</button></div>`).join("")}
+      <button class="btn sm" style="align-self:flex-start;margin-top:2px">+ Add argument</button></div></div>
+
+    <div class="sect">Source actions</div>
+    <div class="rowflex">
+      <button class="btn sm" id="dupBtn">Duplicate</button>
+      <button class="btn sm" id="upBtn">Move up</button>
+      <button class="btn sm" id="downBtn">Move down</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn sm destructive" id="delBtn">Delete…</button>
+    </div>
+  </div>`;
+}
+
+function issues(){
+  const list=[];
+  const ids={};
+  cfg.sources.forEach(s=>{ids[s.id]=(ids[s.id]||0)+1});
+  Object.keys(ids).forEach(k=>{if(ids[k]>1)list.push({sev:"err",m:`Duplicate source id <span class="mono">${k}</span>`});});
+  cfg.sources.forEach(s=>{ if(!s.url.trim()) list.push({sev:"err",m:`<span class="mono">${s.id}</span> has no URL`}); });
+  if(cfg.sources.some(s=>s.type==="spotify"&&s.enabled))
+    list.push({sev:"warn",m:`Spotify sources are enabled but the Deezer ARL is missing — they will be skipped.`});
+  if(!cfg.sources.some(s=>s.enabled)) list.push({sev:"err",m:"No source is enabled."});
+  list.push({sev:"ok",m:"YAML is well-formed and matches schema version 1."});
+  return list;
+}
+
+function render(){
+  $("pane").innerHTML = view==="yaml" ? yamlView() : (sel==="defaults"?defaultsForm():sourceForm(+sel.split(":")[1]));
+  const iss=issues();
+  $("issues").innerHTML=iss.map(i=>`<div class="issue"><span class="sev ${i.sev}">${i.sev==="err"?"✕":i.sev==="warn"?"!":"✓"}</span><span>${i.m}</span></div>`).join("");
+  $("iSrcCount").textContent=`${cfg.sources.length} · ${cfg.sources.filter(s=>s.enabled).length} enabled`;
+  $("summary").innerHTML=dirty
+    ? `<span class="dirty"></span>Unsaved changes · <b>${iss.filter(i=>i.sev==="err").length}</b> errors block saving`
+    : `No unsaved changes · <b>${cfg.sources.length}</b> sources`;
+  $("save").disabled = !dirty || iss.some(i=>i.sev==="err");
+  const sb=$("sbContext"); if(sb) sb.innerHTML=sidebarHTML();
+  wire();
+}
+
+function wire(){
+  document.querySelectorAll("[data-s]").forEach(el=>{
+    if(el.classList.contains("switch")){
+      el.onclick=()=>{const i=+sel.split(":")[1];cfg.sources[i].enabled=el.getAttribute("aria-checked")!=="true";dirty=true;render();};
+    } else el.oninput=()=>{const i=+sel.split(":")[1];cfg.sources[i][el.dataset.s]=el.value;dirty=true;
+      $("summary").innerHTML=`<span class="dirty"></span>Unsaved changes`;
+      const sb=$("sbContext"); if(sb) sb.innerHTML=sidebarHTML();};
+  });
+  document.querySelectorAll("[data-p]").forEach(el=>{
+    el.onchange=()=>{const i=+sel.split(":")[1],v=el.value;
+      cfg.sources[i].sync[el.dataset.p]= v==="default"?undefined:v==="true";dirty=true;render();};
+  });
+  document.querySelectorAll("[data-d]").forEach(el=>{
+    if(el.classList.contains("switch")) el.onclick=()=>{cfg.defaults.continueOnError=el.getAttribute("aria-checked")!=="true";dirty=true;render();};
+    else el.oninput=()=>{cfg.defaults[el.dataset.d]=el.value;dirty=true;};
+  });
+  const t=document.querySelector("[data-type]");
+  if(t) t.onclick=e=>{const b=e.target.closest("button");if(!b)return;const i=+sel.split(":")[1];
+    cfg.sources[i].type=b.dataset.v;cfg.sources[i].adapter=b.dataset.v==="spotify"?"deemix":"scdl";dirty=true;render();};
+  $("delBtn")&&($("delBtn").onclick=()=>{const i=+sel.split(":")[1];
+    $("delText").innerHTML=`<b>${cfg.sources[i].id}</b> is removed from config.yaml. Downloaded files and the state file stay on disk.`;
+    Shell.open("mDelete");});
+  $("dupBtn")&&($("dupBtn").onclick=()=>{const i=+sel.split(":")[1];const c=JSON.parse(JSON.stringify(cfg.sources[i]));
+    c.id=c.id+"-copy";cfg.sources.splice(i+1,0,c);sel="src:"+(i+1);dirty=true;render();});
+  $("upBtn")&&($("upBtn").onclick=()=>{const i=+sel.split(":")[1];if(i===0)return;
+    [cfg.sources[i-1],cfg.sources[i]]=[cfg.sources[i],cfg.sources[i-1]];sel="src:"+(i-1);dirty=true;render();});
+  $("downBtn")&&($("downBtn").onclick=()=>{const i=+sel.split(":")[1];if(i>=cfg.sources.length-1)return;
+    [cfg.sources[i+1],cfg.sources[i]]=[cfg.sources[i],cfg.sources[i+1]];sel="src:"+(i+1);dirty=true;render();});
+}
+
+Shell.init({page:"config",contextual:{title:"config.yaml",html:sidebarHTML()},
+  note:"Feature configs (freedl, playlists, rekordbox) are separate files edited from their own workflows."});
+Shell.wireDismiss();
+document.getElementById("sidebar").addEventListener("click",e=>{
+  if(e.target.closest("[data-add]")){cfg.sources.push({id:"new-source",type:"soundcloud",adapter:"scdl",enabled:true,
+    url:"",targetDir:"~/Music/downloaded/new",stateFile:"new-source.sync.scdl",supportsWindow:false,sync:{},extraArgs:[]});
+    sel="src:"+(cfg.sources.length-1);dirty=true;render();return;}
+  const it=e.target.closest("[data-sel]");if(!it)return;sel=it.dataset.sel;render();});
+$("mode").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;view=b.dataset.v;
+  [...$("mode").children].forEach(x=>x.setAttribute("aria-pressed",x===b));render();});
+$("delOk").onclick=()=>{const i=+sel.split(":")[1];const id=cfg.sources[i].id;cfg.sources.splice(i,1);
+  sel=cfg.sources.length?"src:0":"defaults";dirty=true;render();Shell.toast(`Removed <code>${id}</code> from config.yaml.`);};
+$("save").onclick=()=>{dirty=false;render();Shell.toast("Wrote <code>~/.config/udl/config.yaml</code> · state_dir verified.");};
+$("revert").onclick=()=>{location.reload();};
+document.addEventListener("keydown",e=>{if((e.metaKey||e.ctrlKey)&&e.key==="s"){e.preventDefault();if(!$("save").disabled)$("save").click();}});
+render();
+</script>
+</body>
+</html>

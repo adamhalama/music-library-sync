@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>udl — Rekordbox Sync</title>
+<link rel="stylesheet" href="shell.css" />
+<script src="data.js"></script>
+<style>
+.planbar{padding:11px 17px;border-bottom:.5px solid var(--sep);display:flex;align-items:center;gap:12px;background:var(--sunken)}
+.planbar strong{font-size:12.5px}.planbar small{display:block;color:var(--text-3);font-size:10.5px;margin-top:2px}
+.thead,.row{grid-template-columns:38px 132px 1fr 58px 122px 64px}
+.row.blocked{color:var(--text-3)}
+.trackcell b{display:block;font-weight:540}.trackcell span{display:block;font-size:10.5px;color:var(--text-3);margin-top:1px}
+.checkrow{display:grid;grid-template-columns:16px 1fr;gap:8px;padding:7px 0;border-bottom:.5px solid var(--sep);font-size:11.5px}
+.checkrow:last-child{border-bottom:0}.checkrow small{display:block;color:var(--text-3);line-height:1.4;margin-top:2px}
+.countgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px}
+.mini{background:var(--win);border:.5px solid var(--sep);border-radius:7px;padding:7px;text-align:center}
+.mini b{display:block;font-size:17px;line-height:1.1}.mini span{font-size:9.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <button class="tb-btn" data-sidebar-toggle>▤</button>
+    <div><div class="tb-title">Rekordbox Sync</div><div class="tb-sub">checksummed plan · apply fails closed</div></div>
+    <div class="spacer"></div>
+    <button class="tb-btn" id="rebuild">↻ Rebuild plan</button>
+    <button class="tb-btn on" data-inspector-toggle>◧</button>
+    <button class="tb-btn" data-drawer-open>ⓘ</button>
+  </div>
+  <div class="split">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="center">
+      <div class="planbar">
+        <span class="pill warn" id="planState"><i class="dot"></i>Apply blocked</span>
+        <div><strong id="mappingTitle">Friday Warmup → UDL/Warmup</strong><small id="planMeta">plan v1 · created 15:04 · checksum 63be…910f</small></div>
+        <div class="spacer"></div>
+        <div class="seg sm" id="view" data-seg><button aria-pressed="true" data-v="all">All</button><button aria-pressed="false" data-v="changes">Changes</button><button aria-pressed="false" data-v="blocked">Blocked</button></div>
+      </div>
+      <div class="thead"><div class="num">#</div><div>Artist</div><div>Track / resolved path</div><div class="num">Time</div><div>Match</div><div>Action</div></div>
+      <div class="tbody" id="rows"></div>
+    </main>
+    <aside class="inspector">
+      <div class="ins-sec"><div class="ins-title">Plan summary</div><div class="countgrid" id="counts"></div>
+        <div class="path"><b>Plan checksum</b><span id="checksum">63be…910f</span></div>
+        <div class="path"><b>Snapshot checksum</b>9f2c…41ab</div>
+      </div>
+      <div class="ins-sec"><div class="ins-title">Apply preconditions</div><div id="checks"></div></div>
+      <div class="ins-sec"><div class="ins-title">Safety</div>
+        <div class="hint">Apply re-opens both files, verifies both checksums and refuses to continue if Rekordbox is running or the database changed after planning.</div>
+      </div>
+    </aside>
+  </div>
+  <div class="statusbar">
+    <div class="summary" id="summary"></div><div class="spacer"></div>
+    <button class="btn" id="savePlan">Save plan…</button>
+    <button class="btn primary" id="apply" disabled>Quit Rekordbox to apply</button>
+  </div>
+</div>
+
+<div class="backdrop" id="mApply"><div class="modal">
+  <h4>Apply 4 playlist changes?</h4>
+  <p>This writes the Rekordbox database. udl will create a timestamped backup first, then verify the plan checksum again immediately before the transaction begins.</p>
+  <div class="callout warn" style="text-align:left"><span>!</span><div>Do not open Rekordbox until the apply finishes.</div></div>
+  <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-close id="applyOK">Back up and apply</button></div>
+</div></div>
+
+<div class="drawer" id="drawer">
+  <button class="tb-btn x" data-drawer-close>✕</button>
+  <h3>Rekordbox Sync</h3>
+  <p>The risky workflow is intentionally plan-first. Every intended playlist mutation is visible, checksum-bound, and blocked until the database, source snapshot, process state, and backup destination all pass their preconditions.</p>
+  <dl>
+    <dt>Plan / apply separation</dt><dd>Planning is read-only and allowed while Rekordbox runs. Applying is a distinct command with a fresh safety gate.</dd>
+    <dt>Checksummed inputs</dt><dd>The plan records source snapshot and Rekordbox database checksums; drift produces a regenerate instruction, never an opaque partial apply.</dd>
+    <dt>Fail-closed button state</dt><dd>The primary action names the blocker instead of merely becoming an unexplained disabled button.</dd>
+    <dt>Transaction + backup</dt><dd>Apply creates a timestamped database backup before beginning the pyrekordbox transaction.</dd>
+  </dl>
+</div>
+
+<script src="shell.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let mapping=0, mode="all", running=true, applied=false;
+const mappings=[
+  {name:"Friday Warmup",target:"UDL/Warmup",snapshot:"friday-warmup",enabled:true},
+  {name:"Peak Time",target:"UDL/Peak Time",snapshot:"peak-time",enabled:true},
+  {name:"Closers",target:"UDL/Closers",snapshot:"closers",enabled:false}
+];
+function sidebarHTML(){return mappings.map((m,i)=>`<div class="sb-item ${i===mapping?"on":""} ${m.enabled?"":"dim"}" data-i="${i}">
+  <span class="g">▤</span><span><span class="nm">${m.name}</span><span class="sb-sub">${m.target}</span></span><span class="badge ${m.enabled?"ok":""}">${m.enabled?"on":"off"}</span></div>`).join("")+
+  `<div class="sb-item" data-add><span class="g">+</span><span class="nm">Add mapping…</span><span></span></div>`;}
+function visible(){return UDL.rbRows.filter(r=>mode==="all"||(mode==="changes"&&r.action!=="keep"&&r.action!=="blocked")||(mode==="blocked"&&r.action==="blocked"));}
+function render(){
+  const m=mappings[mapping], rows=visible();
+  $("mappingTitle").textContent=`${m.name} → ${m.target}`;
+  $("rows").innerHTML=rows.map(r=>{const ms=UDL.rbMatch[r.match];return `<div class="row ${r.action==="blocked"?"blocked":""}">
+    <div class="idx">${r.i}</div><div>${r.artist}</div><div class="trackcell"><b>${r.title}</b><span class="mono">${r.path}</span></div>
+    <div class="num">${r.dur}</div><div><span class="pill ${ms.pill}"><i class="dot"></i>${ms.label}</span></div><div>${UDL.rbAction[r.action]}</div></div>`;}).join("");
+  const n={keep:0,add:0,move:0,blocked:0};UDL.rbRows.forEach(r=>n[r.action]=(n[r.action]||0)+1);
+  $("counts").innerHTML=`<div class="mini"><b>${n.add}</b><span>Add</span></div><div class="mini"><b>${n.move}</b><span>Move</span></div><div class="mini"><b class="${n.blocked?"err":""}">${n.blocked}</b><span>Blocked</span></div>`;
+  $("checks").innerHTML=`<div class="checkrow"><span class="sev ok">✓</span><div>Plan checksum matches<small>Plan has not changed since creation.</small></div></div>
+    <div class="checkrow"><span class="sev ok">✓</span><div>Snapshot checksum matches<small>friday-warmup cache is unchanged.</small></div></div>
+    <div class="checkrow"><span class="sev ${running?"err":"ok"}">${running?"✕":"✓"}</span><div>Rekordbox is ${running?"running":"closed"}<small>${running?"Applying is refused while its database is open.":"Process guard passed."}</small></div></div>
+    <div class="checkrow"><span class="sev ok">✓</span><div>Backup directory writable<small>~/Library/Application Support/Pioneer/rekordbox/backups</small></div></div>`;
+  $("apply").disabled=running||n.blocked>0||applied;
+  $("apply").textContent=applied?"Applied":running?"Quit Rekordbox to apply":n.blocked?`Resolve ${n.blocked} blockers`:"Apply 4 changes";
+  $("summary").innerHTML=applied?`<span class="ok">Apply complete</span> · backup verified`:
+    `<b>${UDL.rbRows.length}</b> rows · <span class="ok">${n.add+n.move} changes</span> · <span class="err">${n.blocked} blocked</span>`;
+  const sb=$("sbContext");if(sb)sb.innerHTML=sidebarHTML();
+}
+Shell.init({page:"rekordbox",contextual:{title:"Mappings",html:sidebarHTML()},
+  note:"Planning is read-only. Apply verifies inputs again and writes only after a timestamped database backup succeeds."});
+Shell.wireDismiss();
+$("sidebar").onclick=e=>{const r=e.target.closest("[data-i]");if(!r)return;mapping=+r.dataset.i;render();};
+$("view").addEventListener("picked",e=>{mode=e.detail;render();});
+$("rebuild").onclick=()=>{$("planMeta").innerHTML=`<span class="spin"></span> reading snapshot + Rekordbox…`;
+  setTimeout(()=>{$("planMeta").textContent="plan v1 · created just now · checksum a0d2…6b91";$("checksum").textContent="a0d2…6b91";Shell.toast("Plan rebuilt. Inputs read only; nothing was applied.");},800);};
+$("savePlan").onclick=()=>Shell.toast("Saved checksummed plan to <code>~/Downloads/warmup-rekordbox-plan.json</code>.");
+$("apply").onclick=()=>Shell.open("mApply");
+$("applyOK").onclick=()=>{applied=true;render();Shell.toast("Backup created, 4 changes committed, database checksum verified.");};
+document.addEventListener("keydown",e=>{if(e.altKey&&e.key==="q"){running=false;render();Shell.toast("Demo: Rekordbox process guard now passes. 3 row blockers still prevent apply.");}});
+render();
+</script>
+</body>
+</html>

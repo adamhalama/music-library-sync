@@ -3,17 +3,17 @@ package engine
 import "fmt"
 
 type ExecutionEntry struct {
-	Index         int
-	RemoteID      string
-	Title         string
-	ExecutionSlot int
+	Index         int    `json:"index"`
+	RemoteID      string `json:"remote_id"`
+	Title         string `json:"title"`
+	ExecutionSlot int    `json:"execution_slot"`
 }
 
 type ExecutionManifest struct {
-	SourceID        string
-	DownloadOrder   DownloadOrder
-	SelectedIndices []int
-	Execution       []ExecutionEntry
+	SourceID        string           `json:"source_id"`
+	DownloadOrder   DownloadOrder    `json:"download_order"`
+	SelectedIndices []int            `json:"selected_indices"`
+	Execution       []ExecutionEntry `json:"execution"`
 }
 
 func DefaultSelectedPlanIndices(rows []PlanRow) []int {

@@ -1,0 +1,346 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/jaa/update-downloads/internal/exitcode"
+	"github.com/jaa/update-downloads/internal/playlists"
+)
+
+type agentPlaylistProvider struct {
+	readStarted chan struct{}
+}
+
+func (p agentPlaylistProvider) List(context.Context) ([]playlists.ProviderPlaylist, error) {
+	return []playlists.ProviderPlaylist{{Name: "Favourites", ID: "provider-id", TrackCount: 2}}, nil
+}
+
+func (p agentPlaylistProvider) Read(ctx context.Context, _ playlists.Definition) (playlists.ProviderPlaylist, []playlists.Track, error) {
+	if p.readStarted != nil {
+		close(p.readStarted)
+	}
+	<-ctx.Done()
+	return playlists.ProviderPlaylist{}, nil, ctx.Err()
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(payload)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestPlaylistCacheAndConfigMethodsDoNotReadProvider(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := writeAgentTestConfig(t, dir)
+	playlistPath := dir + "/udl.playlists.yaml"
+	definition := playlists.Definition{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic,
+		ProviderPlaylist: "Favourites", ProviderPlaylistID: "provider-id",
+	}
+	syncJob := playlists.SyncJob{
+		ID:        "favs-august",
+		Rekordbox: playlists.PlaylistSelector{Playlist: "favs_august"},
+		Navidrome: playlists.PlaylistSelector{Playlist: "favs_august"},
+	}
+	if err := playlists.Save(playlistPath, playlists.Config{
+		Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition}, SyncJobs: []playlists.SyncJob{syncJob},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := playlists.WriteSnapshot(dir+"/state", playlists.Snapshot{
+		PlaylistID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic,
+		ProviderPlaylist: "Favourites", RefreshedAt: time.Unix(10, 0).UTC(),
+		Tracks: []playlists.Track{{ProviderID: "one", Title: "One"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readStarted := make(chan struct{})
+	service := playlists.Service{Provider: agentPlaylistProvider{readStarted: readStarted}}
+	server := &Server{
+		WorkingDir: dir, ConfigPath: mainPath, PlaylistsConfigPath: playlistPath,
+		PlaylistService: &service,
+	}
+
+	listValue, rpcErr := server.listPlaylists()
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	rows := listValue.(map[string]any)["playlists"].([]playlistListRow)
+	if len(rows) != 1 || rows[0].Snapshot == nil || rows[0].Snapshot.Tracks[0].Title != "One" {
+		t.Fatalf("unexpected cached list: %+v", rows)
+	}
+	showValue, rpcErr := server.showPlaylist(mustJSON(t, playlistIDParams{PlaylistID: "favorites"}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if showValue.(map[string]any)["snapshot"].(playlists.Snapshot).PlaylistID != "favorites" {
+		t.Fatalf("unexpected show result: %+v", showValue)
+	}
+	select {
+	case <-readStarted:
+		t.Fatal("cache-only list/show read the provider")
+	default:
+	}
+
+	readValue, rpcErr := server.readPlaylistsConfig()
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	read := readValue.(playlistConfigResult)
+	if read.Path != playlistPath || !strings.Contains(read.Content, "favorites") {
+		t.Fatalf("unexpected config read: %+v", read)
+	}
+	if len(read.Config.SyncJobs) != 1 || read.Config.SyncJobs[0].ID != "favs-august" {
+		t.Fatalf("sync jobs did not reach config.read: %+v", read.Config.SyncJobs)
+	}
+	read.Config.Playlists[0].Name = "My Favorites"
+	writtenValue, rpcErr := server.writePlaylistsConfig(mustJSON(t, map[string]any{"config": read.Config}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	written := writtenValue.(playlistConfigResult)
+	if len(written.Config.SyncJobs) != 1 || !strings.Contains(written.Content, "sync_jobs:") {
+		t.Fatalf("sync jobs did not round-trip through config.write: %+v", written)
+	}
+	createdValue, rpcErr := server.savePlaylistDefinition(mustJSON(t, map[string]any{
+		"definition": playlists.Definition{
+			ID: "later", Name: "Later", Provider: playlists.ProviderAppleMusic,
+			ProviderPlaylist: "Later",
+		},
+	}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if !createdValue.(map[string]any)["created"].(bool) {
+		t.Fatalf("new definition was not created: %+v", createdValue)
+	}
+}
+
+func TestPlaylistProviderAndRefreshRunsAreCancelable(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := writeAgentTestConfig(t, dir)
+	playlistPath := dir + "/udl.playlists.yaml"
+	definition := playlists.Definition{
+		ID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic,
+		ProviderPlaylist: "Favourites",
+	}
+	if err := playlists.Save(playlistPath, playlists.Config{
+		Version: playlists.ConfigVersion, Playlists: []playlists.Definition{definition},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := playlists.WriteSnapshot(dir+"/state", playlists.Snapshot{
+		PlaylistID: "favorites", Name: "Favorites", Provider: playlists.ProviderAppleMusic,
+		ProviderPlaylist: "Favourites", RefreshedAt: time.Unix(10, 0).UTC(),
+		Tracks: []playlists.Track{{ProviderID: "old", Title: "Old"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readStarted := make(chan struct{})
+	service := playlists.Service{Provider: agentPlaylistProvider{readStarted: readStarted}}
+	output := &synchronizedBuffer{}
+	server := &Server{
+		Conn: NewConn(strings.NewReader(""), output), Runs: NewRunRegistry(),
+		WorkingDir: dir, ConfigPath: mainPath, PlaylistsConfigPath: playlistPath,
+		PlaylistService: &service, runContext: context.Background(),
+	}
+
+	providerValue, rpcErr := server.listProviderPlaylists(nil)
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if providerValue.(map[string]string)["run_id"] == "" {
+		t.Fatal("provider list did not start a run")
+	}
+	waitForNotifications(t, output, 1)
+
+	refreshValue, rpcErr := server.refreshPlaylist(mustJSON(t, playlistIDParams{PlaylistID: "favorites"}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	refreshID := refreshValue.(map[string]string)["run_id"]
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not reach provider")
+	}
+	if !server.Runs.Cancel(refreshID) {
+		t.Fatal("refresh run was not cancelable")
+	}
+	waitForNotifications(t, output, 2)
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	var finished runFinishedParams
+	var frame envelope
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &frame); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(frame.Params, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if finished.RunID != refreshID || finished.ExitCode != exitcode.Interrupted {
+		t.Fatalf("unexpected canceled refresh result: %+v", finished)
+	}
+	snapshot, err := playlists.LoadSnapshot(dir+"/state", "favorites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tracks) != 1 || snapshot.Tracks[0].ProviderID != "old" {
+		t.Fatalf("canceled refresh replaced the valid snapshot: %+v", snapshot)
+	}
+}
+
+func waitForNotifications(t *testing.T, output *synchronizedBuffer, count int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Count(strings.TrimSpace(output.String()), "\n")+1 >= count && strings.TrimSpace(output.String()) != "" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d notifications: %s", count, output.String())
+}
+
+func TestPlaylistsConfigExpectedSHAGuard(t *testing.T) {
+	path := t.TempDir() + "/playlists.yaml"
+	server := &Server{}
+	server.PlaylistsConfigPath = path
+	cfg := playlists.Config{Version: playlists.ConfigVersion}
+	if err := playlists.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	value, rpcErr := server.readPlaylistsConfig()
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	read := value.(playlistConfigResult)
+	if read.ContentSHA256 != contentSHA256([]byte(read.Content)) {
+		t.Fatal("read SHA does not match content")
+	}
+	external := []byte(read.Content + "# external edit\n")
+	if err := os.WriteFile(path, external, 0600); err != nil {
+		t.Fatal(err)
+	}
+	request := map[string]any{"config": cfg, "expected_content_sha256": read.ContentSHA256}
+	_, rpcErr = server.writePlaylistsConfig(mustJSON(t, request))
+	if rpcErr == nil || rpcErr.Code != CodeRunConflict {
+		t.Fatalf("expected conflict, got %+v", rpcErr)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, external) {
+		t.Fatal("conflict overwrote external edit")
+	}
+	request["expected_content_sha256"] = contentSHA256(external)
+	value, rpcErr = server.writePlaylistsConfig(mustJSON(t, request))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	written := value.(playlistConfigResult)
+	after, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.ContentSHA256 != contentSHA256(after) || written.Content != string(after) {
+		t.Fatal("write did not return persisted content and SHA")
+	}
+}
+
+func TestPlaylistsConfigExpectedSHACreatesMissingFile(t *testing.T) {
+	path := t.TempDir() + "/playlists.yaml"
+	server := &Server{}
+	server.PlaylistsConfigPath = path
+	_, rpcErr := server.writePlaylistsConfig(mustJSON(t, map[string]any{
+		"config":                  playlists.Config{Version: playlists.ConfigVersion},
+		"expected_content_sha256": contentSHA256(nil),
+	}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlaylistsConfigConcurrentExpectedSHAAllowsOneWriter(t *testing.T) {
+	path := t.TempDir() + "/playlists.yaml"
+	server := &Server{PlaylistsConfigPath: path}
+	if err := playlists.Save(path, playlists.Config{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const writers = 32
+	start := make(chan struct{})
+	results := make(chan *RPCError, writers)
+	for i := 0; i < writers; i++ {
+		request := mustJSON(t, map[string]any{"config": playlists.Config{Version: 1, SyncJobs: []playlists.SyncJob{{ID: fmt.Sprintf("writer-%d", i), Rekordbox: playlists.PlaylistSelector{Playlist: "RB"}, Navidrome: playlists.PlaylistSelector{Playlist: "ND"}}}}, "expected_content_sha256": contentSHA256(before)})
+		go func() { <-start; _, rpcErr := server.writePlaylistsConfig(request); results <- rpcErr }()
+	}
+	close(start)
+	successes := 0
+	for i := 0; i < writers; i++ {
+		rpcErr := <-results
+		if rpcErr == nil {
+			successes++
+		} else if rpcErr.Code != CodeRunConflict {
+			t.Errorf("unexpected write error: %+v", rpcErr)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("same revision allowed %d writers, want exactly one", successes)
+	}
+}
+
+func TestPlaylistsConfigReadPreservesMissingDestinationSemantics(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv(playlists.EnvConfigPath, "")
+	path := filepath.Join(dir, "missing.yaml")
+	server := &Server{WorkingDir: dir, PlaylistsConfigPath: path}
+	if _, rpcErr := server.readPlaylistsConfig(); rpcErr == nil || !strings.Contains(rpcErr.Message, "does not exist") {
+		t.Fatalf("missing explicit config must fail, got %+v", rpcErr)
+	}
+	server.PlaylistsConfigPath = ""
+	value, rpcErr := server.readPlaylistsConfig()
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	read := value.(playlistConfigResult)
+	if read.Config.Version != playlists.ConfigVersion || read.Content != "" || read.ContentSHA256 != contentSHA256(nil) {
+		t.Fatalf("missing optional destination: %+v", read)
+	}
+	// An existing zero-byte explicit config is not the same as a missing file.
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server.PlaylistsConfigPath = path
+	if _, rpcErr := server.readPlaylistsConfig(); rpcErr != nil {
+		t.Fatalf("existing empty destination: %+v", rpcErr)
+	}
+}

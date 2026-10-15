@@ -27,6 +27,17 @@ func TestResolveOptionsExpandsPortableDefaultBackupDir(t *testing.T) {
 	}
 }
 
+func TestRekordboxProcessNamesMatchProductButNotUDLHelpers(t *testing.T) {
+	got := rekordboxProcessNames(strings.Join([]string{
+		"/Applications/rekordbox 7/rekordbox.app/Contents/MacOS/rekordbox",
+		"/Applications/UDL.app/Contents/MacOS/UDL",
+		"/Applications/UDL.app/Contents/Resources/udl",
+	}, "\n"))
+	if len(got) != 1 || got[0] != "rekordbox" {
+		t.Fatalf("unexpected process matches: %v", got)
+	}
+}
+
 func TestBuildPlanMatchesByExactNormalizedPath(t *testing.T) {
 	opts := ResolvedOptions{
 		MusicPlaylist:     "Favourites",

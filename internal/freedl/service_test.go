@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jaa/update-downloads/internal/fileops"
+	"github.com/jaa/update-downloads/internal/mediametadata"
 )
 
 func TestBackupOriginalCopiesOriginalAndRefusesOverwrite(t *testing.T) {
@@ -87,6 +88,10 @@ func TestApplyReplacementKeepsOriginalWhenCreationTimeRestoreFails(t *testing.T)
 	}
 
 	originalRun := runPromotionFFmpeg
+	originalVerify := verifyPromotionMetadata
+	verifyPromotionMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		return mediametadata.Report{}, nil
+	}
 	originalRestore := restorePromotionCreationTime
 	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, outputPath string) error {
 		return os.WriteFile(outputPath, []byte("upgraded audio"), 0o644)
@@ -96,6 +101,7 @@ func TestApplyReplacementKeepsOriginalWhenCreationTimeRestoreFails(t *testing.T)
 	}
 	t.Cleanup(func() {
 		runPromotionFFmpeg = originalRun
+		verifyPromotionMetadata = originalVerify
 		restorePromotionCreationTime = originalRestore
 	})
 
@@ -243,5 +249,146 @@ func TestReadCaptureStateKeepsPathsWithSpaces(t *testing.T) {
 	}
 	if !reflect.DeepEqual(entries, want) {
 		t.Fatalf("unexpected entries\nwant: %+v\n got: %+v", want, entries)
+	}
+}
+
+func TestNativePromotionMetadataFailureKeepsLibraryAndBackup(t *testing.T) {
+	dir := t.TempDir()
+	library := filepath.Join(dir, "track.m4a")
+	backup := filepath.Join(dir, "backups", "track.m4a")
+	if err := os.WriteFile(library, []byte("original audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldRun, oldVerify := runPromotionFFmpeg, verifyPromotionMetadata
+	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, path string) error {
+		return os.WriteFile(path, []byte("staged upgrade"), 0600)
+	}
+	verifyPromotionMetadata = func(_ context.Context, original, stage string) (mediametadata.Report, error) {
+		if original != backup {
+			t.Fatalf("metadata read from %s, want immutable backup", original)
+		}
+		return mediametadata.Report{}, errors.New("injected complete metadata verification failure")
+	}
+	t.Cleanup(func() { runPromotionFFmpeg = oldRun; verifyPromotionMetadata = oldVerify })
+	plan := PromotionPlan{RunID: "run", LogDir: filepath.Join(dir, "logs"), Rows: []PromotionRow{{Index: 1, LibraryPath: library, BackupPath: backup, Action: PromotionEncodeAAC, Selected: true}}}
+	result := (Service{}).ApplyPromotionPlan(context.Background(), plan)
+	if result.Failed != 1 || result.Replaced != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	for _, path := range []string{library, backup} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "original audio" {
+			t.Fatalf("original changed at %s", path)
+		}
+	}
+	stages, _ := filepath.Glob(filepath.Join(dir, ".udl-freedl-promote-*"))
+	if len(stages) != 0 {
+		t.Fatalf("stages leaked: %v", stages)
+	}
+}
+
+func TestNativePromotionRejectsConcurrentLibraryEdit(t *testing.T) {
+	dir := t.TempDir()
+	library := filepath.Join(dir, "track.mp3")
+	backup := filepath.Join(dir, "backups", "track.mp3")
+	if err := os.WriteFile(library, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldRun, oldVerify := runPromotionFFmpeg, verifyPromotionMetadata
+	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, path string) error {
+		return os.WriteFile(path, []byte("upgrade"), 0600)
+	}
+	verifyPromotionMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		if err := os.WriteFile(library, []byte("external edit"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return mediametadata.Report{}, nil
+	}
+	t.Cleanup(func() { runPromotionFFmpeg = oldRun; verifyPromotionMetadata = oldVerify })
+	result := (Service{}).ApplyPromotionPlan(context.Background(), PromotionPlan{LogDir: filepath.Join(dir, "logs"), Rows: []PromotionRow{{LibraryPath: library, BackupPath: backup, Action: PromotionEncodeMP3, Selected: true}}})
+	if result.Failed != 1 {
+		t.Fatalf("wanted drift failure: %+v", result)
+	}
+	data, _ := os.ReadFile(library)
+	if string(data) != "external edit" {
+		t.Fatal("overwrote concurrent library edit")
+	}
+	data, _ = os.ReadFile(backup)
+	if string(data) != "original" {
+		t.Fatal("backup changed")
+	}
+}
+
+func TestNativePromotionPartialFailureReportsOnlyVerifiedRows(t *testing.T) {
+	dir := t.TempDir()
+	plan := PromotionPlan{LogDir: filepath.Join(dir, "logs")}
+	for i, name := range []string{"bad.mp3", "good.mp3"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("original"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		plan.Rows = append(plan.Rows, PromotionRow{Index: i + 1, LibraryPath: p, BackupPath: filepath.Join(dir, "backups", name), Selected: true, Action: PromotionEncodeMP3})
+	}
+	oldRun, oldVerify := runPromotionFFmpeg, verifyPromotionMetadata
+	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, path string) error {
+		return os.WriteFile(path, []byte("upgrade"), 0600)
+	}
+	verifyPromotionMetadata = func(_ context.Context, original, stage string) (mediametadata.Report, error) {
+		if filepath.Base(original) == "bad.mp3" {
+			return mediametadata.Report{}, errors.New("injected artwork mismatch")
+		}
+		hash, err := mediametadata.FileSHA256(stage)
+		return mediametadata.Report{MetadataVerified: true, ArtworkVerified: true, DecodeVerified: true, FileSHA256: hash}, err
+	}
+	t.Cleanup(func() { runPromotionFFmpeg = oldRun; verifyPromotionMetadata = oldVerify })
+	result := (Service{}).ApplyPromotionPlan(context.Background(), plan)
+	if result.Failed != 1 || result.Replaced != 1 {
+		t.Fatalf("unexpected partial result: %+v", result)
+	}
+	if result.Rows[0].Preservation != nil {
+		t.Fatal("failed row claimed preservation")
+	}
+	if result.Rows[1].Preservation == nil || !result.Rows[1].Preservation.MetadataVerified {
+		t.Fatal("verified row missing proof")
+	}
+	first, _ := os.ReadFile(plan.Rows[0].LibraryPath)
+	second, _ := os.ReadFile(plan.Rows[1].LibraryPath)
+	if string(first) != "original" || string(second) != "upgrade" {
+		t.Fatal("unexpected library state")
+	}
+}
+
+func TestNativePromotionCancellationAfterVerificationKeepsOriginal(t *testing.T) {
+	dir := t.TempDir()
+	library := filepath.Join(dir, "track.mp3")
+	backup := filepath.Join(dir, "backups", "track.mp3")
+	if err := os.WriteFile(library, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	oldRun, oldVerify := runPromotionFFmpeg, verifyPromotionMetadata
+	runPromotionFFmpeg = func(_ context.Context, _ PromotionPlan, _ PromotionRow, path string) error {
+		return os.WriteFile(path, []byte("upgrade"), 0600)
+	}
+	verifyPromotionMetadata = func(context.Context, string, string) (mediametadata.Report, error) {
+		cancel()
+		return mediametadata.Report{}, nil
+	}
+	t.Cleanup(func() { runPromotionFFmpeg = oldRun; verifyPromotionMetadata = oldVerify })
+	result := (Service{}).ApplyPromotionPlan(ctx, PromotionPlan{LogDir: filepath.Join(dir, "logs"), Rows: []PromotionRow{{LibraryPath: library, BackupPath: backup, Selected: true, Action: PromotionEncodeMP3}}})
+	if result.Failed != 1 {
+		t.Fatal("canceled row did not fail")
+	}
+	data, _ := os.ReadFile(library)
+	if string(data) != "original" {
+		t.Fatal("installed canceled stage")
+	}
+	data, _ = os.ReadFile(backup)
+	if string(data) != "original" {
+		t.Fatal("lost original backup")
 	}
 }

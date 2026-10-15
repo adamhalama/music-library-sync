@@ -1,92 +1,241 @@
-# Finish FreeDL, Playlist, and Rekordbox TUI Integration
+# Rekordbox and Navidrome Directional Playlist Sync
 
-**Status:** Planned  
-**Branch:** `feature/freedl-rekordbox-tui`  
-**Worktree:** `/Users/jaa/dev/utils/update-downloads-freedl-rekordbox-tui`  
-**Last updated:** 2026-07-28
+- **Status:** In progress
+- **Target:** Safely mirror one paired playlist in either direction between
+  Rekordbox and Navidrome, preserving membership and order
+- **Last updated:** 2026-10-15
+- **Implementation tracker:** [IMPLEMENTATION.md](./IMPLEMENTATION.md)
+- **Predecessor:**
+  [plans/archive/navidrome-likes-rekordbox-plan.md](./plans/archive/navidrome-likes-rekordbox-plan.md)
 
-## Goal
+## Purpose
 
-Finish the FreeDL, playlist, and Rekordbox TUI feature so it can be merged safely into `master`. The finished feature should preserve the branch's cache-first playlist workflow, FreeDL filtering, and backup-first Rekordbox design while resolving the remaining correctness, portability, usability, and documentation gaps.
+The working pattern is gig-oriented:
+
+1. Curate a Rekordbox playlist such as `favs_august` from the larger favourites
+   library.
+2. Send that playlist to Navidrome so it is available in the phone client.
+3. Add, remove, or reorder tracks on the phone.
+4. Bring the Navidrome playlist back into the paired Rekordbox playlist.
+
+This is deliberately an **explicit directional mirror**, not an automatic
+merge. Each run names its source, previews the exact replacement, and applies
+only after confirmation. The selected source controls both membership and
+order for that run.
 
 ## Current State
 
-The feature is substantially implemented and its baseline automated checks pass:
+The repository already has most of the safe primitives:
 
-- `go test ./...`
-- `go vet ./...`
-- `go test -race ./...`
+- Rekordbox inspection exposes playlists, ordered content IDs, and library
+  paths through the pyrekordbox bridge.
+- The existing Rekordbox mirror uses checksummed plans, precondition checks,
+  mandatory backups, a transactional rewrite, and post-apply verification.
+- Navidrome exposes real library paths and ordered playlist contents through
+  the Subsonic API, with credentials kept in Keychain.
+- Standalone playlist snapshots and the native app already establish
+  cache-first reads, explicit refreshes, cancellable agent runs, and on-screen
+  workflow errors.
 
-The Apple Music snapshot refresh and read-only Rekordbox planning workflows also work with real data. The current real-library plan contains 139 tracks: 138 match local files and one is missing. The fail-closed policy correctly prevents the incomplete plan from being applied.
+**2026-10-15 status update:** The Rekordbox playlist source model, writable
+Navidrome playlist client, direction-neutral planner, durable pair bindings, and
+CLI/agent/native workspace are implemented. This initiative is not Delivered:
+provider-picker enrichment, remaining lifecycle/view coverage, combined CLI
+acceptance, isolated destructive apply/restore, a real phone edit round trip, and
+manual native validation remain tracked in [IMPLEMENTATION.md](./IMPLEMENTATION.md).
+Automated review regressions do not close those acceptance gates.
 
-The branch is one commit behind `origin/master` and should be updated before the remaining work. A merge simulation found two straightforward conflicts:
+## Product Decisions
 
-- `AGENTS.md`: retain the relevant notes from both branches.
-- `internal/engine/syncer.go`: register both the `deemix` and `scdl-freedl` plan providers.
+1. **Direction is selected for every run.** Supported values are
+   `rekordbox-to-navidrome` and `navidrome-to-rekordbox`. There is no automatic
+   three-way merge or last-writer-wins rule.
+2. **The source controls membership and order.** A successful apply makes the
+   destination exactly match the selected source.
+3. **Every mutation is plan then apply.** Plans are checksummed, human-readable,
+   saveable, and revalidated immediately before the destination changes.
+4. **Matching is exact normalized real path only.** No artist/title fallback is
+   allowed; a plausible wrong match is worse than a refused sync.
+5. **Partial mirrors are forbidden.** Empty sources, missing matches, ambiguous
+   paths, and duplicate canonical tracks block apply.
+6. **Existing exact-name destinations are adoptable.** The first plan previews
+   their complete replacement. Multiple exact-name matches are ambiguous and
+   block planning.
+7. **Missing destinations may be created.** The source must always exist; the
+   plan explicitly identifies a destination creation before apply.
+8. **Only normal, writable Navidrome playlists qualify.** UDL-managed smart
+   playlists and playlists owned by another account are never overwritten.
+9. **Sync remains manual.** Scheduling, background polling, and implicit sync
+   after download or scan are deferred.
+10. **Existing one-way workflows stay compatible.** Standalone snapshots,
+    favourites, and `udl rekordbox playlist-sync` keep their current formats and
+    behavior.
 
-## Planned Outcomes
+## Configuration and State
 
-### 1. Update the feature branch
+Add optional paired jobs to `playlists.yaml` without changing the existing
+configuration version:
 
-Merge the current `origin/master` into the published feature branch. Use a merge commit rather than rewriting the branch history, then resolve the two known conflicts without dropping either branch's behavior.
+```yaml
+version: 1
 
-### 2. Correct release-blocking behavior
+sync_jobs:
+  - id: favs-august
+    rekordbox:
+      playlist: favs_august
+      playlist_id: "" # optional stable selector
+    navidrome:
+      playlist: favs_august
+      playlist_id: "" # optional stable selector
+```
 
-- Replace hard-coded user-specific Rekordbox backup paths with a portable home-relative default.
-- Make `rekordbox playlist-sync apply --backup-dir` an effective runtime override without mutating the checksummed plan.
-- Strengthen standalone Rekordbox sync configuration validation.
-- Compare playlist snapshots as multisets so duplicate tracks are handled correctly.
+- Job IDs are unique and use the existing safe identifier rules.
+- Both playlist names are required because either side may need to be created
+  as a destination; provider IDs are optional stable selectors.
+- A successful apply atomically records the resolved IDs, configuration
+  fingerprint, last direction, timestamp, and verified final checksum under
+  `state_dir/playlist-sync/jobs/<job-id>.json`.
+- Saved bindings survive external playlist renames. A changed job
+  configuration invalidates the old binding and forces fresh selector
+  resolution and adoption preview.
+- Operational state informs selection and status only; it never chooses a
+  direction or bypasses live preconditions.
 
-### 3. Finish blocked-plan and compact-screen UX
+## User Interfaces
 
-- Keep the existing fail-closed policy for incomplete Rekordbox plans.
-- Show the actual blocking tracks, including artist, title, and expected path, in CLI and TUI output.
-- Preserve the complete plan for diagnosis rather than silently creating a partial mirror.
-- Make playlist detail useful at an 80×24 terminal size by keeping the selected track and path visible.
-- Keep the playlist summary compact enough to leave room for track rows.
+### CLI
 
-### 4. Clarify integrity and safety language
+```text
+udl playlist sync list
+udl playlist sync plan --job favs-august \
+  --direction rekordbox-to-navidrome [--out <file>]
+udl playlist sync plan --job favs-august \
+  --direction navidrome-to-rekordbox [--out <file>]
+udl playlist sync show --plan-file <file>
+udl playlist sync apply --plan-file <file> [--force]
+```
 
-Describe Rekordbox plan files as checksummed or integrity-checked rather than signed. The current SHA-256 checksum detects modification but is not a cryptographic signature.
+- `--direction` accepts only the two explicit values above.
+- Global `--json`, `--dry-run`, and `--no-input` retain their existing meaning.
+- Interactive apply names the source and destination and reports additions,
+  removals, moves, unchanged tracks, and final count before confirmation.
+- Non-interactive apply requires `--force`; primary results go to stdout and
+  progress/errors to stderr.
+- Existing exit-code conventions remain, including `5` for a mutation whose
+  outcome needs reconciliation and `130` for interruption.
 
-### 5. Complete documentation and release validation
+### Agent protocol and native app
 
-- Document the `playlist` and `rekordbox` command surfaces, flags, dependencies, cache behavior, and backup safety model.
-- Confirm Homebrew dependency checks account for the supported Python runtime.
-- Add regression coverage for every corrected behavior.
-- Re-run automated, isolated real-data, and manual TUI validation.
-- Push the completed branch and verify CI before proposing it for merge.
+Add `playlistSync.inspect`, `playlistSync.plan`, and `playlistSync.apply` run
+methods. The native app gets a dedicated **Playlist Sync** workspace with:
 
-## Required Public Behavior
+- configured jobs and last verified status in the sidebar;
+- explicit “Send Rekordbox to phone” and “Bring phone edits to Rekordbox”
+  direction choices;
+- a row-level add/remove/move/keep/blocked preview;
+- inline blockers and disabled-control explanations;
+- a confirmation that names the destination, removals, final count, and backup;
+- workflow-owned success, failure, cancellation, and partial-state messages.
 
-- Opening the TUI remains cache-only; network refresh remains an explicit user action.
-- FreeDL filtering and source planning continue to work alongside the newer Spotify/deemix planning added on `master`.
-- Rekordbox apply remains backup-first and fail-closed.
-- A CLI backup override works without invalidating a previously generated plan.
-- New default backup paths are portable across users and machines.
-- Existing user configuration files are not silently rewritten.
-- Invalid standalone Rekordbox jobs fail during validation with actionable messages.
-- Missing local tracks are visible to the user and prevent partial mirror application.
+## Safety and Apply Semantics
 
-## Scope Boundaries
+Every plan records the job configuration fingerprint, resolved selectors,
+ordered source and destination memberships, matched ID/path pairs, destination
+creation intent, blockers, preconditions, and checksum.
 
-The following are not required to complete this feature:
+Immediately before writing, apply must:
 
-- Full playlist create, edit, and delete CRUD in the TUI.
-- Replacing YAML as the advanced configuration surface.
-- Applying changes to a live Rekordbox database during development or validation.
-- Relaxing the incomplete-plan failure policy.
+1. Verify the plan version and checksum.
+2. Reload the job and reject a changed configuration fingerprint.
+3. Re-read both playlists and all matched library records.
+4. Reject any source or destination change since planning.
+5. Confirm that Rekordbox is closed and has no live database sidecars whenever
+   its database is read or written.
+6. Create the destination-specific mandatory backup.
 
-## Completion Criteria
+For Rekordbox destinations, reuse the existing full database-directory backup,
+transactional playlist rewrite, and committed-state verification.
 
-The feature is ready when:
+For Navidrome destinations, use its own database backup command, replace the
+complete ordered song list through the supported Subsonic `createPlaylist`
+operation, and read the playlist back for exact ordered verification. Prefer
+form-encoded POST when supported so large playlists do not place credentials or
+song lists in an oversized URL. Creation-by-name is never blindly retried after
+an uncertain network result; reconcile by exact-name lookup and planned
+membership instead.
 
-- The branch includes current `master` without losing either plan provider.
-- All identified correctness and portability issues are fixed and covered by tests.
-- CLI and TUI blocker output identify missing tracks.
-- Playlist detail remains useful at 80×24 and works at larger terminal sizes.
-- Documentation matches the implemented command surface and safety behavior.
-- `go test ./...`, `go vet ./...`, and `go test -race ./...` pass.
-- Isolated Apple Music refresh and read-only Rekordbox planning checks pass.
-- CI passes on the pushed feature branch.
+Pair state advances only after exact destination parity is verified. A failure
+or cancellation never claims success, and any uncertain write reports the
+backup path and reconciliation steps.
 
+Security behavior remains unchanged: the password stays in Keychain, auth
+tokens and query strings are redacted, plans/state contain no secrets, and the
+managed Navidrome service remains trusted-LAN-only with no port forwarding.
+
+## Scope
+
+### In scope
+
+- Reusable paired playlist jobs, not a hard-coded `favs_august` special case.
+- Exact membership and order in both directions.
+- Destination creation or explicit adoption of one unique exact-name playlist.
+- Checksummed plan/show/apply workflow with live preconditions and backups.
+- CLI, agent protocol, and native macOS app support.
+- Unit, integration, isolated Rekordbox, fake-Navidrome, and manual phone
+  acceptance coverage.
+
+### Out of scope
+
+- Automatic or scheduled synchronization.
+- Simultaneous three-way merging or conflict resolution.
+- Fuzzy metadata matching, downloading missing tracks, or importing files into
+  either library.
+- Syncing stars, ratings, play counts, cue points, comments, colors, or other
+  playlist metadata.
+- Deleting paired playlists or allowing an empty source to clear a destination.
+- Writing UDL-managed Navidrome smart playlists.
+- Changes to Music.app or Apple Music playlists.
+
+## Exit Criteria
+
+The initiative is delivered when:
+
+- a Rekordbox `favs_august` playlist can create or adopt the paired Navidrome
+  playlist with identical ordered real paths;
+- a phone-side add, removal, and reorder can be planned and reproduced exactly
+  in Rekordbox;
+- re-planning either direction after parity produces a no-op;
+- empty, missing, ambiguous, duplicate, stale, unowned, and smart-playlist cases
+  refuse before writing;
+- every write has a verified backup and exact post-apply readback;
+- interruption or uncertain network delivery cannot advance pair state or hide
+  a potentially changed destination;
+- CLI JSON/human output, agent RPC, and the native app describe the same plan
+  and outcome; and
+- the validation commands and manual round trip are recorded in
+  [IMPLEMENTATION.md](./IMPLEMENTATION.md).
+
+## Risks and Mitigations
+
+- **Real-path reporting is disabled or drifts.** Refuse all fuzzy matching and
+  point to the managed Navidrome `DefaultReportRealPath` setting.
+- **A provider changes after planning.** Ordered source/destination and matched
+  path preconditions force regeneration before any write.
+- **Navidrome creation succeeds but the response is lost.** Do not blindly
+  retry; reconcile unique exact-name membership and return partial status when
+  uncertain.
+- **A new field invalidates old Rekordbox plans.** Use a separate mirror plan
+  type/version and leave the existing `playlistsync.Plan` checksum contract
+  untouched.
+- **A local binding write fails after the destination succeeds.** Report partial
+  success, preserve the verified external result, and make the next plan
+  rebuild the binding safely.
+
+## Deferred
+
+- Automatic three-way sync using a last-successful baseline.
+- Background/scheduled runs and phone push notifications.
+- Per-track conflict resolution or user-selected partial application.
+- Playlist folders and batch mirroring of multiple gig playlists.
+- Metadata and Rekordbox DJ-data synchronization beyond playlist membership and
+  order.
