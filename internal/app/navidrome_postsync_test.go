@@ -33,7 +33,8 @@ func TestShouldRequestNavidromeScan(t *testing.T) {
 	}{
 		{name: "successful run", result: success, want: true},
 		{name: "dry run", req: SyncRequest{DryRun: true}, result: success, reason: "dry run"},
-		{name: "plan only", req: SyncRequest{Plan: true}, result: success, reason: "planning"},
+		{name: "interactive live plan", req: SyncRequest{Plan: true}, result: success, want: true},
+		{name: "preview plan", req: SyncRequest{Plan: true, DryRun: true}, result: success, reason: "dry run"},
 		{name: "failed run", result: success, err: errors.New("boom"), reason: "did not finish"},
 		{name: "canceled run", result: engine.SyncResult{Succeeded: 1, Interrupted: true}, reason: "canceled"},
 		{name: "no changes", result: engine.SyncResult{Total: 2, Attempted: 2, Skipped: 2}, reason: "no source produced changes"},
