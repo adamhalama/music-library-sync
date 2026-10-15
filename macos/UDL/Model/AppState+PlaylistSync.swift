@@ -6,6 +6,13 @@ enum PlaylistSyncJobSaveIntent {
     case create
     case edit(originalID: String)
 
+    static func revisionConstraint(_ revision: String?) -> String? {
+        guard let revision, !revision.trimmed.isEmpty else {
+            return PlaylistSyncJobSaveError.missingRevision.localizedDescription
+        }
+        return nil
+    }
+
     func updatedConfig(_ current: PlaylistConfig?, saving job: PlaylistSyncJob) throws -> PlaylistConfig {
         guard let current else { throw PlaylistSyncJobSaveError.configUnavailable }
         var jobs = current.syncJobs
@@ -31,8 +38,9 @@ enum PlaylistSyncJobSaveIntent {
     }
 }
 
-private enum PlaylistSyncJobSaveError: LocalizedError {
+enum PlaylistSyncJobSaveError: LocalizedError {
     case configUnavailable
+    case missingRevision
     case duplicateID(String)
     case changedID
     case missingOriginal(String)
@@ -41,6 +49,8 @@ private enum PlaylistSyncJobSaveError: LocalizedError {
         switch self {
         case .configUnavailable:
             "Playlist configuration is not loaded. Reload it before saving a pair."
+        case .missingRevision:
+            "No pinned playlist revision is available. Reload jobs before saving. If reload still provides no revision, update or restart the backend."
         case .duplicateID(let id):
             "A playlist pair with ID ‘\(id)’ already exists (IDs are case-insensitive). Choose a different ID or edit the existing pair."
         case .changedID:

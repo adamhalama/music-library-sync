@@ -796,6 +796,9 @@ final class AppState: ObservableObject {
         guard let client else {
             throw JSONRPCConnectionError.disconnected("Playlist pair was not saved. Reconnect the backend and try again.")
         }
+        if PlaylistSyncJobSaveIntent.revisionConstraint(expectedContentSHA256) != nil {
+            throw PlaylistSyncJobSaveError.missingRevision
+        }
         playlistConfig = try await client.writePlaylistsConfig(config, expectedContentSHA256: expectedContentSHA256)
         await loadPlaylists()
     }

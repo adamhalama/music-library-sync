@@ -53,6 +53,8 @@ struct PlaylistSyncJobEditor: View {
                     .font(.callout)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if saveFailure != nil || PlaylistSyncJobSaveIntent.revisionConstraint(expectedContentSHA256) != nil {
                 Button("Reload jobs") {
                     Task {
                         isSaving = true
@@ -82,6 +84,7 @@ struct PlaylistSyncJobEditor: View {
 
     private var saveConstraint: String? {
         if isSaving { return "Writing playlists.yaml…" }
+        if let reason = PlaylistSyncJobSaveIntent.revisionConstraint(expectedContentSHA256) { return reason }
         if id.trimmed.isEmpty || rekordboxName.trimmed.isEmpty || navidromeName.trimmed.isEmpty {
             return "A stable ID and both playlist names are required."
         }
@@ -89,6 +92,10 @@ struct PlaylistSyncJobEditor: View {
     }
 
     private func save() {
+        if let reason = saveConstraint {
+            saveFailure = .failure(reason)
+            return
+        }
         isSaving = true
         saveFailure = nil
         let job = PlaylistSyncJob(

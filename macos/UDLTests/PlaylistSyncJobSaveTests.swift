@@ -108,6 +108,34 @@ final class PlaylistSyncJobSaveTests: XCTestCase {
         XCTAssertNil(state.alertMessage)
         XCTAssertNil(state.playlistConfig)
     }
+    func testEditorRevisionConstraintRequiresExplicitReloadInsteadOfSharedCacheFallback() {
+        for revision: String? in [nil, "", "  "] {
+            XCTAssertTrue(PlaylistSyncJobSaveIntent.revisionConstraint(revision)?.contains("Reload jobs") == true)
+        }
+        XCTAssertNil(PlaylistSyncJobSaveIntent.revisionConstraint("editor-pinned-sha"))
+    }
+
+    func testMissingPinnedRevisionFailsOnScreenBeforeBackendWrite() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        try await reload(state, rpc: rpc, sha: "loaded-sha", jobs: [job("original")])
+        // Even a closed transport must not be reached: this is a missing
+        // editor precondition, not a network failure or an unconditional save.
+        await rpc.connection.close()
+        for revision: String? in [nil, "", "   "] {
+            let saved = await state.savePlaylistSyncJob(job("draft"), intent: .create, expectedContentSHA256: revision)
+            XCTAssertFalse(saved)
+            XCTAssertEqual(state.playlistSyncStatus?.severity, .error)
+            XCTAssertTrue(state.playlistSyncStatus?.message.contains("revision") == true)
+            XCTAssertTrue(state.playlistSyncStatus?.message.contains("Reload jobs") == true)
+            XCTAssertEqual(state.playlistConfig?.contentSHA256, "loaded-sha")
+            XCTAssertEqual(state.playlistConfig?.config.syncJobs, [job("original")])
+            XCTAssertNil(state.alertMessage)
+        }
+    }
+
     func testExpectedSHAConflictStaysInPairWorkflowAndReloadRefreshesConfig() async throws {
         let rpc = AgentRPCFixture()
         await rpc.connection.start()
