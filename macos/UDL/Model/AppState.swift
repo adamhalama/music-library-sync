@@ -1236,9 +1236,10 @@ final class AppState: ObservableObject {
     }
 
     @discardableResult
-    func cancelPrompt() async -> Bool {
+    func cancelPrompt(for runID: String? = nil) async -> Bool {
         guard let prompt = pendingPrompt else { return true }
-        guard let connection = backend.connection else { return false }
+        if let runID, prompt.request.params.objectValue?["run_id"]?.stringValue != runID { return true }
+        guard let connection = client?.connection else { return false }
         do {
             try await connection.respond(to: prompt.request, result: prompt.request.kind.canceledResult)
             if pendingPrompt?.id == prompt.id {
@@ -1256,7 +1257,7 @@ final class AppState: ObservableObject {
 
     private func sendPendingSyncCancellationIfReady() async {
         guard syncRun.beginCancellationRequest(), let runID = syncRun.runID else { return }
-        let promptReplyDelivered = await cancelPrompt()
+        let promptReplyDelivered = await cancelPrompt(for: runID)
         guard let client else {
             syncRun.failCancellation("The backend client is unavailable.")
             return
@@ -1288,7 +1289,7 @@ final class AppState: ObservableObject {
 
     func cancelRun(_ runID: String) async {
         await performOrderedCancellation(
-            answerPending: { await self.cancelPrompt() },
+            answerPending: { await self.cancelPrompt(for: runID) },
             cancelRun: { _ = try? await self.client?.cancelRun(runID) }
         )
     }

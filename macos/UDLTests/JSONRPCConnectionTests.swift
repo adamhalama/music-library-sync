@@ -21,8 +21,8 @@ final class JSONRPCConnectionTests: XCTestCase {
         let second = Task {
             try await connection.callValue("fixture.second", params: JSONValue.object([:]))
         }
-        let requestA = try await readJSONObject(from: outbound.fileHandleForReading)
-        let requestB = try await readJSONObject(from: outbound.fileHandleForReading)
+        let requestA = try await Self.readJSONObject(from: outbound.fileHandleForReading)
+        let requestB = try await Self.readJSONObject(from: outbound.fileHandleForReading)
         let requests = [requestA, requestB]
         let firstRequest = try XCTUnwrap(requests.first { $0["method"] as? String == "fixture.first" })
         let secondRequest = try XCTUnwrap(requests.first { $0["method"] as? String == "fixture.second" })
@@ -55,7 +55,7 @@ final class JSONRPCConnectionTests: XCTestCase {
         let pending = Task {
             try await connection.callValue("fixture.pending", params: JSONValue.object([:]))
         }
-        _ = try await readJSONObject(from: outbound.fileHandleForReading)
+        _ = try await Self.readJSONObject(from: outbound.fileHandleForReading)
         try inbound.fileHandleForWriting.close()
         do {
             _ = try await pending.value
@@ -91,7 +91,7 @@ final class JSONRPCConnectionTests: XCTestCase {
         let request = try XCTUnwrap(nextRequest)
         XCTAssertEqual(request.kind, .confirm)
         try await connection.respond(to: request, result: .object(["confirmed": .bool(true)]))
-        let reply = try await readJSONObject(from: outbound.fileHandleForReading)
+        let reply = try await Self.readJSONObject(from: outbound.fileHandleForReading)
         XCTAssertEqual(reply["id"] as? String, "server-1")
         XCTAssertEqual((reply["result"] as? [String: Any])?["confirmed"] as? Bool, true)
         try inbound.fileHandleForWriting.close()
@@ -161,7 +161,7 @@ final class JSONRPCConnectionTests: XCTestCase {
                 to: request,
                 result: .object(["canceled": .bool(false)])
             )
-            let reply = try await readJSONObject(from: outbound.fileHandleForReading)
+            let reply = try await Self.readJSONObject(from: outbound.fileHandleForReading)
             XCTAssertEqual(reply["id"] as? String, "server-\(offset)")
             try inbound.fileHandleForWriting.close()
             await connection.close()
@@ -231,7 +231,7 @@ final class JSONRPCConnectionTests: XCTestCase {
             cancelRun: { await recorder.append("run") }
         )
 
-        let reply = try await readJSONObject(from: outbound.fileHandleForReading)
+        let reply = try await Self.readJSONObject(from: outbound.fileHandleForReading)
         XCTAssertEqual(reply["id"] as? String, "plan-1")
         XCTAssertEqual((reply["result"] as? [String: Any])?["canceled"] as? Bool, true)
         let values = await recorder.values
@@ -240,13 +240,58 @@ final class JSONRPCConnectionTests: XCTestCase {
         await connection.close()
     }
 
+    @MainActor
+    func testCancelOtherRunDoesNotAnswerSyncPrompt() async throws {
+        try await assertCancellationPromptOwnership(promptRunID: "sync", canceledRunID: "pair")
+    }
+
+    @MainActor
+    func testCancelOwningRunAnswersPromptBeforeCancelRequest() async throws {
+        try await assertCancellationPromptOwnership(promptRunID: "sync", canceledRunID: "sync")
+    }
+
+    @MainActor
+    private func assertCancellationPromptOwnership(promptRunID: String, canceledRunID: String) async throws {
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let connection = JSONRPCConnection(
+            readHandle: inbound.fileHandleForReading, writeHandle: outbound.fileHandleForWriting
+        )
+        await connection.start()
+        let state = AppState(client: UDLClient(connection: connection))
+        state.pendingPrompt = AppState.PendingPrompt(request: UIRequest(
+            id: .string("selection"), kind: .selectRows,
+            params: .object(["run_id": .string(promptRunID)])
+        ))
+        let cancellation = Task { await state.cancelRun(canceledRunID) }
+        if promptRunID == canceledRunID {
+            let reply = try await Self.readJSONObject(from: outbound.fileHandleForReading)
+            XCTAssertEqual(reply["id"] as? String, "selection")
+            XCTAssertEqual((reply["result"] as? [String: Any])?["canceled"] as? Bool, true)
+        }
+        let request = try await Self.readJSONObject(from: outbound.fileHandleForReading)
+        XCTAssertEqual(request["method"] as? String, "run.cancel")
+        XCTAssertEqual((request["params"] as? [String: Any])?["run_id"] as? String, canceledRunID)
+        try writeJSON([
+            "jsonrpc": "2.0", "id": request["id"] as Any, "result": ["canceled": true],
+        ], to: inbound.fileHandleForWriting)
+        await cancellation.value
+        if promptRunID == canceledRunID {
+            XCTAssertNil(state.pendingPrompt)
+        } else {
+            XCTAssertEqual(state.pendingPrompt?.request.id, .string("selection"))
+        }
+        await connection.close()
+        try inbound.fileHandleForWriting.close()
+    }
+
     private func writeJSON(_ object: [String: Any], to handle: FileHandle) throws {
         var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         data.append(0x0A)
         try handle.write(contentsOf: data)
     }
 
-    private func readJSONObject(from handle: FileHandle) async throws -> [String: Any] {
+    private static func readJSONObject(from handle: FileHandle) async throws -> [String: Any] {
         // Blocking pipe reads must not occupy Swift's cooperative executor:
         // on a small CI runner the tasks that produce these bytes need it too.
         let data: Data = try await withCheckedThrowingContinuation { continuation in
