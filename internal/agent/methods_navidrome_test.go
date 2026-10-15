@@ -288,3 +288,30 @@ func TestNavidromeRegistrationSharesPlaylistDestinationTransaction(t *testing.T)
 		t.Fatalf("registration lost the committed draft: %+v", after)
 	}
 }
+
+func TestNavidromeRegistrationRejectsSymlinkDestination(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.yaml")
+	if err := playlists.Save(target, playlists.Config{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "playlists.yaml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	server := &Server{WorkingDir: dir, PlaylistsConfigPath: link}
+	if _, rpcErr := server.navidromePlaylistsRegister(); rpcErr == nil || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("expected destination safeguard, got %+v", rpcErr)
+	}
+	after, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("registration modified symlink target")
+	}
+}
