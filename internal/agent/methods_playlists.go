@@ -129,6 +129,12 @@ func (s *Server) savePlaylistDefinition(params json.RawMessage) (any, *RPCError)
 	if err := json.Unmarshal(params, &request); err != nil {
 		return nil, NewRPCError(CodeInvalidParams, "invalid playlists.saveDefinition params", nil)
 	}
+	path, rpcErr := s.resolvePlaylistsWritePath()
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	unlock := s.lockConfigDestination(path)
+	defer unlock()
 	cfg, err := playlists.Load(playlists.LoadOptions{
 		ExplicitPath: s.PlaylistsConfigPath, WorkingDir: s.WorkingDir,
 	})
@@ -145,10 +151,6 @@ func (s *Server) savePlaylistDefinition(params json.RawMessage) (any, *RPCError)
 	}
 	if !replaced {
 		cfg.Playlists = append(cfg.Playlists, request.Definition)
-	}
-	path, rpcErr := s.resolvePlaylistsWritePath()
-	if rpcErr != nil {
-		return nil, rpcErr
 	}
 	if err := playlists.Save(path, cfg); err != nil {
 		return nil, playlistRPCError(err)
@@ -188,6 +190,8 @@ func (s *Server) writePlaylistsConfig(params json.RawMessage) (any, *RPCError) {
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	unlock := s.lockConfigDestination(path)
+	defer unlock()
 	if expected := strings.TrimSpace(request.ExpectedContentSHA256); expected != "" {
 		current, err := os.ReadFile(path)
 		// A missing standalone config is read as empty content; guard its first

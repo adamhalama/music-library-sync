@@ -48,6 +48,8 @@ type Server struct {
 	RekordboxOps          *RekordboxOperations
 	PlaylistMirrorUseCase *app.PlaylistMirrorUseCase
 
+	configWriteLocks sync.Map // absolute destination path -> *sync.Mutex
+
 	mu           sync.Mutex
 	initialized  bool
 	shuttingDown bool

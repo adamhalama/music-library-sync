@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -280,5 +281,37 @@ func TestPlaylistsConfigExpectedSHACreatesMissingFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPlaylistsConfigConcurrentExpectedSHAAllowsOneWriter(t *testing.T) {
+	path := t.TempDir() + "/playlists.yaml"
+	server := &Server{PlaylistsConfigPath: path}
+	if err := playlists.Save(path, playlists.Config{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const writers = 32
+	start := make(chan struct{})
+	results := make(chan *RPCError, writers)
+	for i := 0; i < writers; i++ {
+		request := mustJSON(t, map[string]any{"config": playlists.Config{Version: 1, SyncJobs: []playlists.SyncJob{{ID: fmt.Sprintf("writer-%d", i), Rekordbox: playlists.PlaylistSelector{Playlist: "RB"}, Navidrome: playlists.PlaylistSelector{Playlist: "ND"}}}}, "expected_content_sha256": contentSHA256(before)})
+		go func() { <-start; _, rpcErr := server.writePlaylistsConfig(request); results <- rpcErr }()
+	}
+	close(start)
+	successes := 0
+	for i := 0; i < writers; i++ {
+		rpcErr := <-results
+		if rpcErr == nil {
+			successes++
+		} else if rpcErr.Code != CodeRunConflict {
+			t.Errorf("unexpected write error: %+v", rpcErr)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("same revision allowed %d writers, want exactly one", successes)
 	}
 }

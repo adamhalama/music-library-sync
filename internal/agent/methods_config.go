@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jaa/update-downloads/internal/config"
 )
@@ -190,4 +191,17 @@ func configRPCError(err error) *RPCError {
 		return NewRPCError(CodeInvalidParams, "invalid config", map[string]any{"problems": validation.Problems})
 	}
 	return NewRPCError(CodeInvalidParams, err.Error(), nil)
+}
+
+// lockConfigDestination serializes optimistic read/compare/write transactions
+// within this server. It is not a lock against independent external editors.
+func (s *Server) lockConfigDestination(path string) func() {
+	absolute, err := filepath.Abs(path)
+	if err == nil {
+		path = absolute
+	}
+	lock, _ := s.configWriteLocks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
+	mutex := lock.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
 }
