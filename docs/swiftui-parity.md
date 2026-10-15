@@ -398,8 +398,8 @@ Redesigned onboarding surface:
   local Command Line Tools limitation is not a project-wide automation gap.
   The workflow runs on pull requests and pushes to `master`. Thread Sanitizer
   and manual visual/workflow acceptance are not established by those CI steps.
-- **2026-10-15 local review validation:** 125 Swift tests passed after the
-  expected-SHA config-save follow-up (#14), up from the 122-test baseline. On
+- **2026-10-15 local review validation:** 126 Swift tests passed after the
+  destination-file SHA/reload follow-ups (#14), up from the 122-test baseline. On
   this Command Line Tools host, use
   `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make app-test-dev`;
   this harness does not substitute for full-Xcode or manual acceptance.
@@ -409,8 +409,11 @@ Redesigned onboarding surface:
   (`JSONRPCFrameLimitTests`), and create/edit collision plus disconnected/unloaded
   config failures (`PlaylistSyncJobSaveTests`). The same save suite verifies
   expected-SHA forwarding, returned-SHA retention, workflow-owned conflicts,
-  cache reload, and compatibility with older wire frames. The editor offers
-  “Reload jobs” on screen; provider-picker enrichment remains open. These are
+  cache reload, revision pinning across automatic refresh, recovery-status
+  preservation, and compatibility with older wire frames. The editor offers
+  “Reload jobs” on screen. The SHA guards only the destination file, not entries
+  inherited from merged user/project configuration; inherited-entry provenance
+  protection (#14) and provider-picker enrichment remain open. These are
   bounded regression claims, not a completed lifecycle/view or backend-recovery
   matrix.
 - Ad-hoc inside-out bundle signing and strict signature verification pass;

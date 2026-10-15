@@ -147,8 +147,10 @@ checksummed.
 - State contract: JSON version 1, mode `0600`, atomically written to
   `playlist-sync/jobs/<job-id>.json`; it contains resolved provider IDs/names,
   direction/time, config and final-path fingerprints, and no credentials.
-- Native editing is implemented in `PlaylistSyncJobEditor`; it writes through
-  the existing guarded playlist-config RPC and keeps credentials/state out of YAML.
+- Native editing is implemented in `PlaylistSyncJobEditor`; it keeps
+  credentials/state out of YAML. The 2026-10-15 destination-file SHA check does
+  not protect entries inherited from merged user/project config; see the open
+  provenance item in Phase 7.
 
 ---
 
@@ -462,8 +464,12 @@ apply result, and cancellation semantics as the CLI.
 - [x] Add explicit “Send Rekordbox to phone” and “Bring phone edits to
       Rekordbox” direction controls; do not infer direction from last run.
 - [x] Add a job editor with explicit create/edit intent that saves through the
-      expected-SHA-guarded config-write path, surfaces external-file conflicts
+      destination-file expected-SHA check, surfaces destination-file conflicts
       on the workflow, and offers “Reload jobs” to refresh cached config.
+- [ ] Complete inherited-entry provenance protection (#14): playlist reads
+      merge user/project config, but the expected SHA guards only the write
+      destination. Changes to inherited entries can still be shadowed by a
+      stale save; do not treat the destination-file guard as full protection.
 - [ ] Enrich the job editor with provider playlist pickers.
 - [x] Render plan header, add/remove/move/keep/blocked filters, searchable row
       table, source/destination metadata, preconditions, and backup expectation.
@@ -504,8 +510,9 @@ apply result, and cancellation semantics as the CLI.
   passed; `make app-test-dev` passed 92/92, including protocol inventory,
   `@DefaultEmpty`, future action values,
   workflow-owned errors, constrained controls, and partial backup rendering.
-- **2026-10-15 review update:** Swift validation passed **125/125** after the
-  expected-SHA config-save follow-up (#14), up from the 122-test baseline.
+- **2026-10-15 review update:** Swift validation passed **126/126** after the
+  destination-file SHA and reload follow-ups (#14), up from the 122-test
+  baseline. #14 remains partial until inherited-entry provenance is protected.
   Local command:
   `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make app-test-dev`.
   `RunOwnershipTests`, `SyncTerminalProgressTests`, `JSONRPCFrameLimitTests`, and
@@ -516,8 +523,10 @@ apply result, and cancellation semantics as the CLI.
   boundary. `TestConnOversizedReplyReturnsSameIDError` and
   `TestOversizedTerminalStillFinishesRun` cover bounded oversized-frame fallbacks.
   No manual, destructive, real-phone, or full lifecycle-matrix completion is
-  inferred from these tests. Guarded editor saves and focused conflict/reload
-  behavior are covered; provider-picker enrichment remains open. Go
+  inferred from these tests. Destination-file SHA conflicts, editor revision
+  pinning across automatic refresh, explicit cache reload, and preservation of
+  apply-error backup paths are covered. Inherited-entry provenance protection
+  and provider-picker enrichment remain open. Go
   `TestPlaylistsConfigExpectedSHAGuard` and
   `TestPlaylistsConfigExpectedSHACreatesMissingFile` cover stale-hash refusal,
   returned hashes, and first-save behavior.
@@ -585,7 +594,7 @@ recoverable, and one real phone round trip proves exact ordered parity.
   built `bin/udl` and a valid ad-hoc-signed `dist/dev/UDL-Dev.app`. The sandbox
   denied only a nonessential Go module stat-cache temp write during build; the
   build itself completed successfully.
-- **2026-10-15 review update:** Swift validation passed 125/125 as recorded in
+- **2026-10-15 review update:** Swift validation passed 126/126 as recorded in
   Phase 7 above; the 92/92 result here is historical.
   Focused automated regressions do not close any acceptance checkbox below.
 - Real playlists/versions:

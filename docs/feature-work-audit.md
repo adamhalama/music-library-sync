@@ -15,18 +15,22 @@ need their own validation; baseline CI is not evidence for an unpushed change.
 The active root plan/tracker describe directional playlist sync, not unified
 queue work. The native pair editor has explicit create/edit intent and rejects
 case-insensitive ID collisions; it fails honestly for unloaded config or a
-missing backend. Expected-SHA protection is now implemented by review fix #14:
-Go returns read/write content hashes and refuses stale expected hashes, the
-client forwards the cached hash, and the editor surfaces conflicts with an
-on-screen “Reload jobs” action that refreshes cached config. This new evidence,
-not the historical “guarded configuration saving” phrase below, establishes the
-guard. Provider-picker enrichment and manual editor acceptance remain open.
+missing backend. Review fix #14 now protects the destination file: Go returns
+its read/write content hashes and refuses stale expected hashes, the editor
+pins its opening revision across automatic refresh, and destination-file
+conflicts offer an on-screen “Reload jobs” action to refresh the cached config
+and explicitly advance the editor revision. Automatic reload retains unrelated
+apply failures and backup recovery paths. This is not full merged-config
+protection: playlist reads merge user/project files, but inherited entries are
+not covered by the write destination's SHA. Inherited-entry provenance (#14),
+provider-picker enrichment, and manual editor acceptance remain open; the
+historical “guarded configuration saving” phrase below must not imply otherwise.
 
 Review regressions cover exact-ID terminal routing, terminal-before-start replies,
 startup busy/cancel isolation, stale terminal progress, per-payload frame limits,
 and pair create/edit failures, expected-SHA forwarding/retention, conflict
 surfacing, cache reload, and older-wire compatibility. Final Swift validation:
-**125 passing tests**, up from the 122-test baseline before #14. See the dated evidence in
+**126 passing tests**, up from the 122-test baseline before #14. See the dated evidence in
 [IMPLEMENTATION.md](../IMPLEMENTATION.md) for test names and scope. No manual
 native acceptance, destructive apply/restore, or real phone round trip is closed
 by these automated regressions. Earlier audit details are retained below without
