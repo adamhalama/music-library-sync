@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000000000000000000504 /* RunOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000504 /* RunOwnershipTests.swift */; };
 		A10000000000000000000001 /* UDLApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* UDLApp.swift */; };
 		A10000000000000000000002 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* JSONValue.swift */; };
 		A10000000000000000000003 /* WireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* WireModels.swift */; };
@@ -87,6 +88,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B10000000000000000000504 /* RunOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunOwnershipTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* UDLApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDLApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/JSONValue.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* WireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend/Wire/WireModels.swift; sourceTree = "<group>"; };
@@ -248,6 +250,7 @@
 				B10000000000000000000104 /* PhoneLibraryTests.swift */,
 				B10000000000000000000201 /* PlaylistErrorSurfacingTests.swift */,
 				B10000000000000000000501 /* SyncTerminalProgressTests.swift */,
+				B10000000000000000000504 /* RunOwnershipTests.swift */,
 				B10000000000000000000502 /* JSONRPCFrameLimitTests.swift */,
 				B1000000000000000000000E /* AgentProcessTests.swift */,
 			);
@@ -426,6 +429,7 @@
 				A10000000000000000000104 /* PhoneLibraryTests.swift in Sources */,
 				A10000000000000000000201 /* PlaylistErrorSurfacingTests.swift in Sources */,
 				A10000000000000000000501 /* SyncTerminalProgressTests.swift in Sources */,
+				A10000000000000000000504 /* RunOwnershipTests.swift in Sources */,
 				A10000000000000000000502 /* JSONRPCFrameLimitTests.swift in Sources */,
 				A1000000000000000000000E /* AgentProcessTests.swift in Sources */,
 			);

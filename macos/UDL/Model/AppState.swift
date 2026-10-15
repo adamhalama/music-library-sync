@@ -249,7 +249,8 @@ final class AppState: ObservableObject {
     private var planCursorBySource: [String: String] = [:]
     private var syncSidebarSelectionIsExplicit = false
 
-    init() {
+    init(client: UDLClient? = nil) {
+        self.client = client
         projectDirectory = FileManager.default.homeDirectoryForCurrentUser
     }
 
@@ -621,6 +622,7 @@ final class AppState: ObservableObject {
                 trackStatus: syncTrackStatus
             ))
             syncRun.registerRunID(started.runID)
+            consumeBufferedFinished(started.runID)
             await sendPendingSyncCancellationIfReady()
         } catch {
             syncRun.phase = .failed
@@ -1344,9 +1346,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func applyFreeDLPlanNotification(_ notification: FreeDLPlanEventNotification) {
+    func applyFreeDLPlanNotification(_ notification: FreeDLPlanEventNotification) {
         guard notification.runID == freeDLRunID || (freeDLRunID == nil && freeDLOperation == .planning) else { return }
-        freeDLRunID = notification.runID
         applyFreeDLPlanEvent(notification.event)
     }
 
@@ -1517,58 +1518,33 @@ final class AppState: ObservableObject {
         planCursorBySource = [:]
     }
 
-    private func routeFinished(_ finished: RunFinishedNotification) {
-        if finished.runID == syncRun.runID || (syncRun.runID == nil && syncRun.phase.isActive) {
-            syncRun.registerRunID(finished.runID)
+    /// A terminal frame may beat its start response. Only a registered run ID
+    /// owns it; a workflow still waiting for its ID must not claim another run.
+    func routeFinished(_ finished: RunFinishedNotification) {
+        if finished.runID == syncRun.runID {
             applySyncFinished(finished)
-            pendingPrompt = nil
-            return
-        }
-        if finished.runID == freeDLRunID || (freeDLRunID == nil && freeDLOperation != nil) {
-            freeDLRunID = finished.runID
+            if pendingPrompt?.request.params.objectValue?["run_id"]?.stringValue == finished.runID {
+                pendingPrompt = nil
+            }
+        } else if finished.runID == freeDLRunID {
             applyFreeDLFinished(finished)
-            return
-        }
-        if finished.runID == rekordboxRunID || (rekordboxRunID == nil && rekordboxOperation != nil) {
-            rekordboxRunID = finished.runID
+        } else if finished.runID == rekordboxRunID {
             applyRekordboxFinished(finished)
-            return
-        }
-        if finished.runID == playlistSyncRunID || (playlistSyncRunID == nil && playlistSyncOperation != nil) {
-            playlistSyncRunID = finished.runID
+        } else if finished.runID == playlistSyncRunID {
             applyPlaylistSyncFinished(finished)
-            return
-        }
-        if finished.runID == phoneLibraryRunID || (phoneLibraryRunID == nil && phoneLibraryOperation != nil) {
-            phoneLibraryRunID = finished.runID
+        } else if finished.runID == phoneLibraryRunID {
             applyPhoneLibraryFinished(finished)
-            return
-        }
-        guard let operation = playlistOperations.removeValue(forKey: finished.runID) else {
-            // Long-running methods may finish before their start response is
-            // delivered. Hold the terminal frame until its operation registers.
+        } else if let operation = playlistOperations.removeValue(forKey: finished.runID) {
+            applyPlaylistFinished(finished, operation: operation)
+        } else {
             bufferedFinished[finished.runID] = finished
-            return
         }
-        applyPlaylistFinished(finished, operation: operation)
     }
 
-    /// Internal because the Phone Library workflow lives in another file.
+    /// Called after the starter registers its own ID, never by operation kind.
     func consumeBufferedFinished(_ runID: String) {
         guard let finished = bufferedFinished.removeValue(forKey: runID) else { return }
-        if let operation = playlistOperations.removeValue(forKey: runID) {
-            applyPlaylistFinished(finished, operation: operation)
-        } else if freeDLOperation != nil {
-            applyFreeDLFinished(finished)
-        } else if rekordboxOperation != nil {
-            applyRekordboxFinished(finished)
-        } else if playlistSyncOperation != nil {
-            applyPlaylistSyncFinished(finished)
-        } else if phoneLibraryOperation != nil {
-            applyPhoneLibraryFinished(finished)
-        } else {
-            bufferedFinished[runID] = finished
-        }
+        routeFinished(finished)
     }
 
     /// Internal so the failure-surfacing behaviour can be tested directly. It is
