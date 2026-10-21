@@ -264,11 +264,21 @@ remote:
   max_delete: 250
 ```
 
-- `udl navidrome push [--no-scan] [--force-scan] [--no-dates]`: mirror the
-  library with rsync over SSH, then — when anything changed — wait for the
-  server to be idle, rescan, and re-apply Date Added. A sync does this on its
-  own; run it after any other library change. A launchd job can run it
+- `udl navidrome push [--no-scan] [--force-scan] [--no-dates] [--allow-deletes N]`:
+  mirror the library with rsync over SSH, then — when anything changed — wait
+  for the server to be idle, rescan, and re-apply Date Added. A sync does this
+  on its own; run it after any other library change. A launchd job can run it
   periodically as a fallback.
+- A dry run comes first: a push that would delete more than `max_delete` files
+  is refused before anything changes (a moved or missing library folder looks
+  like that). Pass `--allow-deletes N` for an intended reorganisation.
+- The server scans only when udl asks, after a complete push (no watcher, no
+  scheduled scan), so a push that stopped half-way is never indexed. A scan or
+  Date Added step that did not finish is recorded in
+  `<data_dir>/udl-mirror-state.json` and retried by the next push; `status`
+  reports it, and a failed push, as a problem.
+- Names starting with `..` (e.g. `...Ready For It.mp3`) are mirrored: Navidrome
+  hides only names with a single leading dot.
 - The server's Navidrome must mount the mirror at the **same absolute path** as
   `music_dir` and report real paths, so every path it returns is a real path
   on this Mac. `udl navidrome status` flags a server library rooted elsewhere.
@@ -278,8 +288,10 @@ remote:
   reconcile` sends this Mac's APFS creation times and the server applies them
   (after its own backup). `--dry-run` reports what would change.
 - `backup create` / `list` act on the server's database in remote mode.
-- The service, dependency and setup commands manage only a local server and do
-  nothing useful in remote mode.
+- Setup, service start/restart and `deps ensure` refuse in remote mode, so a
+  second server never starts on this Mac; stopping the local service is allowed.
+- The native app embeds its own `udl`: rebuild and reinstall it from a build
+  that knows remote mode, or its config saves cannot preserve `mode: remote`.
 
 `rekordbox` commands:
 
