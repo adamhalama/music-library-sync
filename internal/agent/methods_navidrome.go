@@ -390,6 +390,9 @@ func (s *Server) navidromeServiceControl(params json.RawMessage) (any, *RPCError
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	if err := manager.ServiceControlAllowed(action); err != nil {
+		return nil, NewRPCError(CodeInvalidParams, "navidrome runs on the remote server", map[string]string{"detail": err.Error()})
+	}
 	runID, err := s.StartRun(func(ctx context.Context, _ string) (any, error, int) {
 		var controlErr error
 		switch action {

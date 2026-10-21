@@ -462,3 +462,26 @@ func TestSyncMirrorReportsAFailedPushAsAnError(t *testing.T) {
 		t.Fatal("a failed push must be an error")
 	}
 }
+
+func TestRemoteModeRefusesToBringUpALocalServer(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	manager := &Manager{Config: cfg, Resolved: resolved}
+	for _, action := range []string{"start", "restart", "setup"} {
+		if err := manager.ServiceControlAllowed(action); err == nil {
+			t.Errorf("%s must be refused in remote mode", action)
+		}
+	}
+	if err := manager.ServiceControlAllowed("stop"); err != nil {
+		t.Errorf("stopping the local service is part of the move: %v", err)
+	}
+	if _, err := manager.SetupPlan(context.Background()); err == nil {
+		t.Error("a setup plan must be refused in remote mode")
+	}
+	if _, err := manager.ApplySetup(context.Background(), SetupPlan{}); err == nil {
+		t.Error("a setup apply must be refused in remote mode")
+	}
+	local := &Manager{Config: DefaultConfig()}
+	if err := local.ServiceControlAllowed("start"); err != nil {
+		t.Errorf("local mode must keep its service controls: %v", err)
+	}
+}

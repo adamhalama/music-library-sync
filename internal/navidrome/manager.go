@@ -222,12 +222,30 @@ func (m *Manager) Status(ctx context.Context) Status {
 
 // SetupPlan builds a checksummed setup plan.
 func (m *Manager) SetupPlan(ctx context.Context) (SetupPlan, error) {
+	if err := m.ServiceControlAllowed("setup"); err != nil {
+		return SetupPlan{}, err
+	}
 	return m.planner().Plan(ctx, m.Config, m.ConfigPath)
 }
 
 // ApplySetup revalidates and performs a setup plan.
 func (m *Manager) ApplySetup(ctx context.Context, plan SetupPlan) (ApplyResult, error) {
+	if err := m.ServiceControlAllowed("setup"); err != nil {
+		return ApplyResult{}, err
+	}
 	return m.planner().Apply(ctx, m.Config, plan)
+}
+
+// ServiceControlAllowed refuses anything that would bring up Navidrome on
+// this Mac while the remote server is the one serving the phone: two servers
+// would split stars and plays between them. Stopping stays allowed — it is
+// part of moving to the server.
+func (m *Manager) ServiceControlAllowed(action string) error {
+	if !m.Config.IsRemote() || action == "stop" {
+		return nil
+	}
+	return fmt.Errorf("navidrome %s manages a server on this Mac, but navidrome.mode is remote and %s serves the phone; set mode back to local first to run Navidrome here again",
+		action, m.Config.Server.URL)
 }
 
 func (m *Manager) planner() Planner {
