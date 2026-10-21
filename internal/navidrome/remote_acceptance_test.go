@@ -158,6 +158,32 @@ func TestRemoteMirrorAcceptance(t *testing.T) {
 	}
 	assertLibrary("after add/rename/delete")
 
+	// 3b. A move bigger than max_delete is refused before anything changes,
+	// then goes through with an explicit allowance.
+	album := filepath.Dir(added)
+	if err := os.WriteFile(filepath.Join(album, "02 Second.mp3"), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SyncMirror(ctx, MirrorOptions{Scan: true, Dates: true}); err != nil {
+		t.Fatalf("push of the second file: %v", err)
+	}
+	manager.Config.Remote.MaxDelete = 1
+	moved := filepath.Join(music, "Moved Away")
+	if err := os.Rename(album, moved); err != nil {
+		t.Fatal(err)
+	}
+	refused, err := manager.SyncMirror(ctx, MirrorOptions{Scan: true, Dates: true})
+	t.Logf("refused push: planned=%d changed=%d err=%v", refused.Push.PlannedDeletes, refused.Push.Changed, err)
+	if err == nil || refused.Push.PlannedDeletes != 2 || refused.Push.Changed != 0 || refused.Scanned {
+		t.Fatalf("a move over max_delete must be refused untouched: %+v", refused)
+	}
+	allowed, err := manager.SyncMirror(ctx, MirrorOptions{Scan: true, Dates: true, AllowDeletes: 2})
+	if err != nil || !allowed.Scanned || allowed.Push.Deleted != 2 {
+		t.Fatalf("allowed push = %+v, %v", allowed, err)
+	}
+	manager.Config.Remote.MaxDelete = DefaultRemoteMaxDelete
+	assertLibrary("after an allowed move")
+
 	// 4. Managed smart playlists are written locally, pushed, and imported.
 	refreshed, err := manager.RefreshPlaylists(ctx)
 	if err != nil {

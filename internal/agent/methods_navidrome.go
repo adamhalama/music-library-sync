@@ -139,6 +139,11 @@ func (s *Server) ensureNavidromeDeps(params json.RawMessage) (any, *RPCError) {
 	if !request.Confirm {
 		return nil, NewRPCError(CodeInvalidParams, "installing Navidrome requires explicit confirmation", nil)
 	}
+	if manager, rpcErr := s.navidromeManager(true); rpcErr == nil && manager.Config.IsRemote() {
+		return nil, NewRPCError(CodeInvalidParams, "navidrome runs on the remote server", map[string]string{
+			"detail": "navidrome.mode is remote, so there is nothing to install on this Mac",
+		})
+	}
 	runID, err := s.StartRun(func(ctx context.Context, _ string) (any, error, int) {
 		result, ensureErr := navidrome.DependencyChecker{}.Ensure(ctx, true)
 		if ensureErr != nil {

@@ -127,10 +127,11 @@ type Status struct {
 	// this Mac, not an observation. See PhoneConfig.
 	PhoneConnected bool     `json:"phone_connected"`
 	Problems       []string `json:"problems"`
-	// Mode and Remote are set only in remote mode, where Dependency and
-	// Service describe nothing on this Mac and stay empty.
+	// Mode, Remote and Mirror are set only in remote mode, where Dependency
+	// and Service describe nothing on this Mac and stay empty.
 	Mode   string        `json:"mode,omitempty"`
 	Remote *RemoteStatus `json:"remote,omitempty"`
+	Mirror *MirrorState  `json:"mirror,omitempty"`
 }
 
 // Status inspects dependency, service, and — when credentials exist — server
@@ -471,7 +472,14 @@ func (m *Manager) remoteStatusInto(ctx context.Context, status *Status) {
 	status.Mode = ModeRemote
 	status.Service = ServiceStatus{State: ServiceRemote, Problems: []string{}}
 	status.Dependency = DependencyStatus{Problems: []string{}}
-	remote, err := m.RemoteStatus(ctx)
+	if state, err := LoadMirrorState(m.Resolved); err == nil {
+		status.Mirror = &state
+	}
+	status.Problems = append(status.Problems, m.mirrorProblems()...)
+	// A status view must render promptly even when the server is down.
+	remoteCtx, cancel := context.WithTimeout(ctx, remoteStatusTimeout)
+	defer cancel()
+	remote, err := m.RemoteStatus(remoteCtx)
 	if err != nil {
 		status.Problems = append(status.Problems, err.Error())
 		return
@@ -518,7 +526,11 @@ func RequestScanBestEffort(ctx context.Context, opts ManagerOptions) (bool, stri
 	if manager.Config.IsRemote() {
 		// The push is the point of the hook in remote mode, so it runs under
 		// the caller's (longer) budget rather than the local request limit.
-		result, err := manager.SyncMirror(ctx, MirrorOptions{Scan: true, Dates: true})
+		// The scan waits stay short: a scan that outlasts them is left
+		// pending and finished by the next push.
+		result, err := manager.SyncMirror(ctx, MirrorOptions{
+			Scan: true, Dates: true, IdleWait: postSyncScanIdleWait, FinishWait: postSyncScanFinishWait,
+		})
 		if err != nil {
 			return false, fmt.Sprintf("Navidrome mirror push failed; the server keeps serving the previous mirror: %v", err)
 		}
@@ -533,5 +545,13 @@ func RequestScanBestEffort(ctx context.Context, opts ManagerOptions) (bool, stri
 	return true, ""
 }
 
-// localScanRequestTimeout bounds the post-sync scan request to a local server.
-const localScanRequestTimeout = 15 * time.Second
+const (
+	// localScanRequestTimeout bounds the post-sync scan request to a local server.
+	localScanRequestTimeout = 15 * time.Second
+	// postSyncScanIdleWait and postSyncScanFinishWait bound how long the end
+	// of a sync waits on a remote server's scan.
+	postSyncScanIdleWait   = time.Minute
+	postSyncScanFinishWait = 2 * time.Minute
+	// remoteStatusTimeout bounds the SSH status call behind every status view.
+	remoteStatusTimeout = 10 * time.Second
+)

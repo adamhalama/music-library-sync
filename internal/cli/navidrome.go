@@ -42,6 +42,7 @@ and importing favorites are explicit, confirmed actions.
 // promotion, a manual edit) and is what the launchd fallback runs.
 func newNavidromePushCommand(app *AppContext) *cobra.Command {
 	var noScan, forceScan, noDates bool
+	var allowDeletes int
 	cmd := &cobra.Command{
 		Use:   "push",
 		Short: "Mirror the library to the remote Navidrome server and rescan it",
@@ -63,7 +64,7 @@ A failed push leaves the server serving its previous, complete mirror.
 					fmt.Errorf("navidrome push needs navidrome.mode: remote; the local server reads ~/Music/downloaded directly"))
 			}
 			result, err := manager.SyncMirror(cmd.Context(), navidrome.MirrorOptions{
-				Scan: !noScan, ForceScan: forceScan, Dates: !noDates,
+				Scan: !noScan, ForceScan: forceScan, Dates: !noDates, AllowDeletes: allowDeletes,
 			})
 			if app.Opts.JSON {
 				if encodeErr := json.NewEncoder(app.IO.Out).Encode(result); encodeErr != nil {
@@ -71,6 +72,9 @@ A failed push leaves the server serving its previous, complete mirror.
 				}
 			} else {
 				fmt.Fprintf(app.IO.Out, "Pushed: %d changed, %d deleted\n", result.Push.Changed, result.Push.Deleted)
+				if err != nil && result.Push.PlannedDeletes > 0 {
+					fmt.Fprintf(app.IO.Out, "Planned deletions: %d (nothing was changed)\n", result.Push.PlannedDeletes)
+				}
 				if app.Opts.Verbose {
 					for _, item := range result.Push.Items {
 						fmt.Fprintf(app.IO.Out, "  %s\n", item)
@@ -91,6 +95,7 @@ A failed push leaves the server serving its previous, complete mirror.
 	cmd.Flags().BoolVar(&noScan, "no-scan", false, "push only; do not request a scan")
 	cmd.Flags().BoolVar(&forceScan, "force-scan", false, "scan even when the push changed nothing")
 	cmd.Flags().BoolVar(&noDates, "no-dates", false, "skip the Date Added reconcile after the scan")
+	cmd.Flags().IntVar(&allowDeletes, "allow-deletes", 0, "allow up to this many file deletions for one intended reorganisation")
 	return cmd
 }
 
@@ -167,6 +172,10 @@ func newNavidromeDepsCommand(app *AppContext) *cobra.Command {
 		Short: "Install or upgrade Navidrome through Homebrew",
 		Long:  "This changes your machine. It requires --confirm.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if manager, err := navidromeManager(app, true); err == nil && manager.Config.IsRemote() {
+				return withExitCode(exitcode.InvalidConfig, fmt.Errorf(
+					"navidrome.mode is remote: the server runs Navidrome, so there is nothing to install on this Mac"))
+			}
 			result, err := navidrome.DependencyChecker{}.Ensure(cmd.Context(), confirm)
 			if app.Opts.JSON {
 				_ = json.NewEncoder(app.IO.Out).Encode(result)

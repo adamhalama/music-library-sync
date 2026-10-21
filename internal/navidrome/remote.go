@@ -37,7 +37,33 @@ const (
 
 	// scanFinishTimeout bounds the wait for the requested scan.
 	scanFinishTimeout = 10 * time.Minute
+
+	// deleteSlack lets the real push delete the folders and orphaned temp
+	// files the preflight also listed, on top of the files it counted.
+	deleteSlack = 25
+
+	// MirrorStateFileName records push and scan outcomes on this Mac, so a
+	// failure is visible in status and an unfinished scan is retried.
+	MirrorStateFileName = "udl-mirror-state.json"
 )
+
+// mirrorFilters decide what the mirror holds. Navidrome treats a name as
+// hidden only when it starts with "." and not ".." — verified against 0.63.2,
+// which indexes "...Ready For It.mp3" — so ".."-names are mirrored while every
+// other dot-name stays on the Mac. The excludes are sender-side only (`-s`):
+// hidden files on the server, such as temp files orphaned by a crash, are
+// deleted like any other stray file, and rsync still protects its own
+// `.~tmp~` partial folder.
+var mirrorFilters = []string{
+	"--filter=+ ..*",
+	"--filter=-s .*",
+	"--filter=-s *.part", "--filter=-s *.partial", "--filter=-s *.tmp", "--filter=-s *.crdownload",
+}
+
+// isHiddenName mirrors Navidrome's rule for hidden files and folders.
+func isHiddenName(name string) bool {
+	return strings.HasPrefix(name, ".") && !strings.HasPrefix(name, "..")
+}
 
 // rsync exit codes the push treats specially.
 const (
@@ -72,6 +98,8 @@ type RemoteRunner func(ctx context.Context, stdin []byte, name string, args ...s
 // DefaultRemoteRunner runs the command for real.
 func DefaultRemoteRunner(ctx context.Context, stdin []byte, name string, args ...string) (RemoteOutput, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	// rsync's ssh child can outlive a killed rsync and hold its pipes open.
+	cmd.WaitDelay = 5 * time.Second
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -105,6 +133,8 @@ type PushResult struct {
 	Deleted int      `json:"deleted"`
 	Items   []string `json:"items,omitempty"`
 	Warning string   `json:"warning,omitempty"`
+	// PlannedDeletes is the preflight's count of files the push would delete.
+	PlannedDeletes int `json:"planned_deletes,omitempty"`
 }
 
 // HasChanges reports whether the server's library changed.
@@ -124,25 +154,50 @@ const maxReportedPushItems = 200
 //   - no --checksum: it would read the whole library on both ends each time.
 //   - no --iconv: names are mirrored byte-for-byte, which keeps Navidrome's
 //     relative-path identity equal to this Mac's.
-//   - `- .*`: Finder and udl temp files stay local, and hidden server-side
-//     files (rsync's own partials) are protected from --delete.
-func RsyncPushArgs(cfg Config, resolved Resolved) []string {
+//   - mirrorFilters: see there.
+//
+// A dry run (the deletion preflight) omits --max-delete; the real push passes
+// the preflight's count plus slack, so it never stops half-way through.
+func RsyncPushArgs(cfg Config, resolved Resolved, maxDelete int, dryRun bool) []string {
 	remote := cfg.Remote
 	if remote == nil {
 		remote = &RemoteConfig{}
 	}
-	return []string{
+	args := []string{
 		"--recursive", "--times", "--perms", "--chmod=D755,F644",
 		"--delete-delay", "--delay-updates", "--partial", "--fuzzy",
-		fmt.Sprintf("--max-delete=%d", remote.MaxDelete),
-		fmt.Sprintf("--timeout=%d", remoteRsyncTimeoutSeconds),
-		"--filter=- .*",
-		"--filter=- *.part", "--filter=- *.partial", "--filter=- *.tmp", "--filter=- *.crdownload",
-		"--itemize-changes", "--out-format=%i %n%L",
-		"-e", remote.SSHPath + " -o BatchMode=yes",
-		strings.TrimRight(resolved.MusicDir, "/") + "/",
-		remote.SSHTarget + ":",
 	}
+	if dryRun {
+		args = append(args, "--dry-run")
+	} else {
+		args = append(args, fmt.Sprintf("--max-delete=%d", maxDelete))
+	}
+	args = append(args, fmt.Sprintf("--timeout=%d", remoteRsyncTimeoutSeconds))
+	args = append(args, mirrorFilters...)
+	return append(args,
+		"--itemize-changes", "--out-format=%i %n%L",
+		"-e", remote.SSHPath+" -o BatchMode=yes",
+		strings.TrimRight(resolved.MusicDir, "/")+"/",
+		remote.SSHTarget+":",
+	)
+}
+
+// countPlannedDeletions reads a dry run: tracks are deleted files that are
+// not hidden; total is every deletion rsync will count against --max-delete.
+func countPlannedDeletions(output string) (tracks, total int) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if !strings.HasPrefix(line, "*deleting") {
+			continue
+		}
+		total++
+		name := strings.TrimSpace(strings.TrimPrefix(line, "*deleting"))
+		if strings.HasSuffix(name, "/") || isHiddenName(filepath.Base(name)) {
+			continue
+		}
+		tracks++
+	}
+	return tracks, total
 }
 
 // ParseItemizedChanges counts what an itemized push changed.
@@ -154,8 +209,10 @@ func ParseItemizedChanges(output string) (changed, deleted int, items []string) 
 		}
 		switch {
 		case strings.HasPrefix(line, "*deleting"):
-			// A folder emptied by the push is listed too; only files count.
-			if strings.HasSuffix(line, "/") {
+			// A folder emptied by the push is listed too, and so is a hidden
+			// temp file being cleaned up; only real files count.
+			name := strings.TrimSpace(strings.TrimPrefix(line, "*deleting"))
+			if strings.HasSuffix(name, "/") || isHiddenName(filepath.Base(name)) {
 				continue
 			}
 			deleted++
@@ -187,12 +244,18 @@ func (m *Manager) requireRemote() (*RemoteConfig, error) {
 
 // Push mirrors MusicDir to the server. It never requests a scan; see
 // SyncMirror for the full push, scan and Date Added sequence.
-func (m *Manager) Push(ctx context.Context) (PushResult, error) {
+//
+// A dry run comes first and the push is refused outright — nothing copied,
+// nothing deleted — when it would delete more than max_delete (or the
+// explicit allowDeletes) files. rsync's own --max-delete would instead stop
+// half-way and leave old and new paths side by side for the next scan to
+// index as different tracks.
+func (m *Manager) Push(ctx context.Context, allowDeletes int) (PushResult, error) {
 	remote, err := m.requireRemote()
 	if err != nil {
 		return PushResult{}, err
 	}
-	if err := checkPushSource(m.Resolved.MusicDir); err != nil {
+	if err := checkPushSource(m.Resolved.MusicDir, m.Resolved.PlaylistsPath); err != nil {
 		return PushResult{}, err
 	}
 	run := m.remoteRunner()
@@ -204,35 +267,68 @@ func (m *Manager) Push(ctx context.Context) (PushResult, error) {
 		return PushResult{}, fmt.Errorf("%s is not rsync 3.x; macOS's /usr/bin/rsync is openrsync, so point navidrome.remote.rsync_path at Homebrew's rsync", remote.RsyncPath)
 	}
 
-	args := RsyncPushArgs(m.Config, m.Resolved)
-	result := PushResult{Command: remote.RsyncPath + " " + strings.Join(args, " "), StartedAt: m.now()}
+	result := PushResult{StartedAt: m.now()}
+	preflight, err := run(ctx, nil, remote.RsyncPath, RsyncPushArgs(m.Config, m.Resolved, 0, true)...)
+	if err != nil {
+		return result, fmt.Errorf("mirror preflight did not finish: %w", err)
+	}
+	if err := rsyncExitError(preflight, "preflight"); err != nil {
+		return result, err
+	}
+	tracks, total := countPlannedDeletions(string(preflight.Stdout))
+	result.PlannedDeletes = tracks
+	limit := remote.MaxDelete
+	if allowDeletes > limit {
+		limit = allowDeletes
+	}
+	if tracks > limit {
+		result.FinishedAt = m.now()
+		return result, fmt.Errorf(
+			"the push would delete %d files from the server (limit %d), so nothing was pushed. A moved, renamed or missing library folder looks like this; if the deletions are intended, run `udl navidrome push --allow-deletes %d`",
+			tracks, limit, tracks)
+	}
+
+	args := RsyncPushArgs(m.Config, m.Resolved, total+deleteSlack, false)
+	result.Command = remote.RsyncPath + " " + strings.Join(args, " ")
 	out, err := run(ctx, nil, remote.RsyncPath, args...)
 	result.FinishedAt = m.now()
 	result.Changed, result.Deleted, result.Items = ParseItemizedChanges(string(out.Stdout))
 	if err != nil {
 		return result, fmt.Errorf("mirror push did not finish: %w", err)
 	}
+	if out.ExitCode == rsyncExitVanished {
+		result.Warning = "some files changed or vanished during the push; the next push will catch up"
+		return result, nil
+	}
+	return result, rsyncExitError(out, "push")
+}
+
+// rsyncExitError explains a failed rsync run; exit 24 (files vanished while
+// being read) is not a failure.
+func rsyncExitError(out RemoteOutput, step string) error {
 	stderr := strings.TrimSpace(string(out.Stderr))
 	switch out.ExitCode {
-	case 0:
-	case rsyncExitVanished:
-		result.Warning = "some files changed or vanished during the push; the next push will catch up"
+	case 0, rsyncExitVanished:
+		return nil
+	case rsyncExitPartial:
+		// rsync skips every deletion after a read error, so moved files now
+		// exist on the server under both names; no scan may run until a clean
+		// push has removed the old ones.
+		return fmt.Errorf("the mirror %s could not read some files on this Mac, so rsync skipped all deletions; fix the files below and push again: %s",
+			step, lastLines(stderr, 5))
 	case rsyncExitMaxDelete:
-		return result, fmt.Errorf(
-			"the push stopped after deleting %d files on the server (navidrome.remote.max_delete); the mirror is incomplete. If this many deletions are intended, raise max_delete and push again",
-			remote.MaxDelete)
-	default:
-		if strings.Contains(stderr, "Another instance of rrsync") {
-			return result, errors.New("another push to the mirror is still running; try again shortly")
-		}
-		return result, fmt.Errorf("mirror push failed (rsync exit %d): %s", out.ExitCode, lastLines(stderr, 5))
+		return fmt.Errorf("the mirror %s stopped at its delete limit; push again", step)
 	}
-	return result, nil
+	if strings.Contains(stderr, "Another instance of rrsync") {
+		return errors.New("another push to the mirror is still running; try again shortly")
+	}
+	return fmt.Errorf("mirror %s failed (rsync exit %d): %s", step, out.ExitCode, lastLines(stderr, 5))
 }
 
 // checkPushSource refuses to mirror a missing or empty library: with
-// --delete, that would empty the server.
-func checkPushSource(musicDir string) error {
+// --delete, that would empty the server. The managed playlists folder does
+// not count, because a playlist refresh recreates it on its own.
+func checkPushSource(musicDir, playlistsPath string) error {
 	info, err := os.Stat(musicDir)
 	if err != nil {
 		return fmt.Errorf("music_dir %s is not available: %w", musicDir, err)
@@ -245,7 +341,7 @@ func checkPushSource(musicDir string) error {
 		return fmt.Errorf("read music_dir %s: %w", musicDir, err)
 	}
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".") {
+		if !isHiddenName(entry.Name()) && entry.Name() != filepath.Clean(playlistsPath) {
 			return nil
 		}
 	}
@@ -397,23 +493,31 @@ func BuildBirthTimeManifest(resolved Resolved, birth BirthTimeFunc) (BirthTimeMa
 	if birth == nil {
 		birth = FileBirthTime
 	}
-	root := strings.TrimRight(resolved.MusicDir, "/")
-	manifest := BirthTimeManifest{Version: 1, MusicDir: root, Entries: []BirthTimeEntry{}}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	// The manifest names the configured path — the server's library root —
+	// but the walk follows it if it is a symlink, as rsync's `src/` does;
+	// WalkDir would otherwise stop at the link and report an empty library.
+	configured := strings.TrimRight(resolved.MusicDir, "/")
+	manifest := BirthTimeManifest{Version: 1, MusicDir: configured, Entries: []BirthTimeEntry{}}
+	root, err := filepath.EvalSymlinks(configured)
+	if err != nil {
+		return BirthTimeManifest{}, fmt.Errorf("resolve music_dir %s: %w", configured, err)
+	}
+	playlists := filepath.Clean(resolved.PlaylistsPath)
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if path == root {
 			return nil
 		}
-		if strings.HasPrefix(entry.Name(), ".") {
+		if isHiddenName(entry.Name()) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if entry.IsDir() {
-			if resolved.PlaylistsDir != "" && path == resolved.PlaylistsDir {
+			if rel, relErr := filepath.Rel(root, path); relErr == nil && rel == playlists {
 				return filepath.SkipDir
 			}
 			return nil
@@ -453,6 +557,8 @@ type remoteDatesReply struct {
 	Unmatched       int      `json:"unmatched"`
 	UnmatchedSample []string `json:"unmatched_sample"`
 	Ambiguous       int      `json:"ambiguous"`
+	Rejected        int      `json:"rejected"`
+	RejectedSample  []string `json:"rejected_sample"`
 	Candidates      int      `json:"candidates"`
 	Updated         int      `json:"updated"`
 	AlbumsUpdated   int      `json:"albums_updated"`
@@ -466,6 +572,11 @@ func (m *Manager) reconcileDateAddedRemote(ctx context.Context, dryRun bool) (Re
 	manifest, err := BuildBirthTimeManifest(m.Resolved, m.BirthTime)
 	if err != nil {
 		return ReconcileResult{}, err
+	}
+	if len(manifest.Entries) == 0 {
+		// Reporting "already matches" for an empty walk would hide a broken
+		// music_dir for good.
+		return ReconcileResult{}, fmt.Errorf("found no audio files under %s; not reconciling Date Added", m.Resolved.MusicDir)
 	}
 	payload, err := json.Marshal(manifest)
 	if err != nil {
@@ -485,6 +596,7 @@ func (m *Manager) reconcileDateAddedRemote(ctx context.Context, dryRun bool) (Re
 		Updated:       reply.Updated,
 		AlbumsUpdated: reply.AlbumsUpdated,
 		Unmatched:     reply.Unmatched,
+		Rejected:      reply.Rejected,
 	}
 	if reply.Backup != nil {
 		result.BackupPath = reply.Backup.Path
@@ -500,6 +612,10 @@ func (m *Manager) reconcileDateAddedRemote(ctx context.Context, dryRun bool) (Re
 	if reply.Unmatched > 0 {
 		result.Message += fmt.Sprintf(" (%d file(s) are not in the server library yet)", reply.Unmatched)
 	}
+	if reply.Rejected > 0 {
+		result.Message += fmt.Sprintf("; %d file(s) have an implausible creation time and were left alone, e.g. %s",
+			reply.Rejected, strings.Join(reply.RejectedSample[:min(3, len(reply.RejectedSample))], ", "))
+	}
 	return result, nil
 }
 
@@ -514,9 +630,16 @@ var scanPollInterval = time.Second
 
 // scanAfterPush waits for any running scan, requests one, and waits for it to
 // finish. A scan that starts after the push completed includes the pushed
-// files, so being idle first is what makes the request count.
-func scanAfterPush(ctx context.Context, client scanStatusClient) error {
-	idleCtx, cancelIdle := context.WithTimeout(ctx, scanIdleTimeout)
+// files, so being idle first is what makes the request count. Zero waits use
+// the defaults.
+func scanAfterPush(ctx context.Context, client scanStatusClient, idleWait, finishWait time.Duration) error {
+	if idleWait <= 0 {
+		idleWait = scanIdleTimeout
+	}
+	if finishWait <= 0 {
+		finishWait = scanFinishTimeout
+	}
+	idleCtx, cancelIdle := context.WithTimeout(ctx, idleWait)
 	defer cancelIdle()
 	before, err := waitScanIdle(idleCtx, client)
 	if err != nil {
@@ -525,7 +648,7 @@ func scanAfterPush(ctx context.Context, client scanStatusClient) error {
 	if err := client.StartScan(ctx, false); err != nil {
 		return fmt.Errorf("request a Navidrome scan: %w", err)
 	}
-	finishCtx, cancelFinish := context.WithTimeout(ctx, scanFinishTimeout)
+	finishCtx, cancelFinish := context.WithTimeout(ctx, finishWait)
 	defer cancelFinish()
 	sawScanning := false
 	polls := 0
@@ -585,12 +708,86 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // MirrorOptions selects what SyncMirror does after the push.
 type MirrorOptions struct {
-	// Scan requests a scan when the push changed anything.
+	// Scan requests a scan when the push changed anything, or when an
+	// earlier push's scan never finished.
 	Scan bool
 	// ForceScan scans even when the push changed nothing.
 	ForceScan bool
 	// Dates re-applies Date Added after a scan.
 	Dates bool
+	// AllowDeletes raises the delete limit for one intended reorganisation.
+	AllowDeletes int
+	// IdleWait and FinishWait bound the scan waits; zero uses the defaults.
+	// A wait that runs out leaves the scan pending for the next push.
+	IdleWait, FinishWait time.Duration
+}
+
+// MirrorState is what this Mac knows about the mirror between runs.
+type MirrorState struct {
+	LastPushAt    *time.Time `json:"last_push_at,omitempty"`
+	LastScanAt    *time.Time `json:"last_scan_at,omitempty"`
+	LastErrorAt   *time.Time `json:"last_error_at,omitempty"`
+	LastPushError string     `json:"last_push_error,omitempty"`
+	// ScanPending means files reached the server but its scan (and the
+	// Date Added reconcile after it) has not completed yet. The server
+	// runs no scheduled scan, so the next push forces one.
+	ScanPending bool `json:"scan_pending,omitempty"`
+}
+
+// MirrorStatePath is the state file inside the (local) data directory.
+func MirrorStatePath(resolved Resolved) string {
+	return filepath.Join(resolved.DataDir, MirrorStateFileName)
+}
+
+// LoadMirrorState reads the state; a missing file is a fresh state.
+func LoadMirrorState(resolved Resolved) (MirrorState, error) {
+	var state MirrorState
+	payload, err := os.ReadFile(MirrorStatePath(resolved))
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return MirrorState{}, fmt.Errorf("parse %s: %w", MirrorStatePath(resolved), err)
+	}
+	return state, nil
+}
+
+func saveMirrorState(resolved Resolved, state MirrorState) error {
+	if err := os.MkdirAll(resolved.DataDir, 0o700); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return AtomicWrite(MirrorStatePath(resolved), append(payload, '\n'), 0o600)
+}
+
+func (m *Manager) mirrorProblems() []string {
+	state, err := LoadMirrorState(m.Resolved)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	problems := []string{}
+	switch {
+	case state.LastPushError != "":
+		when := "at an unknown time"
+		if state.LastErrorAt != nil {
+			when = state.LastErrorAt.Local().Format("2006-01-02 15:04")
+		}
+		problems = append(problems, fmt.Sprintf(
+			"the last mirror push failed (%s): %s — the server is serving the previous mirror",
+			when, state.LastPushError))
+	case state.LastPushAt == nil:
+		problems = append(problems, "this Mac has never pushed the mirror; run `udl navidrome push`")
+	}
+	if state.ScanPending {
+		problems = append(problems, "the server has not finished scanning the last push; the next `udl navidrome push` retries it")
+	}
+	return problems
 }
 
 // MirrorResult reports a push and what followed it.
@@ -606,51 +803,80 @@ type MirrorResult struct {
 // serving the previous mirror, so scan and date problems are warnings.
 func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorResult, error) {
 	result := MirrorResult{Warnings: []string{}}
-	push, err := m.Push(ctx)
+	state, stateErr := LoadMirrorState(m.Resolved)
+	if stateErr != nil {
+		result.Warnings = append(result.Warnings, stateErr.Error())
+	}
+	record := func() {
+		if err := saveMirrorState(m.Resolved, state); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the mirror state: %v", err))
+		}
+	}
+	push, err := m.Push(ctx, opts.AllowDeletes)
 	result.Push = push
+	now := m.now()
 	if err != nil {
+		state.LastPushError, state.LastErrorAt = err.Error(), &now
+		record()
 		return result, err
 	}
+	state.LastPushAt, state.LastPushError, state.LastErrorAt = &now, "", nil
 	if push.Warning != "" {
 		result.Warnings = append(result.Warnings, push.Warning)
 	}
-	if !opts.Scan || (!push.HasChanges() && !opts.ForceScan) {
+	if !opts.Scan || (!push.HasChanges() && !opts.ForceScan && !state.ScanPending) {
+		state.ScanPending = state.ScanPending || push.HasChanges()
+		record()
 		return result, nil
 	}
+	// Pending until the scan and the reconcile after it complete, so an
+	// interrupted run is finished by the next push rather than forgotten.
+	state.ScanPending = true
+	record()
 	client, err := m.Client()
 	if err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but no scan was requested: %v", err))
 		return result, nil
 	}
-	if err := scanAfterPush(ctx, client); err != nil {
+	if err := scanAfterPush(ctx, client, opts.IdleWait, opts.FinishWait); err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but the scan did not complete: %v", err))
 		return result, nil
 	}
 	result.Scanned = true
+	scanned := m.now()
+	state.LastScanAt = &scanned
 	if opts.Dates {
 		dates, err := m.reconcileDateAddedRemote(ctx, false)
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Date Added was not reconciled: %v", err))
-		} else {
-			result.Dates = &dates
+			record()
+			return result, nil
 		}
+		result.Dates = &dates
 	}
+	state.ScanPending = false
+	record()
 	return result, nil
 }
 
 // pushingRefreshClient makes the playlist refresh push the rewritten `.nsp`
 // files before the scan that imports them; on a mirror the server would
-// otherwise rescan the old files.
+// otherwise rescan the old files. It runs the full mirror sequence, so audio
+// that travels with the playlists gets its Date Added too.
 type pushingRefreshClient struct {
 	manager *Manager
 	client  *Client
 }
 
 func (p pushingRefreshClient) StartScan(ctx context.Context, _ bool) error {
-	if _, err := p.manager.Push(ctx); err != nil {
+	result, err := p.manager.SyncMirror(ctx, MirrorOptions{Scan: true, ForceScan: true, Dates: true})
+	if err != nil {
 		return err
 	}
-	return scanAfterPush(ctx, p.client)
+	if !result.Scanned {
+		return errors.New(strings.Join(result.Warnings, "; "))
+	}
+	return nil
 }
 
 func (p pushingRefreshClient) Playlists(ctx context.Context) ([]Playlist, error) {

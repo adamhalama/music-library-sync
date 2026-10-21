@@ -21,6 +21,10 @@ func remoteTestConfig(t *testing.T) (Config, Resolved) {
 	cfg.Mode = ModeRemote
 	cfg.Remote = &RemoteConfig{SSHTarget: "udl-mirror"}
 	cfg.Paths.MusicDir = music
+	// Each test gets its own data dir: the mirror state file lives there,
+	// and the default would be the real ~/Library path.
+	cfg.Paths.DataDir = t.TempDir()
+	cfg.Paths.CacheDir, cfg.Paths.LogFile, cfg.Paths.ConfigFile, cfg.Paths.BackupDir = "", "", "", ""
 	cfg.Server.URL = "https://music-server.example.ts.net:4533"
 	normalize(&cfg)
 	resolved, err := Resolve(cfg)
@@ -120,11 +124,11 @@ func TestRemoteConfigValidation(t *testing.T) {
 
 func TestRsyncPushArgsPinTheSafetyFlags(t *testing.T) {
 	cfg, resolved := remoteTestConfig(t)
-	args := RsyncPushArgs(cfg, resolved)
+	args := RsyncPushArgs(cfg, resolved, 31, false)
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
-		"--times", "--delete-delay", "--delay-updates", "--partial", "--max-delete=250",
-		"--filter=- .*", "--itemize-changes", "--timeout=120",
+		"--times", "--delete-delay", "--delay-updates", "--partial", "--max-delete=31",
+		"--filter=+ ..*", "--filter=-s .*", "--itemize-changes", "--timeout=120",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %s in %v", want, args)
@@ -143,6 +147,14 @@ func TestRsyncPushArgsPinTheSafetyFlags(t *testing.T) {
 	if got := args[len(args)-1]; got != "udl-mirror:" {
 		t.Errorf("destination = %q", got)
 	}
+	// ".."-names come before the hidden exclude, which is sender-side only.
+	if strings.Index(joined, "--filter=+ ..*") > strings.Index(joined, "--filter=-s .*") {
+		t.Errorf("the .. include must precede the hidden exclude: %v", args)
+	}
+	dry := strings.Join(RsyncPushArgs(cfg, resolved, 0, true), " ")
+	if !strings.Contains(dry, "--dry-run") || strings.Contains(dry, "--max-delete") {
+		t.Errorf("preflight args = %s", dry)
+	}
 }
 
 func TestParseItemizedChanges(t *testing.T) {
@@ -154,6 +166,7 @@ func TestParseItemizedChanges(t *testing.T) {
 		".d..t...... Old/",
 		"*deleting   Gone/04 Removed.mp3",
 		"*deleting   Gone/",
+		"*deleting   Old/.03 Touched.mp3.Ab12Cd",
 		"",
 	}, "\n")
 	changed, deleted, items := ParseItemizedChanges(out)
@@ -165,12 +178,14 @@ func TestParseItemizedChanges(t *testing.T) {
 func TestPushRefusesAnEmptyLibrary(t *testing.T) {
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, ".DS_Store"))
+	// A playlist refresh recreates this folder on its own; it is not a library.
+	writeFile(t, filepath.Join(resolved.MusicDir, "udl-playlists", "All Music.nsp"))
 	runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
 		t.Fatal("no command may run for an empty library")
 		return RemoteOutput{}, nil
 	}}
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	if _, err := manager.Push(context.Background()); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := manager.Push(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -185,7 +200,7 @@ func TestPushRefusesOpenrsync(t *testing.T) {
 		return RemoteOutput{Stdout: []byte("openrsync: protocol version 29\nrsync version 2.6.9 compatible\n")}, nil
 	}}
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	if _, err := manager.Push(context.Background()); err == nil || !strings.Contains(err.Error(), "openrsync") {
+	if _, err := manager.Push(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "openrsync") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -199,7 +214,8 @@ func TestPushClassifiesRsyncExits(t *testing.T) {
 	}{
 		{code: 0},
 		{code: rsyncExitVanished, warn: true},
-		{code: rsyncExitMaxDelete, wantErr: "max_delete"},
+		{code: rsyncExitMaxDelete, wantErr: "delete limit"},
+		{code: rsyncExitPartial, stderr: "IO error encountered -- skipping file deletion", wantErr: "skipped all deletions"},
 		{code: 1, stderr: "Another instance of rrsync is already accessing this directory", wantErr: "still running"},
 		{code: 255, stderr: "ssh: connect to host music-server: Operation timed out", wantErr: "rsync exit 255"},
 	}
@@ -207,13 +223,16 @@ func TestPushClassifiesRsyncExits(t *testing.T) {
 		cfg, resolved := remoteTestConfig(t)
 		writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 		runner := &scriptedRunner{reply: func(_ string, args []string) (RemoteOutput, error) {
-			if args[0] == "--version" {
+			switch {
+			case args[0] == "--version":
 				return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
+			case hasArg(args, "--dry-run"):
+				return RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}, nil
 			}
 			return RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n"), Stderr: []byte(tc.stderr), ExitCode: tc.code}, nil
 		}}
 		manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-		result, err := manager.Push(context.Background())
+		result, err := manager.Push(context.Background(), 0)
 		switch {
 		case tc.wantErr != "":
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -226,6 +245,71 @@ func TestPushClassifiesRsyncExits(t *testing.T) {
 				t.Errorf("exit %d: result = %+v", tc.code, result)
 			}
 		}
+	}
+}
+
+func hasArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func argWithPrefix(args []string, prefix string) string {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			return arg
+		}
+	}
+	return ""
+}
+
+func deletionRunner(t *testing.T, planned int, real *[]string) *scriptedRunner {
+	t.Helper()
+	var dry strings.Builder
+	for i := 0; i < planned; i++ {
+		dry.WriteString("*deleting   Old Folder/" + strings.Repeat("x", i%7+1) + "-" + time.Duration(i).String() + ".mp3\n")
+	}
+	dry.WriteString("*deleting   Old Folder/\n*deleting   Kept/.orphan.mp3.Ab12Cd\n")
+	return &scriptedRunner{reply: func(_ string, args []string) (RemoteOutput, error) {
+		switch {
+		case args[0] == "--version":
+			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
+		case hasArg(args, "--dry-run"):
+			return RemoteOutput{Stdout: []byte(dry.String())}, nil
+		}
+		*real = args
+		return RemoteOutput{}, nil
+	}}
+}
+
+func TestPushRefusesALargeDeletionBeforeChangingAnything(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	var real []string
+	runner := deletionRunner(t, 300, &real)
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+	result, err := manager.Push(context.Background(), 0)
+	if err == nil || !strings.Contains(err.Error(), "nothing was pushed") || !strings.Contains(err.Error(), "--allow-deletes 300") {
+		t.Fatalf("err = %v", err)
+	}
+	if real != nil {
+		t.Fatalf("the real push ran despite the refusal: %v", real)
+	}
+	if result.PlannedDeletes != 300 {
+		t.Fatalf("planned = %d (folders and hidden temps must not count)", result.PlannedDeletes)
+	}
+
+	// An explicit allowance lets the reorganisation through, and the real
+	// push may delete everything the preflight listed, so it cannot stop
+	// half-way.
+	if _, err := manager.Push(context.Background(), 300); err != nil {
+		t.Fatal(err)
+	}
+	if got := argWithPrefix(real, "--max-delete="); got != "--max-delete=327" {
+		t.Fatalf("real push %s, want 300 files + 2 other deletions + slack", got)
 	}
 }
 
@@ -271,9 +355,13 @@ func TestBirthTimeManifestCoversVisibleAudioOnly(t *testing.T) {
 		"Artist/Album/01 Song.mp3",
 		"Artist/Album/cover.jpg",
 		"Artist/Album/02 Song.M4A",
+		"Artist/Album/...Ready For It.mp3",
+		"..Dots/x.mp3",
 		".hidden/x.mp3",
 		"Artist/.DS_Store",
+		"Artist/.hidden.mp3",
 		"udl-playlists/All Music.nsp",
+		"udl-playlists/stray.mp3",
 	} {
 		writeFile(t, filepath.Join(resolved.MusicDir, rel))
 	}
@@ -292,9 +380,46 @@ func TestBirthTimeManifestCoversVisibleAudioOnly(t *testing.T) {
 			t.Errorf("%s birth = %d", entry.Path, entry.BirthTimeNS)
 		}
 	}
-	want := []string{"Artist/Album/01 Song.mp3", "Artist/Album/02 Song.M4A"}
+	// Navidrome indexes ".."-names, so they need Date Added too.
+	want := []string{"..Dots/x.mp3", "Artist/Album/...Ready For It.mp3", "Artist/Album/01 Song.mp3", "Artist/Album/02 Song.M4A"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("entries = %v, want %v", got, want)
+	}
+}
+
+func TestBirthTimeManifestFollowsASymlinkedLibrary(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	real := t.TempDir()
+	writeFile(t, filepath.Join(real, "Artist", "01 Song.mp3"))
+	link := filepath.Join(t.TempDir(), "downloaded")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Paths.MusicDir = link
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildBirthTimeManifest(resolved, func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.MusicDir != link || len(manifest.Entries) != 1 || manifest.Entries[0].Path != "Artist/01 Song.mp3" {
+		t.Fatalf("manifest = %+v; it must name the configured root and relative paths under its target", manifest)
+	}
+}
+
+func TestDateAddedRefusesAnEmptyManifest(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "cover.jpg"))
+	runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
+		t.Fatal("an empty manifest must not reach the server")
+		return RemoteOutput{}, nil
+	}}
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
+		BirthTime: func(string) (time.Time, error) { return time.Now(), nil }}
+	if _, err := manager.ReconcileDateAdded(context.Background()); err == nil {
+		t.Fatal("expected an error rather than \"already matches\"")
 	}
 }
 
@@ -342,7 +467,7 @@ func TestScanAfterPushWaitsForIdleThenForItsOwnScan(t *testing.T) {
 		{Scanning: false, LastScan: before},                // not started yet
 		{Scanning: false, LastScan: after},                 // quick scan finished between polls
 	}}
-	if err := scanAfterPush(context.Background(), client); err != nil {
+	if err := scanAfterPush(context.Background(), client, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	if client.started != 1 {
@@ -357,7 +482,7 @@ func TestScanAfterPushWithoutLastScanUsesTheRunningSignal(t *testing.T) {
 	scanPollInterval = time.Millisecond
 	t.Cleanup(func() { scanPollInterval = time.Second })
 	client := &fakeScanClient{states: []ScanState{{}, {Scanning: true}, {Scanning: true}, {}}}
-	if err := scanAfterPush(context.Background(), client); err != nil {
+	if err := scanAfterPush(context.Background(), client, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -418,6 +543,10 @@ func TestSyncMirrorPushesScansAndAppliesDates(t *testing.T) {
 	if !result.Scanned || *scans != 1 || result.Dates == nil || result.Dates.Updated != 1 || len(result.Warnings) != 0 {
 		t.Fatalf("result = %+v scans=%d", result, *scans)
 	}
+	state, err := LoadMirrorState(resolved)
+	if err != nil || state.LastPushAt == nil || state.LastScanAt == nil || state.ScanPending || state.LastPushError != "" {
+		t.Fatalf("state = %+v, %v", state, err)
+	}
 	var manifest BirthTimeManifest
 	if err := json.Unmarshal(runner.stdin[len(runner.stdin)-1], &manifest); err != nil {
 		t.Fatal(err)
@@ -443,7 +572,7 @@ func TestSyncMirrorSkipsTheScanWhenNothingChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Scanned || *scans != 0 || len(runner.calls) != 2 {
+	if result.Scanned || *scans != 0 || len(runner.calls) != 3 {
 		t.Fatalf("result = %+v scans=%d calls=%v", result, *scans, runner.calls)
 	}
 }
@@ -460,6 +589,66 @@ func TestSyncMirrorReportsAFailedPushAsAnError(t *testing.T) {
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
 	if _, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true}); err == nil {
 		t.Fatal("a failed push must be an error")
+	}
+	state, _ := LoadMirrorState(resolved)
+	if state.LastPushError == "" || state.LastErrorAt == nil {
+		t.Fatalf("a failed push must be recorded: %+v", state)
+	}
+	problems := manager.mirrorProblems()
+	if len(problems) == 0 || !strings.Contains(problems[0], "last mirror push failed") {
+		t.Fatalf("problems = %v", problems)
+	}
+}
+
+func TestAnUnfinishedScanIsRetriedByTheNextPush(t *testing.T) {
+	scanPollInterval = time.Millisecond
+	t.Cleanup(func() { scanPollInterval = time.Second })
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	changed := true
+	runner := &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
+		switch {
+		case args[0] == "--version":
+			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
+		case name == DefaultRemoteRsyncPath && hasArg(args, "--dry-run"):
+			return RemoteOutput{}, nil
+		case name == DefaultRemoteRsyncPath:
+			if changed {
+				return RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}, nil
+			}
+			return RemoteOutput{}, nil
+		}
+		return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
+	}}
+	// First run: the server stays busy scanning past the wait.
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := map[string]any{"status": "ok", "version": "1.16.1",
+			"scanStatus": map[string]any{"scanning": true, "count": 1}}
+		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
+	}))
+	t.Cleanup(busy.Close)
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
+		BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		API:       NewClient(busy.URL, Credentials{Username: "u", Password: "p"})}
+	first, err := manager.SyncMirror(context.Background(), MirrorOptions{
+		Scan: true, Dates: true, IdleWait: 20 * time.Millisecond, FinishWait: 20 * time.Millisecond})
+	if err != nil || first.Scanned || len(first.Warnings) == 0 {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	if state, _ := LoadMirrorState(resolved); !state.ScanPending {
+		t.Fatalf("an unfinished scan must stay pending: %+v", state)
+	}
+
+	// Second run pushes nothing new but still scans, because one is owed.
+	changed = false
+	server, scans := mirrorServer(t)
+	manager.API = NewClient(server.URL, Credentials{Username: "u", Password: "p"})
+	second, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+	if err != nil || !second.Scanned || *scans != 1 {
+		t.Fatalf("second = %+v scans=%d err=%v", second, *scans, err)
+	}
+	if state, _ := LoadMirrorState(resolved); state.ScanPending {
+		t.Fatalf("a completed scan must clear the pending flag: %+v", state)
 	}
 }
 

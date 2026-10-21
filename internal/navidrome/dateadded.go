@@ -24,6 +24,7 @@ type ReconcileResult struct {
 	// server has not indexed yet.
 	AlbumsUpdated int `json:"albums_updated,omitempty"`
 	Unmatched     int `json:"unmatched,omitempty"`
+	Rejected      int `json:"rejected,omitempty"`
 }
 
 // DatabasePath is the managed Navidrome database.
