@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -72,7 +73,7 @@ A failed push leaves the server serving its previous, complete mirror.
 				}
 			} else {
 				fmt.Fprintf(app.IO.Out, "Pushed: %d changed, %d deleted\n", result.Push.Changed, result.Push.Deleted)
-				if err != nil && result.Push.PlannedDeletes > 0 {
+				if errors.Is(err, navidrome.ErrDeleteLimit) {
 					fmt.Fprintf(app.IO.Out, "Planned deletions: %d (nothing was changed)\n", result.Push.PlannedDeletes)
 				}
 				if app.Opts.Verbose {

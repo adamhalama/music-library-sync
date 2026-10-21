@@ -65,6 +65,17 @@ func isHiddenName(name string) bool {
 	return strings.HasPrefix(name, ".") && !strings.HasPrefix(name, "..")
 }
 
+// hasHiddenSegment reports whether any segment of a mirror-relative path is
+// hidden, e.g. rsync's `X/.~tmp~/song.mp3` partial.
+func hasHiddenSegment(rel string) bool {
+	for _, segment := range strings.Split(rel, "/") {
+		if isHiddenName(segment) {
+			return true
+		}
+	}
+	return false
+}
+
 // rsync exit codes the push treats specially.
 const (
 	rsyncExitPartial   = 23
@@ -82,6 +93,20 @@ var mirrorAudioExtensions = map[string]struct{}{
 }
 
 var rsync3Version = regexp.MustCompile(`(?m)^rsync\s+version\s+v?3\.`)
+
+// totalTransferred reads `--stats` "Total transferred file size: 1,234 bytes".
+var totalTransferred = regexp.MustCompile(`(?m)^Total transferred file size: ([0-9.,]+) bytes`)
+
+// ErrDeleteLimit marks a push refused by the deletion preflight; nothing was
+// changed on the server.
+var ErrDeleteLimit = errors.New("push refused by the delete limit")
+
+// ErrMirrorBusy means another udl push to the mirror is running on this Mac.
+var ErrMirrorBusy = errors.New("another udl push to the mirror is running; this one was skipped")
+
+// mirrorFreeFloor is the free space a push must leave on the server; the
+// gate enforces the same floor per session.
+const mirrorFreeFloor = 20 << 30
 
 // RemoteOutput is what a remote command produced.
 type RemoteOutput struct {
@@ -168,7 +193,8 @@ func RsyncPushArgs(cfg Config, resolved Resolved, maxDelete int, dryRun bool) []
 		"--delete-delay", "--delay-updates", "--partial", "--fuzzy",
 	}
 	if dryRun {
-		args = append(args, "--dry-run")
+		// --stats sizes the transfer for the free-space check.
+		args = append(args, "--dry-run", "--stats")
 	} else {
 		args = append(args, fmt.Sprintf("--max-delete=%d", maxDelete))
 	}
@@ -192,7 +218,7 @@ func countPlannedDeletions(output string) (tracks, total int) {
 		}
 		total++
 		name := strings.TrimSpace(strings.TrimPrefix(line, "*deleting"))
-		if strings.HasSuffix(name, "/") || isHiddenName(filepath.Base(name)) {
+		if strings.HasSuffix(name, "/") || hasHiddenSegment(name) {
 			continue
 		}
 		tracks++
@@ -212,7 +238,7 @@ func ParseItemizedChanges(output string) (changed, deleted int, items []string) 
 			// A folder emptied by the push is listed too, and so is a hidden
 			// temp file being cleaned up; only real files count.
 			name := strings.TrimSpace(strings.TrimPrefix(line, "*deleting"))
-			if strings.HasSuffix(name, "/") || isHiddenName(filepath.Base(name)) {
+			if strings.HasSuffix(name, "/") || hasHiddenSegment(name) {
 				continue
 			}
 			deleted++
@@ -284,8 +310,12 @@ func (m *Manager) Push(ctx context.Context, allowDeletes int) (PushResult, error
 	if tracks > limit {
 		result.FinishedAt = m.now()
 		return result, fmt.Errorf(
-			"the push would delete %d files from the server (limit %d), so nothing was pushed. A moved, renamed or missing library folder looks like this; if the deletions are intended, run `udl navidrome push --allow-deletes %d`",
-			tracks, limit, tracks)
+			"%w: it would delete %d files from the server (limit %d), so nothing was pushed. A moved, renamed or missing library folder looks like this; if the deletions are intended, run `udl navidrome push --allow-deletes %d`",
+			ErrDeleteLimit, tracks, limit, tracks)
+	}
+	if err := m.checkServerSpace(ctx, string(preflight.Stdout)); err != nil {
+		result.FinishedAt = m.now()
+		return result, err
 	}
 
 	args := RsyncPushArgs(m.Config, m.Resolved, total+deleteSlack, false)
@@ -296,11 +326,57 @@ func (m *Manager) Push(ctx context.Context, allowDeletes int) (PushResult, error
 	if err != nil {
 		return result, fmt.Errorf("mirror push did not finish: %w", err)
 	}
-	if out.ExitCode == rsyncExitVanished {
+	switch {
+	case out.ExitCode == rsyncExitVanished:
 		result.Warning = "some files changed or vanished during the push; the next push will catch up"
+		return result, nil
+	case out.ExitCode == rsyncExitPartial && !deletionsSkipped(out):
+		// A file that cannot be read is simply not updated; everything else,
+		// deletions included, went through and is safe to scan.
+		result.Warning = "some files could not be read on this Mac and were not pushed: " +
+			lastLines(strings.TrimSpace(string(out.Stderr)), 5)
 		return result, nil
 	}
 	return result, rsyncExitError(out, "push")
+}
+
+// deletionsSkipped reports rsync's "IO error encountered -- skipping file
+// deletion": after an unreadable folder it deletes nothing, so moved files
+// exist under both names until a clean push.
+func deletionsSkipped(out RemoteOutput) bool {
+	return strings.Contains(string(out.Stderr), "skipping file deletion")
+}
+
+// checkServerSpace refuses a push that would leave the server below the free
+// space floor. The gate's own check runs once per session, before rsync
+// writes anything, so a single large push needs this one.
+func (m *Manager) checkServerSpace(ctx context.Context, preflight string) error {
+	match := totalTransferred.FindStringSubmatch(preflight)
+	if match == nil {
+		return nil
+	}
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, match[1])
+	var size int64
+	if _, err := fmt.Sscan(digits, &size); err != nil || size == 0 {
+		return nil
+	}
+	statusCtx, cancel := context.WithTimeout(ctx, remoteStatusTimeout)
+	defer cancel()
+	status, err := m.RemoteStatus(statusCtx)
+	if err != nil || status.Disk.FreeBytes == 0 {
+		// The gate still refuses a session below the floor.
+		return nil
+	}
+	if size > status.Disk.FreeBytes-mirrorFreeFloor {
+		return fmt.Errorf("the push would transfer %d MiB but the server has only %d MiB free (it keeps %d GiB free); nothing was pushed",
+			size>>20, status.Disk.FreeBytes>>20, mirrorFreeFloor>>30)
+	}
+	return nil
 }
 
 // rsyncExitError explains a failed rsync run; exit 24 (files vanished while
@@ -311,11 +387,14 @@ func rsyncExitError(out RemoteOutput, step string) error {
 	case 0, rsyncExitVanished:
 		return nil
 	case rsyncExitPartial:
-		// rsync skips every deletion after a read error, so moved files now
-		// exist on the server under both names; no scan may run until a clean
-		// push has removed the old ones.
-		return fmt.Errorf("the mirror %s could not read some files on this Mac, so rsync skipped all deletions; fix the files below and push again: %s",
-			step, lastLines(stderr, 5))
+		if deletionsSkipped(out) {
+			// After an unreadable folder rsync deletes nothing, so moved files
+			// exist on the server under both names; no scan may run until a
+			// clean push has removed the old ones.
+			return fmt.Errorf("the mirror %s could not read a folder on this Mac, so rsync skipped all deletions; fix it and push again: %s",
+				step, lastLines(stderr, 5))
+		}
+		return fmt.Errorf("the mirror %s could not read some files on this Mac: %s", step, lastLines(stderr, 5))
 	case rsyncExitMaxDelete:
 		return fmt.Errorf("the mirror %s stopped at its delete limit; push again", step)
 	}
@@ -429,6 +508,71 @@ func (m *Manager) RemoteStatus(ctx context.Context) (RemoteStatus, error) {
 	}
 	status.SSHTarget = m.Config.Remote.SSHTarget
 	return status, nil
+}
+
+// mirrorExcluded are the non-hidden names the push never sends.
+var mirrorExcluded = []string{"*.part", "*.partial", "*.tmp", "*.crdownload"}
+
+// localLibraryShape counts the files the push would mirror and finds the
+// newest modification time, matching the gate's own `status` walk.
+func localLibraryShape(musicDir string) (files int, newest time.Time, err error) {
+	root, err := filepath.EvalSymlinks(musicDir)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		if isHiddenName(entry.Name()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			return nil
+		}
+		for _, pattern := range mirrorExcluded {
+			if matched, _ := filepath.Match(pattern, entry.Name()); matched {
+				return nil
+			}
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		files++
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	return files, newest, err
+}
+
+// staleMirrorProblems compares this Mac's library with the server's mirror.
+// It catches what the state file cannot: a launchd push that never runs, or
+// changes nobody pushed.
+func (m *Manager) staleMirrorProblems(status RemoteStatus) []string {
+	files, newest, err := localLibraryShape(m.Resolved.MusicDir)
+	if err != nil {
+		return []string{fmt.Sprintf("could not compare the library with the mirror: %v", err)}
+	}
+	problems := []string{}
+	if files != status.Library.Files {
+		problems = append(problems, fmt.Sprintf(
+			"the server's mirror has %d files but this library has %d; run `udl navidrome push`",
+			status.Library.Files, files))
+	} else if server := status.Library.NewestMtime; server != nil && newest.Sub(*server) > 2*time.Second {
+		problems = append(problems, fmt.Sprintf(
+			"the server's mirror is behind this library (newest file %s here, %s there); run `udl navidrome push`",
+			newest.Local().Format("2006-01-02 15:04"), server.Local().Format("2006-01-02 15:04")))
+	}
+	return problems
 }
 
 // remoteProblems flags a server layout that breaks exact-path identity.
@@ -728,10 +872,13 @@ type MirrorState struct {
 	LastScanAt    *time.Time `json:"last_scan_at,omitempty"`
 	LastErrorAt   *time.Time `json:"last_error_at,omitempty"`
 	LastPushError string     `json:"last_push_error,omitempty"`
-	// ScanPending means files reached the server but its scan (and the
-	// Date Added reconcile after it) has not completed yet. The server
-	// runs no scheduled scan, so the next push forces one.
+	// ScanPending means files reached the server but its scan has not
+	// completed yet. The server never scans on its own, so the next push
+	// forces one.
 	ScanPending bool `json:"scan_pending,omitempty"`
+	// DatesPending means a scan completed but the Date Added reconcile
+	// after it did not; the next push retries it without another scan.
+	DatesPending bool `json:"dates_pending,omitempty"`
 }
 
 // MirrorStatePath is the state file inside the (local) data directory.
@@ -787,6 +934,9 @@ func (m *Manager) mirrorProblems() []string {
 	if state.ScanPending {
 		problems = append(problems, "the server has not finished scanning the last push; the next `udl navidrome push` retries it")
 	}
+	if state.DatesPending {
+		problems = append(problems, "Date Added was not reconciled after the last scan; the next `udl navidrome push` retries it (or run `udl navidrome dates reconcile`)")
+	}
 	return problems
 }
 
@@ -803,6 +953,12 @@ type MirrorResult struct {
 // serving the previous mirror, so scan and date problems are warnings.
 func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorResult, error) {
 	result := MirrorResult{Warnings: []string{}}
+	unlock, err := lockMirror(m.Resolved)
+	if err != nil {
+		// A concurrent run owns the state file; record nothing.
+		return result, err
+	}
+	defer unlock()
 	state, stateErr := LoadMirrorState(m.Resolved)
 	if stateErr != nil {
 		result.Warnings = append(result.Warnings, stateErr.Error())
@@ -817,6 +973,8 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 	now := m.now()
 	if err != nil {
 		state.LastPushError, state.LastErrorAt = err.Error(), &now
+		// A push that failed after transferring files still owes a scan.
+		state.ScanPending = state.ScanPending || push.HasChanges()
 		record()
 		return result, err
 	}
@@ -824,38 +982,37 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 	if push.Warning != "" {
 		result.Warnings = append(result.Warnings, push.Warning)
 	}
-	if !opts.Scan || (!push.HasChanges() && !opts.ForceScan && !state.ScanPending) {
-		state.ScanPending = state.ScanPending || push.HasChanges()
+	state.ScanPending = state.ScanPending || push.HasChanges() || (opts.Scan && opts.ForceScan)
+	if !opts.Scan || (!state.ScanPending && !(opts.Dates && state.DatesPending)) {
 		record()
 		return result, nil
 	}
-	// Pending until the scan and the reconcile after it complete, so an
-	// interrupted run is finished by the next push rather than forgotten.
-	state.ScanPending = true
 	record()
-	client, err := m.Client()
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but no scan was requested: %v", err))
-		return result, nil
+	if state.ScanPending {
+		client, err := m.Client()
+		if err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but no scan was requested: %v", err))
+			return result, nil
+		}
+		if err := scanAfterPush(ctx, client, opts.IdleWait, opts.FinishWait); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but the scan did not complete: %v", err))
+			return result, nil
+		}
+		result.Scanned = true
+		scanned := m.now()
+		state.LastScanAt, state.ScanPending, state.DatesPending = &scanned, false, opts.Dates
+		record()
 	}
-	if err := scanAfterPush(ctx, client, opts.IdleWait, opts.FinishWait); err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but the scan did not complete: %v", err))
-		return result, nil
-	}
-	result.Scanned = true
-	scanned := m.now()
-	state.LastScanAt = &scanned
-	if opts.Dates {
+	if opts.Dates && state.DatesPending {
 		dates, err := m.reconcileDateAddedRemote(ctx, false)
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Date Added was not reconciled: %v", err))
-			record()
 			return result, nil
 		}
 		result.Dates = &dates
+		state.DatesPending = false
+		record()
 	}
-	state.ScanPending = false
-	record()
 	return result, nil
 }
 

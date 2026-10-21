@@ -492,6 +492,7 @@ func (m *Manager) remoteStatusInto(ctx context.Context, status *Status) {
 		status.LatestBackup = &latest
 	}
 	status.Problems = append(status.Problems, m.remoteProblems(remote)...)
+	status.Problems = append(status.Problems, m.staleMirrorProblems(remote)...)
 }
 
 // RequestScan asks Navidrome to rescan. Callers that must not fail on an

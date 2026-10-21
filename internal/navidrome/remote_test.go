@@ -674,3 +674,163 @@ func TestRemoteModeRefusesToBringUpALocalServer(t *testing.T) {
 		t.Errorf("local mode must keep its service controls: %v", err)
 	}
 }
+
+// pushRunner answers the version check and preflight, then the real push
+// with the given output; gate calls get gateReply.
+func pushRunner(real RemoteOutput, preflight string, gateReply string) *scriptedRunner {
+	return &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
+		switch {
+		case args[0] == "--version":
+			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
+		case name == DefaultRemoteRsyncPath && hasArg(args, "--dry-run"):
+			return RemoteOutput{Stdout: []byte(preflight)}, nil
+		case name == DefaultRemoteRsyncPath:
+			return real, nil
+		}
+		return RemoteOutput{Stdout: []byte(gateReply)}, nil
+	}}
+}
+
+func TestAnUnreadableFileIsAWarningButAnUnreadableFolderBlocksTheScan(t *testing.T) {
+	scanPollInterval = time.Millisecond
+	t.Cleanup(func() { scanPollInterval = time.Second })
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	server, scans := mirrorServer(t)
+
+	fileErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ b.mp3\n*deleting   Old/x.mp3\n"),
+		Stderr: []byte("rsync: [sender] send_files failed to open \"/m/c.mp3\": Permission denied (13)\n")}
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: pushRunner(fileErr, "", `{"ok":true,"entries":1}`).run,
+		BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		API:       NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
+	result, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+	if err != nil || !result.Scanned || *scans != 1 || len(result.Warnings) == 0 {
+		t.Fatalf("one unreadable file must not block the scan: %+v, %v", result, err)
+	}
+
+	folderErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ New/b.mp3\n"),
+		Stderr: []byte("IO error encountered -- skipping file deletion\n")}
+	manager.Remote = pushRunner(folderErr, "", "").run
+	result, err = manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+	if err == nil || result.Scanned || *scans != 1 {
+		t.Fatalf("skipped deletions must not be scanned: %+v, %v", result, err)
+	}
+	if state, _ := LoadMirrorState(resolved); !state.ScanPending || state.LastPushError == "" {
+		t.Fatalf("files were transferred, so a scan is owed once a clean push lands: %+v", state)
+	}
+}
+
+func TestASecondConcurrentPushIsSkippedWithoutTouchingState(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	unlock, err := lockMirror(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
+		t.Fatal("a skipped push must not run rsync")
+		return RemoteOutput{}, nil
+	}}
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+	if _, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true}); !errors.Is(err, ErrMirrorBusy) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(MirrorStatePath(resolved)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a skipped push must not write state: %v", err)
+	}
+}
+
+func TestDeletionsInsideHiddenFoldersAreNotTracks(t *testing.T) {
+	tracks, total := countPlannedDeletions(strings.Join([]string{
+		"*deleting   Album/.~tmp~/01 Song.mp3",
+		"*deleting   .hd/x.mp3",
+		"*deleting   Album/..Still A Track.mp3",
+		"*deleting   Album/02 Gone.mp3",
+	}, "\n"))
+	if tracks != 2 || total != 4 {
+		t.Fatalf("tracks=%d total=%d", tracks, total)
+	}
+}
+
+func TestPushRefusesATransferThatWouldFillTheServer(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	status := `{"ok":true,"library":{"files":1},"database":{"present":true},"disk":{"free_bytes":42949672960}}` // 40 GiB
+	var real []string
+	big := "Total transferred file size: 30,000,000,000 bytes\n"
+	runner := pushRunner(RemoteOutput{}, big, status)
+	original := runner.reply
+	runner.reply = func(name string, args []string) (RemoteOutput, error) {
+		if name == DefaultRemoteRsyncPath && !hasArg(args, "--dry-run") && args[0] != "--version" {
+			real = args
+		}
+		return original(name, args)
+	}
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+	if _, err := manager.Push(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "free") || real != nil {
+		t.Fatalf("err = %v, real push ran: %v", err, real != nil)
+	}
+	small := "Total transferred file size: 5,000,000 bytes\n"
+	manager.Remote = pushRunner(RemoteOutput{}, small, status).run
+	if _, err := manager.Push(context.Background(), 0); err != nil {
+		t.Fatalf("a small push must pass: %v", err)
+	}
+}
+
+func TestAFailedReconcileIsRetriedWithoutAnotherScan(t *testing.T) {
+	scanPollInterval = time.Millisecond
+	t.Cleanup(func() { scanPollInterval = time.Second })
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	server, scans := mirrorServer(t)
+	changed := RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}
+	manager := &Manager{Config: cfg, Resolved: resolved,
+		Remote:    pushRunner(changed, "", `{"ok":false,"error":"database is locked"}`).run,
+		BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		API:       NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
+	first, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+	if err != nil || !first.Scanned || first.Dates != nil {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	if state, _ := LoadMirrorState(resolved); state.ScanPending || !state.DatesPending {
+		t.Fatalf("the scan finished but the dates did not: %+v", state)
+	}
+	manager.Remote = pushRunner(RemoteOutput{}, "", `{"ok":true,"entries":1,"updated":1,"candidates":1}`).run
+	second, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+	if err != nil || second.Scanned || second.Dates == nil || *scans != 1 {
+		t.Fatalf("second = %+v scans=%d err=%v", second, *scans, err)
+	}
+	if state, _ := LoadMirrorState(resolved); state.DatesPending {
+		t.Fatalf("dates_pending must clear: %+v", state)
+	}
+}
+
+func TestStatusNoticesAMirrorThatFellBehind(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	writeFile(t, filepath.Join(resolved.MusicDir, "..b.mp3"))
+	writeFile(t, filepath.Join(resolved.MusicDir, ".DS_Store"))
+	writeFile(t, filepath.Join(resolved.MusicDir, "c.mp3.part"))
+	manager := &Manager{Config: cfg, Resolved: resolved}
+	_, newest, err := localLibraryShape(resolved.MusicDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status RemoteStatus
+	status.Library.Files = 2
+	status.Library.NewestMtime = &newest
+	if problems := manager.staleMirrorProblems(status); len(problems) != 0 {
+		t.Fatalf("an in-sync mirror has no problems: %v", problems)
+	}
+	status.Library.Files = 1
+	if problems := manager.staleMirrorProblems(status); len(problems) != 1 || !strings.Contains(problems[0], "has 1 files") {
+		t.Fatalf("a missing file must show: %v", problems)
+	}
+	status.Library.Files = 2
+	older := newest.Add(-time.Hour)
+	status.Library.NewestMtime = &older
+	if problems := manager.staleMirrorProblems(status); len(problems) != 1 || !strings.Contains(problems[0], "behind") {
+		t.Fatalf("an older mirror must show: %v", problems)
+	}
+}
