@@ -153,6 +153,7 @@ func TestParseItemizedChanges(t *testing.T) {
 		".f..t...... Old/03 Touched.mp3",
 		".d..t...... Old/",
 		"*deleting   Gone/04 Removed.mp3",
+		"*deleting   Gone/",
 		"",
 	}, "\n")
 	changed, deleted, items := ParseItemizedChanges(out)

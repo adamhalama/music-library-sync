@@ -99,8 +99,8 @@ type PushResult struct {
 	Command    string    `json:"command"`
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
-	// Changed counts files created or updated on the server, Deleted those
-	// removed. Directory-only metadata changes are not counted.
+	// Changed counts files created or updated on the server, Deleted files
+	// removed. Directory-only changes are not counted.
 	Changed int      `json:"changed"`
 	Deleted int      `json:"deleted"`
 	Items   []string `json:"items,omitempty"`
@@ -154,6 +154,10 @@ func ParseItemizedChanges(output string) (changed, deleted int, items []string) 
 		}
 		switch {
 		case strings.HasPrefix(line, "*deleting"):
+			// A folder emptied by the push is listed too; only files count.
+			if strings.HasSuffix(line, "/") {
+				continue
+			}
 			deleted++
 		case line[1] == 'f' && strings.ContainsRune("<>ch.", rune(line[0])):
 			changed++
