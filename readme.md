@@ -248,6 +248,39 @@ home network):
   distinct spelling (`Hard Bounce` and `HARD BOUNCE` are two entries).
 - The account password lives only in macOS Keychain. It never appears in configuration, plans, logs, or command arguments.
 
+Remote mode (`mode: remote` in `navidrome.yaml`) serves a mirror of
+`~/Music/downloaded` from an always-on server instead of this Mac. The Mac stays
+the only place the library is downloaded and edited; the server keeps serving
+its last complete mirror while the Mac sleeps.
+
+```yaml
+mode: remote
+server:
+  url: https://music-server.<tailnet>.ts.net:4533
+  username: jaa
+remote:
+  ssh_target: udl-mirror          # ~/.ssh/config Host alias for the mirror key
+  rsync_path: /opt/homebrew/bin/rsync
+  max_delete: 250
+```
+
+- `udl navidrome push [--no-scan] [--force-scan] [--no-dates]`: mirror the
+  library with rsync over SSH, then — when anything changed — wait for the
+  server to be idle, rescan, and re-apply Date Added. A sync does this on its
+  own; run it after any other library change. A launchd job can run it
+  periodically as a fallback.
+- The server's Navidrome must mount the mirror at the **same absolute path** as
+  `music_dir` and report real paths, so every path it returns is a real path
+  on this Mac. `udl navidrome status` flags a server library rooted elsewhere.
+- rsync must be 3.x (`brew install rsync`); `/usr/bin/rsync` on current macOS
+  is openrsync and is refused.
+- The server's own creation times are push times, so `udl navidrome dates
+  reconcile` sends this Mac's APFS creation times and the server applies them
+  (after its own backup). `--dry-run` reports what would change.
+- `backup create` / `list` act on the server's database in remote mode.
+- The service, dependency and setup commands manage only a local server and do
+  nothing useful in remote mode.
+
 `rekordbox` commands:
 
 - `udl rekordbox config path|show`: inspect the standalone Rekordbox configuration.

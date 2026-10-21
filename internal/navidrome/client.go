@@ -175,6 +175,16 @@ type scanStatus struct {
 	Scanning    bool  `json:"scanning"`
 	Count       int64 `json:"count"`
 	FolderCount int64 `json:"folderCount"`
+	// LastScan is an OpenSubsonic addition Navidrome sends; older servers
+	// omit it.
+	LastScan string `json:"lastScan,omitempty"`
+}
+
+// ScanState is the scanner state including when the last scan ran.
+type ScanState struct {
+	Scanning bool
+	Count    int64
+	LastScan time.Time
 }
 
 type rawPlaylist struct {
@@ -792,6 +802,24 @@ func (c *Client) ScanStatus(ctx context.Context) (bool, int64, error) {
 		return false, 0, nil
 	}
 	return envelope.Response.ScanStatus.Scanning, envelope.Response.ScanStatus.Count, nil
+}
+
+// ScanState reports scanner state, including the last scan time when the
+// server provides it.
+func (c *Client) ScanState(ctx context.Context) (ScanState, error) {
+	envelope, err := c.get(ctx, "getScanStatus.view", nil)
+	if err != nil {
+		return ScanState{}, err
+	}
+	raw := envelope.Response.ScanStatus
+	if raw == nil {
+		return ScanState{}, nil
+	}
+	state := ScanState{Scanning: raw.Scanning, Count: raw.Count}
+	if last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw.LastScan)); err == nil {
+		state.LastScan = last.UTC()
+	}
+	return state, nil
 }
 
 func convertPlaylist(raw rawPlaylist) Playlist {

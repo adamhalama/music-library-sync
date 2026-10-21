@@ -9,9 +9,13 @@ import (
 	"github.com/jaa/update-downloads/internal/output"
 )
 
-// postSyncScanTimeout bounds the optional scan request. The phone server is a
-// convenience; a slow or wedged one must not hold up the end of a sync.
-const postSyncScanTimeout = 15 * time.Second
+// postSyncBudget bounds the whole optional hook. The phone server is a
+// convenience; a slow or wedged one must not hold up the end of a sync. The
+// scanner applies its own tighter limit to a local server's scan request;
+// this ceiling exists for remote mode, where the hook pushes the mirror
+// first and an incremental push takes seconds but a large batch can take
+// minutes.
+const postSyncBudget = 20 * time.Minute
 
 // NavidromeScanner requests a library rescan. It exists so tests can drive the
 // post-sync hook without a server.
@@ -55,7 +59,7 @@ func RequestNavidromeScan(ctx context.Context, req SyncRequest, result engine.Sy
 	if scanner == nil {
 		scanner = navidrome.RequestScanBestEffort
 	}
-	scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postSyncScanTimeout)
+	scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postSyncBudget)
 	defer cancel()
 
 	requested, warning := scanner(scanCtx, opts)

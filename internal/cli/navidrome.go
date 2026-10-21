@@ -33,6 +33,64 @@ and importing favorites are explicit, confirmed actions.
 	cmd.AddCommand(newNavidromePhoneCommand(app))
 	cmd.AddCommand(newNavidromeBackupCommand(app))
 	cmd.AddCommand(newNavidromeDatesCommand(app))
+	cmd.AddCommand(newNavidromePushCommand(app))
+	return cmd
+}
+
+// newNavidromePushCommand mirrors the library to a remote server. A sync
+// pushes on its own; this is for every other change to the library (Free DL
+// promotion, a manual edit) and is what the launchd fallback runs.
+func newNavidromePushCommand(app *AppContext) *cobra.Command {
+	var noScan, forceScan, noDates bool
+	cmd := &cobra.Command{
+		Use:   "push",
+		Short: "Mirror the library to the remote Navidrome server and rescan it",
+		Long: strings.TrimSpace(`
+Only for navidrome.mode: remote. Pushes ~/Music/downloaded to the server's
+mirror with rsync over SSH, then — when anything changed — waits for the
+server to be idle, rescans, and re-applies Date Added from this Mac's file
+creation times.
+
+A failed push leaves the server serving its previous, complete mirror.
+`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := navidromeManager(app, false)
+			if err != nil {
+				return err
+			}
+			if !manager.Config.IsRemote() {
+				return withExitCode(exitcode.InvalidConfig,
+					fmt.Errorf("navidrome push needs navidrome.mode: remote; the local server reads ~/Music/downloaded directly"))
+			}
+			result, err := manager.SyncMirror(cmd.Context(), navidrome.MirrorOptions{
+				Scan: !noScan, ForceScan: forceScan, Dates: !noDates,
+			})
+			if app.Opts.JSON {
+				if encodeErr := json.NewEncoder(app.IO.Out).Encode(result); encodeErr != nil {
+					return encodeErr
+				}
+			} else {
+				fmt.Fprintf(app.IO.Out, "Pushed: %d changed, %d deleted\n", result.Push.Changed, result.Push.Deleted)
+				if app.Opts.Verbose {
+					for _, item := range result.Push.Items {
+						fmt.Fprintf(app.IO.Out, "  %s\n", item)
+					}
+				}
+				fmt.Fprintf(app.IO.Out, "Scanned: %s\n", yesNo(result.Scanned))
+				if result.Dates != nil {
+					fmt.Fprintln(app.IO.Out, result.Dates.Message)
+				}
+				printProblems(app, result.Warnings)
+			}
+			if err != nil {
+				return withExitCode(exitcode.RuntimeFailure, err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&noScan, "no-scan", false, "push only; do not request a scan")
+	cmd.Flags().BoolVar(&forceScan, "force-scan", false, "scan even when the push changed nothing")
+	cmd.Flags().BoolVar(&noDates, "no-dates", false, "skip the Date Added reconcile after the scan")
 	return cmd
 }
 
@@ -141,9 +199,18 @@ func newNavidromeStatusCommand(app *AppContext) *cobra.Command {
 			}
 			fmt.Fprintf(app.IO.Out, "Enabled: %s\n", yesNo(status.Enabled))
 			fmt.Fprintf(app.IO.Out, "Music: %s\n", status.MusicDir)
-			fmt.Fprintf(app.IO.Out, "Service: %s\n", status.Service.State)
-			fmt.Fprintf(app.IO.Out, "Transcoder: %s\n",
-				orDash(status.Dependency.FFmpegPath))
+			if status.Mode == navidrome.ModeRemote {
+				fmt.Fprintf(app.IO.Out, "Server: %s (remote mirror)\n", manager.Config.Server.URL)
+				if remote := status.Remote; remote != nil {
+					fmt.Fprintf(app.IO.Out, "Mirror: %d files, %d bytes on %s\n",
+						remote.Library.Files, remote.Library.Bytes, remote.SSHTarget)
+					fmt.Fprintf(app.IO.Out, "Server disk free: %d bytes\n", remote.Disk.FreeBytes)
+				}
+			} else {
+				fmt.Fprintf(app.IO.Out, "Service: %s\n", status.Service.State)
+				fmt.Fprintf(app.IO.Out, "Transcoder: %s\n",
+					orDash(status.Dependency.FFmpegPath))
+			}
 			if status.Service.LocalURL != "" {
 				fmt.Fprintf(app.IO.Out, "Local: %s\n", status.Service.LocalURL)
 			}
@@ -491,7 +558,7 @@ func printStarredFavorites(app *AppContext, songs []navidrome.Song) {
 
 func newNavidromeDatesCommand(app *AppContext) *cobra.Command {
 	cmd := &cobra.Command{Use: "dates", Short: "Manage how Date Added is derived"}
-	cmd.AddCommand(&cobra.Command{
+	reconcile := &cobra.Command{
 		Use:   "reconcile",
 		Short: "Make Date Added mean the file's real creation time",
 		Long: strings.TrimSpace(`
@@ -502,13 +569,25 @@ managed smart playlists and a client's own "Date Added" sort.
 
 A database backup is taken first. The operation is idempotent and safe to run
 while the server is running.
+
+In remote mode the server cannot know this Mac's creation times, so UDL sends
+them and the server applies them; --dry-run reports what would change.
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			manager, err := navidromeManager(app, true)
 			if err != nil {
 				return err
 			}
-			result, err := manager.ReconcileDateAdded(cmd.Context())
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			if dryRun && !manager.Config.IsRemote() {
+				return withExitCode(exitcode.InvalidConfig, fmt.Errorf("--dry-run is only available in remote mode"))
+			}
+			var result navidrome.ReconcileResult
+			if dryRun {
+				result, err = manager.PreviewDateAdded(cmd.Context())
+			} else {
+				result, err = manager.ReconcileDateAdded(cmd.Context())
+			}
 			if err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
@@ -521,7 +600,9 @@ while the server is running.
 			fmt.Fprintln(app.IO.Out, result.Message)
 			return nil
 		},
-	})
+	}
+	reconcile.Flags().Bool("dry-run", false, "remote mode: report what would change without writing")
+	cmd.AddCommand(reconcile)
 	return cmd
 }
 
@@ -554,7 +635,7 @@ func newNavidromeBackupCommand(app *AppContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := navidrome.Backups(manager.Resolved)
+			items, err := manager.ListBackups(cmd.Context())
 			if err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}

@@ -23,6 +23,9 @@ const (
 	ServiceRunning ServiceState = "running"
 	// ServiceUnknown means launchd could not be queried.
 	ServiceUnknown ServiceState = "unknown"
+	// ServiceRemote means Navidrome runs on another machine; there is no
+	// service on this Mac to report.
+	ServiceRemote ServiceState = "remote"
 )
 
 // ServiceStatus is a read-only view of the managed service.

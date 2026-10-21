@@ -90,12 +90,39 @@ func (s *Server) writeNavidromeConfig(params json.RawMessage) (any, *RPCError) {
 	if err != nil {
 		return nil, navidromeRPCError(err)
 	}
+	if current, rpcErr := s.navidromeManager(true); rpcErr == nil {
+		if err := keepOmittedRemoteSettings(params, request.Config, current.Config); err != nil {
+			return nil, NewRPCError(CodeInvalidParams, "invalid navidrome.config.write params", nil)
+		}
+	}
 	if err := navidrome.Save(path, *request.Config); err != nil {
 		return nil, NewRPCError(CodeInvalidParams, "navidrome configuration is invalid", map[string]string{
 			"detail": err.Error(),
 		})
 	}
 	return s.readNavidromeConfig()
+}
+
+// keepOmittedRemoteSettings carries the stored mode and remote server over
+// when a write omits them. A native build that predates remote mode decodes
+// the config, edits it, and sends back only the fields it knows; without this
+// a remote install would silently turn back into a local one on its next
+// save. A client that does know the fields sends them and is taken as is.
+func keepOmittedRemoteSettings(params json.RawMessage, incoming *navidrome.Config, current navidrome.Config) error {
+	var raw struct {
+		Config map[string]json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return err
+	}
+	if _, sent := raw.Config["mode"]; !sent {
+		incoming.Mode = current.Mode
+	}
+	if _, sent := raw.Config["remote"]; !sent && current.Remote != nil {
+		remote := *current.Remote
+		incoming.Remote = &remote
+	}
+	return nil
 }
 
 func (s *Server) navidromeDepsStatus() (any, *RPCError) {

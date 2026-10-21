@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,6 +58,27 @@ const (
 	// DefaultAppleHardBouncePlaylist is the Apple Music playlist the genre
 	// allowlist is derived from.
 	DefaultAppleHardBouncePlaylist = "HARD BOUNCE"
+
+	// ModeLocal runs Navidrome on this Mac under launchd. It is the default,
+	// and an empty mode means local so existing files keep their meaning.
+	ModeLocal = "local"
+
+	// ModeRemote serves a mirror of MusicDir from another machine. This Mac
+	// stays the only place the library is edited; UDL pushes the mirror over
+	// SSH and drives the server through the Subsonic API.
+	ModeRemote = "remote"
+
+	// DefaultRemoteRsyncPath is Homebrew's rsync on Apple Silicon. The system
+	// /usr/bin/rsync is openrsync on current macOS, which lacks the delayed,
+	// hidden-temp-file updates the mirror relies on.
+	DefaultRemoteRsyncPath = "/opt/homebrew/bin/rsync"
+
+	// DefaultRemoteSSHPath is the system OpenSSH client.
+	DefaultRemoteSSHPath = "/usr/bin/ssh"
+
+	// DefaultRemoteMaxDelete stops a push that would delete more files than
+	// this, which is what an empty or half-mounted source looks like.
+	DefaultRemoteMaxDelete = 250
 )
 
 // Config is the versioned navidrome.yaml feature configuration. It never holds
@@ -69,6 +92,22 @@ type Config struct {
 	Backup    BackupConfig    `yaml:"backup" json:"backup"`
 	Playlists PlaylistsConfig `yaml:"playlists" json:"playlists"`
 	Phone     PhoneConfig     `yaml:"phone" json:"phone"`
+	// Mode and Remote are omitted while unset so a local install's file and
+	// wire payload stay byte-for-byte what older builds wrote and read.
+	Mode   string        `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Remote *RemoteConfig `yaml:"remote,omitempty" json:"remote,omitempty"`
+}
+
+// RemoteConfig describes the server that serves the mirror in remote mode.
+type RemoteConfig struct {
+	// SSHTarget is the ssh destination of the mirror account, normally a
+	// ~/.ssh/config Host alias that pins the user, key and host key. The
+	// server restricts that key to the mirror's forced command.
+	SSHTarget string `yaml:"ssh_target" json:"ssh_target"`
+	// RsyncPath must be rsync 3.x.
+	RsyncPath string `yaml:"rsync_path" json:"rsync_path"`
+	SSHPath   string `yaml:"ssh_path" json:"ssh_path"`
+	MaxDelete int    `yaml:"max_delete" json:"max_delete"`
 }
 
 // ServerConfig describes how UDL and Amperfy reach the server.
@@ -295,6 +334,7 @@ func Validate(cfg Config) error {
 	if cfg.Backup.Count < 0 {
 		problems = append(problems, "navidrome.backup.count must be >= 0")
 	}
+	problems = append(problems, validateRemote(cfg)...)
 
 	resolved, resolveErr := Resolve(cfg)
 	if resolveErr != nil {
@@ -452,6 +492,15 @@ type fileConfig struct {
 	Backup    *fileBackup    `yaml:"backup"`
 	Playlists *filePlaylists `yaml:"playlists"`
 	Phone     *filePhone     `yaml:"phone"`
+	Mode      *string        `yaml:"mode"`
+	Remote    *fileRemote    `yaml:"remote"`
+}
+
+type fileRemote struct {
+	SSHTarget *string `yaml:"ssh_target"`
+	RsyncPath *string `yaml:"rsync_path"`
+	SSHPath   *string `yaml:"ssh_path"`
+	MaxDelete *int    `yaml:"max_delete"`
 }
 
 type fileServer struct {
@@ -523,6 +572,16 @@ func (f fileConfig) apply(cfg *Config) {
 	if f.Phone != nil {
 		assignBool(f.Phone.Connected, &cfg.Phone.Connected)
 	}
+	assignString(f.Mode, &cfg.Mode)
+	if f.Remote != nil {
+		if cfg.Remote == nil {
+			cfg.Remote = &RemoteConfig{}
+		}
+		assignString(f.Remote.SSHTarget, &cfg.Remote.SSHTarget)
+		assignString(f.Remote.RsyncPath, &cfg.Remote.RsyncPath)
+		assignString(f.Remote.SSHPath, &cfg.Remote.SSHPath)
+		assignInt(f.Remote.MaxDelete, &cfg.Remote.MaxDelete)
+	}
 }
 
 func assignString(src *string, dst *string) {
@@ -572,6 +631,24 @@ func normalize(cfg *Config) {
 	cfg.Playlists.AppleHardBouncePlaylist = firstNonEmpty(
 		cfg.Playlists.AppleHardBouncePlaylist, defaults.Playlists.AppleHardBouncePlaylist)
 	cfg.Playlists.HardBounceGenres = NormalizeGenres(cfg.Playlists.HardBounceGenres)
+
+	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if cfg.Mode == ModeRemote && cfg.Remote == nil {
+		cfg.Remote = &RemoteConfig{}
+	}
+	if cfg.Remote != nil {
+		cfg.Remote.SSHTarget = strings.TrimSpace(cfg.Remote.SSHTarget)
+		cfg.Remote.RsyncPath = firstNonEmpty(cfg.Remote.RsyncPath, DefaultRemoteRsyncPath)
+		cfg.Remote.SSHPath = firstNonEmpty(cfg.Remote.SSHPath, DefaultRemoteSSHPath)
+		if cfg.Remote.MaxDelete == 0 {
+			cfg.Remote.MaxDelete = DefaultRemoteMaxDelete
+		}
+	}
+}
+
+// IsRemote reports whether Navidrome runs on another machine.
+func (cfg Config) IsRemote() bool {
+	return cfg.Mode == ModeRemote
 }
 
 // NormalizeGenres trims, drops empties, deduplicates **exactly**, and sorts
@@ -622,4 +699,60 @@ func osEnvMap() map[string]string {
 		}
 	}
 	return out
+}
+
+func validateRemote(cfg Config) []string {
+	problems := []string{}
+	switch cfg.Mode {
+	case "", ModeLocal, ModeRemote:
+	default:
+		problems = append(problems, fmt.Sprintf("navidrome.mode must be %q or %q", ModeLocal, ModeRemote))
+	}
+	if cfg.Remote == nil {
+		if cfg.Mode == ModeRemote {
+			problems = append(problems, "navidrome.remote must be set when navidrome.mode is remote")
+		}
+		return problems
+	}
+	remote := cfg.Remote
+	if cfg.Mode == ModeRemote {
+		target := remote.SSHTarget
+		switch {
+		case target == "":
+			problems = append(problems, "navidrome.remote.ssh_target must be set when navidrome.mode is remote")
+		case strings.HasPrefix(target, "-") || strings.ContainsAny(target, " \t\r\n"):
+			// The target is passed to ssh and rsync as an argument; a leading
+			// dash would be read as an option.
+			problems = append(problems, "navidrome.remote.ssh_target must be a host or ~/.ssh/config alias, not an option")
+		}
+		if isLoopbackURL(cfg.Server.URL) {
+			problems = append(problems,
+				"navidrome.server.url points at this Mac, but navidrome.mode is remote; use the server's URL")
+		}
+	}
+	for _, item := range []struct{ label, value string }{
+		{"rsync_path", remote.RsyncPath},
+		{"ssh_path", remote.SSHPath},
+	} {
+		if !filepath.IsAbs(item.value) {
+			problems = append(problems, fmt.Sprintf("navidrome.remote.%s must be an absolute path", item.label))
+		}
+	}
+	if remote.MaxDelete < 1 {
+		problems = append(problems, "navidrome.remote.max_delete must be >= 1")
+	}
+	return problems
+}
+
+func isLoopbackURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
