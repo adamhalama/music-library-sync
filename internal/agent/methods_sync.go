@@ -214,7 +214,7 @@ func (s *Server) startSync(params json.RawMessage) (any, *RPCError) {
 		tracker.Reset(cfg.Sources)
 		progress := output.NewStructuredProgressTracker(nil)
 		emitter := &agentSyncEmitter{conn: s.Conn, runID: runID, tracker: tracker, progress: progress}
-		useCase := app.SyncUseCase{Registry: registry, Runner: runner, Emitter: emitter}
+		useCase := app.SyncUseCase{Registry: registry, Runner: runner, Emitter: emitter, NavidromeOptions: s.navidromeOptions()}
 		interaction := &Interaction{
 			Conn: s.Conn, Runs: s.Runs, RunID: runID, Tracker: tracker,
 			SourceDetails: func(sourceID string) app.PlanSourceDetails {

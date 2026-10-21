@@ -34,6 +34,12 @@ type navidromeSaveGenresParams struct {
 	Genres []string `json:"genres"`
 }
 
+// navidromeOptions selects the same phone-library config every navidrome.*
+// method uses, so the post-sync hook pushes and scans the server the app shows.
+func (s *Server) navidromeOptions() navidrome.ManagerOptions {
+	return navidrome.ManagerOptions{ConfigPath: s.NavidromeConfigPath, WorkingDir: s.WorkingDir}
+}
+
 func (s *Server) navidromeManager(skipCredentials bool) (*navidrome.Manager, *RPCError) {
 	manager, err := navidrome.NewManager(navidrome.ManagerOptions{
 		ConfigPath:      s.NavidromeConfigPath,
