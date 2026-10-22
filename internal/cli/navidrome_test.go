@@ -248,7 +248,7 @@ func TestPrintSetupPlanNamesEveryMutation(t *testing.T) {
 	plan := navidrome.SetupPlan{
 		ServerVersion: "0.63.2",
 		BinaryPath:    "/opt/homebrew/bin/navidrome",
-		MusicDir:      "/Users/jaa/Music/downloaded",
+		MusicDir:      "/Users/example/Music/downloaded",
 		Directories: []navidrome.PlannedDirectory{
 			{Label: "data", Path: "/data", Exists: false},
 			{Label: "cache", Path: "/cache", Exists: true},

@@ -18,9 +18,9 @@ final class PhoneLibraryTests: XCTestCase {
         {
           "enabled": true,
           "config_path": "/tmp/navidrome.yaml",
-          "music_dir": "/Users/jaa/Music/downloaded",
-          "data_dir": "/Users/jaa/Library/Application Support/UDL/Navidrome",
-          "playlists_dir": "/Users/jaa/Music/downloaded/.udl/playlists",
+          "music_dir": "/Users/example/Music/downloaded",
+          "data_dir": "/Users/example/Library/Application Support/UDL/Navidrome",
+          "playlists_dir": "/Users/example/Music/downloaded/.udl/playlists",
           "username": "jaa",
           "password_stored": false,
           "dependency": {
@@ -471,9 +471,9 @@ final class PhoneLibraryTests: XCTestCase {
     static let remoteStatusJSON = """
     {
       "enabled": true,
-      "music_dir": "/Users/jaa/Music/downloaded",
-      "data_dir": "/Users/jaa/Library/Application Support/UDL/Navidrome",
-      "playlists_dir": "/Users/jaa/Music/downloaded/.udl/playlists",
+      "music_dir": "/Users/example/Music/downloaded",
+      "data_dir": "/Users/example/Library/Application Support/UDL/Navidrome",
+      "playlists_dir": "/Users/example/Music/downloaded/.udl/playlists",
       "username": "jaa",
       "password_stored": true,
       "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "ffmpeg_installed": false, "problems": []},
@@ -490,7 +490,7 @@ final class PhoneLibraryTests: XCTestCase {
       "mode": "remote",
       "remote": {
         "ssh_target": "udl-mirror",
-        "library": {"path": "/Users/jaa/Music/downloaded", "files": 1580, "bytes": 10093173555, "newest_mtime": "2026-10-22T08:00:00Z"},
+        "library": {"path": "/Users/example/Music/downloaded", "files": 1580, "bytes": 10093173555, "newest_mtime": "2026-10-22T08:00:00Z"},
         "database": {"path": "/data/navidrome.db", "present": true, "size_bytes": 52428800, "tracks": 1574, "libraries": null},
         "udl_backups": null,
         "navidrome_backups": [{"path": "/srv/navidrome/backups/navidrome_backup_x.db", "size_bytes": 9, "created_at": "2026-10-21T03:00:00Z"}],
@@ -962,7 +962,7 @@ final class PhoneLibraryTests: XCTestCase {
             loaded: state == "running",
             pid: state == "running" ? 4242 : nil,
             lastExitStatus: nil,
-            launchAgentPath: "/Users/jaa/Library/LaunchAgents/com.jaa.udl.navidrome.plist",
+            launchAgentPath: "/Users/example/Library/LaunchAgents/com.jaa.udl.navidrome.plist",
             owned: owned,
             localURL: "http://localhost:4533",
             lanURL: "http://mac.local:4533",
@@ -989,9 +989,9 @@ final class PhoneLibraryTests: XCTestCase {
         return NavidromeStatus(
             enabled: true,
             configPath: "/tmp/navidrome.yaml",
-            musicDir: "/Users/jaa/Music/downloaded",
+            musicDir: "/Users/example/Music/downloaded",
             dataDir: "/d",
-            playlistsDir: "/Users/jaa/Music/downloaded/.udl/playlists",
+            playlistsDir: "/Users/example/Music/downloaded/.udl/playlists",
             username: username,
             passwordStored: passwordStored,
             dependency: NavidromeDependencyStatus(

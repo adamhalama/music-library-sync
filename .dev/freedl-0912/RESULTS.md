@@ -2,7 +2,7 @@
 
 Final audit: 2026-09-30T13:39:11.723009+00:00. All 15 supported Free DL candidates have verified upgrades.
 
-The isolated library is `/Users/jaa/Music/downloaded/sc-likes-today-09-12` (46 tracks). Upgrades, backups and preservation repairs in this batch target that copy. The normal `~/Music/downloaded/sc-likes` library was not a promotion target.
+The isolated library is `~/Music/downloaded/sc-likes-today-09-12` (46 tracks). Upgrades, backups and preservation repairs in this batch target that copy. The normal `~/Music/downloaded/sc-likes` library was not a promotion target.
 
 | Outcome | Count |
 |---|---:|
@@ -47,10 +47,10 @@ Portable proof for reviewers:
 
 Local source evidence:
 
-- [Full 46-track quality table](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.md)
-- [Machine-readable audit](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.json)
-- [Capture and promotion ledgers](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/logs)
-- [Original-file backups](/Users/jaa/dev/music-down/statefiles/freedl/upgrade-09-12/backups)
+- [Full 46-track quality table](~/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.md)
+- [Machine-readable audit](~/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.json)
+- [Capture and promotion ledgers](~/dev/music-down/statefiles/freedl/upgrade-09-12/logs)
+- [Original-file backups](~/dev/music-down/statefiles/freedl/upgrade-09-12/backups)
 
 ## Gate exception and unchanged files
 

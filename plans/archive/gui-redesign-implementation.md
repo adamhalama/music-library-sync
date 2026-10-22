@@ -214,7 +214,7 @@ work on every existing screen; C15 verified. — **met**
 - Launched app shows grouped sidebar with a live `3` warning badge on Check System, the
   backend pill reading `Connected / backend dev`, the inspector, and the status bar.
 - ⌘4 navigates to Rekordbox Sync and the sidebar selection follows (screenshot).
-- Toolbar shows `udl` + `/Users/jaa/.config/udl/config.yaml` as title/subtitle.
+- Toolbar shows `udl` + `~/.config/udl/config.yaml` as title/subtitle.
 
 ---
 
