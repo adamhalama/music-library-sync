@@ -11,16 +11,33 @@ extension AppState {
     // MARK: - Loading
 
     func loadPhoneLibrary() async {
-        guard let client else { return }
+        guard let client, !Task.isCancelled else { return }
+        let generation = UUID()
+        phoneLibraryLoadGeneration = generation
+        phoneLibraryLoads.insert(generation)
+        defer { phoneLibraryLoads.remove(generation) }
         do {
             // Keep the configured URL and server state together, even after
             // the config changes outside the app. Publish neither on failure.
             let config = try await client.readNavidromeConfig()
+            try Task.checkCancellation()
+            guard phoneLibraryLoadGeneration == generation else { return }
             let status = try await client.navidromeStatus()
+            try Task.checkCancellation()
+            guard phoneLibraryLoadGeneration == generation else { return }
             navidromeConfig = config
             navidromeStatus = status
+            if let failure = phoneLibraryLoadFailure, phoneLibraryStatus == failure {
+                phoneLibraryStatus = nil
+            }
+            phoneLibraryLoadFailure = nil
+        } catch is CancellationError {
+            // Navigation cancels the view's .task; the cached pair stays valid.
         } catch {
-            phoneLibraryStatus = .failure("Phone Library state could not load: \(error.localizedDescription)")
+            guard !Task.isCancelled, phoneLibraryLoadGeneration == generation else { return }
+            let failure = WorkflowStatus.failure("Phone Library state could not load: \(error.localizedDescription)")
+            phoneLibraryLoadFailure = failure
+            phoneLibraryStatus = failure
         }
     }
 
@@ -396,6 +413,9 @@ extension AppState {
     }
 
     func clearPhoneLibrarySession() {
+        phoneLibraryLoadGeneration = UUID()
+        phoneLibraryLoads = []
+        phoneLibraryLoadFailure = nil
         navidromeConfig = nil
         navidromeStatus = nil
         navidromeSetupPlan = nil

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import UDL
 
@@ -1010,5 +1011,143 @@ final class PhoneLibraryTests: XCTestCase {
             phoneConnected: phoneConnected,
             problems: []
         )
+    }
+}
+
+/// Hold real RPC replies to exercise refresh ownership and navigation races.
+/// These regressions are adapted from the round-4 adversarial review probes.
+@MainActor
+final class PhoneLibraryReloadTests: XCTestCase {
+    func testNavigationCancellationAtEitherReadIsNotAFailure() async throws {
+        for cancelAtStatus in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            let load = Task { await state.loadPhoneLibrary() }
+            let config = try await rpc.readRequest(.navidromeConfigRead)
+            if cancelAtStatus {
+                try rpc.reply(config, result: configValue())
+                _ = try await rpc.readRequest(.navidromeStatus)
+            }
+            load.cancel()
+            await load.value
+            XCTAssertNil(state.phoneLibraryStatus)
+            XCTAssertNil(state.navidromeConfig)
+            XCTAssertNil(state.navidromeStatus)
+            XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+            await rpc.connection.close()
+        }
+    }
+
+    func testSuccessfulRetryClearsItsLoadFailureButNotAnActionFailure() async throws {
+        for actionFailure in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            let first = Task { await state.loadPhoneLibrary() }
+            try rpc.fail(try await rpc.readRequest(.navidromeConfigRead), message: "temporary configuration error")
+            await first.value
+            XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+            let recovery = AppState.WorkflowStatus.failure("Import failed; keep the recovery command.")
+            if actionFailure { state.phoneLibraryStatus = recovery }
+            let retry = Task { await state.refreshPhoneLibraryStatus() }
+            try await answerLoad(rpc, tracks: 2)
+            await retry.value
+            XCTAssertEqual(state.navidromeStatus?.libraryTracks, 2)
+            XCTAssertEqual(state.phoneLibraryStatus, actionFailure ? recovery : nil)
+            XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+            await rpc.connection.close()
+        }
+    }
+
+    func testOlderReloadCannotOverwriteNewerRefreshOrItsError() async throws {
+        for oldFails in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            let old = Task { await state.loadPhoneLibrary() }
+            try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-a"))
+            let oldStatus = try await rpc.readRequest(.navidromeStatus)
+            let new = Task { await state.refreshPhoneLibraryStatus() }
+            try await answerLoad(rpc, server: "server-b", tracks: 2)
+            await new.value
+            XCTAssertEqual(state.phoneLibraryLoads.count, 1, "the superseded read is still in flight")
+            if oldFails { try rpc.fail(oldStatus, message: "obsolete failure") }
+            else { try rpc.reply(oldStatus, result: statusValue(tracks: 1)) }
+            await old.value
+            XCTAssertEqual(state.phoneConnection.serverURL, "https://server-b.example.ts.net")
+            XCTAssertEqual(state.navidromeStatus?.libraryTracks, 2)
+            XCTAssertNil(state.phoneLibraryStatus)
+            XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+            await rpc.connection.close()
+        }
+    }
+
+    func testOlderLoadCannotReleaseTheNewerLoadsConstraint() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        let old = Task { await state.loadPhoneLibrary() }
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-a"))
+        let oldStatus = try await rpc.readRequest(.navidromeStatus)
+        let new = Task { await state.refreshPhoneLibraryStatus() }
+        let newConfig = try await rpc.readRequest(.navidromeConfigRead)
+        try rpc.reply(oldStatus, result: statusValue(tracks: 1))
+        await old.value
+        XCTAssertEqual(state.phoneLibraryLoads.count, 1)
+        XCTAssertNil(state.navidromeConfig, "an obsolete load must not publish even before the newer one finishes")
+        try rpc.reply(newConfig, result: configValue(server: "server-b"))
+        try rpc.reply(try await rpc.readRequest(.navidromeStatus), result: statusValue(tracks: 2))
+        await new.value
+        XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+        XCTAssertEqual(state.phoneConnection.serverURL, "https://server-b.example.ts.net")
+        await rpc.connection.close()
+    }
+
+    func testSessionResetRetiresAnOutstandingLoad() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        let load = Task { await state.loadPhoneLibrary() }
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue())
+        let status = try await rpc.readRequest(.navidromeStatus)
+        state.clearPhoneLibrarySession()
+        try rpc.reply(status, result: statusValue(tracks: 1))
+        await load.value
+        XCTAssertNil(state.navidromeConfig)
+        XCTAssertNil(state.navidromeStatus)
+        XCTAssertNil(state.phoneLibraryStatus)
+        XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+        await rpc.connection.close()
+    }
+
+    private func configValue(server: String = "music-server", connected: Bool = false) throws -> JSONValue {
+        let result = NavidromeConfigResult(path: "/fixture/navidrome.yaml", config: NavidromeConfig(
+            version: 1, enabled: true,
+            server: NavidromeServerConfig(url: "https://\(server).example.ts.net", username: "fixture", port: 4533, address: ""),
+            paths: NavidromePathsConfig(musicDir: "/m", dataDir: "/d", cacheDir: "/c", logFile: "/l", configFile: "/f", backupDir: "/b", playlistsPath: ".udl/playlists"),
+            scan: NavidromeScanConfig(schedule: "@every 1h"),
+            backup: NavidromeBackupConfig(schedule: "0 3 * * *", count: 7),
+            playlists: NavidromePlaylistsConfig(hardBounceGenres: [], appleHardBouncePlaylist: "HARD BOUNCE"),
+            phone: NavidromePhoneConfig(connected: connected)
+        ), content: "")
+        return try result.jsonValue(using: .agent)
+    }
+
+    private func statusValue(tracks: Int = 1, remote: Bool = true) throws -> JSONValue {
+        var value = try XCTUnwrap(JSONDecoder().decode(JSONValue.self, from: Data(PhoneLibraryTests.remoteStatusJSON.utf8)).objectValue)
+        value["library_tracks"] = .number(Double(tracks))
+        value["mode"] = .string(remote ? "remote" : "local")
+        return .object(value)
+    }
+
+    private func answerLoad(_ rpc: AgentRPCFixture, server: String = "music-server", tracks: Int = 1, remote: Bool = true) async throws {
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: server))
+        try rpc.reply(try await rpc.readRequest(.navidromeStatus), result: statusValue(tracks: tracks, remote: remote))
     }
 }
