@@ -40,6 +40,7 @@ struct PhoneLibraryView: View {
                         Label("Refresh status", systemImage: "arrow.clockwise")
                     }
                     .help("Reads dependency, service, account, library, and backup state. Changes nothing.")
+                    .constrained(by: appState.phoneLibraryConfigSaving ? busyReason : nil)
                 }
             }
             .workspaceInspector { inspector }

@@ -1190,6 +1190,8 @@ final class PhoneLibraryReloadTests: XCTestCase {
         XCTAssertTrue(state.isPhoneLibraryBusy)
         XCTAssertTrue(state.phoneLibraryBusyReason?.contains("Saving Phone Library configuration") ?? false)
         await state.setPhoneConnected(false)
+        await state.loadPhoneLibrary()
+        await state.refreshPhoneLibraryStatus()
         assertNoRequest(rpc)
         var fresh = try decode(NavidromeConfigResult.self, configValue(server: "server-b")).config
         fresh.backup.count = 11
@@ -1200,6 +1202,7 @@ final class PhoneLibraryReloadTests: XCTestCase {
         fresh.phone.connected = true
         XCTAssertEqual(sent, fresh, "only phone.connected may differ from the freshly read config")
         await state.setPhoneConnected(false)
+        await state.refreshPhoneLibraryStatus()
         assertNoRequest(rpc)
         try rpc.reply(write, result: configValue(server: "server-b", connected: true))
         try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-b", connected: true))

@@ -11,6 +11,14 @@ extension AppState {
     // MARK: - Loading
 
     func loadPhoneLibrary() async {
+        // A config save owns a fresh read/write plus its final paired reload.
+        // Coalesce reopen/Refresh into that reload rather than allowing a read
+        // to race the whole-config write after its initial busy guard.
+        guard !phoneLibraryConfigSaving else { return }
+        await reloadPhoneLibrary()
+    }
+
+    private func reloadPhoneLibrary() async {
         guard let client, !Task.isCancelled else { return }
         let generation = UUID()
         phoneLibraryLoadGeneration = generation
@@ -67,8 +75,9 @@ extension AppState {
                 config.phone.connected = connected
                 _ = try await client.writeNavidromeConfig(config)
             }
-            // Publish the config/status pair through the same owned load path.
-            await refreshPhoneLibraryStatus()
+            // Publish the config/status pair while retaining the save's action
+            // constraint. External reads coalesce into this final reload.
+            await reloadPhoneLibrary()
             guard phoneLibraryLoadFailure == nil else { return }
             phoneLibraryStatus = connected
                 ? "Marked the phone as connected. UDL cannot verify this itself."
