@@ -995,7 +995,10 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 		}
 		result.Scanned = true
 		scanned := m.now()
-		state.LastScanAt, state.ScanPending, state.DatesPending = &scanned, false, opts.Dates
+		state.LastScanAt, state.ScanPending = &scanned, false
+		// Skipping dates for this push does not settle an earlier reconcile
+		// failure. Only a successful apply-dates call below clears that debt.
+		state.DatesPending = state.DatesPending || opts.Dates
 		record()
 	}
 	if opts.Dates && state.DatesPending {

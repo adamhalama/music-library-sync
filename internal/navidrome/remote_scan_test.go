@@ -483,6 +483,54 @@ func TestRemoteApplyDatesMapsBusyRefusalsAndKeepsDatesPending(t *testing.T) {
 	}
 }
 
+func TestRemoteScanWithDatesDisabledPreservesEarlierDateDebt(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		for _, pending := range []bool{false, true} {
+			t.Run(fmt.Sprintf("changed=%t/pending=%t", changed, pending), func(t *testing.T) {
+				cfg, resolved := remoteTestConfig(t)
+				writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+				if err := saveMirrorState(resolved, MirrorState{DatesPending: pending}); err != nil {
+					t.Fatal(err)
+				}
+				out := RemoteOutput{}
+				if changed {
+					out.Stdout = []byte(">f+++++++++ a.mp3\n")
+				}
+				runner := pushRunner(t, out, "", "")
+				original := runner.reply
+				runner.reply = func(name string, args []string) (RemoteOutput, error) {
+					if name == DefaultRemoteSSHPath && requireGateCommand(t, name, args) == "udl-mirror apply-dates" {
+						t.Fatal("dates disabled must not reconcile during this push")
+					}
+					return original(name, args)
+				}
+				manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
+					BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil }}
+				first, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, ForceScan: !changed, Dates: false})
+				if err != nil || !first.Scanned || first.Dates != nil || len(first.Warnings) != 0 {
+					t.Fatalf("scan without dates = %+v, %v", first, err)
+				}
+				state, err := LoadMirrorState(resolved)
+				if err != nil || state.DatesPending != pending || state.ScanPending {
+					t.Fatalf("skipping dates must preserve earlier debt: %+v, %v", state, err)
+				}
+				// A later ordinary no-op push settles only the existing date debt,
+				// without requesting a redundant scan.
+				retry := pushRunner(t, RemoteOutput{}, "", `{"ok":true,"entries":1,"matched":1,"candidates":1,"updated":1}`)
+				manager.Remote = retry.run
+				second, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+				if err != nil || second.Scanned || (second.Dates != nil) != pending || len(second.Warnings) != 0 || gateScanCalls(retry) != 0 {
+					t.Fatalf("later no-op push = %+v, %v", second, err)
+				}
+				state, err = LoadMirrorState(resolved)
+				if err != nil || state.DatesPending || state.ScanPending {
+					t.Fatalf("completed retry must settle debt: %+v, %v", state, err)
+				}
+			})
+		}
+	}
+}
+
 func TestRemotePlaylistRefreshForcesAGateScanWithoutAPIScans(t *testing.T) {
 	cfg, resolved := remoteTestConfig(t)
 	cfg.Server.Username = "u"
