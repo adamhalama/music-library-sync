@@ -320,8 +320,12 @@ struct PhoneLibraryView: View {
             FieldRow("Server library", summary.serverLibrary)
             FieldRow("Server database", summary.serverDatabase)
             FieldRow("Latest server backup", summary.latestServerBackup)
+            FieldRow("Server DB copy on this Mac", summary.lastServerDBCopy)
             if let error = summary.lastPushError {
                 ConstraintNote(text: error, severity: .error, symbol: "exclamationmark.triangle")
+            }
+            if let error = summary.lastServerDBCopyError {
+                ConstraintNote(text: error, severity: .warn, symbol: "exclamationmark.triangle")
             }
             if !summary.problems.isEmpty {
                 Divider()

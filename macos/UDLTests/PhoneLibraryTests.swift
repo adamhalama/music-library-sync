@@ -494,8 +494,9 @@ final class PhoneLibraryTests: XCTestCase {
         "last_push_at": "2026-10-22T10:00:00.123456789Z",
         "last_scan_at": "2026-10-22T10:01:00Z",
         "scan_pending": true,
-        "last_export_at": "2026-10-20T00:00:00Z"
-      }
+        "a_future_field": 1
+      },
+      "export": {"last_export_at": "2026-10-20T11:00:00.5Z"}
     }
     """
 
@@ -519,6 +520,8 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(status.mirror?.scanPending, true)
         XCTAssertNil(status.mirror?.datesPending)
         XCTAssertNil(status.mirror?.lastPushError)
+        XCTAssertEqual(status.serverDBExport?.lastExportAt, "2026-10-20T11:00:00.5Z")
+        XCTAssertNil(status.serverDBExport?.lastExportError)
     }
 
     /// A backend that predates remote mode — or a local install — sends no
@@ -538,6 +541,7 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertNil(status.mode)
         XCTAssertNil(status.remote)
         XCTAssertNil(status.mirror)
+        XCTAssertNil(status.serverDBExport)
         XCTAssertFalse(status.isRemote)
     }
 
@@ -587,6 +591,8 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(summary.serverDatabase, "1574 tracks")
         XCTAssertTrue(summary.databaseHealthy)
         XCTAssertEqual(summary.latestServerBackup, "/srv/navidrome/backups/udl-20261022.db · 35 minutes ago (2026-10-22 09:30)")
+        XCTAssertEqual(summary.lastServerDBCopy, "1 day ago (2026-10-20 11:00)")
+        XCTAssertNil(summary.lastServerDBCopyError)
         XCTAssertEqual(summary.problems.count, 1)
 
         let never = PhoneLibraryRemoteSummary(status: nil, configuredServerURL: nil, now: now, timeZone: utc)
@@ -594,6 +600,33 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(never.serverURL, "")
         XCTAssertEqual(never.latestServerBackup, "none yet")
         XCTAssertFalse(never.databaseHealthy)
+    }
+
+    /// The weekly off-server copy of the server's database: when it last
+    /// worked, or why the last one failed. A backend that predates the
+    /// export reports nothing, which is not the same as "never".
+    func testRemoteSummaryShowsTheLastServerDatabaseCopy() throws {
+        let now = try XCTUnwrap(PhoneLibraryFormat.date("2026-10-22T10:05:30Z"))
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        var status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(Self.remoteStatusJSON.utf8))
+        func summary() -> PhoneLibraryRemoteSummary {
+            PhoneLibraryRemoteSummary(status: status, configuredServerURL: nil, now: now, timeZone: utc)
+        }
+
+        status.serverDBExport = try JSONDecoder.agent.decode(NavidromeServerDBExportState.self, from: Data("""
+        {"last_export_at": "2026-10-11T11:00:00Z", "last_export_error": "the mirror server is not reachable over SSH (udl-mirror): timeout",
+         "last_export_error_at": "2026-10-22T10:00:00Z"}
+        """.utf8))
+        XCTAssertEqual(summary().lastServerDBCopy, "10 days ago (2026-10-11 11:00)")
+        XCTAssertEqual(summary().lastServerDBCopyError,
+                       "Last copy failed 5 minutes ago (2026-10-22 10:00): the mirror server is not reachable over SSH (udl-mirror): timeout")
+
+        status.serverDBExport = try JSONDecoder.agent.decode(NavidromeServerDBExportState.self, from: Data("{}".utf8))
+        XCTAssertEqual(summary().lastServerDBCopy, "never")
+        XCTAssertNil(summary().lastServerDBCopyError)
+
+        status.serverDBExport = nil
+        XCTAssertEqual(summary().lastServerDBCopy, "not reported by this backend")
     }
 
     func testFormatParsesGoTimestampsAndKeepsWhatItCannotParse() throws {

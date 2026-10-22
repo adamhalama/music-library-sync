@@ -215,6 +215,9 @@ struct NavidromeStatus: Codable, Sendable, Equatable {
     var remote: NavidromeRemoteStatus?
     /// What this Mac recorded about its pushes.
     var mirror: NavidromeMirrorState?
+    /// The weekly off-server copy of the server's database (`udl navidrome
+    /// export-db`). Absent from backends that predate it.
+    var serverDBExport: NavidromeServerDBExportState?
 
     enum CodingKeys: String, CodingKey {
         case enabled, reachable, server, scanning, username
@@ -232,6 +235,7 @@ struct NavidromeStatus: Codable, Sendable, Equatable {
         case phoneConnected = "phone_connected"
         case problems
         case mode, remote, mirror
+        case serverDBExport = "export"
     }
 
     /// In remote mode the dependency and service fields describe nothing on
@@ -314,6 +318,20 @@ struct NavidromeMirrorState: Codable, Sendable, Equatable {
         case lastPushError = "last_push_error"
         case scanPending = "scan_pending"
         case datesPending = "dates_pending"
+    }
+}
+
+/// What this Mac recorded about pulling copies of the server's database.
+/// Raw timestamps, like the mirror state.
+struct NavidromeServerDBExportState: Codable, Sendable, Equatable {
+    let lastExportAt: String?
+    let lastExportError: String?
+    let lastExportErrorAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case lastExportAt = "last_export_at"
+        case lastExportError = "last_export_error"
+        case lastExportErrorAt = "last_export_error_at"
     }
 }
 
@@ -876,6 +894,10 @@ struct PhoneLibraryRemoteSummary: Equatable {
     let serverDatabase: String
     let databaseHealthy: Bool
     let latestServerBackup: String
+    /// When the server's database was last copied to this Mac, and why the
+    /// most recent attempt failed, if it did.
+    let lastServerDBCopy: String
+    let lastServerDBCopyError: String?
     /// The status problems — stale or failed pushes, an unreachable server,
     /// a library rooted at the wrong path.
     let problems: [String]
@@ -918,6 +940,18 @@ struct PhoneLibraryRemoteSummary: Equatable {
             latestServerBackup = "\(backup.path) · \(PhoneLibraryFormat.moment(backup.createdAt, now: now, timeZone: timeZone, never: "unknown time"))"
         } else {
             latestServerBackup = "none yet"
+        }
+        if let export = status?.serverDBExport {
+            lastServerDBCopy = PhoneLibraryFormat.moment(export.lastExportAt, now: now, timeZone: timeZone)
+            if let error = export.lastExportError, !error.isEmpty {
+                let when = PhoneLibraryFormat.moment(export.lastExportErrorAt, now: now, timeZone: timeZone, never: "at an unknown time")
+                lastServerDBCopyError = "Last copy failed \(when): \(error)"
+            } else {
+                lastServerDBCopyError = nil
+            }
+        } else {
+            lastServerDBCopy = "not reported by this backend"
+            lastServerDBCopyError = nil
         }
         problems = status?.problems ?? []
     }
