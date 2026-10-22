@@ -140,6 +140,21 @@ func TestCappedRunnerStopsAnOversizedStream(t *testing.T) {
 	}
 }
 
+func TestCappedRunnerKillsAQuietChildOnOverflow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	// The child overflows the cap and then goes quiet: nothing else would
+	// end it before the transfer timeout.
+	_, err := cappedRemoteRunner(8)(ctx, nil, "/bin/sh", "-c", "printf 1234567890; sleep 5")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("the cap must stop the subprocess at once; it ran for %s", elapsed)
+	}
+	if !errors.Is(err, errServerDBExportTooLarge) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestExportRotationKeepsTheNewestAndIgnoresForeignFiles(t *testing.T) {
 	manager, _ := exportManager(t, nil, 0)
 	dir := ServerDBExportDir(manager.Resolved)

@@ -380,34 +380,49 @@ func exportProblems(state MirrorState, now time.Time) []string {
 	return problems
 }
 
-// cappedBuffer collects output up to a limit and then fails the write; os/exec
-// then closes the pipe, which stops the ssh child instead of buffering
-// without end. Wait reports ssh's exit rather than this error, hence the flag.
+// cappedBuffer collects output up to a limit and then fails the write, which
+// makes os/exec close its end of the pipe. onOverflow, when set, runs once at
+// that point. Wait reports the child's exit rather than this error, hence the
+// flag.
 type cappedBuffer struct {
-	buf      bytes.Buffer
-	limit    int
-	overflow bool
+	buf        bytes.Buffer
+	limit      int
+	overflow   bool
+	onOverflow func()
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
 	if c.overflow || c.buf.Len()+len(p) > c.limit {
+		if !c.overflow && c.onOverflow != nil {
+			c.onOverflow()
+		}
 		c.overflow = true
 		return 0, errServerDBExportTooLarge
 	}
 	return c.buf.Write(p)
 }
 
-// cappedRemoteRunner is DefaultRemoteRunner with a bounded stdout.
+// cappedRunnerWaitDelay bounds the wait for the pipes after the subprocess
+// has exited or was killed.
+const cappedRunnerWaitDelay = 500 * time.Millisecond
+
+// cappedRemoteRunner is DefaultRemoteRunner with a bounded stdout. Passing
+// the cap kills the subprocess at once: a closed pipe alone does not end a
+// child that has gone quiet, which would then hold the buffer until the
+// transfer timeout.
 func cappedRemoteRunner(limit int) RemoteRunner {
-	return func(ctx context.Context, stdin []byte, name string, args ...string) (RemoteOutput, error) {
-		ctx, cancel := context.WithCancel(ctx)
+	return func(parent context.Context, stdin []byte, name string, args ...string) (RemoteOutput, error) {
+		ctx, cancel := context.WithCancel(parent)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, name, args...)
-		cmd.WaitDelay = 5 * time.Second
+		// ssh writes everything before it exits, so this only bounds how
+		// long a killed child's leftovers (e.g. a ProxyCommand) may hold
+		// the stderr pipe open.
+		cmd.WaitDelay = cappedRunnerWaitDelay
 		if stdin != nil {
 			cmd.Stdin = bytes.NewReader(stdin)
 		}
-		stdout := &cappedBuffer{limit: limit}
+		stdout := &cappedBuffer{limit: limit, onOverflow: cancel}
 		stderr := &cappedBuffer{limit: 1 << 20}
 		cmd.Stdout, cmd.Stderr = stdout, stderr
 		err := cmd.Run()
