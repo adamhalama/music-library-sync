@@ -16,10 +16,11 @@ import (
 func newNavidromeCommand(app *AppContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "navidrome",
-		Short: "Manage the local Navidrome server that serves the phone library",
+		Short: "Manage the Navidrome server that serves the phone library",
 		Long: strings.TrimSpace(`
-Manage the UDL-owned Navidrome service that publishes ~/Music/downloaded to
-Amperfy on the home network.
+Manage the Navidrome server that publishes ~/Music/downloaded to your phone
+app: a UDL-owned service on this Mac, or — with navidrome.mode: remote — a
+mirror on another server that UDL pushes to.
 
 Status and doctor checks never change the system. Installing, applying setup,
 and importing favorites are explicit, confirmed actions.
@@ -246,15 +247,16 @@ func newNavidromeStatusCommand(app *AppContext) *cobra.Command {
 }
 
 // newNavidromePhoneCommand records the one setup step that happens on the
-// phone. Nothing here can observe Amperfy, so the acknowledgement is stored
+// phone. Nothing here can observe the phone app, so the acknowledgement is stored
 // where every surface reads it from: the feature config.
 func newNavidromePhoneCommand(app *AppContext) *cobra.Command {
 	connected := true
 	cmd := &cobra.Command{
 		Use:   "phone",
-		Short: "Record whether Amperfy on the phone reaches this Mac",
+		Short: "Record whether your phone app reaches the Navidrome server",
 		Long: strings.TrimSpace(`
-Mark the phone as connected once Amperfy can reach this Mac over home Wi-Fi.
+Mark the phone as connected once your phone app can reach the Navidrome
+server.
 
 This is self-reported. UDL cannot observe the phone, and marking it changes
 nothing about the server — only the setup checklist.
@@ -275,7 +277,7 @@ nothing about the server — only the setup checklist.
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&connected, "connected", true, "Whether Amperfy on the phone reaches this Mac")
+	cmd.Flags().BoolVar(&connected, "connected", true, "Whether your phone app reaches the Navidrome server")
 	return cmd
 }
 
