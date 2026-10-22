@@ -263,16 +263,22 @@ final class RunOwnershipTests: XCTestCase {
         func answerStatusRefresh() async throws {
             let config = try phoneLibraryConfigValue(url: "https://server.example:4533")
             try await answerPhoneLibraryLoad(rpc, config: config, status: remoteStatus)
+            // Writing the replies does not wait for the reload to publish them
+            // and release its busy constraint on the main actor.
+            let deadline = ContinuousClock.now + .seconds(5)
+            while !state.phoneLibraryLoads.isEmpty && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
         }
 
         try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush) {
             await state.pushNavidromeMirror()
         }
+        try await answerStatusRefresh()
         assertPhoneIdle(state)
         XCTAssertEqual(state.navidromeMirrorPushOutcome?.kind, .failed)
         XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
         XCTAssertTrue(state.phoneLibraryStatus?.message.contains("terminal fixture") ?? false)
-        try await answerStatusRefresh()
 
         let refused: JSONValue = .object([
             "push": .object(["changed": .number(0), "deleted": .number(0), "planned_deletes": .number(300)]),
@@ -288,11 +294,11 @@ final class RunOwnershipTests: XCTestCase {
         try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush, result: refused) {
             await state.pushNavidromeMirror()
         }
+        try await answerStatusRefresh()
         assertPhoneIdle(state)
         XCTAssertEqual(state.navidromeMirrorPushOutcome?.plannedDeletes, 300)
         XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
         XCTAssertTrue(state.phoneLibraryStatus?.message.contains("--allow-deletes 300") ?? false)
-        try await answerStatusRefresh()
 
         let pushed: JSONValue = .object([
             "push": .object(["changed": .number(2), "deleted": .number(0)]),
@@ -303,11 +309,11 @@ final class RunOwnershipTests: XCTestCase {
         try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush, result: pushed) {
             await state.pushNavidromeMirror()
         }
+        try await answerStatusRefresh()
         assertPhoneIdle(state)
         XCTAssertEqual(state.navidromeMirrorPushOutcome?.kind, .pushed)
         XCTAssertEqual(state.navidromeMirrorPush?.mirror?.lastPushAt, "2026-10-22T10:00:00Z")
         XCTAssertEqual(state.phoneLibraryStatus?.severity, .ok)
-        try await answerStatusRefresh()
         await rpc.connection.close()
     }
 
