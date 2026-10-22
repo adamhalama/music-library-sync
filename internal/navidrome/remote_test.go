@@ -600,6 +600,14 @@ func TestSyncMirrorReportsAFailedPushAsAnError(t *testing.T) {
 	if len(problems) == 0 || !strings.Contains(problems[0], "last mirror push failed") {
 		t.Fatalf("problems = %v", problems)
 	}
+	for _, want := range []string{"push is incomplete", "server may be partly updated", "next `udl navidrome push` completes it"} {
+		if !strings.Contains(problems[0], want) {
+			t.Errorf("failed-push warning must say %q: %s", want, problems[0])
+		}
+	}
+	if strings.Contains(problems[0], "previous mirror") {
+		t.Fatalf("a failed push must not promise the previous mirror: %s", problems[0])
+	}
 }
 
 func TestAnUnfinishedScanIsRetriedByTheNextPush(t *testing.T) {

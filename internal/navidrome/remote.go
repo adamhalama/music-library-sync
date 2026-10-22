@@ -979,7 +979,7 @@ func (m *Manager) mirrorProblems() []string {
 			when = state.LastErrorAt.Local().Format("2006-01-02 15:04")
 		}
 		problems = append(problems, fmt.Sprintf(
-			"the last mirror push failed (%s): %s — the server is serving the previous mirror",
+			"the last mirror push failed (%s): %s — the push is incomplete; the server may be partly updated; the next `udl navidrome push` completes it",
 			when, state.LastPushError))
 	case state.LastPushAt == nil:
 		problems = append(problems, "this Mac has never pushed the mirror; run `udl navidrome push`")
@@ -1002,8 +1002,9 @@ type MirrorResult struct {
 }
 
 // SyncMirror pushes the library, rescans when anything changed, and then
-// re-applies Date Added. Only the push can fail the call: the server keeps
-// serving the previous mirror, so scan and date problems are warnings.
+// re-applies Date Added. Only the push can fail the call; a failed push may
+// leave the server partly updated until the next push completes it. Scan and
+// date problems after a completed push are warnings, with pending work recorded.
 //
 // Under the mirror lock, no real transfer starts until Navidrome is confirmed
 // idle: a scan of a half-applied mirror gives moved tracks new IDs. A push

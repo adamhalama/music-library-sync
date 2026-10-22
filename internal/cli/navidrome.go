@@ -57,7 +57,8 @@ mirror with rsync over SSH, then — when anything changed — waits for the
 server to be idle, rescans, and re-applies Date Added from this Mac's file
 creation times.
 
-A failed push leaves the server serving its previous, complete mirror.
+A failed push is incomplete: the server may be partly updated. The next push
+completes it.
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			manager, err := navidromeManager(app, false)

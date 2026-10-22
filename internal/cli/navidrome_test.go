@@ -40,6 +40,7 @@ func TestNavidromeCommandTreeIsRegistered(t *testing.T) {
 		{"navidrome", "phone", "--help"},
 		{"navidrome", "backup", "create", "--help"},
 		{"navidrome", "export-db", "--help"},
+		{"navidrome", "push", "--help"},
 	} {
 		app, _, _ := newNavidromeTestApp()
 		root := newRootCommand(app)
@@ -47,6 +48,25 @@ func TestNavidromeCommandTreeIsRegistered(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
+	}
+}
+
+func TestNavidromePushHelpWarnsAboutPartialUpdates(t *testing.T) {
+	app, out, _ := newNavidromeTestApp()
+	root := newRootCommand(app)
+	root.SetOut(out)
+	root.SetArgs([]string{"navidrome", "push", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"failed push is incomplete", "server may be partly updated", "next push\ncompletes it"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("push help must say %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "previous, complete mirror") {
+		t.Fatalf("push help must not promise an unchanged mirror: %s", text)
 	}
 }
 

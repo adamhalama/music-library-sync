@@ -251,7 +251,8 @@ home network):
 Remote mode (`mode: remote` in `navidrome.yaml`) serves a mirror of
 `~/Music/downloaded` from an always-on server instead of this Mac. The Mac stays
 the only place the library is downloaded and edited; the server keeps serving
-its last complete mirror while the Mac sleeps.
+its mirror while the Mac sleeps. Pushes are not all-or-nothing: a failed push is
+incomplete, the server may be partly updated, and the next push completes it.
 
 ```yaml
 mode: remote

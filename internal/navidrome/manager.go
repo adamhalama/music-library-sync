@@ -539,7 +539,7 @@ func RequestScanBestEffort(ctx context.Context, opts ManagerOptions) (bool, stri
 			Scan: true, Dates: true, IdleWait: postSyncScanIdleWait, FinishWait: postSyncScanFinishWait,
 		})
 		if err != nil {
-			return false, fmt.Sprintf("Navidrome mirror push failed; the server keeps serving the previous mirror: %v", err)
+			return false, fmt.Sprintf("Navidrome mirror push incomplete; the server may be partly updated; the next `udl navidrome push` completes it: %v", err)
 		}
 		return result.Scanned, strings.Join(result.Warnings, "; ")
 	}
