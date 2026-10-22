@@ -521,3 +521,44 @@ func TestMirrorPushIsDeferredWhenTheScanStateIsUnknown(t *testing.T) {
 		})
 	}
 }
+
+func TestMirrorPushCanceledDuringTheTransferStillOwesAScan(t *testing.T) {
+	entered := make(chan struct{})
+	transfers := 0
+	runner := &mirrorTestRunner{reply: func(ctx context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
+		switch {
+		case args[0] == "--version":
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
+		case strings.HasSuffix(args[len(args)-1], "apply-dates"):
+			return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
+		case name == navidrome.DefaultRemoteRsyncPath && !containsArg(args, "--dry-run"):
+			transfers++
+			if transfers == 1 {
+				// The server can apply updates before any itemized line
+				// reaches this Mac, so no stdout proves nothing changed.
+				close(entered)
+				<-ctx.Done()
+				return navidrome.RemoteOutput{}, ctx.Err()
+			}
+		}
+		return navidrome.RemoteOutput{}, nil
+	}}
+	api, scans := mirrorTestSubsonic(t)
+	server, output, manager := newMirrorPushServer(t, runner, api, false)
+	first := startMirrorPush(t, server, map[string]any{})
+	<-entered
+	if _, rpcErr := server.cancelRun(mustJSON(t, map[string]string{"run_id": first})); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if terminal := awaitMirrorPush(t, output, first); terminal.Result.Mirror == nil || !terminal.Result.Mirror.ScanPending {
+		t.Fatalf("a canceled transfer must leave a scan owed: %+v", terminal.Result.Mirror)
+	}
+	if state, _ := navidrome.LoadMirrorState(manager.Resolved); !state.ScanPending {
+		t.Fatalf("state = %+v", state)
+	}
+	// The retry transfers nothing but still scans, because one is owed.
+	second := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
+	if second.ExitCode != exitcode.Success || !second.Result.Scanned || *scans != 1 || second.Result.Mirror.ScanPending {
+		t.Fatalf("the owed scan must run on the next push: %+v scans=%d", second, *scans)
+	}
+}

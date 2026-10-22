@@ -1024,14 +1024,27 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 			result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the mirror state: %v", err))
 		}
 	}
+	previousPending := state.ScanPending
 	push, err := m.push(ctx, opts.AllowDeletes, func(ctx context.Context) error {
-		return m.confirmScanIdle(ctx, opts.IdleWait)
+		if err := m.confirmScanIdle(ctx, opts.IdleWait); err != nil {
+			return err
+		}
+		// From here the server may change even if this process never sees
+		// a single itemized line (a cancel, a dropped connection, a Mac
+		// that sleeps), so the owed scan is on disk before rsync starts.
+		state.ScanPending = true
+		if err := saveMirrorState(m.Resolved, state); err != nil {
+			state.ScanPending = previousPending
+			return fmt.Errorf("could not record the mirror state before the transfer, so nothing was pushed: %w", err)
+		}
+		return nil
 	})
 	result.Push = push
 	now := m.now()
 	if err != nil {
 		state.LastPushError, state.LastErrorAt = err.Error(), &now
-		// A push that failed after transferring files still owes a scan.
+		// A real transfer that started stays owed a scan (set above); a
+		// refusal before it leaves the flag as it was.
 		state.ScanPending = state.ScanPending || push.HasChanges()
 		record()
 		return result, err
@@ -1040,7 +1053,9 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 	if push.Warning != "" {
 		result.Warnings = append(result.Warnings, push.Warning)
 	}
-	state.ScanPending = state.ScanPending || push.HasChanges() || (opts.Scan && opts.ForceScan)
+	// The transfer finished, so its itemized output is complete: only a scan
+	// owed before it, a change, or a forced scan keeps the flag.
+	state.ScanPending = previousPending || push.HasChanges() || (opts.Scan && opts.ForceScan)
 	if !opts.Scan || (!state.ScanPending && !(opts.Dates && state.DatesPending)) {
 		record()
 		return result, nil

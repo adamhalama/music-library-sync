@@ -904,3 +904,66 @@ func TestSyncMirrorDefersItsTransferWhileTheServerScans(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncMirrorRecordsTheOwedScanBeforeTheTransfer(t *testing.T) {
+	scanPollInterval = time.Millisecond
+	t.Cleanup(func() { scanPollInterval = time.Second })
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	server, _ := mirrorServer(t)
+	api := NewClient(server.URL, Credentials{Username: "u", Password: "p"})
+
+	cases := []struct {
+		name        string
+		preflight   RemoteOutput
+		real        RemoteOutput
+		realErr     error
+		wantPending bool
+		wantErr     bool
+	}{
+		// A real transfer that failed with nothing itemized may still have
+		// changed the server: rsync's stdout reaches this Mac late or never.
+		{name: "transfer canceled", realErr: context.Canceled, wantPending: true, wantErr: true},
+		{name: "transfer failed", real: RemoteOutput{ExitCode: 12, Stderr: []byte("connection unexpectedly closed")}, wantPending: true, wantErr: true},
+		// No real transfer ran, so nothing can be owed.
+		{name: "preflight failed", preflight: RemoteOutput{ExitCode: 12, Stderr: []byte("connection unexpectedly closed")}, wantErr: true},
+		// A clean no-op restores the previous (clear) flag.
+		{name: "nothing changed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.Remove(MirrorStatePath(resolved)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			var pendingAtTransfer *bool
+			runner := &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
+				switch {
+				case args[0] == "--version":
+					return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
+				case name == DefaultRemoteRsyncPath && hasArg(args, "--dry-run"):
+					return tc.preflight, nil
+				case name == DefaultRemoteRsyncPath:
+					state, err := LoadMirrorState(resolved)
+					if err != nil {
+						t.Fatal(err)
+					}
+					pendingAtTransfer = &state.ScanPending
+					return tc.real, tc.realErr
+				}
+				return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1}`)}, nil
+			}}
+			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run, API: api,
+				BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil }}
+			_, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v", err)
+			}
+			if pendingAtTransfer != nil && !*pendingAtTransfer {
+				t.Fatal("scan_pending must be on disk before the real transfer starts")
+			}
+			if state, _ := LoadMirrorState(resolved); state.ScanPending != tc.wantPending {
+				t.Fatalf("scan_pending = %v, want %v", state.ScanPending, tc.wantPending)
+			}
+		})
+	}
+}
