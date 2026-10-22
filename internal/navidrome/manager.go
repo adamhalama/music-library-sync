@@ -426,7 +426,26 @@ func (m *Manager) ApplyFavorites(ctx context.Context, plan FavoritePlan) (Favori
 // the creation times instead and the server applies them.
 func (m *Manager) ReconcileDateAdded(ctx context.Context) (ReconcileResult, error) {
 	if m.Config.IsRemote() {
-		return m.reconcileDateAddedRemote(ctx, false)
+		// Explicit reconciles settle the same date intent as push-driven ones.
+		// Serialize the state update with pushes so it cannot overwrite debt.
+		unlock, err := lockMirror(m.Resolved)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		defer unlock()
+		state, err := LoadMirrorState(m.Resolved)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		result, err := m.reconcileDateAddedRemote(ctx, false)
+		if err != nil {
+			return result, err
+		}
+		state.recordDates(result)
+		if err := saveMirrorState(m.Resolved, state); err != nil {
+			return result, fmt.Errorf("Date Added was reconciled, but its mirror state could not be recorded: %w", err)
+		}
+		return result, nil
 	}
 	return ReconcileDateAdded(ctx, m.Run, m.Resolved, func(backupCtx context.Context) (Backup, error) {
 		result, err := CreateBackup(backupCtx, m.Run, m.Deps.BinaryPath(), m.Resolved)

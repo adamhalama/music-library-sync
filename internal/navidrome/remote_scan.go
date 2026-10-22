@@ -88,14 +88,22 @@ func rsyncGateRefusal(out RemoteOutput) error {
 	// exit code is rsync's (often 12), not necessarily the gate's exit 2.
 	for _, line := range bytes.Split(out.Stderr, []byte{'\n'}) {
 		var reply struct {
-			OK    *bool  `json:"ok"`
-			Busy  string `json:"busy"`
-			Error string `json:"error"`
+			OK        *bool  `json:"ok"`
+			Busy      string `json:"busy"`
+			Error     string `json:"error"`
+			LockError string `json:"lock_error"`
 		}
-		if json.Unmarshal(bytes.TrimSpace(line), &reply) != nil || reply.OK == nil || *reply.OK || gateBusyCause(reply.Busy) == nil {
+		if json.Unmarshal(bytes.TrimSpace(line), &reply) != nil || reply.OK == nil || *reply.OK {
 			continue
 		}
-		return &mirrorTransferRefusal{cause: &gateCommandError{Verb: "rsync", Message: reply.Error, Busy: reply.Busy}}
+		// A lock validation failure is an explicit no-mutation refusal too,
+		// but it must not be mistaken for a lock held by another push/scan.
+		if reply.LockError != "" {
+			return &mirrorTransferRefusal{cause: fmt.Errorf("%w: %s", ErrMirrorGateMisconfigured, reply.LockError)}
+		}
+		if gateBusyCause(reply.Busy) != nil {
+			return &mirrorTransferRefusal{cause: &gateCommandError{Verb: "rsync", Message: reply.Error, Busy: reply.Busy}}
+		}
 	}
 	return nil
 }

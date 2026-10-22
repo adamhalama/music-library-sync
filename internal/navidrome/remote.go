@@ -523,6 +523,7 @@ type RemoteStatus struct {
 		Files       int        `json:"files"`
 		Bytes       int64      `json:"bytes"`
 		NewestMtime *time.Time `json:"newest_mtime,omitempty"`
+		Partial     bool       `json:"partial,omitempty"`
 	} `json:"library"`
 	Database struct {
 		Path      string `json:"path"`
@@ -601,6 +602,11 @@ func localLibraryShape(musicDir string) (files int, newest time.Time, err error)
 // It catches what the state file cannot: a launchd push that never runs, or
 // changes nobody pushed.
 func (m *Manager) staleMirrorProblems(status RemoteStatus) []string {
+	if status.Library.Partial {
+		// The gate bounds its library walk; truncated counts and timestamps
+		// cannot establish that this Mac and the mirror differ.
+		return []string{"the server's file count is incomplete (status timed out)"}
+	}
 	files, newest, err := localLibraryShape(m.Resolved.MusicDir)
 	if err != nil {
 		return []string{fmt.Sprintf("could not compare the library with the mirror: %v", err)}
@@ -785,6 +791,9 @@ func (m *Manager) reconcileDateAddedRemote(ctx context.Context, dryRun bool) (Re
 		Unmatched:     reply.Unmatched,
 		Rejected:      reply.Rejected,
 	}
+	if reply.Unmatched > 0 {
+		result.UnmatchedSample = append([]string(nil), reply.UnmatchedSample[:min(3, len(reply.UnmatchedSample))]...)
+	}
 	if reply.Backup != nil {
 		result.BackupPath = reply.Backup.Path
 	}
@@ -851,9 +860,27 @@ type MirrorState struct {
 	// possibly waiting for its scan first. Only successful reconciliation
 	// settles it; a later push with dates disabled must preserve the debt.
 	DatesPending bool `json:"dates_pending,omitempty"`
+	// DatesUnmatched records files not indexed at the last successful reconcile.
+	// It is not immediate debt: only a subsequent completed scan re-arms dates,
+	// so unchanged pushes do not repeatedly retry files the server cannot index.
+	DatesUnmatched       int      `json:"dates_unmatched,omitempty"`
+	DatesUnmatchedSample []string `json:"dates_unmatched_sample,omitempty"`
 	// The off-server database copy keeps its own state file
 	// (ServerDBExportState): older builds rewrite this one with only the
 	// fields they know.
+}
+
+func (s *MirrorState) recordDates(result ReconcileResult) {
+	s.DatesPending = false
+	s.DatesUnmatched = result.Unmatched
+	s.DatesUnmatchedSample = nil
+	if result.Unmatched > 0 {
+		s.DatesUnmatchedSample = append([]string(nil), result.UnmatchedSample[:min(3, len(result.UnmatchedSample))]...)
+	}
+}
+
+func datesUnmatchedProblem(count int) string {
+	return fmt.Sprintf("Date Added could not be applied to %d tracks the server has not indexed; they are retried after the next scan", count)
 }
 
 // MirrorStatePath is the state file inside the (local) data directory.
@@ -917,6 +944,9 @@ func (m *Manager) mirrorProblems() []string {
 	}
 	if state.DatesPending {
 		problems = append(problems, "Date Added is still owed for the last push; the next `udl navidrome push` retries it after any pending scan (or run `udl navidrome dates reconcile` once the scan finishes)")
+	}
+	if state.DatesUnmatched > 0 {
+		problems = append(problems, datesUnmatchedProblem(state.DatesUnmatched))
 	}
 	return problems
 }
@@ -1013,6 +1043,9 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 		result.Scanned = true
 		scanned := m.now()
 		state.LastScanAt, state.ScanPending = &scanned, false
+		// Previously unmatched files may now have been indexed. Re-arm their
+		// date intent even if this push opts out of applying dates right now.
+		state.DatesPending = state.DatesPending || state.DatesUnmatched > 0
 		record()
 	}
 	if opts.Dates && state.DatesPending {
@@ -1022,7 +1055,10 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 			return result, nil
 		}
 		result.Dates = &dates
-		state.DatesPending = false
+		state.recordDates(dates)
+		if state.DatesUnmatched > 0 {
+			result.Warnings = append(result.Warnings, datesUnmatchedProblem(state.DatesUnmatched))
+		}
 		record()
 	}
 	return result, nil

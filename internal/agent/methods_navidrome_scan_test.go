@@ -105,6 +105,7 @@ func TestMirrorPushHandoffRefusalAndUnknownTransferFailuresReachRunFinished(t *t
 		{name: "scan handoff rsync exit 12", stderr: "rsync: connection closed\n" + `{"ok":false,"busy":"scan","error":"scan active"}` + "\nrsync error: protocol data stream (code 12)\n", exit: 12, kind: "server_scanning", refused: true},
 		{name: "recovery handoff", stderr: `{"ok":false,"busy":"recovery","error":"scan marker is set"}`, exit: 12, kind: "server_scanning", refused: true},
 		{name: "mirror handoff", stderr: `{"ok":false,"busy":"mirror","error":"mirror lock held"}`, exit: 12, kind: "busy", refused: true},
+		{name: "invalid locks handoff", stderr: "rsync: remote command refused\n" + `{"ok":false,"lock_error":"scan control locks are unreadable or invalid","error":"mirror admission failed"}` + "\nrsync: connection closed\n", exit: 12, kind: "failed", refused: true},
 		{name: "generic exit 12", stderr: "rsync: connection unexpectedly closed", exit: 12, kind: "failed"},
 		{name: "unknown busy value", stderr: `{"ok":false,"busy":"other","error":"unrecognized"}`, exit: 12, kind: "failed"},
 		{name: "missing refusal flag", stderr: `{"busy":"scan"}`, exit: 12, kind: "failed"},
@@ -148,6 +149,10 @@ func TestMirrorPushHandoffRefusalAndUnknownTransferFailuresReachRunFinished(t *t
 						terminal.Result.Failure == nil || terminal.Result.Failure.Kind != tt.kind {
 						t.Fatalf("handoff/transfer failure must reach the wire as %s: %+v", tt.kind, terminal)
 					}
+					if strings.Contains(tt.stderr, "lock_error") && (!strings.Contains(terminal.Result.Failure.Detail, "scan control is misconfigured") ||
+						!strings.Contains(terminal.Result.Failure.Detail, "scan control locks are unreadable or invalid")) {
+						t.Fatalf("lock admission failure must retain a clear diagnostic: %+v", terminal.Result.Failure)
+					}
 					// Only the gate's explicit refusal proves the receiver never ran.
 					wantPending := pending || !tt.refused
 					mirror := terminal.Result.Mirror
@@ -190,6 +195,7 @@ func TestMirrorPushIncompleteGateScanIsAWarningWithDebt(t *testing.T) {
 		{name: "timeout", reply: `{"ok":false,"pending":true,"error":"scan still running"}`, exit: 1, detail: "scan still running"},
 		{name: "pending despite ok", reply: `{"ok":true,"pending":true,"scanned":true}`, detail: "pending"},
 		{name: "authentication", reply: `{"ok":false,"error":"scan authentication failed"}`, exit: 1, detail: "authentication failed"},
+		{name: "invalid control locks", reply: `{"ok":false,"lock_error":"scan control locks are unreadable or invalid","error":"mirror admission failed"}`, exit: 2, detail: "scan control is misconfigured"},
 		{name: "scan busy", reply: `{"ok":false,"busy":"scan","error":"another scan job"}`, exit: 2, detail: "another scan job"},
 		{name: "mirror busy", reply: `{"ok":false,"busy":"mirror","error":"mirror mutation active"}`, exit: 2, detail: "mirror mutation active"},
 		{name: "no completion confirmation", reply: `{"ok":true,"scanned":false}`, detail: "did not confirm"},
@@ -244,9 +250,16 @@ func TestMirrorPushIncompleteGateScanIsAWarningWithDebt(t *testing.T) {
 	}
 }
 
-func TestMirrorPushBusyDateReconcileIsAWarningWithDatesPending(t *testing.T) {
-	for _, busy := range []string{"scan", "recovery", "mirror"} {
-		t.Run(busy, func(t *testing.T) {
+func TestMirrorPushRefusedDateReconcileIsAWarningWithDatesPending(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, detail string
+	}{
+		{name: "scan", reply: `{"ok":false,"busy":"scan","error":"Date Added lock held"}`, detail: "Date Added lock held"},
+		{name: "recovery", reply: `{"ok":false,"busy":"recovery","error":"Date Added lock held"}`, detail: "Date Added lock held"},
+		{name: "mirror", reply: `{"ok":false,"busy":"mirror","error":"Date Added lock held"}`, detail: "Date Added lock held"},
+		{name: "invalid locks", reply: `{"ok":false,"lock_error":"scan control locks are unreadable or invalid","error":"mirror admission failed"}`, detail: "scan control is misconfigured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			transfers, dates := 0, 0
 			runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
 				switch {
@@ -259,7 +272,7 @@ func TestMirrorPushBusyDateReconcileIsAWarningWithDatesPending(t *testing.T) {
 				case mirrorTestGateCommand(name, args) == "udl-mirror apply-dates":
 					dates++
 					if dates == 1 {
-						return navidrome.RemoteOutput{Stdout: []byte(`{"ok":false,"busy":"` + busy + `","error":"Date Added lock held"}`), ExitCode: 2}, nil
+						return navidrome.RemoteOutput{Stdout: []byte(tc.reply), ExitCode: 2}, nil
 					}
 					return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1,"candidates":1,"updated":1}`)}, nil
 				case name == navidrome.DefaultRemoteRsyncPath:
@@ -277,7 +290,7 @@ func TestMirrorPushBusyDateReconcileIsAWarningWithDatesPending(t *testing.T) {
 			server, output, _ := newMirrorPushServer(t, runner, nil, false)
 			terminal := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
 			if terminal.ExitCode != exitcode.Success || terminal.Error != "" || terminal.Result.Failure != nil || !terminal.Result.Scanned || terminal.Result.Dates != nil ||
-				!strings.Contains(strings.Join(terminal.Result.Warnings, "\n"), "Date Added lock held") {
+				!strings.Contains(strings.Join(terminal.Result.Warnings, "\n"), tc.detail) {
 				t.Fatalf("a busy reconcile after a completed push/scan must only warn: %+v", terminal)
 			}
 			mirror := terminal.Result.Mirror

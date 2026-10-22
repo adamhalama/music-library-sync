@@ -183,18 +183,27 @@ func TestSyncMirrorQueriesScanStatusOnceWithABoundedContext(t *testing.T) {
 func TestRsyncGateRefusalsRestoreThePreviousScanAndDateDebt(t *testing.T) {
 	for _, step := range []string{"preflight", "transfer"} {
 		for _, prior := range []MirrorState{{}, {ScanPending: true}, {DatesPending: true}, {ScanPending: true, DatesPending: true}} {
-			for _, busy := range []string{"scan", "recovery", "mirror"} {
+			for _, tc := range []struct {
+				name, reply string
+				want        error
+			}{
+				{name: "scan", reply: `{"ok":false,"busy":"scan","error":"gate refused before mutation"}`, want: ErrServerScanning},
+				{name: "recovery", reply: `{"ok":false,"busy":"recovery","error":"gate refused before mutation"}`, want: ErrServerScanning},
+				{name: "mirror", reply: `{"ok":false,"busy":"mirror","error":"gate refused before mutation"}`, want: ErrMirrorBusy},
+				{name: "invalid locks", reply: `{"ok":false,"lock_error":"scan control locks are unreadable or invalid","error":"mirror admission failed"}`, want: ErrMirrorGateMisconfigured},
+				{name: "invalid locks override busy", reply: `{"ok":false,"lock_error":"scan control locks are unreadable or invalid","busy":"mirror"}`, want: ErrMirrorGateMisconfigured},
+			} {
 				// rsync can propagate or translate the gate's exit. Even exits
 				// normally treated as warnings must not override a gate refusal.
 				for _, code := range []int{2, 12, rsyncExitPartial, rsyncExitVanished, rsyncExitMaxDelete, 255} {
-					t.Run(fmt.Sprintf("%s/scan=%t/dates=%t/%s/exit=%d", step, prior.ScanPending, prior.DatesPending, busy, code), func(t *testing.T) {
+					t.Run(fmt.Sprintf("%s/scan=%t/dates=%t/%s/exit=%d", step, prior.ScanPending, prior.DatesPending, tc.name, code), func(t *testing.T) {
 						cfg, resolved := remoteTestConfig(t)
 						writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 						if err := saveMirrorState(resolved, prior); err != nil {
 							t.Fatal(err)
 						}
 						refusal := RemoteOutput{ExitCode: code, Stderr: []byte("rsync: remote command refused\n" +
-							fmt.Sprintf(`{"ok":false,"busy":%q,"error":"gate refused before mutation"}`, busy) + "\nrsync: connection unexpectedly closed\n")}
+							tc.reply + "\nrsync: connection unexpectedly closed\n")}
 						runner := pushRunner(t, refusal, "", "")
 						original := runner.reply
 						transfers := 0
@@ -213,12 +222,11 @@ func TestRsyncGateRefusalsRestoreThePreviousScanAndDateDebt(t *testing.T) {
 						}
 						manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
 						result, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-						want := ErrServerScanning
-						if busy == "mirror" {
-							want = ErrMirrorBusy
+						if !errors.Is(err, tc.want) || result.Scanned || result.Push.HasChanges() || gateScanCalls(runner) != 0 {
+							t.Fatalf("result=%+v err=%v, want %v", result, err, tc.want)
 						}
-						if !errors.Is(err, want) || result.Scanned || result.Push.HasChanges() || gateScanCalls(runner) != 0 {
-							t.Fatalf("result=%+v err=%v, want %v", result, err, want)
+						if tc.want == ErrMirrorGateMisconfigured && (errors.Is(err, ErrMirrorBusy) || errors.Is(err, ErrServerScanning) || !strings.Contains(err.Error(), "scan control locks are unreadable or invalid")) {
+							t.Fatalf("lock validation must retain its distinct configuration diagnostic: %v", err)
 						}
 						if (step == "transfer" && transfers != 1) || (step == "preflight" && transfers != 0) {
 							t.Fatalf("transfer attempts=%d for %s refusal", transfers, step)
@@ -240,6 +248,8 @@ func TestUnstructuredTransferErrorsStillOweAScan(t *testing.T) {
 		`{"ok":false,"busy":"unknown","error":"not a recognized refusal"}`,
 		`{"busy":"scan"}`,
 		`{"ok":true,"busy":"scan"}`,
+		`{"lock_error":"scan control locks are unreadable or invalid"}`,
+		`{"ok":true,"lock_error":"scan control locks are unreadable or invalid"}`,
 		`prefix {"ok":false,"busy":"scan"} is not a JSON line`,
 		`{"ok":false,"busy":`,
 	} {
@@ -450,15 +460,26 @@ func TestRemoteScanContextRespectsParentDeadlineAndCancellation(t *testing.T) {
 	}
 }
 
-func TestRemoteApplyDatesMapsBusyRefusalsAndKeepsDatesPending(t *testing.T) {
-	for _, busy := range []string{"scan", "recovery", "mirror"} {
-		t.Run(busy, func(t *testing.T) {
+func TestRemoteApplyDatesMapsRefusalsAndKeepsDatesPending(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply string
+		want        error
+	}{
+		{name: "scan", reply: `{"ok":false,"busy":"scan","error":"gate refused dates"}`, want: ErrServerScanning},
+		{name: "recovery", reply: `{"ok":false,"busy":"recovery","error":"gate refused dates"}`, want: ErrServerScanning},
+		{name: "mirror", reply: `{"ok":false,"busy":"mirror","error":"gate refused dates"}`, want: ErrMirrorBusy},
+		{name: "invalid locks", reply: `{"ok":false,"lock_error":"scan control locks are unreadable or invalid","error":"mirror admission failed"}`, want: ErrMirrorGateMisconfigured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			cfg, resolved := remoteTestConfig(t)
 			writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
-			refusal := fmt.Sprintf(`{"ok":false,"busy":%q,"error":"gate refused dates"}`, busy)
+			refusal := tc.reply
 			runner := pushRunner(t, RemoteOutput{}, "", refusal)
 			original := runner.reply
 			runner.reply = func(name string, args []string) (RemoteOutput, error) {
+				if tc.want == ErrMirrorGateMisconfigured && name == DefaultRemoteSSHPath && strings.HasPrefix(requireGateCommand(t, name, args), "udl-mirror scan ") {
+					return RemoteOutput{Stdout: []byte(refusal), ExitCode: 2}, nil
+				}
 				out, err := original(name, args)
 				if name == DefaultRemoteSSHPath && requireGateCommand(t, name, args) == "udl-mirror apply-dates" {
 					out.ExitCode = 2
@@ -467,12 +488,8 @@ func TestRemoteApplyDatesMapsBusyRefusalsAndKeepsDatesPending(t *testing.T) {
 			}
 			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
 				BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil }}
-			want := ErrServerScanning
-			if busy == "mirror" {
-				want = ErrMirrorBusy
-			}
-			if _, err := manager.ReconcileDateAdded(context.Background()); !errors.Is(err, want) {
-				t.Fatalf("ReconcileDateAdded error=%v, want %v", err, want)
+			if _, err := manager.ReconcileDateAdded(context.Background()); !errors.Is(err, tc.want) {
+				t.Fatalf("ReconcileDateAdded error=%v, want %v", err, tc.want)
 			}
 			if err := saveMirrorState(resolved, MirrorState{DatesPending: true}); err != nil {
 				t.Fatal(err)
@@ -484,6 +501,14 @@ func TestRemoteApplyDatesMapsBusyRefusalsAndKeepsDatesPending(t *testing.T) {
 			state, err := LoadMirrorState(resolved)
 			if err != nil || !state.DatesPending || state.ScanPending {
 				t.Fatalf("dates refusal must preserve dates_pending: %+v, %v", state, err)
+			}
+			if tc.want == ErrMirrorGateMisconfigured {
+				if !strings.Contains(strings.Join(result.Warnings, "\n"), "scan control locks are unreadable or invalid") {
+					t.Fatalf("date admission must preserve the lock diagnostic: %+v", result)
+				}
+				if err := manager.RequestScan(context.Background(), false); !errors.Is(err, tc.want) || !strings.Contains(err.Error(), "scan control locks are unreadable or invalid") {
+					t.Fatalf("scan admission must report its lock validation failure: %v", err)
+				}
 			}
 		})
 	}
