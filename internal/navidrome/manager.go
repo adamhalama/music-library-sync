@@ -504,6 +504,9 @@ func (m *Manager) remoteStatusInto(ctx context.Context, status *Status) {
 // RequestScan asks Navidrome to rescan. Callers that must not fail on an
 // unavailable server should use RequestScanBestEffort instead.
 func (m *Manager) RequestScan(ctx context.Context, full bool) error {
+	if m.Config.IsRemote() {
+		return m.scanRemote(ctx, full, 0, 0)
+	}
 	client, err := m.Client()
 	if err != nil {
 		return err

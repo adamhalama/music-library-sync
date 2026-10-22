@@ -18,8 +18,12 @@ import (
 //
 //	E2E_MUSIC_DIR   source library; must equal the server's library root
 //	E2E_RSYNC       rsync 3.x client
-//	E2E_SSH         ssh stand-in that runs the gate with SSH_ORIGINAL_COMMAND
-//	E2E_URL, E2E_USER, E2E_PASSWORD   Subsonic access to the server
+//	E2E_SSH         ssh stand-in that runs the scan-capable gate with SSH_ORIGINAL_COMMAND
+//	E2E_URL, E2E_USER, E2E_PASSWORD   Subsonic access through the server's scan-filtering proxy
+//
+// E2E_SSH owns the gate argv: supply its --lock, --scan-job-lock, --nd-url and
+// --scan-credentials paths there. The client calls scan-status and scan over
+// SSH; E2E_URL is for library/playlist reads, not for starting scans.
 //
 // Creation times are not readable on Linux, so a file's "birth" is its mtime
 // minus a year; the assertions compare against the same function.
@@ -64,8 +68,6 @@ func TestRemoteMirrorAcceptance(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	scanPollInterval = 200 * time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
 
 	audio := func() map[string]time.Time {
 		manifest, err := BuildBirthTimeManifest(resolved, birth)

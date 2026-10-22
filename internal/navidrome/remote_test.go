@@ -434,77 +434,22 @@ func TestBirthTimeManifestFailsWithoutCreationTimes(t *testing.T) {
 	}
 }
 
-// fakeScanClient scripts scanner state for scanAfterPush.
-type fakeScanClient struct {
-	states  []ScanState
-	started int
-}
-
-func (f *fakeScanClient) StartScan(context.Context, bool) error {
-	f.started++
-	return nil
-}
-
-func (f *fakeScanClient) ScanState(context.Context) (ScanState, error) {
-	if len(f.states) == 0 {
-		return ScanState{}, errors.New("script exhausted")
-	}
-	state := f.states[0]
-	if len(f.states) > 1 {
-		f.states = f.states[1:]
-	}
-	return state, nil
-}
-
-func TestScanAfterPushWaitsForIdleThenForItsOwnScan(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
-	before := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
-	after := before.Add(time.Hour)
-	client := &fakeScanClient{states: []ScanState{
-		{Scanning: true, LastScan: before.Add(-time.Hour)}, // someone else's scan
-		{Scanning: false, LastScan: before},                // idle: request ours
-		{Scanning: false, LastScan: before},                // not started yet
-		{Scanning: false, LastScan: after},                 // quick scan finished between polls
-	}}
-	if err := scanAfterPush(context.Background(), client, 0, 0); err != nil {
-		t.Fatal(err)
-	}
-	if client.started != 1 {
-		t.Fatalf("started = %d", client.started)
-	}
-	if len(client.states) != 1 {
-		t.Fatalf("returned before the scan finished; remaining script %v", client.states)
-	}
-}
-
-func TestScanAfterPushWithoutLastScanUsesTheRunningSignal(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
-	client := &fakeScanClient{states: []ScanState{{}, {Scanning: true}, {Scanning: true}, {}}}
-	if err := scanAfterPush(context.Background(), client, 0, 0); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// mirrorServer is a minimal Subsonic server whose scans finish.
+// mirrorServer supports API reads but rejects API scan calls: remote scans
+// belong to the SSH gate, never to the externally reachable Subsonic API.
 func mirrorServer(t *testing.T) (*httptest.Server, *int) {
 	t.Helper()
 	var mu sync.Mutex
 	scans := 0
-	polls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		body := map[string]any{"status": "ok", "version": "1.16.1"}
 		switch strings.TrimPrefix(r.URL.Path, "/rest/") {
-		case "startScan.view":
+		case "startScan.view", "startScan", "getScanStatus.view", "getScanStatus":
 			scans++
-			polls = 0
-		case "getScanStatus.view":
-			polls++
-			last := time.Date(2026, 10, 21, 10, scans, 0, 0, time.UTC)
-			body["scanStatus"] = map[string]any{"scanning": scans > 0 && polls == 1, "count": 3, "lastScan": last.Format(time.RFC3339Nano)}
+			t.Errorf("remote mode must not call the scan API: %s", r.URL.Path)
+			body["status"] = "failed"
+			body["error"] = map[string]any{"code": 50, "message": "use the SSH gate"}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
 	}))
@@ -513,18 +458,22 @@ func mirrorServer(t *testing.T) (*httptest.Server, *int) {
 }
 
 func TestSyncMirrorPushesScansAndAppliesDates(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, "Artist/01 Song.mp3"))
-	server, scans := mirrorServer(t)
+	server, apiScans := mirrorServer(t)
+	gateScans := 0
 	runner := &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
 		switch {
 		case args[0] == "--version":
 			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
 		case name == DefaultRemoteRsyncPath:
 			return RemoteOutput{Stdout: []byte(">f+++++++++ Artist/01 Song.mp3\n")}, nil
-		case strings.HasSuffix(args[len(args)-1], "apply-dates"):
+		case name == DefaultRemoteSSHPath && requireGateCommand(t, name, args) == "udl-mirror scan-status":
+			return RemoteOutput{Stdout: []byte(idleRemoteScanStatus)}, nil
+		case name == DefaultRemoteSSHPath && requireGateCommand(t, name, args) == "udl-mirror scan --timeout-seconds 900":
+			gateScans++
+			return RemoteOutput{Stdout: []byte(completedRemoteScan)}, nil
+		case name == DefaultRemoteSSHPath && requireGateCommand(t, name, args) == "udl-mirror apply-dates":
 			return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1,"candidates":1,"updated":1,"albums_updated":1,"backup":{"path":"/b/x.db","size_bytes":9}}`)}, nil
 		}
 		t.Fatalf("unexpected %s %v", name, args)
@@ -540,8 +489,8 @@ func TestSyncMirrorPushesScansAndAppliesDates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Scanned || *scans != 1 || result.Dates == nil || result.Dates.Updated != 1 || len(result.Warnings) != 0 {
-		t.Fatalf("result = %+v scans=%d", result, *scans)
+	if !result.Scanned || gateScans != 1 || *apiScans != 0 || result.Dates == nil || result.Dates.Updated != 1 || len(result.Warnings) != 0 {
+		t.Fatalf("result = %+v gate scans=%d API scans=%d", result, gateScans, *apiScans)
 	}
 	state, err := LoadMirrorState(resolved)
 	if err != nil || state.LastPushAt == nil || state.LastScanAt == nil || state.ScanPending || state.LastPushError != "" {
@@ -560,19 +509,14 @@ func TestSyncMirrorSkipsTheScanWhenNothingChanged(t *testing.T) {
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 	server, scans := mirrorServer(t)
-	runner := &scriptedRunner{reply: func(_ string, args []string) (RemoteOutput, error) {
-		if args[0] == "--version" {
-			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
-		}
-		return RemoteOutput{}, nil
-	}}
+	runner := pushRunner(t, RemoteOutput{}, "", "")
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
 		API: NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
 	result, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Scanned || *scans != 0 || len(runner.calls) != 3 {
+	if result.Scanned || *scans != 0 || len(runner.calls) != 4 || gateScanCalls(runner) != 0 {
 		t.Fatalf("result = %+v scans=%d calls=%v", result, *scans, runner.calls)
 	}
 }
@@ -611,14 +555,13 @@ func TestSyncMirrorReportsAFailedPushAsAnError(t *testing.T) {
 }
 
 func TestAnUnfinishedScanIsRetriedByTheNextPush(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 	changed := true
+	gateScans := 0
 	runner := &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
 		switch {
-		case args[0] == "--version":
+		case name == DefaultRemoteRsyncPath && len(args) == 1 && args[0] == "--version":
 			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
 		case name == DefaultRemoteRsyncPath && hasArg(args, "--dry-run"):
 			return RemoteOutput{}, nil
@@ -628,53 +571,43 @@ func TestAnUnfinishedScanIsRetriedByTheNextPush(t *testing.T) {
 			}
 			return RemoteOutput{}, nil
 		}
-		return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
-	}}
-	// First run: the server is idle when the push starts, then stays busy
-	// scanning (someone else's scan) past the wait.
-	var pushed sync.Once
-	busyNow := make(chan struct{})
-	original := runner.reply
-	runner.reply = func(name string, args []string) (RemoteOutput, error) {
-		if name == DefaultRemoteRsyncPath && args[0] != "--version" && !hasArg(args, "--dry-run") {
-			pushed.Do(func() { close(busyNow) })
-		}
-		return original(name, args)
-	}
-	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scanning := false
-		select {
-		case <-busyNow:
-			scanning = true
+		switch requireGateCommand(t, name, args) {
+		case "udl-mirror scan-status":
+			return RemoteOutput{Stdout: []byte(idleRemoteScanStatus)}, nil
+		case "udl-mirror scan --timeout-seconds 1":
+			gateScans++
+			return RemoteOutput{Stdout: []byte(`{"ok":false,"pending":true,"error":"scan still running"}`), ExitCode: 1}, nil
+		case "udl-mirror scan --timeout-seconds 900":
+			gateScans++
+			return RemoteOutput{Stdout: []byte(completedRemoteScan)}, nil
+		case "udl-mirror apply-dates":
+			return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
 		default:
+			t.Fatalf("unexpected gate call: %s %v", name, args)
+			return RemoteOutput{}, nil
 		}
-		body := map[string]any{"status": "ok", "version": "1.16.1",
-			"scanStatus": map[string]any{"scanning": scanning, "count": 1}}
-		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
-	}))
-	t.Cleanup(busy.Close)
+	}}
+	server, apiScans := mirrorServer(t)
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
 		BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
-		API:       NewClient(busy.URL, Credentials{Username: "u", Password: "p"})}
+		API:       NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
 	first, err := manager.SyncMirror(context.Background(), MirrorOptions{
 		Scan: true, Dates: true, IdleWait: 20 * time.Millisecond, FinishWait: 20 * time.Millisecond})
-	if err != nil || first.Scanned || len(first.Warnings) == 0 {
-		t.Fatalf("first = %+v, %v", first, err)
+	if err != nil || first.Scanned || first.Dates != nil || len(first.Warnings) == 0 || gateScans != 1 {
+		t.Fatalf("first = %+v, gate scans=%d err=%v", first, gateScans, err)
 	}
 	if state, _ := LoadMirrorState(resolved); !state.ScanPending {
 		t.Fatalf("an unfinished scan must stay pending: %+v", state)
 	}
 
-	// Second run pushes nothing new but still scans, because one is owed.
+	// The retry transfers nothing, but still owes the first push's scan.
 	changed = false
-	server, scans := mirrorServer(t)
-	manager.API = NewClient(server.URL, Credentials{Username: "u", Password: "p"})
 	second, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-	if err != nil || !second.Scanned || *scans != 1 {
-		t.Fatalf("second = %+v scans=%d err=%v", second, *scans, err)
+	if err != nil || !second.Scanned || second.Dates == nil || gateScans != 2 || *apiScans != 0 {
+		t.Fatalf("second = %+v gate scans=%d API scans=%d err=%v", second, gateScans, *apiScans, err)
 	}
-	if state, _ := LoadMirrorState(resolved); state.ScanPending {
-		t.Fatalf("a completed scan must clear the pending flag: %+v", state)
+	if state, _ := LoadMirrorState(resolved); state.ScanPending || state.DatesPending {
+		t.Fatalf("completed scan and dates must clear the pending flags: %+v", state)
 	}
 }
 
@@ -701,44 +634,55 @@ func TestRemoteModeRefusesToBringUpALocalServer(t *testing.T) {
 	}
 }
 
-// pushRunner answers the version check and preflight, then the real push
-// with the given output; gate calls get gateReply.
-func pushRunner(real RemoteOutput, preflight string, gateReply string) *scriptedRunner {
+// pushRunner answers the rsync steps, the idle gate query and a successful
+// gate-owned scan; status/apply-dates get gateReply. Unknown commands fail.
+func pushRunner(t *testing.T, real RemoteOutput, preflight string, gateReply string) *scriptedRunner {
+	t.Helper()
 	return &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
 		switch {
-		case args[0] == "--version":
+		case name == DefaultRemoteRsyncPath && len(args) == 1 && args[0] == "--version":
 			return RemoteOutput{Stdout: []byte(rsync3VersionOutput)}, nil
 		case name == DefaultRemoteRsyncPath && hasArg(args, "--dry-run"):
 			return RemoteOutput{Stdout: []byte(preflight)}, nil
 		case name == DefaultRemoteRsyncPath:
 			return real, nil
 		}
-		return RemoteOutput{Stdout: []byte(gateReply)}, nil
+		switch requireGateCommand(t, name, args) {
+		case "udl-mirror scan-status":
+			return RemoteOutput{Stdout: []byte(idleRemoteScanStatus)}, nil
+		case "udl-mirror scan --timeout-seconds 900":
+			return RemoteOutput{Stdout: []byte(completedRemoteScan)}, nil
+		case "udl-mirror status", "udl-mirror apply-dates":
+			return RemoteOutput{Stdout: []byte(gateReply)}, nil
+		default:
+			t.Fatalf("unexpected gate call: %s %v", name, args)
+			return RemoteOutput{}, nil
+		}
 	}}
 }
 
 func TestAnUnreadableFileIsAWarningButAnUnreadableFolderBlocksTheScan(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 	server, scans := mirrorServer(t)
 
 	fileErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ b.mp3\n*deleting   Old/x.mp3\n"),
 		Stderr: []byte("rsync: [sender] send_files failed to open \"/m/c.mp3\": Permission denied (13)\n")}
-	manager := &Manager{Config: cfg, Resolved: resolved, Remote: pushRunner(fileErr, "", `{"ok":true,"entries":1}`).run,
+	fileRunner := pushRunner(t, fileErr, "", `{"ok":true,"entries":1}`)
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: fileRunner.run,
 		BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		API:       NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
 	result, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-	if err != nil || !result.Scanned || *scans != 1 || len(result.Warnings) == 0 {
+	if err != nil || !result.Scanned || gateScanCalls(fileRunner) != 1 || *scans != 0 || len(result.Warnings) == 0 {
 		t.Fatalf("one unreadable file must not block the scan: %+v, %v", result, err)
 	}
 
 	folderErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ New/b.mp3\n"),
 		Stderr: []byte("IO error encountered -- skipping file deletion\n")}
-	manager.Remote = pushRunner(folderErr, "", "").run
+	folderRunner := pushRunner(t, folderErr, "", "")
+	manager.Remote = folderRunner.run
 	result, err = manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-	if err == nil || result.Scanned || *scans != 1 {
+	if err == nil || result.Scanned || gateScanCalls(folderRunner) != 0 || *scans != 0 {
 		t.Fatalf("skipped deletions must not be scanned: %+v, %v", result, err)
 	}
 	if state, _ := LoadMirrorState(resolved); !state.ScanPending || state.LastPushError == "" {
@@ -785,7 +729,7 @@ func TestPushRefusesATransferThatWouldFillTheServer(t *testing.T) {
 	status := `{"ok":true,"library":{"files":1},"database":{"present":true},"disk":{"free_bytes":42949672960}}` // 40 GiB
 	var real []string
 	big := "Total transferred file size: 30,000,000,000 bytes\n"
-	runner := pushRunner(RemoteOutput{}, big, status)
+	runner := pushRunner(t, RemoteOutput{}, big, status)
 	original := runner.reply
 	runner.reply = func(name string, args []string) (RemoteOutput, error) {
 		if name == DefaultRemoteRsyncPath && !hasArg(args, "--dry-run") && args[0] != "--version" {
@@ -798,33 +742,33 @@ func TestPushRefusesATransferThatWouldFillTheServer(t *testing.T) {
 		t.Fatalf("err = %v, real push ran: %v", err, real != nil)
 	}
 	small := "Total transferred file size: 5,000,000 bytes\n"
-	manager.Remote = pushRunner(RemoteOutput{}, small, status).run
+	manager.Remote = pushRunner(t, RemoteOutput{}, small, status).run
 	if _, err := manager.push(context.Background(), 0, nil); err != nil {
 		t.Fatalf("a small push must pass: %v", err)
 	}
 }
 
 func TestAFailedReconcileIsRetriedWithoutAnotherScan(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 	server, scans := mirrorServer(t)
 	changed := RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}
+	firstRunner := pushRunner(t, changed, "", `{"ok":false,"error":"database is locked"}`)
 	manager := &Manager{Config: cfg, Resolved: resolved,
-		Remote:    pushRunner(changed, "", `{"ok":false,"error":"database is locked"}`).run,
+		Remote:    firstRunner.run,
 		BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		API:       NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
 	first, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-	if err != nil || !first.Scanned || first.Dates != nil {
+	if err != nil || !first.Scanned || first.Dates != nil || gateScanCalls(firstRunner) != 1 {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
 	if state, _ := LoadMirrorState(resolved); state.ScanPending || !state.DatesPending {
 		t.Fatalf("the scan finished but the dates did not: %+v", state)
 	}
-	manager.Remote = pushRunner(RemoteOutput{}, "", `{"ok":true,"entries":1,"updated":1,"candidates":1}`).run
+	secondRunner := pushRunner(t, RemoteOutput{}, "", `{"ok":true,"entries":1,"updated":1,"candidates":1}`)
+	manager.Remote = secondRunner.run
 	second, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-	if err != nil || second.Scanned || second.Dates == nil || *scans != 1 {
+	if err != nil || second.Scanned || second.Dates == nil || gateScanCalls(secondRunner) != 0 || *scans != 0 {
 		t.Fatalf("second = %+v scans=%d err=%v", second, *scans, err)
 	}
 	if state, _ := LoadMirrorState(resolved); state.DatesPending {
@@ -861,61 +805,7 @@ func TestStatusNoticesAMirrorThatFellBehind(t *testing.T) {
 	}
 }
 
-// busyScanServer is a Navidrome stand-in that is always scanning.
-func busyScanServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := map[string]any{"status": "ok", "version": "1.16.1",
-			"scanStatus": map[string]any{"scanning": true, "count": 1}}
-		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
-	}))
-	t.Cleanup(server.Close)
-	return server
-}
-
-func TestSyncMirrorDefersItsTransferWhileTheServerScans(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
-	cfg, resolved := remoteTestConfig(t)
-	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
-	unreachable := httptest.NewServer(http.NotFoundHandler())
-	unreachable.Close()
-	cases := map[string]*Client{
-		"scanning":    NewClient(busyScanServer(t).URL, Credentials{Username: "u", Password: "p"}),
-		"unreachable": NewClient(unreachable.URL, Credentials{Username: "u", Password: "p"}),
-		"no API":      nil,
-	}
-	for name, api := range cases {
-		t.Run(name, func(t *testing.T) {
-			if err := os.Remove(MirrorStatePath(resolved)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				t.Fatal(err)
-			}
-			runner := pushRunner(RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}, ">f+++++++++ a.mp3\n", "")
-			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run, API: api}
-			result, err := manager.SyncMirror(context.Background(), MirrorOptions{
-				Scan: true, Dates: true, IdleWait: 20 * time.Millisecond, FinishWait: 20 * time.Millisecond})
-			if !errors.Is(err, ErrServerScanning) || !strings.Contains(err.Error(), "deferred") {
-				t.Fatalf("err = %v", err)
-			}
-			for _, call := range runner.calls {
-				if call[0] == DefaultRemoteRsyncPath && call[1] != "--version" && !hasArg(call, "--dry-run") {
-					t.Fatalf("no real transfer may start while a scan can be running: %v", call)
-				}
-			}
-			if result.Push.HasChanges() || result.Scanned {
-				t.Fatalf("result = %+v", result)
-			}
-			state, _ := LoadMirrorState(resolved)
-			if state.LastPushError == "" || state.ScanPending || state.LastPushAt != nil {
-				t.Fatalf("a deferred push records only its error: %+v", state)
-			}
-		})
-	}
-}
-
 func TestSyncMirrorRecordsTheOwedScanBeforeTheTransfer(t *testing.T) {
-	scanPollInterval = time.Millisecond
-	t.Cleanup(func() { scanPollInterval = time.Second })
 	cfg, resolved := remoteTestConfig(t)
 	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 	server, _ := mirrorServer(t)
@@ -958,7 +848,10 @@ func TestSyncMirrorRecordsTheOwedScanBeforeTheTransfer(t *testing.T) {
 					pendingAtTransfer = &state.ScanPending
 					return tc.real, tc.realErr
 				}
-				return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1}`)}, nil
+				if requireGateCommand(t, name, args) != "udl-mirror scan-status" {
+					t.Fatalf("unexpected gate call: %s %v", name, args)
+				}
+				return RemoteOutput{Stdout: []byte(idleRemoteScanStatus)}, nil
 			}}
 			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run, API: api,
 				BirthTime: func(string) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil }}

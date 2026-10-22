@@ -17,7 +17,12 @@ import (
 	"github.com/jaa/update-downloads/internal/navidrome"
 )
 
-const mirrorTestRsyncVersion = "rsync  version 3.4.1  protocol version 32\n"
+const (
+	mirrorTestRsyncVersion = "rsync  version 3.4.1  protocol version 32\n"
+	mirrorTestIdle         = `{"ok":true,"scanning":false,"enforcement":1}`
+	mirrorTestScanned      = `{"ok":true,"scanned":true,"full":false,"count":1}`
+	mirrorTestScanCommand  = "udl-mirror scan --timeout-seconds 900"
+)
 
 // mirrorTestRunner answers rsync and ssh invocations from a function, like
 // the navidrome package's scriptedRunner, and records every call.
@@ -55,29 +60,56 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
-// mirrorTestSubsonic is a Navidrome stand-in for the scan the push requests:
-// each startScan is reported as running on the next poll and finished after.
-func mirrorTestSubsonic(t *testing.T) (*navidrome.Client, *int) {
-	t.Helper()
-	var mu sync.Mutex
-	scans, polls := 0, 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		body := map[string]any{"status": "ok", "version": "1.16.1"}
-		switch strings.TrimPrefix(r.URL.Path, "/rest/") {
-		case "startScan.view":
-			scans++
-			polls = 0
-		case "getScanStatus.view":
-			polls++
-			last := time.Date(2026, 10, 22, 10, scans, 0, 0, time.UTC)
-			body["scanStatus"] = map[string]any{"scanning": scans > 0 && polls == 1, "count": 1, "lastScan": last.Format(time.RFC3339Nano)}
+// gateCommands preserves command order, including flags, without exposing the
+// runner's mutable call log while a run is active.
+func (r *mirrorTestRunner) gateCommands() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	commands := []string{}
+	for _, call := range r.calls {
+		if call[0] == navidrome.DefaultRemoteSSHPath {
+			commands = append(commands, call[len(call)-1])
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
+	}
+	return commands
+}
+
+func (r *mirrorTestRunner) scanCount() int {
+	count := 0
+	for _, command := range r.gateCommands() {
+		if strings.HasPrefix(command, "udl-mirror scan ") {
+			count++
+		}
+	}
+	return count
+}
+
+func mirrorTestGateCommand(name string, args []string) string {
+	if name == navidrome.DefaultRemoteSSHPath && len(args) > 0 {
+		return args[len(args)-1]
+	}
+	return ""
+}
+
+// Public API credentials can exist, but a remote push must neither query scan
+// state nor start a scan there: only the SSH gate owns scans and their locks.
+func mirrorTestUnusedAPI(t *testing.T) *navidrome.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("remote mirror push must not call the public API: %s", r.URL.Path)
+		http.Error(w, "scans belong to the SSH gate", http.StatusForbidden)
 	}))
 	t.Cleanup(server.Close)
-	return navidrome.NewClient(server.URL, navidrome.Credentials{Username: "u", Password: "p"}), &scans
+	return navidrome.NewClient(server.URL, navidrome.Credentials{Username: "u", Password: "p"})
+}
+
+func awaitMirrorPhase(t *testing.T, entered <-chan struct{}, output *synchronizedBuffer) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the push did not reach the intended phase: %s", output.String())
+	}
 }
 
 // newMirrorPushServer builds an agent server whose navidrome.* methods see a
@@ -213,14 +245,17 @@ func TestMirrorPushRunsTheCLISequenceAndReturnsTheRecordedState(t *testing.T) {
 			return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
 		case name == navidrome.DefaultRemoteRsyncPath:
 			return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
-		case strings.HasSuffix(args[len(args)-1], "apply-dates"):
+		case mirrorTestGateCommand(name, args) == "udl-mirror scan-status":
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestIdle)}, nil
+		case mirrorTestGateCommand(name, args) == mirrorTestScanCommand:
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestScanned)}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror apply-dates":
 			return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1,"candidates":1,"updated":1}`)}, nil
 		}
 		t.Errorf("unexpected call %s %v", name, args)
 		return navidrome.RemoteOutput{ExitCode: 1}, nil
 	}}
-	api, scans := mirrorTestSubsonic(t)
-	server, output, _ := newMirrorPushServer(t, runner, api, false)
+	server, output, _ := newMirrorPushServer(t, runner, mirrorTestUnusedAPI(t), false)
 
 	// Empty params are the app's plain "Push now".
 	terminal := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
@@ -228,8 +263,11 @@ func TestMirrorPushRunsTheCLISequenceAndReturnsTheRecordedState(t *testing.T) {
 		t.Fatalf("terminal = %+v", terminal)
 	}
 	result := terminal.Result
-	if result.Push.Changed != 1 || !result.Scanned || *scans != 1 || result.Dates == nil {
-		t.Fatalf("the push must scan and re-apply Date Added like `udl navidrome push`: %+v scans=%d", result, *scans)
+	if result.Push.Changed != 1 || !result.Scanned || runner.scanCount() != 1 || result.Dates == nil {
+		t.Fatalf("the push must scan and re-apply Date Added like `udl navidrome push`: %+v scans=%d", result, runner.scanCount())
+	}
+	if commands := strings.Join(runner.gateCommands(), "\n"); commands != "udl-mirror scan-status\n"+mirrorTestScanCommand+"\nudl-mirror apply-dates" {
+		t.Fatalf("gate sequence = %q", commands)
 	}
 	if result.Warnings == nil {
 		t.Fatalf("warnings must be an array, never null")
@@ -248,21 +286,28 @@ func TestMirrorPushForceScanScansAnUnchangedMirror(t *testing.T) {
 		switch {
 		case args[0] == "--version":
 			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
-		case strings.HasSuffix(args[len(args)-1], "apply-dates"):
+		case name == navidrome.DefaultRemoteRsyncPath:
+			return navidrome.RemoteOutput{}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror scan-status":
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestIdle)}, nil
+		case mirrorTestGateCommand(name, args) == mirrorTestScanCommand:
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestScanned)}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror apply-dates":
 			return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
 		}
-		return navidrome.RemoteOutput{}, nil
+		t.Errorf("unexpected call %s %v", name, args)
+		return navidrome.RemoteOutput{ExitCode: 1}, nil
 	}}
-	api, scans := mirrorTestSubsonic(t)
-	server, output, _ := newMirrorPushServer(t, runner, api, false)
+	// Gate-owned scans do not need the Mac's public API credentials.
+	server, output, _ := newMirrorPushServer(t, runner, nil, false)
 
 	terminal := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
-	if terminal.ExitCode != exitcode.Success || terminal.Result.Scanned || *scans != 0 {
-		t.Fatalf("an unchanged mirror is not rescanned: %+v scans=%d", terminal, *scans)
+	if terminal.ExitCode != exitcode.Success || terminal.Result.Scanned || runner.scanCount() != 0 {
+		t.Fatalf("an unchanged mirror is not rescanned: %+v scans=%d", terminal, runner.scanCount())
 	}
 	terminal = awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{"force_scan": true}))
-	if terminal.ExitCode != exitcode.Success || !terminal.Result.Scanned || *scans != 1 {
-		t.Fatalf("force_scan must scan: %+v scans=%d", terminal, *scans)
+	if terminal.ExitCode != exitcode.Success || !terminal.Result.Scanned || runner.scanCount() != 1 || terminal.Result.Dates == nil {
+		t.Fatalf("force_scan must request a normal gate scan and reconcile dates: %+v scans=%d", terminal, runner.scanCount())
 	}
 }
 
@@ -277,11 +322,15 @@ func TestMirrorPushReportsTheDeleteLimitWithItsCountAndTheCLIOverride(t *testing
 			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
 		case containsArg(args, "--dry-run"):
 			return navidrome.RemoteOutput{Stdout: []byte(dry.String())}, nil
+		case name == navidrome.DefaultRemoteRsyncPath:
+			return navidrome.RemoteOutput{}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror scan-status":
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestIdle)}, nil
 		}
-		return navidrome.RemoteOutput{}, nil
+		t.Errorf("unexpected call %s %v", name, args)
+		return navidrome.RemoteOutput{ExitCode: 1}, nil
 	}}
-	api, _ := mirrorTestSubsonic(t)
-	server, output, _ := newMirrorPushServer(t, runner, api, false)
+	server, output, _ := newMirrorPushServer(t, runner, nil, false)
 
 	terminal := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
 	if terminal.ExitCode != exitcode.RuntimeFailure {
@@ -318,21 +367,26 @@ func TestMirrorPushSaysAPushIsAlreadyRunning(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	runner := &mirrorTestRunner{reply: func(_ context.Context, _ string, args []string) (navidrome.RemoteOutput, error) {
+	runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
 		if args[0] == "--version" {
 			once.Do(func() { close(entered) })
 			<-release
 			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
 		}
+		if mirrorTestGateCommand(name, args) == "udl-mirror scan-status" {
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestIdle)}, nil
+		}
+		if name != navidrome.DefaultRemoteRsyncPath {
+			t.Errorf("unexpected call %s %v", name, args)
+		}
 		return navidrome.RemoteOutput{}, nil
 	}}
-	api, _ := mirrorTestSubsonic(t)
-	server, output, _ := newMirrorPushServer(t, runner, api, false)
+	server, output, _ := newMirrorPushServer(t, runner, nil, false)
 
 	// The first push holds the per-data-directory mirror lock, as the post-sync hook or
 	// the launchd push would.
 	first := startMirrorPush(t, server, map[string]any{})
-	<-entered
+	awaitMirrorPhase(t, entered, output)
 	second := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
 	close(release)
 
@@ -363,7 +417,7 @@ func TestMirrorPushHonoursRunCancellation(t *testing.T) {
 	}}
 	server, output, _ := newMirrorPushServer(t, runner, nil, false)
 	runID := startMirrorPush(t, server, map[string]any{})
-	<-entered
+	awaitMirrorPhase(t, entered, output)
 	if _, rpcErr := server.cancelRun(mustJSON(t, map[string]string{"run_id": runID})); rpcErr != nil {
 		t.Fatal(rpcErr)
 	}
@@ -373,155 +427,8 @@ func TestMirrorPushHonoursRunCancellation(t *testing.T) {
 	}
 }
 
-// heldScanSubsonic is a Navidrome stand-in whose scans keep running while
-// hold is set, like a scan the user started from the phone app or one a
-// canceled push left behind. Released, each startScan runs for one poll.
-type heldScanSubsonic struct {
-	mu       sync.Mutex
-	hold     bool
-	scanning bool
-	polls    int
-	scans    int
-	seen     chan struct{}
-	once     sync.Once
-}
-
-func newHeldScanSubsonic(t *testing.T) (*heldScanSubsonic, *navidrome.Client) {
-	t.Helper()
-	fake := &heldScanSubsonic{hold: true, seen: make(chan struct{})}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fake.mu.Lock()
-		defer fake.mu.Unlock()
-		body := map[string]any{"status": "ok", "version": "1.16.1"}
-		switch strings.TrimPrefix(r.URL.Path, "/rest/") {
-		case "startScan.view":
-			fake.scans++
-			fake.scanning = true
-		case "getScanStatus.view":
-			fake.polls++
-			body["scanStatus"] = map[string]any{"scanning": fake.scanning, "count": 1,
-				"lastScan": time.Date(2026, 10, 22, 10, fake.scans, 0, 0, time.UTC).Format(time.RFC3339Nano)}
-			if fake.scanning {
-				fake.once.Do(func() { close(fake.seen) })
-				if !fake.hold {
-					fake.scanning = false
-				}
-			}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
-	}))
-	t.Cleanup(server.Close)
-	return fake, navidrome.NewClient(server.URL, navidrome.Credentials{Username: "u", Password: "p"})
-}
-
-func (f *heldScanSubsonic) state() (scanning bool, polls int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.scanning, f.polls
-}
-
-func (f *heldScanSubsonic) release() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.hold = false
-}
-
-func TestMirrorPushWaitsForARunningScanBeforeItsTransfer(t *testing.T) {
-	fake, api := newHeldScanSubsonic(t)
-	var mu sync.Mutex
-	var overlapped []bool
-	runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
-		switch {
-		case args[0] == "--version":
-			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
-		case name == navidrome.DefaultRemoteRsyncPath && !containsArg(args, "--dry-run"):
-			scanning, _ := fake.state()
-			mu.Lock()
-			overlapped = append(overlapped, scanning)
-			mu.Unlock()
-			return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
-		case strings.HasSuffix(args[len(args)-1], "apply-dates"):
-			return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
-		}
-		return navidrome.RemoteOutput{}, nil
-	}}
-	server, output, _ := newMirrorPushServer(t, runner, api, false)
-
-	// The first push transfers and requests its scan, then is canceled while
-	// that scan runs on: the server keeps scanning after the run ends.
-	first := startMirrorPush(t, server, map[string]any{})
-	select {
-	case <-fake.seen:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the first push never started its scan")
-	}
-	if _, rpcErr := server.cancelRun(mustJSON(t, map[string]string{"run_id": first})); rpcErr != nil {
-		t.Fatal(rpcErr)
-	}
-	_ = awaitMirrorPush(t, output, first)
-
-	// The next push must not start rsync while that scan is still running.
-	_, pollsBefore := fake.state()
-	second := startMirrorPush(t, server, map[string]any{})
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, polls := fake.state(); polls > pollsBefore {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the second push never checked the server's scan state")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if pushes := runner.realPushes(); len(pushes) != 1 {
-		t.Fatalf("the second push transferred while the server was scanning: %d real pushes", len(pushes))
-	}
-	fake.release()
-	terminal := awaitMirrorPush(t, output, second)
-	if terminal.ExitCode != exitcode.Success || terminal.Result.Failure != nil {
-		t.Fatalf("once the scan finished the push must go through: %+v", terminal)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(overlapped) != 2 || overlapped[1] {
-		t.Fatalf("a real transfer overlapped a running scan: %v", overlapped)
-	}
-}
-
-func TestMirrorPushIsDeferredWhenTheScanStateIsUnknown(t *testing.T) {
-	unreachable := httptest.NewServer(http.NotFoundHandler())
-	unreachable.Close()
-	for name, api := range map[string]*navidrome.Client{
-		"no credentials":     nil,
-		"server unreachable": navidrome.NewClient(unreachable.URL, navidrome.Credentials{Username: "u", Password: "p"}),
-	} {
-		t.Run(name, func(t *testing.T) {
-			runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
-				switch {
-				case args[0] == "--version":
-					return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
-				case containsArg(args, "--dry-run"):
-					return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
-				}
-				t.Errorf("a push whose scan state is unknown must not transfer: %s %v", name, args)
-				return navidrome.RemoteOutput{}, nil
-			}}
-			server, output, _ := newMirrorPushServer(t, runner, api, false)
-			terminal := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
-			if terminal.ExitCode != exitcode.RuntimeFailure || terminal.Result.Failure == nil || terminal.Result.Failure.Kind != "server_scanning" {
-				t.Fatalf("terminal = %+v", terminal)
-			}
-			if !strings.Contains(terminal.Error, "deferred") || !strings.Contains(terminal.Result.Failure.Detail, "deferred") {
-				t.Fatalf("the error must say the push was deferred: %q / %q", terminal.Error, terminal.Result.Failure.Detail)
-			}
-			mirror := terminal.Result.Mirror
-			if mirror == nil || mirror.LastPushError == "" || mirror.ScanPending {
-				t.Fatalf("a deferred push records its error and nothing else: %+v", mirror)
-			}
-		})
-	}
-}
-
+// A canceled real transfer may have changed the mirror without producing any
+// itemized output. Its retry must scan even when rsync reports no new changes.
 func TestMirrorPushCanceledDuringTheTransferStillOwesAScan(t *testing.T) {
 	entered := make(chan struct{})
 	transfers := 0
@@ -529,58 +436,104 @@ func TestMirrorPushCanceledDuringTheTransferStillOwesAScan(t *testing.T) {
 		switch {
 		case args[0] == "--version":
 			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
-		case strings.HasSuffix(args[len(args)-1], "apply-dates"):
+		case mirrorTestGateCommand(name, args) == "udl-mirror scan-status":
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestIdle)}, nil
+		case mirrorTestGateCommand(name, args) == mirrorTestScanCommand:
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestScanned)}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror apply-dates":
 			return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
-		case name == navidrome.DefaultRemoteRsyncPath && !containsArg(args, "--dry-run"):
-			transfers++
-			if transfers == 1 {
-				// The server can apply updates before any itemized line
-				// reaches this Mac, so no stdout proves nothing changed.
-				close(entered)
-				<-ctx.Done()
-				return navidrome.RemoteOutput{}, ctx.Err()
+		case name == navidrome.DefaultRemoteRsyncPath:
+			if !containsArg(args, "--dry-run") {
+				transfers++
+				if transfers == 1 {
+					// No stdout does not prove that the receiver changed nothing.
+					close(entered)
+					<-ctx.Done()
+					return navidrome.RemoteOutput{}, ctx.Err()
+				}
 			}
+			return navidrome.RemoteOutput{}, nil
 		}
-		return navidrome.RemoteOutput{}, nil
+		t.Errorf("unexpected call %s %v", name, args)
+		return navidrome.RemoteOutput{ExitCode: 1}, nil
 	}}
-	api, scans := mirrorTestSubsonic(t)
-	server, output, manager := newMirrorPushServer(t, runner, api, false)
+	server, output, manager := newMirrorPushServer(t, runner, nil, false)
 	first := startMirrorPush(t, server, map[string]any{})
-	<-entered
+	awaitMirrorPhase(t, entered, output)
 	if _, rpcErr := server.cancelRun(mustJSON(t, map[string]string{"run_id": first})); rpcErr != nil {
 		t.Fatal(rpcErr)
 	}
-	if terminal := awaitMirrorPush(t, output, first); terminal.Result.Mirror == nil || !terminal.Result.Mirror.ScanPending {
-		t.Fatalf("a canceled transfer must leave a scan owed: %+v", terminal.Result.Mirror)
+	terminal := awaitMirrorPush(t, output, first)
+	if terminal.ExitCode != exitcode.Interrupted || terminal.Result.Failure == nil || terminal.Result.Failure.Kind != "canceled" ||
+		terminal.Result.Mirror == nil || !terminal.Result.Mirror.ScanPending || terminal.Result.Mirror.LastPushAt != nil {
+		t.Fatalf("a canceled transfer must leave a scan owed, not a completed push: %+v", terminal)
 	}
-	if state, _ := navidrome.LoadMirrorState(manager.Resolved); !state.ScanPending {
-		t.Fatalf("state = %+v", state)
+	if state, err := navidrome.LoadMirrorState(manager.Resolved); err != nil || !state.ScanPending {
+		t.Fatalf("state = %+v, err = %v", state, err)
 	}
-	// The retry transfers nothing but still scans, because one is owed.
+	if len(runner.realPushes()) != 1 || runner.scanCount() != 0 {
+		t.Fatalf("the canceled run must reach the transfer, not its scan: %v", runner.gateCommands())
+	}
 	second := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
-	if second.ExitCode != exitcode.Success || !second.Result.Scanned || *scans != 1 || second.Result.Mirror.ScanPending {
-		t.Fatalf("the owed scan must run on the next push: %+v scans=%d", second, *scans)
+	if second.ExitCode != exitcode.Success || !second.Result.Scanned || runner.scanCount() != 1 ||
+		second.Result.Mirror == nil || second.Result.Mirror.ScanPending || second.Result.Mirror.DatesPending {
+		t.Fatalf("the owed scan must run on the next push: %+v scans=%d", second, runner.scanCount())
 	}
 }
 
 func TestMirrorPushCanceledDuringItsScanFinishesCanceled(t *testing.T) {
-	fake, api := newHeldScanSubsonic(t)
-	runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
+	entered := make(chan struct{})
+	var mu sync.Mutex
+	scanning, scanCalls, transfers := false, 0, 0
+	runner := &mirrorTestRunner{reply: func(ctx context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
 		switch {
 		case args[0] == "--version":
 			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
-		case name == navidrome.DefaultRemoteRsyncPath && !containsArg(args, "--dry-run"):
-			return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror scan-status":
+			mu.Lock()
+			active := scanning
+			mu.Unlock()
+			if active {
+				return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"scanning":true}`)}, nil
+			}
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestIdle)}, nil
+		case mirrorTestGateCommand(name, args) == mirrorTestScanCommand:
+			mu.Lock()
+			scanCalls++
+			first := scanCalls == 1
+			scanning = first
+			mu.Unlock()
+			if first {
+				close(entered)
+				<-ctx.Done()
+				return navidrome.RemoteOutput{}, ctx.Err()
+			}
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestScanned)}, nil
+		case mirrorTestGateCommand(name, args) == "udl-mirror apply-dates":
+			return navidrome.RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
+		case name == navidrome.DefaultRemoteRsyncPath:
+			if containsArg(args, "--dry-run") {
+				return navidrome.RemoteOutput{}, nil
+			}
+			mu.Lock()
+			active := scanning
+			transfers++
+			first := transfers == 1
+			mu.Unlock()
+			if active {
+				t.Error("a real transfer overlapped a running gate scan")
+			}
+			if first {
+				return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
+			}
+			return navidrome.RemoteOutput{}, nil
 		}
-		return navidrome.RemoteOutput{}, nil
+		t.Errorf("unexpected call %s %v", name, args)
+		return navidrome.RemoteOutput{ExitCode: 1}, nil
 	}}
-	server, output, _ := newMirrorPushServer(t, runner, api, false)
+	server, output, _ := newMirrorPushServer(t, runner, mirrorTestUnusedAPI(t), false)
 	runID := startMirrorPush(t, server, map[string]any{})
-	select {
-	case <-fake.seen:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the push never started its scan")
-	}
+	awaitMirrorPhase(t, entered, output)
 	if _, rpcErr := server.cancelRun(mustJSON(t, map[string]string{"run_id": runID})); rpcErr != nil {
 		t.Fatal(rpcErr)
 	}
@@ -589,9 +542,25 @@ func TestMirrorPushCanceledDuringItsScanFinishesCanceled(t *testing.T) {
 		terminal.Result.Failure == nil || terminal.Result.Failure.Kind != "canceled" {
 		t.Fatalf("a cancel after the transfer is still a canceled run: %+v", terminal)
 	}
-	// The partial result stays: the transfer happened and the scan is owed.
-	if terminal.Result.Push.Changed != 1 || terminal.Result.Scanned || len(terminal.Result.Warnings) == 0 ||
+	if terminal.Result.Push.Changed != 1 || terminal.Result.Scanned || terminal.Result.Dates != nil || len(terminal.Result.Warnings) == 0 ||
 		terminal.Result.Mirror == nil || !terminal.Result.Mirror.ScanPending || terminal.Result.Mirror.LastPushAt == nil {
-		t.Fatalf("result = %+v mirror = %+v", terminal.Result, terminal.Result.Mirror)
+		t.Fatalf("the partial transfer result and scan debt must survive cancellation: %+v", terminal.Result)
+	}
+
+	// Canceling SSH does not stop the server scan. The next push is refused,
+	// not held waiting on the public API, and keeps the previous scan debt.
+	second := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
+	if second.ExitCode != exitcode.RuntimeFailure || second.Result.Failure == nil || second.Result.Failure.Kind != "server_scanning" ||
+		second.Result.Mirror == nil || !second.Result.Mirror.ScanPending || len(runner.realPushes()) != 1 {
+		t.Fatalf("an active server scan must defer the next transfer: %+v", second)
+	}
+	mu.Lock()
+	scanning = false
+	mu.Unlock()
+	third := awaitMirrorPush(t, output, startMirrorPush(t, server, map[string]any{}))
+	if third.ExitCode != exitcode.Success || third.Result.Failure != nil || !third.Result.Scanned || third.Result.Dates == nil ||
+		third.Result.Mirror == nil || third.Result.Mirror.ScanPending || third.Result.Mirror.DatesPending ||
+		len(runner.realPushes()) != 2 || runner.scanCount() != 2 {
+		t.Fatalf("an idle retry must transfer and finish its scan debt: %+v", third)
 	}
 }

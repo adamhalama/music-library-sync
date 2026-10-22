@@ -20,7 +20,7 @@ import (
 // place the library is edited. The server holds a mirror of MusicDir that UDL
 // pushes with rsync over SSH; the server's single key for this Mac runs a
 // forced command (udl-mirror-gate) that hands rsync to `rrsync -wo` and
-// otherwise answers only `udl-mirror status|backup|apply-dates`.
+// otherwise answers only `udl-mirror status|backup|apply-dates|scan|scan-status`.
 //
 // The mirror is mounted inside the server's container at the same absolute
 // path as MusicDir, so every path Navidrome reports is a real path on this
@@ -101,8 +101,8 @@ var totalTransferred = regexp.MustCompile(`(?m)^Total transferred file size: ([0
 // changed on the server.
 var ErrDeleteLimit = errors.New("push refused by the delete limit")
 
-// ErrMirrorBusy means another udl push is using the same local data directory.
-var ErrMirrorBusy = errors.New("another udl push to the mirror is running; this one was skipped")
+// ErrMirrorBusy means another push holds the local or server-side mirror lock.
+var ErrMirrorBusy = errors.New("another push to the mirror is running; this one was skipped")
 
 // ErrServerScanning marks a push deferred before its real transfer because
 // Navidrome was scanning, or its scan state could not be read: a scan that
@@ -343,6 +343,9 @@ func (m *Manager) push(ctx context.Context, allowDeletes int, beforeTransfer fun
 	result.Command = remote.RsyncPath + " " + strings.Join(args, " ")
 	out, err := run(ctx, nil, remote.RsyncPath, args...)
 	result.FinishedAt = m.now()
+	if refusal := rsyncGateRefusal(out); refusal != nil {
+		return result, refusal
+	}
 	result.Changed, result.Deleted, result.Items = ParseItemizedChanges(string(out.Stdout))
 	if err != nil {
 		return result, fmt.Errorf("mirror push did not finish: %w", err)
@@ -403,6 +406,9 @@ func (m *Manager) checkServerSpace(ctx context.Context, preflight string) error 
 // rsyncExitError explains a failed rsync run; exit 24 (files vanished while
 // being read) is not a failure.
 func rsyncExitError(out RemoteOutput, step string) error {
+	if refusal := rsyncGateRefusal(out); refusal != nil {
+		return refusal
+	}
 	stderr := strings.TrimSpace(string(out.Stderr))
 	switch out.ExitCode {
 	case 0, rsyncExitVanished:
@@ -458,8 +464,10 @@ func lastLines(text string, n int) string {
 
 // gateReply is the envelope every udl-mirror verb answers with.
 type gateReply struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error"`
+	Busy    string `json:"busy"`
+	Pending bool   `json:"pending"`
 }
 
 // callGate runs one `udl-mirror <verb>` on the server and decodes its reply.
@@ -482,8 +490,11 @@ func (m *Manager) callGate(ctx context.Context, stdin []byte, out any, verb stri
 		}
 		return fmt.Errorf("udl-mirror %s returned no usable reply (exit %d): %s", verb, raw.ExitCode, detail)
 	}
-	if !envelope.OK {
-		return fmt.Errorf("udl-mirror %s: %s", verb, envelope.Error)
+	if !envelope.OK || envelope.Pending || envelope.Busy != "" {
+		return &gateCommandError{Verb: verb, Message: envelope.Error, Busy: envelope.Busy, Pending: envelope.Pending}
+	}
+	if raw.ExitCode != 0 {
+		return fmt.Errorf("udl-mirror %s failed (exit %d) despite its success reply", verb, raw.ExitCode)
 	}
 	if out != nil {
 		if err := json.Unmarshal(bytes.TrimSpace(raw.Stdout), out); err != nil {
@@ -495,7 +506,8 @@ func (m *Manager) callGate(ctx context.Context, stdin []byte, out any, verb stri
 
 // RemoteStatus is the server side of the mirror as the gate reports it.
 type RemoteStatus struct {
-	SSHTarget string `json:"ssh_target"`
+	SSHTarget string            `json:"ssh_target"`
+	Scan      *RemoteScanStatus `json:"scan,omitempty"`
 	Library   struct {
 		Path        string     `json:"path"`
 		Files       int        `json:"files"`
@@ -596,11 +608,11 @@ func (m *Manager) staleMirrorProblems(status RemoteStatus) []string {
 	return problems
 }
 
-// remoteProblems flags a server layout that breaks exact-path identity.
+// remoteProblems flags scan recovery debt and a layout that breaks exact-path identity.
 func (m *Manager) remoteProblems(status RemoteStatus) []string {
-	problems := []string{}
+	problems := remoteScanProblems(status.Scan)
 	if !status.Database.Present {
-		return append(problems, "the server has no Navidrome database yet; start the container and finish its first scan")
+		return append(problems, "the server has no Navidrome database yet; start the container and finish its first scan through the mirror gate")
 	}
 	rooted := false
 	for _, library := range status.Database.Libraries {
@@ -784,109 +796,6 @@ func (m *Manager) reconcileDateAddedRemote(ctx context.Context, dryRun bool) (Re
 	return result, nil
 }
 
-// scanStatusClient is the slice of the API the scan wait needs.
-type scanStatusClient interface {
-	StartScan(ctx context.Context, full bool) error
-	ScanState(ctx context.Context) (ScanState, error)
-}
-
-// scanPollInterval is a var so tests do not sleep.
-var scanPollInterval = time.Second
-
-// scanAfterPush waits for any running scan, requests one, and waits for it to
-// finish. A scan that starts after the push completed includes the pushed
-// files, so being idle first is what makes the request count. Zero waits use
-// the defaults.
-func scanAfterPush(ctx context.Context, client scanStatusClient, idleWait, finishWait time.Duration) error {
-	if idleWait <= 0 {
-		idleWait = scanIdleTimeout
-	}
-	if finishWait <= 0 {
-		finishWait = scanFinishTimeout
-	}
-	idleCtx, cancelIdle := context.WithTimeout(ctx, idleWait)
-	defer cancelIdle()
-	before, err := waitScanIdle(idleCtx, client)
-	if err != nil {
-		return fmt.Errorf("wait for the running Navidrome scan: %w", err)
-	}
-	if err := client.StartScan(ctx, false); err != nil {
-		return fmt.Errorf("request a Navidrome scan: %w", err)
-	}
-	finishCtx, cancelFinish := context.WithTimeout(ctx, finishWait)
-	defer cancelFinish()
-	sawScanning := false
-	polls := 0
-	for {
-		state, err := client.ScanState(finishCtx)
-		if err != nil {
-			return fmt.Errorf("read Navidrome scan status: %w", err)
-		}
-		polls++
-		switch {
-		case state.Scanning:
-			sawScanning = true
-		case sawScanning:
-			return nil
-		case !state.LastScan.IsZero():
-			// A quick scan can start and finish between two polls; lastScan
-			// moving past its pre-request value is the signal for that.
-			if !state.LastScan.Equal(before.LastScan) {
-				return nil
-			}
-		case polls >= 3:
-			// A server that omits lastScan and never showed the scan running
-			// has nothing more precise to offer.
-			return nil
-		}
-		if err := sleepCtx(finishCtx, scanPollInterval); err != nil {
-			return fmt.Errorf("the Navidrome scan did not finish in time: %w", err)
-		}
-	}
-}
-
-// confirmScanIdle makes sure Navidrome is not scanning before the real
-// transfer changes the mirror. It waits up to idleWait for a running scan —
-// one a canceled push left behind, or one started from the phone app — and
-// refuses with ErrServerScanning when the scan outlasts the wait or the scan
-// state cannot be read: an unreachable API does not prove that no scan runs.
-func (m *Manager) confirmScanIdle(ctx context.Context, idleWait time.Duration) error {
-	client, err := m.Client()
-	if err != nil {
-		return fmt.Errorf("%w: could not read Navidrome's scan state: %v", ErrServerScanning, err)
-	}
-	if idleWait <= 0 {
-		idleWait = scanIdleTimeout
-	}
-	idleCtx, cancel := context.WithTimeout(ctx, idleWait)
-	defer cancel()
-	if _, err := waitScanIdle(idleCtx, client); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if idleCtx.Err() != nil {
-			return fmt.Errorf("%w: Navidrome was still scanning after %s; the next push retries", ErrServerScanning, idleWait)
-		}
-		return fmt.Errorf("%w: could not read Navidrome's scan state: %v", ErrServerScanning, err)
-	}
-	return nil
-}
-
-func waitScanIdle(ctx context.Context, client scanStatusClient) (ScanState, error) {
-	for {
-		state, err := client.ScanState(ctx)
-		if err != nil {
-			return ScanState{}, err
-		}
-		if !state.Scanning {
-			return state, nil
-		}
-		if err := sleepCtx(ctx, scanPollInterval); err != nil {
-			return ScanState{}, err
-		}
-	}
-}
-
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -903,16 +812,18 @@ type MirrorOptions struct {
 	// Scan requests a scan when the push changed anything, or when an
 	// earlier push's scan never finished.
 	Scan bool
-	// ForceScan scans even when the push changed nothing.
+	// ForceScan requests a scan even when the push changed nothing; it does
+	// not request a full Navidrome rescan.
 	ForceScan bool
 	// Dates re-applies Date Added after a scan.
 	Dates bool
 	// AllowDeletes raises the delete limit for one intended reorganisation.
 	AllowDeletes int
-	// IdleWait and FinishWait bound the scan waits; zero uses the defaults.
-	// IdleWait also bounds the wait for a running scan before the transfer;
-	// one that runs out there defers the push (ErrServerScanning). A wait
-	// that runs out after the push leaves the scan pending for the next one.
+	// IdleWait bounds the pre-transfer gate check (at most 10s).
+	// IdleWait + FinishWait is
+	// the gate scan timeout (rounded up to seconds, capped at one hour);
+	// zero uses the defaults. A refused check defers the push, while a scan
+	// timeout after the push leaves its scan pending for the next one.
 	IdleWait, FinishWait time.Duration
 }
 
@@ -1013,9 +924,9 @@ type MirrorResult struct {
 // date problems after a completed push are warnings, with pending work recorded.
 //
 // Under the mirror lock, no real transfer starts until Navidrome is confirmed
-// idle: a scan of a half-applied mirror gives moved tracks new IDs. A push
-// canceled during its scan leaves that scan running on the server, and the
-// phone app can start one too.
+// idle: a scan of a half-applied mirror gives moved tracks new IDs. The gate
+// repeats that check under its server lock at hand-off. Scans run only through
+// the gate; canceling a push does not cancel an already-running server scan.
 func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorResult, error) {
 	result := MirrorResult{Warnings: []string{}}
 	unlock, err := lockMirror(m.Resolved)
@@ -1052,9 +963,16 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 	now := m.now()
 	if err != nil {
 		state.LastPushError, state.LastErrorAt = err.Error(), &now
-		// A real transfer that started stays owed a scan (set above); a
-		// refusal before it leaves the flag as it was.
-		state.ScanPending = state.ScanPending || push.HasChanges()
+		// Only an explicit gate hand-off refusal proves the receiver never
+		// started. Undo the pre-transfer write, preserving any earlier debt.
+		var refusal *mirrorTransferRefusal
+		if errors.As(err, &refusal) {
+			state.ScanPending = previousPending
+		} else {
+			// A cancel/connection error may have transferred files without
+			// returning itemized output, so keep the durable pending flag.
+			state.ScanPending = state.ScanPending || push.HasChanges()
+		}
 		record()
 		return result, err
 	}
@@ -1071,12 +989,7 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 	}
 	record()
 	if state.ScanPending {
-		client, err := m.Client()
-		if err != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but no scan was requested: %v", err))
-			return result, nil
-		}
-		if err := scanAfterPush(ctx, client, opts.IdleWait, opts.FinishWait); err != nil {
+		if err := m.scanRemote(ctx, false, opts.IdleWait, opts.FinishWait); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("pushed, but the scan did not complete: %v", err))
 			return result, nil
 		}
