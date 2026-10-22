@@ -492,8 +492,12 @@ const maxPushSourceEntries = 100_000
 
 func findPushSourceFile(root, playlistsPath string, maxEntries int) (bool, error) {
 	playlists := filepath.Join(root, filepath.Clean(playlistsPath))
+	playlistsInfo, err := os.Stat(playlists)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
 	found, visited := false, 0
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -509,6 +513,17 @@ func findPushSourceFile(root, playlistsPath string, maxEntries int) (bool, error
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if entry.IsDir() && playlistsInfo != nil {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			// APFS aliases case and Unicode spellings. The managed directory
+			// is not library evidence under any spelling of the same inode.
+			if os.SameFile(info, playlistsInfo) {
+				return filepath.SkipDir
+			}
 		}
 		if entry.Type().IsRegular() {
 			found = true

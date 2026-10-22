@@ -230,6 +230,53 @@ func TestPushSourceRequiresAnEligibleFile(t *testing.T) {
 	}
 }
 
+func TestPushSourceExcludesManagedPlaylistsByIdentity(t *testing.T) {
+	cases := []struct {
+		name       string
+		onDisk     string
+		configured string
+		symlink    bool
+	}{
+		{name: "case alias", onDisk: "udl-playlists", configured: "UDL-playlists"},
+		{name: "Unicode normalization alias", onDisk: "café-playlists", configured: "café-playlists"},
+		{name: "symlink alias", onDisk: "generated", configured: "udl-playlists", symlink: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, resolved := remoteTestConfig(t)
+			actual := filepath.Join(resolved.MusicDir, tc.onDisk)
+			configured := filepath.Join(resolved.MusicDir, tc.configured)
+			writeFile(t, filepath.Join(actual, "All Music.nsp"))
+			if tc.symlink {
+				if err := os.Symlink(actual, configured); err != nil {
+					t.Fatal(err)
+				}
+			}
+			actualInfo, err := os.Stat(actual)
+			if err != nil {
+				t.Fatal(err)
+			}
+			configuredInfo, err := os.Stat(configured)
+			if err != nil || !os.SameFile(actualInfo, configuredInfo) {
+				t.Skip("the filesystem does not alias these path spellings")
+			}
+			resolved.PlaylistsPath = tc.configured
+			runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
+				t.Fatal("managed playlists alone must not reach a subprocess")
+				return RemoteOutput{}, nil
+			}}
+			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+			if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "empty; refusing to push") {
+				t.Fatalf("managed playlists with an alias must not count as library content: %v", err)
+			}
+			writeFile(t, filepath.Join(resolved.MusicDir, "Artist", "a.mp3"))
+			if err := checkPushSource(resolved.MusicDir, resolved.PlaylistsPath); err != nil {
+				t.Fatalf("a real track outside the managed directory must still count: %v", err)
+			}
+		})
+	}
+}
+
 func TestPushSourceDoesNotFollowSymlinkEntries(t *testing.T) {
 	music, outside := t.TempDir(), t.TempDir()
 	writeFile(t, filepath.Join(outside, "a.mp3"))
