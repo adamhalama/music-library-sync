@@ -844,7 +844,7 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(failed.kind, .failed)
         XCTAssertEqual(failed.severity, .error)
         XCTAssertTrue(failed.message.contains("rsync exit 12"))
-        XCTAssertTrue(failed.message.contains("previous mirror"))
+        XCTAssertTrue(failed.message.contains("push again"))
 
         let deferred = NavidromeMirrorPushOutcome(exitCode: 1, error: "the server is scanning", result: try decodePush("""
         {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
@@ -870,6 +870,48 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertTrue(bare.message.contains("run result exceeds frame limit"))
         let bareCancel = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: nil)
         XCTAssertEqual(bareCancel.kind, .canceled)
+    }
+
+    /// rsync is not transactional across the tree: a failed or canceled push
+    /// may have changed part of the mirror, so the app says so and asks for
+    /// another push instead of promising the previous mirror.
+    func testAnInterruptedPushSaysItIsIncomplete() throws {
+        let partialFailure = NavidromeMirrorPushOutcome(exitCode: 1, error: "mirror push did not finish: signal: killed", result: try decodePush("""
+        {"push": {"changed": 5, "deleted": 2}, "scanned": false, "warnings": [],
+         "mirror": {"last_push_error": "mirror push did not finish: signal: killed", "scan_pending": true},
+         "failure": {"kind": "failed", "detail": "mirror push did not finish: signal: killed"}}
+        """))
+        XCTAssertEqual(partialFailure.kind, .failed)
+        for text in ["did not complete", "partly updated", "push again", "signal: killed"] {
+            XCTAssertTrue(partialFailure.message.contains(text), "\(text): \(partialFailure.message)")
+        }
+        XCTAssertFalse(partialFailure.message.contains("previous mirror"))
+
+        // Canceled mid-transfer: nothing itemized arrived, but the recorded
+        // owed scan says the transfer had started. The detail is kept.
+        let partialCancel = NavidromeMirrorPushOutcome(exitCode: 130, error: "mirror push did not finish: context canceled", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "mirror": {"scan_pending": true},
+         "failure": {"kind": "canceled", "detail": "mirror push did not finish: context canceled"}}
+        """))
+        XCTAssertEqual(partialCancel.kind, .canceled)
+        for text in ["canceled", "partly updated", "push again", "mirror push did not finish: context canceled"] {
+            XCTAssertTrue(partialCancel.message.contains(text), "\(text): \(partialCancel.message)")
+        }
+        XCTAssertFalse(partialCancel.message.contains("previous mirror"))
+
+        // Canceled in the preflight: the recorded state shows nothing owed.
+        let early = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "mirror": {"last_push_error": "mirror preflight did not finish: context canceled"},
+         "failure": {"kind": "canceled", "detail": "mirror preflight did not finish: context canceled"}}
+        """))
+        XCTAssertTrue(early.message.contains("nothing changed on the server"), early.message)
+        XCTAssertTrue(early.message.contains("mirror preflight did not finish"))
+
+        // Without a result nothing is known, so the cautious wording applies.
+        let bare = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: nil)
+        XCTAssertTrue(bare.message.contains("partly updated"), bare.message)
     }
 
     // MARK: Fixtures

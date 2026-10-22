@@ -792,9 +792,21 @@ struct NavidromeMirrorPushOutcome: Equatable {
             severity = warnings.isEmpty && !scanOwed && !datesOwed ? .ok : .warn
             return
         }
-        let detail = failure?.detail.flatMap { $0.isEmpty ? nil : $0 }
+        let reported = failure?.detail.flatMap { $0.isEmpty ? nil : $0 }
             ?? error.flatMap { $0.isEmpty ? nil : $0 }
-            ?? "The push failed with exit code \(exitCode)."
+        let detail = reported ?? "The push failed with exit code \(exitCode)."
+        // rsync is not transactional across the tree, so a push that stopped
+        // after its transfer began may have changed part of the mirror. The
+        // owed scan is recorded before the transfer starts; without it, and
+        // without changes, nothing reached the server. Unknown reads as maybe.
+        let changes = (result?.push?.changed ?? 0) + (result?.push?.deleted ?? 0)
+        let mirror = result?.mirror
+        let mayBePartial = mirror == nil || changes > 0
+            || mirror?.scanPending == true || mirror?.datesPending == true
+        let canceledMessage = (mayBePartial
+            ? "Push canceled before it finished. The server may be partly updated; push again to complete it."
+            : "Push canceled before anything was transferred; nothing changed on the server.")
+            + (reported.map { " \($0)" } ?? "")
         switch failure?.kind {
         case "busy":
             kind = .busy
@@ -814,16 +826,18 @@ struct NavidromeMirrorPushOutcome: Equatable {
             severity = .warn
         case "canceled":
             kind = .canceled
-            message = "Push canceled. The server keeps serving the previous mirror; the next push resumes."
+            message = canceledMessage
             severity = .warn
         default:
             if exitCode == 130 {
                 kind = .canceled
-                message = "Push canceled. The server keeps serving the previous mirror; the next push resumes."
+                message = canceledMessage
                 severity = .warn
             } else {
                 kind = .failed
-                message = "The push failed; the server keeps serving the previous mirror. \(detail)"
+                message = mayBePartial
+                    ? "The push did not complete, and the server may be partly updated; push again once the cause is fixed. \(detail)"
+                    : "The push failed before anything was transferred; nothing changed on the server. \(detail)"
                 severity = .error
             }
         }
