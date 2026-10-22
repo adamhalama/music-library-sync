@@ -276,7 +276,12 @@ remote:
   scheduled scan), so a push that stopped half-way is never indexed. A scan or
   Date Added step that did not finish is recorded in
   `<data_dir>/udl-mirror-state.json` and retried by the next push; `status`
-  reports it, and a failed push, as a problem.
+  reports it, and a failed push, as a problem. The pending scan is recorded
+  before the transfer starts, so a push interrupted mid-transfer still owes one.
+- No transfer starts while the server is scanning: the push waits for a
+  running scan (one a canceled push left behind, or one started from the phone
+  app) and is deferred, with nothing changed, if it outlasts the wait or the
+  server's scan state cannot be read. The next push retries.
 - Names starting with `..` (e.g. `...Ready For It.mp3`) are mirrored: Navidrome
   hides only names with a single leading dot.
 - The server's Navidrome must mount the mirror at the **same absolute path** as
