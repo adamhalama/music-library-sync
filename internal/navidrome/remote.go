@@ -879,6 +879,11 @@ type MirrorState struct {
 	// DatesPending means a scan completed but the Date Added reconcile
 	// after it did not; the next push retries it without another scan.
 	DatesPending bool `json:"dates_pending,omitempty"`
+	// LastExportAt and LastExportError record the weekly off-server copy of
+	// the server's database (`udl navidrome export-db`, see export.go).
+	LastExportAt      *time.Time `json:"last_export_at,omitempty"`
+	LastExportError   string     `json:"last_export_error,omitempty"`
+	LastExportErrorAt *time.Time `json:"last_export_error_at,omitempty"`
 }
 
 // MirrorStatePath is the state file inside the (local) data directory.
@@ -937,6 +942,7 @@ func (m *Manager) mirrorProblems() []string {
 	if state.DatesPending {
 		problems = append(problems, "Date Added was not reconciled after the last scan; the next `udl navidrome push` retries it (or run `udl navidrome dates reconcile`)")
 	}
+	problems = append(problems, exportProblems(state, m.now())...)
 	return problems
 }
 

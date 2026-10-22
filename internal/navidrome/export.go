@@ -1,0 +1,431 @@
+package navidrome
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+// In remote mode stars, plays and playlists live only in the server's
+// database. `udl navidrome export-db` pulls a verified copy of it to this Mac
+// (weekly, from launchd) through the gate's `udl-mirror export-db` verb, which
+// answers with one JSON header line followed by exactly size_bytes raw bytes
+// of a fresh, quick_check-verified backup.
+
+const (
+	// ServerDBExportDirName is the default folder, inside the local data
+	// directory, that holds the pulled copies.
+	ServerDBExportDirName = "server-db-exports"
+
+	// DefaultServerDBExportKeep keeps two months of weekly copies.
+	DefaultServerDBExportKeep = 8
+
+	// maxServerDBExportBytes refuses a reply that cannot be a phone
+	// library's database; the whole reply is held in memory.
+	maxServerDBExportBytes = 512 << 20
+
+	// maxServerDBExportHeaderBytes bounds the JSON line before the bytes.
+	maxServerDBExportHeaderBytes = 64 << 10
+
+	// serverDBExportStaleAfter is when status starts warning: two missed
+	// weekly runs.
+	serverDBExportStaleAfter = 14 * 24 * time.Hour
+
+	// serverDBExportTimeout ends a transfer that stalls, e.g. when the Mac
+	// sleeps mid-download.
+	serverDBExportTimeout = 30 * time.Minute
+
+	serverDBExportPrefix = "navidrome-server-"
+	serverDBExportStamp  = "20060102T150405Z"
+)
+
+// sqliteMagic starts every SQLite 3 database file.
+var sqliteMagic = []byte("SQLite format 3\x00")
+
+// serverDBExportName matches only files this command writes; rotation never
+// touches anything else in the folder.
+var serverDBExportName = regexp.MustCompile(`^navidrome-server-\d{8}T\d{6}Z\.db$`)
+
+// exportStateLockWait bounds how long recording the outcome waits for a push
+// that holds the mirror lock (the post-sync push is capped at 20 minutes).
+// Variables so tests can shorten them.
+var (
+	exportStateLockWait = 25 * time.Minute
+	exportStateLockPoll = 2 * time.Second
+)
+
+// errServerDBExportTooLarge stops reading a reply past the cap.
+var errServerDBExportTooLarge = fmt.Errorf("the server's database export is larger than %d MiB; refusing it", maxServerDBExportBytes>>20)
+
+// ServerDBExportOptions selects where copies go and how many are kept.
+type ServerDBExportOptions struct {
+	// OutDir defaults to <data_dir>/server-db-exports.
+	OutDir string
+	// Keep is the number of newest copies retained; zero uses the default.
+	Keep int
+}
+
+// ServerDBExportResult reports one pulled copy.
+type ServerDBExportResult struct {
+	Path            string    `json:"path"`
+	SizeBytes       int64     `json:"size_bytes"`
+	SHA256          string    `json:"sha256"`
+	ExportedAt      time.Time `json:"exported_at"`
+	ServerPath      string    `json:"server_path"`
+	ServerCreatedAt string    `json:"server_created_at"`
+	Kept            int       `json:"kept"`
+	Removed         []string  `json:"removed"`
+	Warnings        []string  `json:"warnings"`
+}
+
+// serverDBExportHeader is the gate's first line.
+type serverDBExportHeader struct {
+	OK        bool   `json:"ok"`
+	Error     string `json:"error"`
+	Format    string `json:"format"`
+	SizeBytes int64  `json:"size_bytes"`
+	SHA256    string `json:"sha256"`
+	CreatedAt string `json:"created_at"`
+	Path      string `json:"path"`
+}
+
+// ServerDBExportDir is the default folder for pulled copies.
+func ServerDBExportDir(resolved Resolved) string {
+	return filepath.Join(resolved.DataDir, ServerDBExportDirName)
+}
+
+// ExportServerDB pulls a verified copy of the server's Navidrome database,
+// writes it atomically (0600) and keeps the newest opts.Keep copies. The
+// outcome is recorded in the mirror state, which status reports.
+//
+// The download runs without the mirror lock; only the short state update
+// takes it, so a running push neither blocks the transfer nor loses its own
+// state writes.
+func (m *Manager) ExportServerDB(ctx context.Context, opts ServerDBExportOptions) (ServerDBExportResult, error) {
+	result := ServerDBExportResult{Removed: []string{}, Warnings: []string{}}
+	remote, err := m.requireRemote()
+	if err != nil {
+		return result, err
+	}
+	if opts.Keep < 0 {
+		return result, errors.New("keep must be at least 1")
+	}
+	if opts.Keep == 0 {
+		opts.Keep = DefaultServerDBExportKeep
+	}
+	if strings.TrimSpace(opts.OutDir) == "" {
+		opts.OutDir = ServerDBExportDir(m.Resolved)
+	}
+	result, err = m.exportServerDB(ctx, remote, opts, result)
+	at := m.now()
+	if err == nil {
+		at = result.ExportedAt
+	}
+	if recordErr := m.recordServerDBExport(ctx, at, err); recordErr != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the export in the mirror state: %v", recordErr))
+	}
+	return result, err
+}
+
+func (m *Manager) exportServerDB(ctx context.Context, remote *RemoteConfig, opts ServerDBExportOptions, result ServerDBExportResult) (ServerDBExportResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, serverDBExportTimeout)
+	defer cancel()
+	run := m.Remote
+	if run == nil {
+		// Header line, newline, database.
+		run = cappedRemoteRunner(maxServerDBExportHeaderBytes + 1 + maxServerDBExportBytes)
+	}
+	raw, err := run(ctx, nil, remote.SSHPath, "-o", "BatchMode=yes", remote.SSHTarget, "udl-mirror export-db")
+	if errors.Is(err, errServerDBExportTooLarge) {
+		return result, err
+	}
+	if err != nil {
+		return result, fmt.Errorf("udl-mirror export-db: %w", err)
+	}
+	header, payload, err := parseServerDBExport(raw)
+	if err != nil {
+		if raw.ExitCode == 255 && len(raw.Stdout) == 0 {
+			return result, fmt.Errorf("the mirror server is not reachable over SSH (%s): %s",
+				remote.SSHTarget, lastLines(strings.TrimSpace(string(raw.Stderr)), 3))
+		}
+		return result, err
+	}
+	stamp := m.now()
+	path, err := writeServerDBExport(opts.OutDir, stamp, payload)
+	if err != nil {
+		return result, err
+	}
+	result.Path, result.SizeBytes, result.SHA256 = path, header.SizeBytes, strings.ToLower(header.SHA256)
+	result.ExportedAt, result.ServerPath, result.ServerCreatedAt = stamp, header.Path, header.CreatedAt
+	kept, removed, rotateErr := rotateServerDBExports(opts.OutDir, opts.Keep)
+	result.Kept, result.Removed = kept, removed
+	if rotateErr != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("could not prune older copies: %v", rotateErr))
+	}
+	return result, nil
+}
+
+// parseServerDBExport checks the gate's header and the bytes after it: the
+// declared size, the sha256 and the SQLite file magic. The server already
+// ran PRAGMA quick_check on the file it streamed.
+func parseServerDBExport(raw RemoteOutput) (serverDBExportHeader, []byte, error) {
+	var header serverDBExportHeader
+	stdout := raw.Stdout
+	newline := bytes.IndexByte(stdout, '\n')
+	if newline < 0 || newline > maxServerDBExportHeaderBytes {
+		limit := len(stdout)
+		if limit > maxServerDBExportHeaderBytes {
+			limit = maxServerDBExportHeaderBytes
+		}
+		newline = limit
+	}
+	line := bytes.TrimSpace(stdout[:newline])
+	if err := json.Unmarshal(line, &header); err != nil {
+		return header, nil, fmt.Errorf("udl-mirror export-db returned no usable reply (exit %d): %s",
+			raw.ExitCode, lastLines(strings.TrimSpace(string(raw.Stderr)), 3))
+	}
+	if !header.OK {
+		if header.Error == "" {
+			header.Error = "the server refused the export without a reason"
+		}
+		return header, nil, fmt.Errorf("udl-mirror export-db: %s", header.Error)
+	}
+	if header.Format != "sqlite" {
+		return header, nil, fmt.Errorf("udl-mirror export-db sent format %q, not sqlite", header.Format)
+	}
+	if header.SizeBytes <= 0 {
+		return header, nil, errors.New("udl-mirror export-db declared an empty database")
+	}
+	if header.SizeBytes > maxServerDBExportBytes {
+		return header, nil, errServerDBExportTooLarge
+	}
+	payload := []byte{}
+	if newline < len(stdout) {
+		payload = stdout[newline+1:]
+	}
+	if int64(len(payload)) != header.SizeBytes {
+		detail := ""
+		if stderr := strings.TrimSpace(string(raw.Stderr)); stderr != "" {
+			detail = ": " + lastLines(stderr, 3)
+		}
+		return header, nil, fmt.Errorf("udl-mirror export-db sent %d bytes but declared %d (exit %d)%s",
+			len(payload), header.SizeBytes, raw.ExitCode, detail)
+	}
+	if raw.ExitCode != 0 {
+		return header, nil, fmt.Errorf("udl-mirror export-db exited %d after sending the database", raw.ExitCode)
+	}
+	sum := sha256.Sum256(payload)
+	if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, header.SHA256) {
+		return header, nil, fmt.Errorf("udl-mirror export-db sha256 mismatch: received %s, server declared %s", got, header.SHA256)
+	}
+	if !bytes.HasPrefix(payload, sqliteMagic) {
+		return header, nil, errors.New("udl-mirror export-db sent a file that is not an SQLite database")
+	}
+	return header, payload, nil
+}
+
+// writeServerDBExport stores the copy through a synced temp file and a
+// rename, so the folder only ever holds complete, verified copies.
+func writeServerDBExport(dir string, at time.Time, payload []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	final := filepath.Join(dir, serverDBExportPrefix+at.UTC().Format(serverDBExportStamp)+".db")
+	if _, err := os.Lstat(final); err == nil {
+		return "", fmt.Errorf("%s already exists; not replacing it", final)
+	}
+	tmp, err := os.CreateTemp(dir, ".navidrome-server-*.db.partial")
+	if err != nil {
+		return "", fmt.Errorf("create a temporary file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("sync %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmpPath, final); err != nil {
+		return "", fmt.Errorf("replace %s: %w", final, err)
+	}
+	keep = true
+	if handle, err := os.Open(dir); err == nil {
+		_ = handle.Sync()
+		_ = handle.Close()
+	}
+	return final, nil
+}
+
+// rotateServerDBExports keeps the newest `keep` copies. Only regular files
+// named like this command's output are considered; the stamp in the name
+// orders them.
+func rotateServerDBExports(dir string, keep int) (int, []string, error) {
+	removed := []string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, removed, err
+	}
+	names := []string{}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && serverDBExportName.MatchString(entry.Name()) {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	if len(names) <= keep {
+		return len(names), removed, nil
+	}
+	var errs []error
+	for _, name := range names[keep:] {
+		path := filepath.Join(dir, name)
+		if err := os.Remove(path); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		removed = append(removed, path)
+	}
+	return len(names) - len(removed), removed, errors.Join(errs...)
+}
+
+// recordServerDBExport stores the outcome in the mirror state. SyncMirror
+// loads the state once and rewrites it under lockMirror, so this waits for
+// the lock (a push can run for minutes) and holds it only for the
+// read-modify-write.
+func (m *Manager) recordServerDBExport(ctx context.Context, at time.Time, exportErr error) error {
+	unlock, err := lockMirrorWait(ctx, m.Resolved, exportStateLockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	state, err := LoadMirrorState(m.Resolved)
+	if err != nil {
+		// Do not replace a state file this build cannot read.
+		return err
+	}
+	if exportErr == nil {
+		state.LastExportAt, state.LastExportError, state.LastExportErrorAt = &at, "", nil
+	} else {
+		state.LastExportError, state.LastExportErrorAt = exportErr.Error(), &at
+	}
+	return saveMirrorState(m.Resolved, state)
+}
+
+// lockMirrorWait retries the non-blocking mirror lock until it is free, the
+// wait runs out, or ctx ends. The recording deliberately outlives the
+// transfer's own timeout but not the caller's context.
+func lockMirrorWait(ctx context.Context, resolved Resolved, wait time.Duration) (func(), error) {
+	deadline := time.Now().Add(wait)
+	for {
+		unlock, err := lockMirror(resolved)
+		if !errors.Is(err, ErrMirrorBusy) {
+			return unlock, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("a mirror push held the state lock for over %s", wait)
+		}
+		if err := sleepCtx(ctx, exportStateLockPoll); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// exportProblems flags a failed or stale off-server copy. A Mac that never
+// exported is not flagged: the copy is opt-in until the launchd job exists.
+func exportProblems(state MirrorState, now time.Time) []string {
+	problems := []string{}
+	last := "never"
+	if state.LastExportAt != nil {
+		last = state.LastExportAt.Local().Format("2006-01-02 15:04")
+	}
+	switch {
+	case state.LastExportError != "":
+		when := "at an unknown time"
+		if state.LastExportErrorAt != nil {
+			when = state.LastExportErrorAt.Local().Format("2006-01-02 15:04")
+		}
+		problems = append(problems, fmt.Sprintf(
+			"the last off-server copy of the server's database failed (%s): %s — last good copy: %s; run `udl navidrome export-db`",
+			when, state.LastExportError, last))
+	case state.LastExportAt != nil && now.Sub(*state.LastExportAt) > serverDBExportStaleAfter:
+		problems = append(problems, fmt.Sprintf(
+			"the newest off-server copy of the server's database is from %s (%d days ago); stars and plays since then exist only on the server — run `udl navidrome export-db` and check the weekly launchd job",
+			last, int(now.Sub(*state.LastExportAt).Hours()/24)))
+	}
+	return problems
+}
+
+// cappedBuffer collects output up to a limit and then fails the write; os/exec
+// then closes the pipe, which stops the ssh child instead of buffering
+// without end. Wait reports ssh's exit rather than this error, hence the flag.
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if c.overflow || c.buf.Len()+len(p) > c.limit {
+		c.overflow = true
+		return 0, errServerDBExportTooLarge
+	}
+	return c.buf.Write(p)
+}
+
+// cappedRemoteRunner is DefaultRemoteRunner with a bounded stdout.
+func cappedRemoteRunner(limit int) RemoteRunner {
+	return func(ctx context.Context, stdin []byte, name string, args ...string) (RemoteOutput, error) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.WaitDelay = 5 * time.Second
+		if stdin != nil {
+			cmd.Stdin = bytes.NewReader(stdin)
+		}
+		stdout := &cappedBuffer{limit: limit}
+		stderr := &cappedBuffer{limit: 1 << 20}
+		cmd.Stdout, cmd.Stderr = stdout, stderr
+		err := cmd.Run()
+		out := RemoteOutput{Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes()}
+		if stdout.overflow {
+			return out, errServerDBExportTooLarge
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && ctx.Err() == nil {
+			out.ExitCode = exitErr.ExitCode()
+			return out, nil
+		}
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return out, ctxErr
+			}
+			return out, err
+		}
+		return out, nil
+	}
+}
