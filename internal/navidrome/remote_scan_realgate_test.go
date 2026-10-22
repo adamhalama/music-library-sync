@@ -47,6 +47,13 @@ func TestRealGateRefusesTheRsyncHandOff(t *testing.T) {
 		if got := f.handOffs(); got != 2 {
 			t.Fatalf("hand-offs = %d, want preflight + transfer", got)
 		}
+		raw, err := os.ReadFile(f.sentinel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Count(string(raw), "no-lock=true\n"); got != 2 {
+			t.Fatalf("-no-lock hand-offs = %d, want preflight + transfer with the gate's --lock", got)
+		}
 		if _, err := os.Stat(filepath.Join(f.library, "a.mp3")); err != nil {
 			t.Fatalf("idle push did not reach the mirror: %v", err)
 		}
@@ -219,11 +226,15 @@ func (h realGateHarness) fixture(t *testing.T) *realGateFixture {
 		"c.execute(\"INSERT INTO library VALUES (1, 'Synthetic', '/synthetic-music', \"\n"+
 		"  \"'2026-10-22 11:00:00+00:00', '0001-01-01 00:00:00+00:00', 0)\")\n")
 
-	// A stand-in for rrsync -wo: record the hand-off, then run the receiver
-	// confined to the mirror, exactly as the client asked for it.
+	// A stand-in for rrsync -wo: record the hand-off and -no-lock flag, then
+	// run the receiver confined to the mirror (the last argument).
 	rrsync := filepath.Join(tmp, "fake-rrsync")
 	writeScript(t, rrsync, "#!/bin/sh\nset -f\necho hand-off >> "+shellQuote(f.sentinel)+"\n"+
-		"[ \"$1 $2\" = \"-wo -munge\" ] || exit 99\ncd \"$3\" || exit 98\n"+
+		"[ \"$1 $2\" = \"-wo -munge\" ] || exit 99\n"+
+		"no_lock=false\nfor arg in \"$@\"; do\n"+
+		"  library=$arg\n  [ \"$arg\" != \"-no-lock\" ] || no_lock=true\ndone\n"+
+		"printf 'no-lock=%s\\n' \"$no_lock\" >> "+shellQuote(f.sentinel)+"\n"+
+		"cd \"$library\" || exit 98\n"+
 		"set -- $SSH_ORIGINAL_COMMAND\nshift\nexec "+shellQuote(h.rsync)+" \"$@\"\n")
 	// A stand-in for ssh + sshd's forced command: everything after the
 	// target becomes SSH_ORIGINAL_COMMAND, in a scrubbed environment.
