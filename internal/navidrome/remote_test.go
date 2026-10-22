@@ -185,7 +185,7 @@ func TestPushRefusesAnEmptyLibrary(t *testing.T) {
 		return RemoteOutput{}, nil
 	}}
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	if _, err := manager.Push(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -200,7 +200,7 @@ func TestPushRefusesOpenrsync(t *testing.T) {
 		return RemoteOutput{Stdout: []byte("openrsync: protocol version 29\nrsync version 2.6.9 compatible\n")}, nil
 	}}
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	if _, err := manager.Push(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "openrsync") {
+	if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "openrsync") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestPushClassifiesRsyncExits(t *testing.T) {
 			return RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n"), Stderr: []byte(tc.stderr), ExitCode: tc.code}, nil
 		}}
 		manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-		result, err := manager.Push(context.Background(), 0)
+		result, err := manager.push(context.Background(), 0, nil)
 		switch {
 		case tc.wantErr != "":
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -291,7 +291,7 @@ func TestPushRefusesALargeDeletionBeforeChangingAnything(t *testing.T) {
 	var real []string
 	runner := deletionRunner(t, 300, &real)
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	result, err := manager.Push(context.Background(), 0)
+	result, err := manager.push(context.Background(), 0, nil)
 	if err == nil || !strings.Contains(err.Error(), "nothing was pushed") || !strings.Contains(err.Error(), "--allow-deletes 300") {
 		t.Fatalf("err = %v", err)
 	}
@@ -305,7 +305,7 @@ func TestPushRefusesALargeDeletionBeforeChangingAnything(t *testing.T) {
 	// An explicit allowance lets the reorganisation through, and the real
 	// push may delete everything the preflight listed, so it cannot stop
 	// half-way.
-	if _, err := manager.Push(context.Background(), 300); err != nil {
+	if _, err := manager.push(context.Background(), 300, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := argWithPrefix(real, "--max-delete="); got != "--max-delete=327" {
@@ -586,7 +586,9 @@ func TestSyncMirrorReportsAFailedPushAsAnError(t *testing.T) {
 		}
 		return RemoteOutput{ExitCode: 12, Stderr: []byte("rsync error: error in rsync protocol data stream")}, nil
 	}}
-	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+	server, _ := mirrorServer(t)
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run,
+		API: NewClient(server.URL, Credentials{Username: "u", Password: "p"})}
 	if _, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true}); err == nil {
 		t.Fatal("a failed push must be an error")
 	}
@@ -620,10 +622,26 @@ func TestAnUnfinishedScanIsRetriedByTheNextPush(t *testing.T) {
 		}
 		return RemoteOutput{Stdout: []byte(`{"ok":true,"entries":1,"matched":1}`)}, nil
 	}}
-	// First run: the server stays busy scanning past the wait.
+	// First run: the server is idle when the push starts, then stays busy
+	// scanning (someone else's scan) past the wait.
+	var pushed sync.Once
+	busyNow := make(chan struct{})
+	original := runner.reply
+	runner.reply = func(name string, args []string) (RemoteOutput, error) {
+		if name == DefaultRemoteRsyncPath && args[0] != "--version" && !hasArg(args, "--dry-run") {
+			pushed.Do(func() { close(busyNow) })
+		}
+		return original(name, args)
+	}
 	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scanning := false
+		select {
+		case <-busyNow:
+			scanning = true
+		default:
+		}
 		body := map[string]any{"status": "ok", "version": "1.16.1",
-			"scanStatus": map[string]any{"scanning": true, "count": 1}}
+			"scanStatus": map[string]any{"scanning": scanning, "count": 1}}
 		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
 	}))
 	t.Cleanup(busy.Close)
@@ -768,12 +786,12 @@ func TestPushRefusesATransferThatWouldFillTheServer(t *testing.T) {
 		return original(name, args)
 	}
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	if _, err := manager.Push(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "free") || real != nil {
+	if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "free") || real != nil {
 		t.Fatalf("err = %v, real push ran: %v", err, real != nil)
 	}
 	small := "Total transferred file size: 5,000,000 bytes\n"
 	manager.Remote = pushRunner(RemoteOutput{}, small, status).run
-	if _, err := manager.Push(context.Background(), 0); err != nil {
+	if _, err := manager.push(context.Background(), 0, nil); err != nil {
 		t.Fatalf("a small push must pass: %v", err)
 	}
 }
@@ -832,5 +850,57 @@ func TestStatusNoticesAMirrorThatFellBehind(t *testing.T) {
 	status.Library.NewestMtime = &older
 	if problems := manager.staleMirrorProblems(status); len(problems) != 1 || !strings.Contains(problems[0], "behind") {
 		t.Fatalf("an older mirror must show: %v", problems)
+	}
+}
+
+// busyScanServer is a Navidrome stand-in that is always scanning.
+func busyScanServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := map[string]any{"status": "ok", "version": "1.16.1",
+			"scanStatus": map[string]any{"scanning": true, "count": 1}}
+		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": body})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestSyncMirrorDefersItsTransferWhileTheServerScans(t *testing.T) {
+	scanPollInterval = time.Millisecond
+	t.Cleanup(func() { scanPollInterval = time.Second })
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	unreachable := httptest.NewServer(http.NotFoundHandler())
+	unreachable.Close()
+	cases := map[string]*Client{
+		"scanning":    NewClient(busyScanServer(t).URL, Credentials{Username: "u", Password: "p"}),
+		"unreachable": NewClient(unreachable.URL, Credentials{Username: "u", Password: "p"}),
+		"no API":      nil,
+	}
+	for name, api := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := os.Remove(MirrorStatePath(resolved)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			runner := pushRunner(RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}, ">f+++++++++ a.mp3\n", "")
+			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run, API: api}
+			result, err := manager.SyncMirror(context.Background(), MirrorOptions{
+				Scan: true, Dates: true, IdleWait: 20 * time.Millisecond, FinishWait: 20 * time.Millisecond})
+			if !errors.Is(err, ErrServerScanning) || !strings.Contains(err.Error(), "deferred") {
+				t.Fatalf("err = %v", err)
+			}
+			for _, call := range runner.calls {
+				if call[0] == DefaultRemoteRsyncPath && call[1] != "--version" && !hasArg(call, "--dry-run") {
+					t.Fatalf("no real transfer may start while a scan can be running: %v", call)
+				}
+			}
+			if result.Push.HasChanges() || result.Scanned {
+				t.Fatalf("result = %+v", result)
+			}
+			state, _ := LoadMirrorState(resolved)
+			if state.LastPushError == "" || state.ScanPending || state.LastPushAt != nil {
+				t.Fatalf("a deferred push records only its error: %+v", state)
+			}
+		})
 	}
 }

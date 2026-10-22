@@ -104,6 +104,12 @@ var ErrDeleteLimit = errors.New("push refused by the delete limit")
 // ErrMirrorBusy means another udl push to the mirror is running on this Mac.
 var ErrMirrorBusy = errors.New("another udl push to the mirror is running; this one was skipped")
 
+// ErrServerScanning marks a push deferred before its real transfer because
+// Navidrome was scanning, or its scan state could not be read: a scan that
+// reads a half-applied mirror gives moved tracks new IDs. Nothing was changed
+// on the server.
+var ErrServerScanning = errors.New("the server is scanning or its scan state is unknown; the push was deferred and nothing was changed")
+
 // mirrorFreeFloor is the free space a push must leave on the server; the
 // gate enforces the same floor per session.
 const mirrorFreeFloor = 20 << 30
@@ -268,15 +274,19 @@ func (m *Manager) requireRemote() (*RemoteConfig, error) {
 	return m.Config.Remote, nil
 }
 
-// Push mirrors MusicDir to the server. It never requests a scan; see
-// SyncMirror for the full push, scan and Date Added sequence.
+// push mirrors MusicDir to the server. It never requests a scan; SyncMirror
+// is the only caller and runs the full push, scan and Date Added sequence
+// under the mirror lock.
 //
 // A dry run comes first and the push is refused outright — nothing copied,
 // nothing deleted — when it would delete more than max_delete (or the
 // explicit allowDeletes) files. rsync's own --max-delete would instead stop
 // half-way and leave old and new paths side by side for the next scan to
 // index as different tracks.
-func (m *Manager) Push(ctx context.Context, allowDeletes int) (PushResult, error) {
+//
+// beforeTransfer, when set, runs after every check and immediately before the
+// real transfer; an error from it refuses the push with nothing changed.
+func (m *Manager) push(ctx context.Context, allowDeletes int, beforeTransfer func(context.Context) error) (PushResult, error) {
 	remote, err := m.requireRemote()
 	if err != nil {
 		return PushResult{}, err
@@ -318,6 +328,12 @@ func (m *Manager) Push(ctx context.Context, allowDeletes int) (PushResult, error
 		return result, err
 	}
 
+	if beforeTransfer != nil {
+		if err := beforeTransfer(ctx); err != nil {
+			result.FinishedAt = m.now()
+			return result, err
+		}
+	}
 	args := RsyncPushArgs(m.Config, m.Resolved, total+deleteSlack, false)
 	result.Command = remote.RsyncPath + " " + strings.Join(args, " ")
 	out, err := run(ctx, nil, remote.RsyncPath, args...)
@@ -824,6 +840,33 @@ func scanAfterPush(ctx context.Context, client scanStatusClient, idleWait, finis
 	}
 }
 
+// confirmScanIdle makes sure Navidrome is not scanning before the real
+// transfer changes the mirror. It waits up to idleWait for a running scan —
+// one a canceled push left behind, or one started from the phone app — and
+// refuses with ErrServerScanning when the scan outlasts the wait or the scan
+// state cannot be read: an unreachable API does not prove that no scan runs.
+func (m *Manager) confirmScanIdle(ctx context.Context, idleWait time.Duration) error {
+	client, err := m.Client()
+	if err != nil {
+		return fmt.Errorf("%w: could not read Navidrome's scan state: %v", ErrServerScanning, err)
+	}
+	if idleWait <= 0 {
+		idleWait = scanIdleTimeout
+	}
+	idleCtx, cancel := context.WithTimeout(ctx, idleWait)
+	defer cancel()
+	if _, err := waitScanIdle(idleCtx, client); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if idleCtx.Err() != nil {
+			return fmt.Errorf("%w: Navidrome was still scanning after %s; the next push retries", ErrServerScanning, idleWait)
+		}
+		return fmt.Errorf("%w: could not read Navidrome's scan state: %v", ErrServerScanning, err)
+	}
+	return nil
+}
+
 func waitScanIdle(ctx context.Context, client scanStatusClient) (ScanState, error) {
 	for {
 		state, err := client.ScanState(ctx)
@@ -862,7 +905,9 @@ type MirrorOptions struct {
 	// AllowDeletes raises the delete limit for one intended reorganisation.
 	AllowDeletes int
 	// IdleWait and FinishWait bound the scan waits; zero uses the defaults.
-	// A wait that runs out leaves the scan pending for the next push.
+	// IdleWait also bounds the wait for a running scan before the transfer;
+	// one that runs out there defers the push (ErrServerScanning). A wait
+	// that runs out after the push leaves the scan pending for the next one.
 	IdleWait, FinishWait time.Duration
 }
 
@@ -957,6 +1002,11 @@ type MirrorResult struct {
 // SyncMirror pushes the library, rescans when anything changed, and then
 // re-applies Date Added. Only the push can fail the call: the server keeps
 // serving the previous mirror, so scan and date problems are warnings.
+//
+// Under the mirror lock, no real transfer starts until Navidrome is confirmed
+// idle: a scan of a half-applied mirror gives moved tracks new IDs. A push
+// canceled during its scan leaves that scan running on the server, and the
+// phone app can start one too.
 func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorResult, error) {
 	result := MirrorResult{Warnings: []string{}}
 	unlock, err := lockMirror(m.Resolved)
@@ -974,7 +1024,9 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 			result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the mirror state: %v", err))
 		}
 	}
-	push, err := m.Push(ctx, opts.AllowDeletes)
+	push, err := m.push(ctx, opts.AllowDeletes, func(ctx context.Context) error {
+		return m.confirmScanIdle(ctx, opts.IdleWait)
+	})
 	result.Push = push
 	now := m.now()
 	if err != nil {

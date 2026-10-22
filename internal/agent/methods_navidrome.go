@@ -444,10 +444,11 @@ type navidromeMirrorPushResult struct {
 
 // Failure kinds of a mirror push.
 const (
-	mirrorPushBusy        = "busy"
-	mirrorPushDeleteLimit = "delete_limit"
-	mirrorPushCanceled    = "canceled"
-	mirrorPushFailed      = "failed"
+	mirrorPushBusy           = "busy"
+	mirrorPushDeleteLimit    = "delete_limit"
+	mirrorPushServerScanning = "server_scanning"
+	mirrorPushCanceled       = "canceled"
+	mirrorPushFailed         = "failed"
 )
 
 type navidromeMirrorPushFailure struct {
@@ -535,6 +536,10 @@ func classifyMirrorPushError(ctx context.Context, err error, push navidrome.Push
 		}
 	case errors.Is(err, context.Canceled), ctx.Err() != nil:
 		return navidromeMirrorPushFailure{Kind: mirrorPushCanceled, Detail: err.Error()}
+	case errors.Is(err, navidrome.ErrServerScanning):
+		// Deferred before the transfer: nothing changed, and the next push
+		// (the scheduled one included) tries again.
+		return navidromeMirrorPushFailure{Kind: mirrorPushServerScanning, Detail: err.Error()}
 	}
 	return navidromeMirrorPushFailure{Kind: mirrorPushFailed, Detail: err.Error()}
 }

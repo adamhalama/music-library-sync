@@ -79,6 +79,9 @@ A failed push leaves the server serving its previous, complete mirror.
 				if errors.Is(err, navidrome.ErrDeleteLimit) {
 					fmt.Fprintf(app.IO.Out, "Planned deletions: %d (nothing was changed)\n", result.Push.PlannedDeletes)
 				}
+				if errors.Is(err, navidrome.ErrServerScanning) {
+					fmt.Fprintln(app.IO.Out, "Deferred: the server is scanning or its scan state is unknown, so nothing was pushed; push again when it is idle and reachable")
+				}
 				if app.Opts.Verbose {
 					for _, item := range result.Push.Items {
 						fmt.Fprintf(app.IO.Out, "  %s\n", item)

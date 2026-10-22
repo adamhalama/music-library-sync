@@ -157,8 +157,11 @@ with `-32602` and a `detail` before any run starts. Inside the run,
 holds this Mac's mirror lock; nothing changed), `delete_limit` (the preflight
 refused; `failure.planned_deletes` and `failure.allow_deletes_command` name the
 count and the explicit `udl navidrome push --allow-deletes N` override, which
-the app deliberately does not offer as one click), `canceled` (exit `130` after
-`run.cancel`), or `failed`. `navidrome.status` carries the same push state as
+the app deliberately does not offer as one click), `server_scanning` (the
+server was scanning, or its scan state could not be read, when the real
+transfer was about to start; the push was deferred with nothing changed and the
+next push retries), `canceled` (exit `130` after `run.cancel`), or `failed`.
+Clients must treat an unknown `failure.kind` like `failed`. `navidrome.status` carries the same push state as
 `mirror` and the server side as `remote`; both are omitted in local mode.
 
 `phone.connected` in the Navidrome config is a user acknowledgement, not an
