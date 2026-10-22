@@ -833,7 +833,7 @@ func TestSyncMirrorRecordsTheOwedScanBeforeTheTransfer(t *testing.T) {
 			if err := os.Remove(MirrorStatePath(resolved)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Fatal(err)
 			}
-			var pendingAtTransfer *bool
+			var stateAtTransfer *MirrorState
 			runner := &scriptedRunner{reply: func(name string, args []string) (RemoteOutput, error) {
 				switch {
 				case args[0] == "--version":
@@ -845,7 +845,7 @@ func TestSyncMirrorRecordsTheOwedScanBeforeTheTransfer(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					pendingAtTransfer = &state.ScanPending
+					stateAtTransfer = &state
 					return tc.real, tc.realErr
 				}
 				if requireGateCommand(t, name, args) != "udl-mirror scan-status" {
@@ -859,11 +859,11 @@ func TestSyncMirrorRecordsTheOwedScanBeforeTheTransfer(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v", err)
 			}
-			if pendingAtTransfer != nil && !*pendingAtTransfer {
-				t.Fatal("scan_pending must be on disk before the real transfer starts")
+			if stateAtTransfer != nil && (!stateAtTransfer.ScanPending || !stateAtTransfer.DatesPending) {
+				t.Fatalf("scan and opted-in dates must be on disk before the real transfer starts: %+v", stateAtTransfer)
 			}
-			if state, _ := LoadMirrorState(resolved); state.ScanPending != tc.wantPending {
-				t.Fatalf("scan_pending = %v, want %v", state.ScanPending, tc.wantPending)
+			if state, err := LoadMirrorState(resolved); err != nil || state.ScanPending != tc.wantPending || state.DatesPending != tc.wantPending {
+				t.Fatalf("scan and date debt must both be %v: %+v, %v", tc.wantPending, state, err)
 			}
 		})
 	}

@@ -34,6 +34,8 @@ func TestMirrorPushGateStatusRefusalsReachRunFinished(t *testing.T) {
 		{name: "scan job lock", reply: `{"ok":true,"scanning":false,"scan_job_busy":true}`, kind: "server_scanning"},
 		// A mirror lock belongs to another push, not a Navidrome scan.
 		{name: "mirror lock", reply: `{"ok":true,"scanning":false,"mirror_busy":true}`, kind: "busy"},
+		{name: "invalid control locks", reply: `{"ok":true,"scanning":false,"lock_error":"scan control locks are unreadable or invalid","mirror_busy":true,"scan_job_busy":true}`, kind: "failed"},
+		{name: "invalid locks with API outage", reply: `{"ok":true,"scanning":null,"api_error":"loopback API unavailable","lock_error":"scan control locks are unreadable or invalid","mirror_busy":true,"scan_job_busy":true}`, kind: "failed"},
 		{name: "unknown scanning", reply: `{"ok":true,"scanning":null}`, kind: "server_scanning"},
 		{name: "missing scanning", reply: `{"ok":true}`, kind: "server_scanning"},
 		{name: "API error despite idle", reply: `{"ok":true,"scanning":false,"api_error":"loopback API unavailable"}`, kind: "server_scanning"},
@@ -73,6 +75,10 @@ func TestMirrorPushGateStatusRefusalsReachRunFinished(t *testing.T) {
 					}
 					if tt.kind == "server_scanning" && !strings.Contains(terminal.Result.Failure.Detail, "deferred") {
 						t.Fatalf("scan refusal must explain the deferral: %+v", terminal.Result.Failure)
+					}
+					if strings.Contains(tt.reply, "lock_error") && (!strings.Contains(terminal.Result.Failure.Detail, "scan control is misconfigured") ||
+						!strings.Contains(terminal.Result.Failure.Detail, "scan control locks are unreadable or invalid")) {
+						t.Fatalf("invalid locks must reach run.finished as a clear configuration failure: %+v", terminal.Result.Failure)
 					}
 					mirror := terminal.Result.Mirror
 					if mirror == nil || mirror.ScanPending != pending || !mirror.DatesPending || mirror.LastPushError == "" ||
@@ -223,8 +229,8 @@ func TestMirrorPushIncompleteGateScanIsAWarningWithDebt(t *testing.T) {
 				t.Fatalf("a gate scan failure after a completed push is a warning, not a failed push: %+v", terminal)
 			}
 			mirror := terminal.Result.Mirror
-			if mirror == nil || !mirror.ScanPending || mirror.DatesPending || mirror.LastPushAt == nil || mirror.LastScanAt != nil || mirror.LastPushError != "" {
-				t.Fatalf("a scan not confirmed complete must remain owed: %+v", mirror)
+			if mirror == nil || !mirror.ScanPending || !mirror.DatesPending || mirror.LastPushAt == nil || mirror.LastScanAt != nil || mirror.LastPushError != "" {
+				t.Fatalf("an incomplete scan must retain both scan debt and opted-in date intent: %+v", mirror)
 			}
 			if commands := strings.Join(runner.gateCommands(), "\n"); commands != "udl-mirror scan-status\n"+mirrorTestScanCommand {
 				t.Fatalf("dates must not run before a completed scan: %q", commands)
@@ -296,6 +302,7 @@ func TestNavidromeStatusExposesOptionalRemoteScanFieldsAndProblems(t *testing.T)
 		{name: "minimal idle", scan: `{"scanning":false}`},
 		{name: "scan markers and locks", scan: `{"scanning":true,"mirror_busy":true,"scan_job_busy":true,"recovery_pending":true,"migration_scan_pending":true,"enforcement":1,"libraries":[{"id":7,"last_scan_at":"2026-10-22 10:00:00","last_scan_started_at":"0001-01-01 00:00:00","full_scan_in_progress":true}]}`, problems: []string{"unfinished Navidrome scan", "migration scan"}},
 		{name: "unknown API status", scan: `{"scanning":null,"api_error":"loopback API unavailable","enforcement":1}`, problems: []string{"cannot read Navidrome's scan status"}},
+		{name: "invalid control locks", scan: `{"scanning":false,"lock_error":"scan control locks are unreadable or invalid","mirror_busy":true,"scan_job_busy":true,"enforcement":1}`, problems: []string{"scan control is misconfigured", "scan control locks are unreadable or invalid"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {

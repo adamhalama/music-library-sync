@@ -104,6 +104,10 @@ var ErrDeleteLimit = errors.New("push refused by the delete limit")
 // ErrMirrorBusy means another push holds the local or server-side mirror lock.
 var ErrMirrorBusy = errors.New("another push to the mirror is running; this one was skipped")
 
+// ErrMirrorGateMisconfigured means the server's scan-control locks cannot be
+// trusted. This is a server configuration failure, not another active push.
+var ErrMirrorGateMisconfigured = errors.New("the mirror server's scan control is misconfigured; repair its control locks on the server before pushing again")
+
 // ErrServerScanning marks a push deferred before its real transfer because
 // Navidrome was scanning, or its scan state could not be read: a scan that
 // reads a half-applied mirror gives moved tracks new IDs. Nothing was changed
@@ -464,10 +468,11 @@ func lastLines(text string, n int) string {
 
 // gateReply is the envelope every udl-mirror verb answers with.
 type gateReply struct {
-	OK      bool   `json:"ok"`
-	Error   string `json:"error"`
-	Busy    string `json:"busy"`
-	Pending bool   `json:"pending"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error"`
+	LockError string `json:"lock_error"`
+	Busy      string `json:"busy"`
+	Pending   bool   `json:"pending"`
 }
 
 // callGate runs one `udl-mirror <verb>` on the server and decodes its reply.
@@ -489,6 +494,11 @@ func (m *Manager) callGate(ctx context.Context, stdin []byte, out any, verb stri
 			return fmt.Errorf("the mirror server is not reachable over SSH (%s): %s", remote.SSHTarget, detail)
 		}
 		return fmt.Errorf("udl-mirror %s returned no usable reply (exit %d): %s", verb, raw.ExitCode, detail)
+	}
+	if envelope.LockError != "" {
+		// Invalid/unreadable locks can also set busy flags conservatively;
+		// they are a configuration failure, not evidence of another push.
+		return fmt.Errorf("%w: %s", ErrMirrorGateMisconfigured, envelope.LockError)
 	}
 	if !envelope.OK || envelope.Pending || envelope.Busy != "" {
 		return &gateCommandError{Verb: verb, Message: envelope.Error, Busy: envelope.Busy, Pending: envelope.Pending}
@@ -837,8 +847,9 @@ type MirrorState struct {
 	// completed yet. The server never scans on its own, so the next push
 	// forces one.
 	ScanPending bool `json:"scan_pending,omitempty"`
-	// DatesPending means a scan completed but the Date Added reconcile
-	// after it did not; the next push retries it without another scan.
+	// DatesPending means an opted-in push still owes Date Added reconciliation,
+	// possibly waiting for its scan first. Only successful reconciliation
+	// settles it; a later push with dates disabled must preserve the debt.
 	DatesPending bool `json:"dates_pending,omitempty"`
 	// The off-server database copy keeps its own state file
 	// (ServerDBExportState): older builds rewrite this one with only the
@@ -905,7 +916,7 @@ func (m *Manager) mirrorProblems() []string {
 		problems = append(problems, "the server has not finished scanning the last push; the next `udl navidrome push` retries it")
 	}
 	if state.DatesPending {
-		problems = append(problems, "Date Added was not reconciled after the last scan; the next `udl navidrome push` retries it (or run `udl navidrome dates reconcile`)")
+		problems = append(problems, "Date Added is still owed for the last push; the next `udl navidrome push` retries it after any pending scan (or run `udl navidrome dates reconcile` once the scan finishes)")
 	}
 	return problems
 }
@@ -944,17 +955,20 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 			result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the mirror state: %v", err))
 		}
 	}
-	previousPending := state.ScanPending
+	previousPending, previousDatesPending := state.ScanPending, state.DatesPending
 	push, err := m.push(ctx, opts.AllowDeletes, func(ctx context.Context) error {
 		if err := m.confirmScanIdle(ctx, opts.IdleWait); err != nil {
 			return err
 		}
 		// From here the server may change even if this process never sees
 		// a single itemized line (a cancel, a dropped connection, a Mac
-		// that sleeps), so the owed scan is on disk before rsync starts.
+		// that sleeps), so the owed scan and opted-in dates are on disk before
+		// rsync starts. A failed scan must not lose date intent to --no-dates
+		// on a later retry.
 		state.ScanPending = true
+		state.DatesPending = state.DatesPending || opts.Dates
 		if err := saveMirrorState(m.Resolved, state); err != nil {
-			state.ScanPending = previousPending
+			state.ScanPending, state.DatesPending = previousPending, previousDatesPending
 			return fmt.Errorf("could not record the mirror state before the transfer, so nothing was pushed: %w", err)
 		}
 		return nil
@@ -967,7 +981,7 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 		// started. Undo the pre-transfer write, preserving any earlier debt.
 		var refusal *mirrorTransferRefusal
 		if errors.As(err, &refusal) {
-			state.ScanPending = previousPending
+			state.ScanPending, state.DatesPending = previousPending, previousDatesPending
 		} else {
 			// A cancel/connection error may have transferred files without
 			// returning itemized output, so keep the durable pending flag.
@@ -983,6 +997,9 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 	// The transfer finished, so its itemized output is complete: only a scan
 	// owed before it, a change, or a forced scan keeps the flag.
 	state.ScanPending = previousPending || push.HasChanges() || (opts.Scan && opts.ForceScan)
+	// A proven no-op owes no new work. Otherwise keep opted-in dates even
+	// when this run skips or fails its scan; --no-dates only postpones them.
+	state.DatesPending = previousDatesPending || (opts.Dates && state.ScanPending)
 	if !opts.Scan || (!state.ScanPending && !(opts.Dates && state.DatesPending)) {
 		record()
 		return result, nil
@@ -996,9 +1013,6 @@ func (m *Manager) SyncMirror(ctx context.Context, opts MirrorOptions) (MirrorRes
 		result.Scanned = true
 		scanned := m.now()
 		state.LastScanAt, state.ScanPending = &scanned, false
-		// Skipping dates for this push does not settle an earlier reconcile
-		// failure. Only a successful apply-dates call below clears that debt.
-		state.DatesPending = state.DatesPending || opts.Dates
 		record()
 	}
 	if opts.Dates && state.DatesPending {

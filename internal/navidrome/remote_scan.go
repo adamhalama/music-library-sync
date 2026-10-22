@@ -17,6 +17,7 @@ type RemoteScanStatus struct {
 	OK                   bool                `json:"ok,omitempty"`
 	Scanning             *bool               `json:"scanning,omitempty"`
 	APIError             string              `json:"api_error,omitempty"`
+	LockError            string              `json:"lock_error,omitempty"`
 	MirrorBusy           bool                `json:"mirror_busy,omitempty"`
 	ScanJobBusy          bool                `json:"scan_job_busy,omitempty"`
 	Libraries            []RemoteScanLibrary `json:"libraries,omitempty"`
@@ -115,7 +116,7 @@ func (m *Manager) confirmScanIdle(ctx context.Context, idleWait time.Duration) e
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if errors.Is(err, ErrMirrorBusy) {
+		if errors.Is(err, ErrMirrorGateMisconfigured) || errors.Is(err, ErrMirrorBusy) {
 			return err
 		}
 		return fmt.Errorf("%w: could not read the server's scan state: %v", ErrServerScanning, err)
@@ -178,6 +179,9 @@ func remoteScanProblems(state *RemoteScanStatus) []string {
 		return nil
 	}
 	problems := []string{}
+	if state.LockError != "" {
+		problems = append(problems, fmt.Sprintf("%s: %s", ErrMirrorGateMisconfigured, state.LockError))
+	}
 	if state.RecoveryPending {
 		problems = append(problems, "the server has an unfinished Navidrome scan; pushes are paused to protect track IDs. Finish a recovery scan on the server before pushing again")
 	}

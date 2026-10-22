@@ -163,7 +163,9 @@ the app deliberately does not offer as one click), `server_scanning` (the
 server was scanning, a scan job/recovery/migration scan was pending, or its scan
 state could not be read at the pre-transfer check or the gate's rsync hand-off;
 the push was deferred with nothing changed and any earlier `scan_pending`
-value is preserved), `canceled` (exit `130` after `run.cancel`), or `failed`.
+value is preserved), `canceled` (exit `130` after `run.cancel`), or `failed`
+(including invalid/unreadable server control locks, reported as a server
+configuration problem with a repair hint, not another busy push).
 Clients must treat an unknown `failure.kind` like `failed`. `navidrome.status` carries the same push state as
 `mirror`, the server side as `remote`, and the off-server database copy
 (`udl navidrome export-db`) as `export` (`last_export_at`, `last_export_error`,
@@ -178,13 +180,19 @@ replaced by legacy history.
 
 In remote mode `remote.scan` carries the forced-command gate's scan state, not
 an inference from the Mac's last push. Its optional fields are `ok`, `scanning`
-(boolean; omitted when unknown), `api_error`, `mirror_busy`, `scan_job_busy`,
+(boolean; omitted when unknown), `api_error`, `lock_error`, `mirror_busy`, `scan_job_busy`,
 `recovery_pending`, `migration_scan_pending`, `enforcement`, and `libraries`
 (rows with `id`, `last_scan_at`, `last_scan_started_at`, and
 `full_scan_in_progress`). False/empty fields may be omitted; an explicitly
 known idle `scanning: false` is retained. `remote.scan` itself is omitted if an
-older gate does not report it. Recovery/migration scan debt and an unreachable
-server-side Navidrome API also appear as plain-language `problems`.
+older gate does not report it. Recovery/migration scan debt, `lock_error`
+(server configuration), and an unreachable server-side Navidrome API also appear
+as plain-language `problems`. `lock_error` takes precedence over conservative
+busy flags when refusing a push. An `api_error` within a successful gate status
+reply does not discard the reachable server's database, disk or backup fields;
+only the scan API state is unknown. The whole SSH status request retains a
+10-second budget; the gate's shorter API probe leaves time to return these
+partial diagnostics.
 
 All remote scan triggers (mirror push including `force_scan`, playlist refresh,
 and the post-sync hook) use SSH `udl-mirror scan`, never the public API's
@@ -192,10 +200,15 @@ and the post-sync hook) use SSH `udl-mirror scan`, never the public API's
 the combined idle/finish wait budget, rounded up to seconds and capped at one
 hour. `force_scan` requests a normal scan even if nothing changed, not a full
 rescan. A pending/timeout or failed scan keeps `mirror.scan_pending` for the next
-push; a busy `apply-dates` keeps `mirror.dates_pending` and reports a warning.
-Only a confirmed completed gate scan clears scan debt. A generic rsync interruption may already
-have changed files and keeps its pre-transfer scan debt; an explicit gate
-hand-off refusal proves that nothing transferred and restores the prior value.
+push. Opted-in Date Added intent is recorded as `mirror.dates_pending` alongside
+scan debt, before transfer/scan success, including when a push skips its scan.
+A failed scan or a later `--no-dates` retry preserves that date debt; only a
+successful reconciliation settles it. A busy `apply-dates` keeps the debt and
+reports a warning. Only a confirmed completed gate scan clears scan debt. A
+generic rsync interruption may already have changed files and keeps its
+pre-transfer scan/date debt; an explicit gate hand-off refusal proves that
+nothing transferred and restores both prior values. A completed no-op transfer
+adds no new debt unless a scan was already owed or explicitly forced.
 
 `phone.connected` in the Navidrome config is a user acknowledgement, not an
 observation: nothing on the Mac can see the phone app, so the last setup step is

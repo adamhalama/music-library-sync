@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRemoteStatusCarriesGateScanState(t *testing.T) {
@@ -84,6 +85,7 @@ func TestRemoteScanProblemsExplainRequiredRecovery(t *testing.T) {
 		{"unreachable", &RemoteScanStatus{APIError: "connection refused"}, "API is reachable again"},
 		{"unknown", &RemoteScanStatus{}, "cannot read Navidrome's scan status"},
 		{"API error with stale idle", &RemoteScanStatus{Scanning: &idle, APIError: "authentication failed"}, "cannot read Navidrome's scan status"},
+		{"invalid control locks", &RemoteScanStatus{Scanning: &idle, LockError: "scan control locks are unreadable or invalid", MirrorBusy: true, ScanJobBusy: true}, "scan control is misconfigured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager := &Manager{}
@@ -102,5 +104,41 @@ func TestRemoteScanProblemsExplainRequiredRecovery(t *testing.T) {
 				t.Fatalf("problems = %v, want %q", problems, tc.want)
 			}
 		})
+	}
+}
+
+func TestRemoteStatusPreservesPartialStatusWhenScanAPIIsUnavailable(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	const reply = `{"ok":true,"library":{"files":3,"bytes":4096},"database":{"path":"/data/navidrome.db","present":true,"size_bytes":8192,"tracks":3},"disk":{"free_bytes":42949672960,"total_bytes":85899345920},"udl_backups":[{"path":"/backups/udl.db","created_at":"2026-10-22T11:00:00Z","size_bytes":8192}],"navidrome_backups":[{"path":"/backups/scheduled.db","created_at":"2026-10-22T12:00:00Z","size_bytes":8192}],"scan":{"ok":true,"scanning":null,"api_error":"loopback API probe timed out","mirror_busy":false,"scan_job_busy":false,"enforcement":1}}`
+	calls := 0
+	manager := &Manager{Config: cfg, Resolved: resolved}
+	manager.Remote = func(ctx context.Context, _ []byte, name string, args ...string) (RemoteOutput, error) {
+		if requireGateCommand(t, name, args) != "udl-mirror status" {
+			t.Fatalf("unexpected gate command: %v", args)
+		}
+		calls++
+		deadline, bounded := ctx.Deadline()
+		if remaining := time.Until(deadline); !bounded || remaining <= 0 || remaining > 10*time.Second || remoteStatusTimeout != 10*time.Second {
+			t.Fatalf("whole-SSH status budget must remain 10s: deadline=%v present=%t timeout=%v", deadline, bounded, remoteStatusTimeout)
+		}
+		return RemoteOutput{Stdout: []byte(reply)}, nil
+	}
+	var status Status
+	manager.remoteStatusInto(context.Background(), &status)
+	remote := status.Remote
+	if calls != 1 || remote == nil || remote.SSHTarget != cfg.Remote.SSHTarget || remote.Scan == nil ||
+		remote.Scan.Scanning != nil || remote.Scan.APIError != "loopback API probe timed out" {
+		t.Fatalf("an API outage must not discard the reachable gate's status: %+v calls=%d", status, calls)
+	}
+	if !remote.Database.Present || remote.Database.Path != "/data/navidrome.db" || remote.Database.SizeBytes != 8192 || remote.Database.Tracks != 3 ||
+		remote.Disk.FreeBytes != 42949672960 || remote.Disk.TotalBytes != 85899345920 || remote.Library.Files != 3 || remote.Library.Bytes != 4096 {
+		t.Fatalf("database, disk and library status must survive an API outage: %+v", remote)
+	}
+	if len(remote.UDLBackups) != 1 || len(remote.NavidromeBackups) != 1 || status.BackupCount != 2 ||
+		status.LatestBackup == nil || status.LatestBackup.Path != "/backups/scheduled.db" {
+		t.Fatalf("backups must survive an API outage: %+v", status)
+	}
+	if !strings.Contains(strings.Join(status.Problems, "\n"), "cannot read Navidrome's scan status") {
+		t.Fatalf("the API outage must still be explained: %v", status.Problems)
 	}
 }
