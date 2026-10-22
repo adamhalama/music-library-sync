@@ -392,9 +392,11 @@ func (m *Manager) push(ctx context.Context, allowDeletes int, beforeTransfer fun
 
 // deletionsSkipped reports rsync's "IO error encountered -- skipping file
 // deletion": after an unreadable folder it deletes nothing, so moved files
-// exist under both names until a clean push.
+// exist under both names until a clean push. rsync 3.x writes this diagnostic
+// to stdout; accept either stream so it cannot become a scan-safe warning.
 func deletionsSkipped(out RemoteOutput) bool {
-	return strings.Contains(string(out.Stderr), "skipping file deletion")
+	return bytes.Contains(out.Stdout, []byte("skipping file deletion")) ||
+		bytes.Contains(out.Stderr, []byte("skipping file deletion"))
 }
 
 // checkServerSpace refuses a push that would leave the server below the free

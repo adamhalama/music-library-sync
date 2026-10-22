@@ -280,6 +280,7 @@ func TestPushRefusesOpenrsync(t *testing.T) {
 func TestPushClassifiesRsyncExits(t *testing.T) {
 	cases := []struct {
 		code    int
+		stdout  string
 		stderr  string
 		wantErr string
 		warn    bool
@@ -288,6 +289,7 @@ func TestPushClassifiesRsyncExits(t *testing.T) {
 		{code: rsyncExitVanished, warn: true},
 		{code: rsyncExitMaxDelete, wantErr: "delete limit"},
 		{code: rsyncExitPartial, stderr: "IO error encountered -- skipping file deletion", wantErr: "skipped all deletions"},
+		{code: rsyncExitPartial, stdout: "IO error encountered -- skipping file deletion\n", stderr: "rsync: [sender] opendir failed: Permission denied (13)", wantErr: "skipped all deletions"},
 		{code: 1, stderr: "Another instance of rrsync is already accessing this directory", wantErr: "still running"},
 		{code: 255, stderr: "ssh: connect to host music-server: Operation timed out", wantErr: "rsync exit 255"},
 	}
@@ -301,7 +303,7 @@ func TestPushClassifiesRsyncExits(t *testing.T) {
 			case hasArg(args, "--dry-run"):
 				return RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n")}, nil
 			}
-			return RemoteOutput{Stdout: []byte(">f+++++++++ a.mp3\n"), Stderr: []byte(tc.stderr), ExitCode: tc.code}, nil
+			return RemoteOutput{Stdout: []byte(tc.stdout + ">f+++++++++ a.mp3\n"), Stderr: []byte(tc.stderr), ExitCode: tc.code}, nil
 		}}
 		manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
 		result, err := manager.push(context.Background(), 0, nil)
@@ -749,16 +751,28 @@ func TestAnUnreadableFileIsAWarningButAnUnreadableFolderBlocksTheScan(t *testing
 		t.Fatalf("one unreadable file must not block the scan: %+v, %v", result, err)
 	}
 
-	folderErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ New/b.mp3\n"),
-		Stderr: []byte("IO error encountered -- skipping file deletion\n")}
-	folderRunner := pushRunner(t, folderErr, "", "")
-	manager.Remote = folderRunner.run
-	result, err = manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
-	if err == nil || result.Scanned || gateScanCalls(folderRunner) != 0 || *scans != 0 {
-		t.Fatalf("skipped deletions must not be scanned: %+v, %v", result, err)
-	}
-	if state, _ := LoadMirrorState(resolved); !state.ScanPending || state.LastPushError == "" {
-		t.Fatalf("files were transferred, so a scan is owed once a clean push lands: %+v", state)
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run("deletions skipped on "+stream, func(t *testing.T) {
+			folderErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ New/b.mp3\n"),
+				Stderr: []byte("rsync: [sender] opendir failed: Permission denied (13)\n")}
+			const diagnostic = "IO error encountered -- skipping file deletion\n"
+			if stream == "stdout" {
+				// Homebrew rsync 3.5.1 writes this to stdout, not stderr.
+				folderErr.Stdout = append([]byte(diagnostic), folderErr.Stdout...)
+			} else {
+				folderErr.Stderr = append(folderErr.Stderr, diagnostic...)
+			}
+			// The preflight succeeded, before the folder became unreadable.
+			folderRunner := pushRunner(t, folderErr, "*deleting   Old/b.mp3\n", "")
+			manager.Remote = folderRunner.run
+			result, err := manager.SyncMirror(context.Background(), MirrorOptions{Scan: true, Dates: true})
+			if err == nil || !strings.Contains(err.Error(), "skipped all deletions") || result.Scanned || result.Dates != nil || gateScanCalls(folderRunner) != 0 || *scans != 0 {
+				t.Fatalf("skipped deletions must not be scanned: %+v, %v", result, err)
+			}
+			if state, err := LoadMirrorState(resolved); err != nil || !state.ScanPending || !strings.Contains(state.LastPushError, "skipped all deletions") {
+				t.Fatalf("files were transferred, so a scan is owed once a clean push lands: %+v, %v", state, err)
+			}
+		})
 	}
 }
 
