@@ -138,6 +138,68 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.close()
     }
 
+    /// Push now reports every outcome on the Phone Library screen and then
+    /// refreshes status, which is the one follow-up request it sends.
+    func testMirrorPushConsumesItsEarlyFinishAndReportsOnTheScreen() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        let state = AppState(client: rpc.client)
+        defer { rpc.closePipes() }
+        let remoteStatus = try JSONDecoder().decode(JSONValue.self, from: Data(PhoneLibraryTests.remoteStatusJSON.utf8))
+        state.navidromeStatus = try JSONDecoder.agent.decode(
+            NavidromeStatus.self, from: Data(PhoneLibraryTests.remoteStatusJSON.utf8)
+        )
+        func answerStatusRefresh() async throws {
+            let refresh = try await rpc.readRequest(.navidromeStatus)
+            try rpc.reply(refresh, result: remoteStatus)
+        }
+
+        try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush) {
+            await state.pushNavidromeMirror()
+        }
+        assertPhoneIdle(state)
+        XCTAssertEqual(state.navidromeMirrorPushOutcome?.kind, .failed)
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+        XCTAssertTrue(state.phoneLibraryStatus?.message.contains("terminal fixture") ?? false)
+        try await answerStatusRefresh()
+
+        let refused: JSONValue = .object([
+            "push": .object(["changed": .number(0), "deleted": .number(0), "planned_deletes": .number(300)]),
+            "scanned": .bool(false),
+            "warnings": .null,
+            "failure": .object([
+                "kind": .string("delete_limit"),
+                "detail": .string("push refused by the delete limit"),
+                "planned_deletes": .number(300),
+                "allow_deletes_command": .string("udl navidrome push --allow-deletes 300"),
+            ]),
+        ])
+        try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush, result: refused) {
+            await state.pushNavidromeMirror()
+        }
+        assertPhoneIdle(state)
+        XCTAssertEqual(state.navidromeMirrorPushOutcome?.plannedDeletes, 300)
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+        XCTAssertTrue(state.phoneLibraryStatus?.message.contains("--allow-deletes 300") ?? false)
+        try await answerStatusRefresh()
+
+        let pushed: JSONValue = .object([
+            "push": .object(["changed": .number(2), "deleted": .number(0)]),
+            "scanned": .bool(true),
+            "warnings": .array([]),
+            "mirror": .object(["last_push_at": .string("2026-10-22T10:00:00Z")]),
+        ])
+        try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush, result: pushed) {
+            await state.pushNavidromeMirror()
+        }
+        assertPhoneIdle(state)
+        XCTAssertEqual(state.navidromeMirrorPushOutcome?.kind, .pushed)
+        XCTAssertEqual(state.navidromeMirrorPush?.mirror?.lastPushAt, "2026-10-22T10:00:00Z")
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .ok)
+        try await answerStatusRefresh()
+        await rpc.connection.close()
+    }
+
     func testPlaylistSyncPlanAndApplyConsumeEarlyFinishAndCanStartAgain() async throws {
         let rpc = AgentRPCFixture()
         await rpc.connection.start()

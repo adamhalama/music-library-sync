@@ -458,6 +458,315 @@ final class PhoneLibraryTests: XCTestCase {
         )
     }
 
+    // MARK: Remote mode
+
+    /// What `navidrome.status` sends in remote mode, including the nulls Go
+    /// produces for empty slices and its nanosecond timestamps.
+    static let remoteStatusJSON = """
+    {
+      "enabled": true,
+      "music_dir": "/Users/jaa/Music/downloaded",
+      "data_dir": "/Users/jaa/Library/Application Support/UDL/Navidrome",
+      "playlists_dir": "/Users/jaa/Music/downloaded/.udl/playlists",
+      "username": "jaa",
+      "password_stored": true,
+      "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "ffmpeg_installed": false, "problems": []},
+      "service": {"state": "remote", "loaded": false, "owned": false, "problems": []},
+      "reachable": true,
+      "server": {"type": "navidrome", "server_version": "0.63.2"},
+      "library_tracks": 1574,
+      "scanning": false,
+      "managed_playlists": null,
+      "backup_count": 2,
+      "latest_backup": {"path": "/srv/navidrome/backups/udl-20261022.db", "size_bytes": 1048576, "created_at": "2026-10-22T09:30:00.123456789Z"},
+      "phone_connected": false,
+      "problems": ["the server has not finished scanning the last push; the next `udl navidrome push` retries it"],
+      "mode": "remote",
+      "remote": {
+        "ssh_target": "udl-mirror",
+        "library": {"path": "/Users/jaa/Music/downloaded", "files": 1580, "bytes": 10093173555, "newest_mtime": "2026-10-22T08:00:00Z"},
+        "database": {"path": "/data/navidrome.db", "present": true, "size_bytes": 52428800, "tracks": 1574, "libraries": null},
+        "udl_backups": null,
+        "navidrome_backups": [{"path": "/srv/navidrome/backups/navidrome_backup_x.db", "size_bytes": 9, "created_at": "2026-10-21T03:00:00Z"}],
+        "disk": {"free_bytes": 400000000000, "total_bytes": 500000000000}
+      },
+      "mirror": {
+        "last_push_at": "2026-10-22T10:00:00.123456789Z",
+        "last_scan_at": "2026-10-22T10:01:00Z",
+        "scan_pending": true,
+        "last_export_at": "2026-10-20T00:00:00Z"
+      }
+    }
+    """
+
+    func testRemoteModeStatusDecodesServerAndMirrorState() throws {
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(Self.remoteStatusJSON.utf8))
+        XCTAssertTrue(status.isRemote)
+        XCTAssertEqual(status.managedPlaylists, [])
+        XCTAssertEqual(status.remote?.sshTarget, "udl-mirror")
+        XCTAssertEqual(status.remote?.library?.files, 1580)
+        XCTAssertEqual(status.remote?.library?.bytes, 10_093_173_555)
+        XCTAssertEqual(status.remote?.library?.newestMtime, "2026-10-22T08:00:00Z")
+        XCTAssertEqual(status.remote?.database?.tracks, 1574)
+        XCTAssertEqual(status.remote?.database?.present, true)
+        XCTAssertNil(status.remote?.database?.error)
+        // Go's nil slice arrives as null and must read as empty.
+        XCTAssertEqual(status.remote?.udlBackups, [])
+        XCTAssertEqual(status.remote?.navidromeBackups.count, 1)
+        XCTAssertEqual(status.remote?.disk?.freeBytes, 400_000_000_000)
+        // Timestamps stay verbatim; unknown mirror fields are ignored.
+        XCTAssertEqual(status.mirror?.lastPushAt, "2026-10-22T10:00:00.123456789Z")
+        XCTAssertEqual(status.mirror?.scanPending, true)
+        XCTAssertNil(status.mirror?.datesPending)
+        XCTAssertNil(status.mirror?.lastPushError)
+    }
+
+    /// A backend that predates remote mode — or a local install — sends no
+    /// mode, remote, or mirror. That must decode and read as local.
+    func testAStatusWithoutRemoteFieldsDecodesAsLocal() throws {
+        let payload = """
+        {
+          "enabled": true, "music_dir": "/m", "data_dir": "/d", "playlists_dir": "/p",
+          "password_stored": false,
+          "dependency": {"homebrew_installed": true, "installed": true, "minimum_version": "0.63.2", "version_supported": true, "problems": null},
+          "service": {"state": "running", "loaded": true, "owned": true, "problems": null},
+          "reachable": false, "server": {}, "library_tracks": 0, "scanning": false,
+          "managed_playlists": null, "backup_count": 0, "phone_connected": false, "problems": null
+        }
+        """
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(payload.utf8))
+        XCTAssertNil(status.mode)
+        XCTAssertNil(status.remote)
+        XCTAssertNil(status.mirror)
+        XCTAssertFalse(status.isRemote)
+    }
+
+    /// The server could not be asked: remote mode with no `remote` object, and
+    /// a gate reply missing most of its numbers. Neither may fail decoding.
+    func testARemoteStatusWithoutServerDetailsStillDecodes() throws {
+        let unreachable = """
+        {
+          "enabled": true, "music_dir": "/m", "data_dir": "/d", "playlists_dir": "/p",
+          "password_stored": true,
+          "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "problems": []},
+          "service": {"state": "remote", "loaded": false, "owned": false, "problems": []},
+          "reachable": false, "server": {}, "library_tracks": 0, "scanning": false,
+          "managed_playlists": null, "backup_count": 0, "phone_connected": false,
+          "problems": ["the mirror server is not reachable over SSH (udl-mirror): timeout"],
+          "mode": "remote", "mirror": {}
+        }
+        """
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(unreachable.utf8))
+        XCTAssertTrue(status.isRemote)
+        XCTAssertNil(status.remote)
+        XCTAssertNil(status.mirror?.lastPushAt)
+
+        let sparse = try JSONDecoder.agent.decode(
+            NavidromeRemoteStatus.self,
+            from: Data(#"{"library": {}, "database": {"present": false}, "udl_backups": null}"#.utf8)
+        )
+        XCTAssertNil(sparse.sshTarget)
+        XCTAssertNil(sparse.library?.files)
+        XCTAssertEqual(sparse.udlBackups, [])
+        XCTAssertEqual(sparse.navidromeBackups, [], "an absent collection reads as empty too")
+    }
+
+    func testRemoteSummaryStatesWhatThePhoneUsesAndHowCurrentTheMirrorIs() throws {
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(Self.remoteStatusJSON.utf8))
+        let now = try XCTUnwrap(PhoneLibraryFormat.date("2026-10-22T10:05:30Z"))
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let summary = PhoneLibraryRemoteSummary(
+            status: status, configuredServerURL: "https://music-server.example.ts.net:4533", now: now, timeZone: utc
+        )
+        XCTAssertEqual(summary.serverURL, "https://music-server.example.ts.net:4533")
+        XCTAssertEqual(summary.sshTarget, "udl-mirror")
+        XCTAssertEqual(summary.lastPush, "5 minutes ago (2026-10-22 10:00)")
+        XCTAssertEqual(summary.lastScan, "4 minutes ago (2026-10-22 10:01)")
+        XCTAssertNil(summary.lastPushError)
+        XCTAssertEqual(summary.serverLibrary, "1580 files · 9.4 GiB")
+        XCTAssertEqual(summary.serverDatabase, "1574 tracks")
+        XCTAssertTrue(summary.databaseHealthy)
+        XCTAssertEqual(summary.latestServerBackup, "/srv/navidrome/backups/udl-20261022.db · 35 minutes ago (2026-10-22 09:30)")
+        XCTAssertEqual(summary.problems.count, 1)
+
+        let never = PhoneLibraryRemoteSummary(status: nil, configuredServerURL: nil, now: now, timeZone: utc)
+        XCTAssertEqual(never.lastPush, "never")
+        XCTAssertEqual(never.serverURL, "")
+        XCTAssertEqual(never.latestServerBackup, "none yet")
+        XCTAssertFalse(never.databaseHealthy)
+    }
+
+    func testFormatParsesGoTimestampsAndKeepsWhatItCannotParse() throws {
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let nanos = try XCTUnwrap(PhoneLibraryFormat.date("2026-10-22T10:00:00.123456789Z"))
+        XCTAssertEqual(PhoneLibraryFormat.absolute(nanos, timeZone: utc), "2026-10-22 10:00")
+        XCTAssertNotNil(PhoneLibraryFormat.date("2026-10-22T12:00:00+02:00"))
+        XCTAssertEqual(PhoneLibraryFormat.moment("yesterday-ish"), "yesterday-ish")
+        XCTAssertEqual(PhoneLibraryFormat.moment(nil), "never")
+        XCTAssertEqual(PhoneLibraryFormat.relative(nanos, now: nanos.addingTimeInterval(-30)), "just now")
+        XCTAssertEqual(PhoneLibraryFormat.relative(nanos, now: nanos.addingTimeInterval(3 * 86_400 + 5)), "3 days ago")
+        XCTAssertEqual(PhoneLibraryFormat.bytes(nil), "unknown size")
+        XCTAssertEqual(PhoneLibraryFormat.bytes(5 << 20), "5 MiB")
+    }
+
+    /// Remote mode has nothing to install or start on this Mac; the checklist
+    /// asks for a successful push instead, so the badge can reach zero.
+    func testRemoteProgressReplacesTheLocalInstallSteps() {
+        let local = makeStatus(
+            dependencyReady: false, homebrewInstalled: false, serviceState: "remote",
+            passwordStored: true, username: "jaa", reachable: true,
+            libraryTracks: 1574, playlistCount: 3, phoneConnected: true
+        )
+        func remote(_ mirror: NavidromeMirrorState?) -> NavidromeStatus {
+            var status = local
+            status.mode = "remote"
+            status.mirror = mirror
+            return status
+        }
+        let neverPushed = PhoneLibraryProgress(status: remote(nil))
+        XCTAssertEqual(neverPushed.steps.map(\.id), ["mirror", "account", "library", "playlists", "phone"])
+        XCTAssertEqual(neverPushed.current?.id, "mirror")
+
+        let pushed = PhoneLibraryProgress(status: remote(NavidromeMirrorState(
+            lastPushAt: "2026-10-22T10:00:00Z", lastScanAt: nil, lastErrorAt: nil,
+            lastPushError: nil, scanPending: nil, datesPending: nil
+        )))
+        XCTAssertEqual(pushed.remaining, 0)
+
+        let failed = PhoneLibraryProgress(status: remote(NavidromeMirrorState(
+            lastPushAt: "2026-10-22T10:00:00Z", lastScanAt: nil, lastErrorAt: "2026-10-22T11:00:00Z",
+            lastPushError: "mirror push failed (rsync exit 12)", scanPending: nil, datesPending: nil
+        )))
+        guard case .blocked(let reason)? = failed.steps.first?.state else {
+            return XCTFail("a failed last push must block the mirror step")
+        }
+        XCTAssertTrue(reason.contains("last push failed"))
+    }
+
+    func testRemoteConnectionUsesTheConfiguredServerURL() {
+        var status = makeStatus(
+            dependencyReady: false, homebrewInstalled: false, serviceState: "remote",
+            passwordStored: true, username: "jaa", reachable: true,
+            libraryTracks: 10, playlistCount: 3
+        )
+        // A local status ignores the configured URL and keeps the LAN address.
+        XCTAssertEqual(
+            PhoneConnectionDetails(status: status, configuredServerURL: "https://server:4533").serverURL,
+            "http://mac.local:4533"
+        )
+        status.mode = "remote"
+        let remote = PhoneConnectionDetails(status: status, configuredServerURL: "https://server:4533")
+        XCTAssertEqual(remote.serverURL, "https://server:4533")
+        XCTAssertTrue(remote.isReady)
+        XCTAssertFalse(PhoneConnectionDetails(status: status).isReady, "remote mode without server.url has no address")
+    }
+
+    func testMirrorPushIsAMutatingOperation() {
+        XCTAssertTrue(PhoneLibraryOperation.mirrorPush.isMutating)
+        XCTAssertFalse(PhoneLibraryOperation.mirrorPush.label.isEmpty)
+    }
+
+    func testMirrorPushParamsNeverRaiseTheDeleteLimit() throws {
+        let encoded = try JSONEncoder.agent.encode(NavidromeMirrorPushParams(forceScan: false))
+        XCTAssertEqual(String(decoding: encoded, as: UTF8.self), #"{"force_scan":false}"#)
+    }
+
+    // MARK: Push outcomes
+
+    private func decodePush(_ json: String) throws -> NavidromeMirrorPushResult {
+        try JSONDecoder.agent.decode(NavidromeMirrorPushResult.self, from: Data(json.utf8))
+    }
+
+    func testASuccessfulPushReportsCountsAndScan() throws {
+        let result = try decodePush("""
+        {
+          "push": {"command": "rsync …", "started_at": "2026-10-22T10:00:00Z", "finished_at": "2026-10-22T10:00:05Z",
+                   "changed": 3, "deleted": 1, "items": null},
+          "scanned": true,
+          "dates": {"database_path": "udl-mirror:navidrome.db", "candidates": 3, "updated": 3,
+                    "message": "Date Added now matches file creation time for 3 track(s)"},
+          "warnings": null,
+          "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "last_scan_at": "2026-10-22T10:01:00Z"}
+        }
+        """)
+        XCTAssertEqual(result.push?.items, [])
+        XCTAssertEqual(result.warnings, [])
+        XCTAssertEqual(result.mirror?.lastScanAt, "2026-10-22T10:01:00Z")
+        let outcome = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: result)
+        XCTAssertEqual(outcome.kind, .pushed)
+        XCTAssertEqual(outcome.severity, .ok)
+        XCTAssertTrue(outcome.message.contains("3 changed, 1 deleted"))
+        XCTAssertTrue(outcome.message.contains("rescanned"))
+        XCTAssertTrue(outcome.message.contains("Date Added now matches"))
+        XCTAssertNil(outcome.plannedDeletes)
+    }
+
+    func testAPushWithWarningsIsAWarningNotASuccess() throws {
+        let result = try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false,
+         "warnings": ["pushed, but no scan was requested: the Navidrome API is not available"]}
+        """)
+        let outcome = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: result)
+        XCTAssertEqual(outcome.kind, .pushed)
+        XCTAssertEqual(outcome.severity, .warn)
+        XCTAssertTrue(outcome.message.contains("no scan was requested"))
+    }
+
+    /// The refusal names the planned count and the CLI override; there is no
+    /// one-click way past it.
+    func testADeleteLimitRefusalCarriesTheCountAndTheCLIOverride() throws {
+        let error = "push refused by the delete limit: it would delete 300 files from the server (limit 250), so nothing was pushed. … run `udl navidrome push --allow-deletes 300`"
+        let result = try decodePush("""
+        {
+          "push": {"changed": 0, "deleted": 0, "planned_deletes": 300},
+          "scanned": false, "warnings": [],
+          "mirror": {"last_push_error": "push refused by the delete limit", "last_error_at": "2026-10-22T10:00:00Z"},
+          "failure": {"kind": "delete_limit", "detail": "\(error)", "planned_deletes": 300,
+                      "allow_deletes_command": "udl navidrome push --allow-deletes 300"}
+        }
+        """)
+        let outcome = NavidromeMirrorPushOutcome(exitCode: 1, error: error, result: result)
+        XCTAssertEqual(outcome.kind, .deleteLimit(plannedDeletes: 300, command: "udl navidrome push --allow-deletes 300"))
+        XCTAssertEqual(outcome.plannedDeletes, 300)
+        XCTAssertEqual(outcome.severity, .error)
+        XCTAssertTrue(outcome.message.contains("300 file(s)"))
+        XCTAssertTrue(outcome.message.contains("`udl navidrome push --allow-deletes 300`"))
+        XCTAssertTrue(outcome.message.contains("Nothing was changed"))
+    }
+
+    func testBusyCanceledAndFailedPushesMapToDistinctOutcomes() throws {
+        let busy = NavidromeMirrorPushOutcome(exitCode: 1, error: "A push is already running", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "busy", "detail": "A push is already running (a sync's post-sync push…); this one was skipped and nothing changed."}}
+        """))
+        XCTAssertEqual(busy.kind, .busy)
+        XCTAssertEqual(busy.severity, .warn)
+        XCTAssertTrue(busy.message.contains("already running"))
+
+        let canceled = NavidromeMirrorPushOutcome(exitCode: 130, error: "mirror preflight did not finish: context canceled", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "canceled", "detail": "mirror preflight did not finish: context canceled"}}
+        """))
+        XCTAssertEqual(canceled.kind, .canceled)
+        XCTAssertEqual(canceled.severity, .warn)
+
+        let failed = NavidromeMirrorPushOutcome(exitCode: 1, error: "mirror push failed (rsync exit 12): protocol", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "failed", "detail": "mirror push failed (rsync exit 12): protocol"}}
+        """))
+        XCTAssertEqual(failed.kind, .failed)
+        XCTAssertEqual(failed.severity, .error)
+        XCTAssertTrue(failed.message.contains("rsync exit 12"))
+        XCTAssertTrue(failed.message.contains("previous mirror"))
+
+        // A terminal frame without a decodable result still says what failed.
+        let bare = NavidromeMirrorPushOutcome(exitCode: 1, error: "run result exceeds frame limit", result: nil)
+        XCTAssertEqual(bare.kind, .failed)
+        XCTAssertTrue(bare.message.contains("run result exceeds frame limit"))
+        let bareCancel = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: nil)
+        XCTAssertEqual(bareCancel.kind, .canceled)
+    }
+
     // MARK: Fixtures
 
     private func makeService(state: String, owned: Bool) -> NavidromeServiceStatus {
