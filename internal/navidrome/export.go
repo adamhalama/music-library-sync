@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -282,27 +283,28 @@ func parseServerDBExport(raw RemoteOutput) (serverDBExportHeader, []byte, error)
 	return header, payload, nil
 }
 
-// writeServerDBExport stores the copy through a synced temp file and a
-// rename, so the folder only ever holds complete, verified copies.
+// writeServerDBExport stores the copy through a synced temp file that is
+// hard-linked to its final name, so the folder only ever holds complete,
+// verified copies and an existing copy is never replaced: link(2) fails with
+// EEXIST where a rename would overwrite.
 func writeServerDBExport(dir string, at time.Time, payload []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
 	final := filepath.Join(dir, serverDBExportPrefix+at.UTC().Format(serverDBExportStamp)+".db")
+	exists := fmt.Errorf("%s already exists; not replacing it", final)
+	// Checked first only to fail before writing; the link below decides.
 	if _, err := os.Lstat(final); err == nil {
-		return "", fmt.Errorf("%s already exists; not replacing it", final)
+		return "", exists
 	}
 	tmp, err := os.CreateTemp(dir, ".navidrome-server-*.db.partial")
 	if err != nil {
 		return "", fmt.Errorf("create a temporary file in %s: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(tmpPath)
-		}
-	}()
+	// After a link the temp name is a second name for the copy; after a
+	// failure it is the only one. Either way it goes.
+	defer func() { _ = os.Remove(tmpPath) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return "", err
@@ -318,15 +320,35 @@ func writeServerDBExport(dir string, at time.Time, payload []byte) (string, erro
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	if err := os.Rename(tmpPath, final); err != nil {
-		return "", fmt.Errorf("replace %s: %w", final, err)
+	if err := installNoClobber(tmpPath, final); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return "", exists
+		}
+		return "", fmt.Errorf("install %s: %w", final, err)
 	}
-	keep = true
 	if handle, err := os.Open(dir); err == nil {
 		_ = handle.Sync()
 		_ = handle.Close()
 	}
 	return final, nil
+}
+
+// installNoClobber gives tmp's file the name final unless final exists; the
+// caller removes tmp. On a filesystem without hard links (an external exFAT
+// --out folder) it falls back to a checked rename, which the export lock
+// keeps race-free between exports on this Mac.
+func installNoClobber(tmp, final string) error {
+	err := os.Link(tmp, final)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	if _, statErr := os.Lstat(final); statErr == nil {
+		return fs.ErrExist
+	}
+	return os.Rename(tmp, final)
 }
 
 // rotateServerDBExports keeps the newest `keep` copies. Only regular files

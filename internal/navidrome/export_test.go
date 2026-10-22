@@ -230,6 +230,50 @@ func TestExportServerDBHonoursOutDirAndRefusesToClobber(t *testing.T) {
 	}
 }
 
+func TestExportInstallNeverReplacesACopyThatAppearsDuringTheWrite(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now()
+	final := filepath.Join(dir, serverDBExportPrefix+at.UTC().Format(serverDBExportStamp)+".db")
+	// Large enough that the temp file exists for a while.
+	payload := bytes.Repeat([]byte{'x'}, 64<<20)
+	done := make(chan error, 1)
+	go func() {
+		_, err := writeServerDBExport(dir, at, payload)
+		done <- err
+	}()
+	// Once the writer has passed its existence check and is writing the
+	// temp file, a competing export installs the same name.
+	created := false
+	for deadline := time.Now().Add(10 * time.Second); !created && time.Now().Before(deadline); {
+		entries, _ := os.ReadDir(dir)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".partial") {
+				competing, err := os.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+				if err != nil {
+					t.Fatalf("create the competing copy: %v", err)
+				}
+				_, _ = competing.Write([]byte("competing-export"))
+				_ = competing.Close()
+				created = true
+				break
+			}
+		}
+	}
+	if !created {
+		t.Skip("the writer finished before the race could be arranged")
+	}
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v", err)
+	}
+	if got, _ := os.ReadFile(final); string(got) != "competing-export" {
+		t.Fatalf("an existing copy was replaced (%d bytes)", len(got))
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, ".*")); len(leftovers) != 0 {
+		t.Fatalf("temporary files left: %v", leftovers)
+	}
+}
+
 func TestExportServerDBNeedsRemoteMode(t *testing.T) {
 	cfg, resolved := remoteTestConfig(t)
 	cfg.Mode = ModeLocal
