@@ -13,23 +13,19 @@ extension AppState {
     func loadPhoneLibrary() async {
         guard let client else { return }
         do {
-            async let config = client.readNavidromeConfig()
-            async let status = client.navidromeStatus()
-            let loaded = try await (config, status)
-            navidromeConfig = loaded.0
-            navidromeStatus = loaded.1
+            // Keep the configured URL and server state together, even after
+            // the config changes outside the app. Publish neither on failure.
+            let config = try await client.readNavidromeConfig()
+            let status = try await client.navidromeStatus()
+            navidromeConfig = config
+            navidromeStatus = status
         } catch {
             phoneLibraryStatus = .failure("Phone Library state could not load: \(error.localizedDescription)")
         }
     }
 
     func refreshPhoneLibraryStatus() async {
-        guard let client else { return }
-        do {
-            navidromeStatus = try await client.navidromeStatus()
-        } catch {
-            phoneLibraryStatus = .failure("Phone Library status could not refresh: \(error.localizedDescription)")
-        }
+        await loadPhoneLibrary()
     }
 
     func savePhoneLibraryConfig(_ config: NavidromeConfig) async -> Bool {

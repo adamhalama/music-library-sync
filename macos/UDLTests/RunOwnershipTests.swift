@@ -138,8 +138,119 @@ final class RunOwnershipTests: XCTestCase {
         await rpc.connection.close()
     }
 
+    func testPhoneLibraryLoadAndRefreshReloadConfigWithStatus() async throws {
+        for remote in [true, false] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            let state = AppState(client: rpc.client)
+            defer { rpc.closePipes() }
+            // First open, reopen with cached status, then explicit Refresh.
+            let loaders: [@MainActor () async -> Void] = [
+                { await state.loadPhoneLibrary() },
+                { await state.loadPhoneLibrary() },
+                { await state.refreshPhoneLibraryStatus() },
+            ]
+            for (index, load) in loaders.enumerated() {
+                let url = "https://server-\(index).example:4533"
+                let config = try phoneLibraryConfigValue(url: url)
+                let status = try phoneLibraryStatusValue(remote: remote, tracks: index + 1)
+                let task = Task { await load() }
+                try await answerPhoneLibraryLoad(rpc, config: config, status: status)
+                await task.value
+                XCTAssertEqual(state.navidromeConfig?.config.server.url, url)
+                XCTAssertEqual(state.navidromeStatus?.libraryTracks, index + 1)
+                XCTAssertEqual(state.phoneConnection.serverURL, remote ? url : "http://mac.local:4533")
+                XCTAssertEqual(state.phoneLibraryRemoteSummary.serverURL, url)
+                XCTAssertNil(state.phoneLibraryStatus)
+            }
+            await rpc.connection.close()
+        }
+    }
+
+    func testPhoneLibraryLoadAndRefreshPreserveBothCachesIfEitherReadFails() async throws {
+        for refresh in [false, true] {
+            for failedMethod in [AgentMethod.navidromeConfigRead, .navidromeStatus] {
+                let rpc = AgentRPCFixture()
+                await rpc.connection.start()
+                let state = AppState(client: rpc.client)
+                defer { rpc.closePipes() }
+                let oldConfig = try phoneLibraryConfigValue(url: "https://server-a.example:4533")
+                let oldStatus = try phoneLibraryStatusValue(remote: true, tracks: 1)
+                state.navidromeConfig = try JSONDecoder.agent.decode(
+                    NavidromeConfigResult.self, from: JSONEncoder.agent.encode(oldConfig)
+                )
+                state.navidromeStatus = try JSONDecoder.agent.decode(
+                    NavidromeStatus.self, from: JSONEncoder.agent.encode(oldStatus)
+                )
+                let task = Task {
+                    if refresh { await state.refreshPhoneLibraryStatus() }
+                    else { await state.loadPhoneLibrary() }
+                }
+                try await answerPhoneLibraryLoad(
+                    rpc, config: phoneLibraryConfigValue(url: "https://server-b.example:4533"),
+                    status: phoneLibraryStatusValue(remote: true, tracks: 2), failedMethod: failedMethod
+                )
+                await task.value
+                XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example:4533")
+                XCTAssertEqual(state.navidromeStatus?.libraryTracks, 1)
+                XCTAssertEqual(state.phoneConnection.serverURL, "https://server-a.example:4533")
+                XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+                XCTAssertTrue(state.phoneLibraryStatus?.message.contains("fixture read failed") ?? false)
+                await rpc.connection.close()
+            }
+        }
+    }
+
+    private func answerPhoneLibraryLoad(
+        _ rpc: AgentRPCFixture, config: JSONValue, status: JSONValue, failedMethod: AgentMethod? = nil
+    ) async throws {
+        for (method, result) in [(AgentMethod.navidromeConfigRead, config), (.navidromeStatus, status)] {
+            let request = try await rpc.readRequest(method)
+            if method == failedMethod {
+                try rpc.fail(request, message: "fixture read failed")
+                return
+            }
+            try rpc.reply(request, result: result)
+        }
+    }
+
+    private func phoneLibraryConfigValue(url: String) throws -> JSONValue {
+        let config = NavidromeConfig(
+            version: 1, enabled: true,
+            server: NavidromeServerConfig(url: url, username: "jaa", port: 4533, address: "0.0.0.0"),
+            paths: NavidromePathsConfig(
+                musicDir: "/m", dataDir: "/d", cacheDir: "/c", logFile: "/l",
+                configFile: "/f", backupDir: "/b", playlistsPath: ".udl/playlists"
+            ),
+            scan: NavidromeScanConfig(schedule: "@every 1h"),
+            backup: NavidromeBackupConfig(schedule: "0 3 * * *", count: 7),
+            playlists: NavidromePlaylistsConfig(hardBounceGenres: [], appleHardBouncePlaylist: "HARD BOUNCE"),
+            phone: NavidromePhoneConfig(connected: false)
+        )
+        return try JSONDecoder().decode(JSONValue.self, from: JSONEncoder.agent.encode(
+            NavidromeConfigResult(path: "/fixture/navidrome.yaml", config: config, content: "")
+        ))
+    }
+
+    private func phoneLibraryStatusValue(remote: Bool, tracks: Int) throws -> JSONValue {
+        let value = try JSONDecoder().decode(
+            JSONValue.self, from: Data(PhoneLibraryTests.remoteStatusJSON.utf8)
+        )
+        var status = try XCTUnwrap(value.objectValue)
+        status["mode"] = .string(remote ? "remote" : "local")
+        status["library_tracks"] = .number(Double(tracks))
+        if !remote {
+            status["service"] = .object([
+                "state": .string("running"), "loaded": .bool(true), "owned": .bool(true),
+                "lan_url": .string("http://mac.local:4533"), "local_url": .string("http://localhost:4533"),
+                "problems": .null,
+            ])
+        }
+        return .object(status)
+    }
+
     /// Push now reports every outcome on the Phone Library screen and then
-    /// refreshes status, which is the one follow-up request it sends.
+    /// refreshes config and status together.
     func testMirrorPushConsumesItsEarlyFinishAndReportsOnTheScreen() async throws {
         let rpc = AgentRPCFixture()
         await rpc.connection.start()
@@ -150,8 +261,8 @@ final class RunOwnershipTests: XCTestCase {
             NavidromeStatus.self, from: Data(PhoneLibraryTests.remoteStatusJSON.utf8)
         )
         func answerStatusRefresh() async throws {
-            let refresh = try await rpc.readRequest(.navidromeStatus)
-            try rpc.reply(refresh, result: remoteStatus)
+            let config = try phoneLibraryConfigValue(url: "https://server.example:4533")
+            try await answerPhoneLibraryLoad(rpc, config: config, status: remoteStatus)
         }
 
         try await rpc.finishBeforeReply(state, method: .navidromeMirrorPush) {

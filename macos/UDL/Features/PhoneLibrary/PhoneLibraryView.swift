@@ -45,9 +45,7 @@ struct PhoneLibraryView: View {
             .workspaceInspector { inspector }
             .udlStatusBar { statusSummary } actions: { statusActions }
             .task {
-                if appState.navidromeStatus == nil {
-                    await appState.loadPhoneLibrary()
-                }
+                await appState.loadPhoneLibrary()
                 if appState.playlistConfig == nil {
                     await appState.loadPlaylists()
                 }
