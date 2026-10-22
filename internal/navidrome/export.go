@@ -63,8 +63,8 @@ var serverDBExportName = regexp.MustCompile(`^navidrome-server-\d{8}T\d{6}Z\.db$
 // fields, and the export never waits for a push's lock.
 const ServerDBExportStateFileName = "udl-export-state.json"
 
-// ErrServerDBExportBusy means another export is running on this Mac (the
-// weekly launchd job and a manual run); this one did nothing.
+// ErrServerDBExportBusy means another export is using the same data directory
+// (the weekly launchd job and a manual run); this one did nothing.
 var ErrServerDBExportBusy = errors.New("another `udl navidrome export-db` is running; this one was skipped")
 
 // errServerDBExportTooLarge stops reading a reply past the cap.
@@ -208,7 +208,7 @@ func saveServerDBExportState(resolved Resolved, state ServerDBExportState) error
 // writes it atomically (0600) and keeps the newest opts.Keep copies. The
 // outcome is recorded in the export's own state file, which status reports.
 //
-// One export runs at a time per Mac (ErrServerDBExportBusy otherwise); it
+// One export runs at a time per data directory (ErrServerDBExportBusy otherwise); it
 // never takes the mirror lock, so a running push neither blocks it nor
 // loses its own state writes.
 func (m *Manager) ExportServerDB(ctx context.Context, opts ServerDBExportOptions) (ServerDBExportResult, error) {
@@ -377,7 +377,7 @@ func writeServerDBExport(dir string, at time.Time, payload []byte) (string, erro
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	if err := installNoClobber(tmpPath, final); err != nil {
+	if err := installNoClobber(tmpPath, final, os.Link); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return "", exists
 		}
@@ -391,21 +391,16 @@ func writeServerDBExport(dir string, at time.Time, payload []byte) (string, erro
 }
 
 // installNoClobber gives tmp's file the name final unless final exists; the
-// caller removes tmp. On a filesystem without hard links (an external exFAT
-// --out folder) it falls back to a checked rename, which the export lock
-// keeps race-free between exports on this Mac.
-func installNoClobber(tmp, final string) error {
-	err := os.Link(tmp, final)
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, fs.ErrExist) {
+// caller removes tmp. A failed hard link must never fall back to a checked
+// rename: another configuration or process can publish after the check, and
+// rename would overwrite it. Filesystems without hard links are refused.
+// link is os.Link in production, supplied here for filesystem-fault tests.
+func installNoClobber(tmp, final string, link func(string, string) error) error {
+	err := link(tmp, final)
+	if err == nil || errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	if _, statErr := os.Lstat(final); statErr == nil {
-		return fs.ErrExist
-	}
-	return os.Rename(tmp, final)
+	return fmt.Errorf("the destination filesystem at %s must support hard links for no-replace publication; export refused: %w", filepath.Dir(final), err)
 }
 
 // rotateServerDBExports keeps the newest `keep` copies. Only regular files

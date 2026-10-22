@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-// lockMirror takes the per-Mac mirror lock without waiting. The post-sync
+// lockMirror takes the per-data-directory mirror lock without waiting. The post-sync
 // hook, the launchd fallback and a manual push would otherwise interleave
 // their state-file updates and lose a pending scan.
 func lockMirror(resolved Resolved) (func(), error) {

@@ -101,7 +101,7 @@ var totalTransferred = regexp.MustCompile(`(?m)^Total transferred file size: ([0
 // changed on the server.
 var ErrDeleteLimit = errors.New("push refused by the delete limit")
 
-// ErrMirrorBusy means another udl push to the mirror is running on this Mac.
+// ErrMirrorBusy means another udl push is using the same local data directory.
 var ErrMirrorBusy = errors.New("another udl push to the mirror is running; this one was skipped")
 
 // ErrServerScanning marks a push deferred before its real transfer because

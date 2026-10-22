@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -272,6 +273,70 @@ func TestExportInstallNeverReplacesACopyThatAppearsDuringTheWrite(t *testing.T) 
 	if leftovers, _ := filepath.Glob(filepath.Join(dir, ".*")); len(leftovers) != 0 {
 		t.Fatalf("temporary files left: %v", leftovers)
 	}
+}
+
+// Regression for the round-4 no-hard-link fallback probe. Fault injection
+// represents an unsupported destination filesystem, without needing an exFAT
+// mount. A competing writer publishes during our failed link operation.
+func TestExportInstallRefusesAFailedHardLinkWithoutReplacingACopy(t *testing.T) {
+	for _, linkErr := range []error{syscall.EOPNOTSUPP, syscall.EPERM, syscall.EXDEV, errors.New("hard links unsupported (simulated exFAT)")} {
+		t.Run(linkErr.Error(), func(t *testing.T) {
+			dir := t.TempDir()
+			tmp, final := filepath.Join(dir, "partial"), filepath.Join(dir, "final.db")
+			if err := os.WriteFile(tmp, []byte("new-export"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := func(old, new string) error {
+				if old != tmp || new != final {
+					t.Fatalf("link paths = %q, %q", old, new)
+				}
+				if err := os.WriteFile(new, []byte("competing-export"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return linkErr
+			}
+			err := installNoClobber(tmp, final, link)
+			if !errors.Is(err, linkErr) || !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "must support hard links") {
+				t.Fatalf("must refuse and explain the destination limitation: %v", err)
+			}
+			if got, _ := os.ReadFile(final); string(got) != "competing-export" {
+				t.Fatalf("failed-link path overwrote a competing final: %q", got)
+			}
+			if got, _ := os.ReadFile(tmp); string(got) != "new-export" {
+				t.Fatalf("failed-link path moved the staged copy: %q", got)
+			}
+		})
+	}
+}
+
+func TestExportInstallFailedHardLinkDoesNotPublishANewCopy(t *testing.T) {
+	dir := t.TempDir()
+	tmp, final := filepath.Join(dir, "partial"), filepath.Join(dir, "final.db")
+	if err := os.WriteFile(tmp, []byte("new-export"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := installNoClobber(tmp, final, func(string, string) error { return syscall.EOPNOTSUPP })
+	if !errors.Is(err, syscall.EOPNOTSUPP) {
+		t.Fatalf("unsupported hard links must refuse the export: %v", err)
+	}
+	if _, err := os.Lstat(final); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused export must not publish a copy: %v", err)
+	}
+}
+
+func TestExportLockIsPerDataDirectoryNotPerMac(t *testing.T) {
+	_, one := remoteTestConfig(t)
+	_, two := remoteTestConfig(t)
+	unlock, err := lockServerDBExport(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	unlockTwo, err := lockServerDBExport(two)
+	if err != nil {
+		t.Fatalf("different data directories do not share an export lock: %v", err)
+	}
+	defer unlockTwo()
 }
 
 func TestExportServerDBNeedsRemoteMode(t *testing.T) {

@@ -70,6 +70,21 @@ func TestNavidromePushHelpWarnsAboutPartialUpdates(t *testing.T) {
 	}
 }
 
+func TestNavidromeExportHelpStatesFilesystemAndLockScope(t *testing.T) {
+	app, out, _ := newNavidromeTestApp()
+	root := newRootCommand(app)
+	root.SetOut(out)
+	root.SetArgs([]string{"navidrome", "export-db", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"filesystem must support hard links", "refused rather than risking replacement", "per data_dir, not per Mac"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("export help must say %q: %s", want, out.String())
+		}
+	}
+}
+
 func TestNavidromeConfigPathHonoursTheExplicitFlag(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "custom.navidrome.yaml")

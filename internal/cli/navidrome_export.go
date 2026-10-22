@@ -27,6 +27,10 @@ checks its size, sha256 and SQLite header, and stores it as
 navidrome-server-<UTC time>.db (mode 0600). The newest --keep copies are kept;
 other files in the folder are never touched.
 
+The destination filesystem must support hard links; otherwise the export is
+refused rather than risking replacement of an existing copy. The export lock
+is per data_dir, not per Mac.
+
 ` + "`udl navidrome status`" + ` warns when the last copy failed or is older than 14 days.
 `),
 		Args: cobra.NoArgs,

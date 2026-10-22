@@ -154,7 +154,7 @@ so a listing and a refreshed snapshot can be compared line for line.
 with `-32602` and a `detail` before any run starts. Inside the run,
 `failure.kind` tells the app what happened without parsing the error text:
 `busy` (another push — the post-sync hook, the scheduled push, or a CLI push —
-holds this Mac's mirror lock; nothing changed), `delete_limit` (the preflight
+holds the configured data directory's mirror lock; nothing changed), `delete_limit` (the preflight
 refused; `failure.planned_deletes` and `failure.allow_deletes_command` name the
 count and the explicit `udl navidrome push --allow-deletes N` override, which
 the app deliberately does not offer as one click), `server_scanning` (the

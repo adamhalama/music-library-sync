@@ -294,6 +294,11 @@ remote:
   reconcile` sends this Mac's APFS creation times and the server applies them
   (after its own backup). `--dry-run` reports what would change.
 - `backup create` / `list` act on the server's database in remote mode.
+- `udl navidrome export-db [--out <folder>] [--keep N]` pulls a verified copy of
+  the server's database to this Mac. The destination filesystem must support
+  hard links (for example, exFAT is refused) so publication never overwrites an
+  existing copy. The export lock is per `data_dir`, not per Mac: configurations
+  with different data directories do not share it.
 - Setup, service start/restart and `deps ensure` refuse in remote mode, so a
   second server never starts on this Mac; stopping the local service is allowed.
 - The native app embeds its own `udl`: rebuild and reinstall it from a build

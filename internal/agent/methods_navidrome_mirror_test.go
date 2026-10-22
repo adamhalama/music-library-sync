@@ -329,7 +329,7 @@ func TestMirrorPushSaysAPushIsAlreadyRunning(t *testing.T) {
 	api, _ := mirrorTestSubsonic(t)
 	server, output, _ := newMirrorPushServer(t, runner, api, false)
 
-	// The first push holds the per-Mac mirror lock, as the post-sync hook or
+	// The first push holds the per-data-directory mirror lock, as the post-sync hook or
 	// the launchd push would.
 	first := startMirrorPush(t, server, map[string]any{})
 	<-entered

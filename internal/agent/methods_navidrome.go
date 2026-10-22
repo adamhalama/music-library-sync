@@ -461,7 +461,7 @@ type navidromeMirrorPushFailure struct {
 	AllowDeletesCommand string `json:"allow_deletes_command,omitempty"`
 }
 
-// mirrorPushBusyDetail is shown when another push holds the per-Mac mirror
+// mirrorPushBusyDetail is shown when another push holds the per-data-directory mirror
 // lock: the post-sync hook, the launchd fallback, or a CLI push.
 const mirrorPushBusyDetail = "A push is already running (a sync's post-sync push, the scheduled push, or `udl navidrome push`); " +
 	"this one was skipped and nothing changed. Try again when it finishes."
