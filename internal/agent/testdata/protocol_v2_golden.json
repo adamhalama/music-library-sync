@@ -56,7 +56,8 @@
     "navidrome.favorites.plan",
     "navidrome.favorites.apply",
     "navidrome.favorites.list",
-    "navidrome.backup.create"
+    "navidrome.backup.create",
+    "navidrome.mirror.push"
   ],
   "groups": [
     {

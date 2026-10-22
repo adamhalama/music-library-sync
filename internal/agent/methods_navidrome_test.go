@@ -54,7 +54,7 @@ func TestNavidromeMethodsAreAdvertised(t *testing.T) {
 		"navidrome.playlists.refresh", "navidrome.playlists.deriveGenres",
 		"navidrome.playlists.saveGenres",
 		"navidrome.favorites.plan", "navidrome.favorites.apply",
-		"navidrome.backup.create",
+		"navidrome.backup.create", "navidrome.mirror.push",
 	} {
 		if !advertised[method] {
 			t.Fatalf("method %q is not advertised in initialize", method)

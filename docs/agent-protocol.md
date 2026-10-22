@@ -77,7 +77,7 @@ use that advertised inventory rather than a hard-coded count.
 | Paired playlist sync | `playlistSync.inspect`, `playlistSync.plan`, `playlistSync.apply` |
 | Free DL | `freedl.config.read`, `freedl.config.write`, `freedl.plan.start`, `freedl.capture.start`, `freedl.promotionPlan.build`, `freedl.promote.apply` |
 | Rekordbox | `rekordbox.config.read`, `rekordbox.config.write`, `rekordbox.deps.status`, `rekordbox.deps.ensure`, `rekordbox.deps.reset`, `rekordbox.inspect`, `rekordbox.plan`, `rekordbox.apply` |
-| Navidrome | `navidrome.config.read`, `navidrome.config.write`, `navidrome.deps.status`, `navidrome.deps.ensure`, `navidrome.status`, `navidrome.service.control`, `navidrome.setup.plan`, `navidrome.setup.apply`, `navidrome.playlists.refresh`, `navidrome.playlists.deriveGenres`, `navidrome.playlists.saveGenres`, `navidrome.favorites.plan`, `navidrome.favorites.apply`, `navidrome.favorites.list`, `navidrome.backup.create` |
+| Navidrome | `navidrome.config.read`, `navidrome.config.write`, `navidrome.deps.status`, `navidrome.deps.ensure`, `navidrome.status`, `navidrome.service.control`, `navidrome.setup.plan`, `navidrome.setup.apply`, `navidrome.playlists.refresh`, `navidrome.playlists.deriveGenres`, `navidrome.playlists.saveGenres`, `navidrome.favorites.plan`, `navidrome.favorites.apply`, `navidrome.favorites.list`, `navidrome.backup.create`, `navidrome.mirror.push` |
 
 ## Method contracts
 
@@ -137,6 +137,7 @@ marked **run** return `{"run_id":"…"}` immediately and terminate through
 | `navidrome.favorites.apply` | signed `plan` | **run** returning backup path, newly starred IDs, and parity |
 | `navidrome.favorites.list` | `{}` | **run** returning `count` and the server's starred `tracks`, path-sorted |
 | `navidrome.backup.create` | `{}` | **run** returning the created database backup |
+| `navidrome.mirror.push` | optional `allow_deletes` (int, default 0), `force_scan` (bool) | remote mode only: **run** pushing the mirror, then scanning and re-applying Date Added like `udl navidrome push`; returns `push`, `scanned`, `dates`, `warnings`, the refreshed `mirror` state, and `failure` when the push did not go through |
 
 The Navidrome account password is never carried by any of these methods. It
 lives only in macOS Keychain and is written through `credentials.save`.
@@ -149,8 +150,19 @@ touches Apple Music, so it is the one favourites method that works without a
 Music automation grant. Its ordering matches the `navidrome-favorites` snapshot,
 so a listing and a refreshed snapshot can be compared line for line.
 
+`navidrome.mirror.push` exists only in remote mode; a local config is refused
+with `-32602` and a `detail` before any run starts. Inside the run,
+`failure.kind` tells the app what happened without parsing the error text:
+`busy` (another push — the post-sync hook, the scheduled push, or a CLI push —
+holds this Mac's mirror lock; nothing changed), `delete_limit` (the preflight
+refused; `failure.planned_deletes` and `failure.allow_deletes_command` name the
+count and the explicit `udl navidrome push --allow-deletes N` override, which
+the app deliberately does not offer as one click), `canceled` (exit `130` after
+`run.cancel`), or `failed`. `navidrome.status` carries the same push state as
+`mirror` and the server side as `remote`; both are omitted in local mode.
+
 `phone.connected` in the Navidrome config is a user acknowledgement, not an
-observation: nothing on the Mac can see Amperfy, so the last setup step is
+observation: nothing on the Mac can see the phone app, so the last setup step is
 recorded through `navidrome.config.write` and read back on `navidrome.status`
 as `phone_connected`. No method claims to have verified the phone.
 

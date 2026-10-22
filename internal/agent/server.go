@@ -16,6 +16,7 @@ import (
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/jaa/update-downloads/internal/freedl"
+	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/playlists"
 	"github.com/jaa/update-downloads/internal/rekordbox/syncconfig"
 )
@@ -47,6 +48,10 @@ type Server struct {
 	FreeDLOps             *FreeDLOperations
 	RekordboxOps          *RekordboxOperations
 	PlaylistMirrorUseCase *app.PlaylistMirrorUseCase
+
+	// newNavidromeManager replaces navidrome.NewManager in tests, which need a
+	// remote-mode manager with a scripted rsync/ssh runner.
+	newNavidromeManager func(navidrome.ManagerOptions) (*navidrome.Manager, error)
 
 	configWriteLocks sync.Map // absolute destination path -> *sync.Mutex
 
@@ -129,6 +134,7 @@ var protocolMethods = []string{
 	"navidrome.favorites.apply",
 	"navidrome.favorites.list",
 	"navidrome.backup.create",
+	"navidrome.mirror.push",
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -265,6 +271,8 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *RPCError) 
 		return s.navidromeFavoritesList()
 	case "navidrome.backup.create":
 		return s.navidromeBackupCreate()
+	case "navidrome.mirror.push":
+		return s.navidromeMirrorPush(params)
 	case "rekordbox.config.read":
 		return s.readRekordboxConfig()
 	case "rekordbox.config.write":

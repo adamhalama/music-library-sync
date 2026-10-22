@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -41,7 +42,11 @@ func (s *Server) navidromeOptions() navidrome.ManagerOptions {
 }
 
 func (s *Server) navidromeManager(skipCredentials bool) (*navidrome.Manager, *RPCError) {
-	manager, err := navidrome.NewManager(navidrome.ManagerOptions{
+	build := navidrome.NewManager
+	if s.newNavidromeManager != nil {
+		build = s.newNavidromeManager
+	}
+	manager, err := build(navidrome.ManagerOptions{
 		ConfigPath:      s.NavidromeConfigPath,
 		WorkingDir:      s.WorkingDir,
 		SkipCredentials: skipCredentials,
@@ -417,6 +422,121 @@ func (s *Server) navidromeServiceControl(params json.RawMessage) (any, *RPCError
 		return nil, asRPCError(err)
 	}
 	return map[string]string{"run_id": runID}, nil
+}
+
+type navidromeMirrorPushParams struct {
+	// AllowDeletes raises the delete limit for one intended reorganisation,
+	// exactly like `udl navidrome push --allow-deletes N`. Zero keeps the
+	// configured limit.
+	AllowDeletes int  `json:"allow_deletes"`
+	ForceScan    bool `json:"force_scan"`
+}
+
+// navidromeMirrorPushResult is what a `navidrome.mirror.push` run finishes
+// with: the push and what followed it (MirrorResult's fields, flattened), the
+// mirror state as recorded afterwards, and — when the push did not go through
+// — why, in a form the app can show without parsing the error text.
+type navidromeMirrorPushResult struct {
+	navidrome.MirrorResult
+	Mirror  *navidrome.MirrorState      `json:"mirror,omitempty"`
+	Failure *navidromeMirrorPushFailure `json:"failure,omitempty"`
+}
+
+// Failure kinds of a mirror push.
+const (
+	mirrorPushBusy        = "busy"
+	mirrorPushDeleteLimit = "delete_limit"
+	mirrorPushCanceled    = "canceled"
+	mirrorPushFailed      = "failed"
+)
+
+type navidromeMirrorPushFailure struct {
+	Kind   string `json:"kind"`
+	Detail string `json:"detail"`
+	// PlannedDeletes and AllowDeletesCommand are set for a delete-limit
+	// refusal. The override stays a deliberate CLI step; the app offers no
+	// one-click equivalent.
+	PlannedDeletes      int    `json:"planned_deletes,omitempty"`
+	AllowDeletesCommand string `json:"allow_deletes_command,omitempty"`
+}
+
+// mirrorPushBusyDetail is shown when another push holds the per-Mac mirror
+// lock: the post-sync hook, the launchd fallback, or a CLI push.
+const mirrorPushBusyDetail = "A push is already running (a sync's post-sync push, the scheduled push, or `udl navidrome push`); " +
+	"this one was skipped and nothing changed. Try again when it finishes."
+
+// navidromeMirrorPush runs the same push, scan and Date Added sequence as
+// `udl navidrome push`. Only remote mode has a mirror; a local install is
+// refused before any run starts.
+func (s *Server) navidromeMirrorPush(params json.RawMessage) (any, *RPCError) {
+	var request navidromeMirrorPushParams
+	if len(params) > 0 && string(params) != "null" {
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, NewRPCError(CodeInvalidParams, "invalid navidrome.mirror.push params", nil)
+		}
+	}
+	if request.AllowDeletes < 0 {
+		return nil, NewRPCError(CodeInvalidParams, "allow_deletes must not be negative", nil)
+	}
+	manager, rpcErr := s.navidromeManager(false)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	if !manager.Config.IsRemote() {
+		return nil, NewRPCError(CodeInvalidParams, "the mirror push needs remote mode", map[string]string{
+			"detail": "navidrome.mode is local: Navidrome on this Mac reads the music folder directly, so there is no mirror to push",
+		})
+	}
+	runID, err := s.StartRun(func(ctx context.Context, _ string) (any, error, int) {
+		return pushNavidromeMirror(ctx, manager, request)
+	})
+	if err != nil {
+		return nil, asRPCError(err)
+	}
+	return map[string]string{"run_id": runID}, nil
+}
+
+func pushNavidromeMirror(ctx context.Context, manager *navidrome.Manager, request navidromeMirrorPushParams) (any, error, int) {
+	mirrored, pushErr := manager.SyncMirror(ctx, navidrome.ManualPushOptions(request.AllowDeletes, request.ForceScan))
+	result := navidromeMirrorPushResult{MirrorResult: mirrored}
+	if result.Warnings == nil {
+		result.Warnings = []string{}
+	}
+	if state, err := navidrome.LoadMirrorState(manager.Resolved); err == nil {
+		result.Mirror = &state
+	} else {
+		result.Warnings = append(result.Warnings, err.Error())
+	}
+	if pushErr == nil {
+		return result, nil, exitcode.Success
+	}
+	failure := classifyMirrorPushError(ctx, pushErr, mirrored.Push)
+	result.Failure = &failure
+	switch failure.Kind {
+	case mirrorPushCanceled:
+		return result, pushErr, exitcode.Interrupted
+	case mirrorPushBusy:
+		return result, errors.New(failure.Detail), exitcode.RuntimeFailure
+	}
+	return result, pushErr, exitcode.RuntimeFailure
+}
+
+func classifyMirrorPushError(ctx context.Context, err error, push navidrome.PushResult) navidromeMirrorPushFailure {
+	switch {
+	case errors.Is(err, navidrome.ErrMirrorBusy):
+		return navidromeMirrorPushFailure{Kind: mirrorPushBusy, Detail: mirrorPushBusyDetail}
+	case errors.Is(err, navidrome.ErrDeleteLimit):
+		// The error itself names the planned count and the override.
+		return navidromeMirrorPushFailure{
+			Kind:                mirrorPushDeleteLimit,
+			Detail:              err.Error(),
+			PlannedDeletes:      push.PlannedDeletes,
+			AllowDeletesCommand: fmt.Sprintf("udl navidrome push --allow-deletes %d", push.PlannedDeletes),
+		}
+	case errors.Is(err, context.Canceled), ctx.Err() != nil:
+		return navidromeMirrorPushFailure{Kind: mirrorPushCanceled, Detail: err.Error()}
+	}
+	return navidromeMirrorPushFailure{Kind: mirrorPushFailed, Detail: err.Error()}
 }
 
 func navidromeRPCError(err error) *RPCError {

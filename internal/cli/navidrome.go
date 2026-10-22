@@ -64,9 +64,10 @@ A failed push leaves the server serving its previous, complete mirror.
 				return withExitCode(exitcode.InvalidConfig,
 					fmt.Errorf("navidrome push needs navidrome.mode: remote; the local server reads ~/Music/downloaded directly"))
 			}
-			result, err := manager.SyncMirror(cmd.Context(), navidrome.MirrorOptions{
-				Scan: !noScan, ForceScan: forceScan, Dates: !noDates, AllowDeletes: allowDeletes,
-			})
+			opts := navidrome.ManualPushOptions(allowDeletes, forceScan)
+			opts.Scan = opts.Scan && !noScan
+			opts.Dates = opts.Dates && !noDates
+			result, err := manager.SyncMirror(cmd.Context(), opts)
 			if app.Opts.JSON {
 				if encodeErr := json.NewEncoder(app.IO.Out).Encode(result); encodeErr != nil {
 					return encodeErr
