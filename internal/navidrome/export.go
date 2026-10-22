@@ -119,21 +119,78 @@ func ServerDBExportStatePath(resolved Resolved) string {
 	return filepath.Join(resolved.DataDir, ServerDBExportStateFileName)
 }
 
-// LoadServerDBExportState reads the state; a missing file means no export
-// has run yet.
+// LoadServerDBExportState reads the state. If the separate state file does
+// not exist, it migrates the previous build's last_export_* fields from the
+// mirror state under the export lock. No history in either file means no
+// export has run yet.
 func LoadServerDBExportState(resolved Resolved) (ServerDBExportState, error) {
-	var state ServerDBExportState
-	payload, err := os.ReadFile(ServerDBExportStatePath(resolved))
-	if errors.Is(err, os.ErrNotExist) {
-		return state, nil
+	state, err := readServerDBExportState(ServerDBExportStatePath(resolved))
+	if !errors.Is(err, os.ErrNotExist) {
+		return state, err
 	}
+	legacy, err := readLegacyServerDBExportState(resolved)
+	if err != nil || legacy == (ServerDBExportState{}) {
+		return legacy, err
+	}
+	unlock, err := lockServerDBExport(resolved)
+	if err != nil {
+		return ServerDBExportState{}, fmt.Errorf("migrate legacy export history: %w", err)
+	}
+	defer unlock()
+	// Re-read both files under the lock: another exporter or migrator may
+	// have written the new state since our first read. Never replay legacy
+	// history over a recorded outcome, even an explicitly empty state.
+	return loadServerDBExportStateLocked(resolved)
+}
+
+func readServerDBExportState(path string) (ServerDBExportState, error) {
+	var state ServerDBExportState
+	payload, err := os.ReadFile(path)
 	if err != nil {
 		return state, err
 	}
 	if err := json.Unmarshal(payload, &state); err != nil {
-		return ServerDBExportState{}, fmt.Errorf("parse %s: %w", ServerDBExportStatePath(resolved), err)
+		return ServerDBExportState{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return state, nil
+}
+
+func readLegacyServerDBExportState(resolved Resolved) (ServerDBExportState, error) {
+	state, err := readServerDBExportState(MirrorStatePath(resolved))
+	if errors.Is(err, os.ErrNotExist) {
+		return ServerDBExportState{}, nil
+	}
+	return state, err
+}
+
+// loadServerDBExportStateLocked is also used when recording an export whose
+// caller already owns the lock; acquiring it again would refuse our own run.
+func loadServerDBExportStateLocked(resolved Resolved) (ServerDBExportState, error) {
+	state, err := readServerDBExportState(ServerDBExportStatePath(resolved))
+	if !errors.Is(err, os.ErrNotExist) {
+		return state, err
+	}
+	state, err = readLegacyServerDBExportState(resolved)
+	if err != nil || state == (ServerDBExportState{}) {
+		return state, err
+	}
+	if err := saveServerDBExportState(resolved, state); err != nil {
+		return ServerDBExportState{}, fmt.Errorf("migrate legacy export history: %w", err)
+	}
+	return state, nil
+}
+
+// preserveLegacyServerDBExportState runs before a mirror load/write can
+// discard fields its typed state no longer owns. If migration is busy or
+// fails, the mirror writer must leave the original bytes intact. Once those
+// fields are gone, export state errors cannot block independent mirror work.
+func preserveLegacyServerDBExportState(resolved Resolved) error {
+	legacy, err := readLegacyServerDBExportState(resolved)
+	if err != nil || legacy == (ServerDBExportState{}) {
+		return err
+	}
+	_, err = LoadServerDBExportState(resolved)
+	return err
 }
 
 func saveServerDBExportState(resolved Resolved, state ServerDBExportState) error {
@@ -385,7 +442,7 @@ func rotateServerDBExports(dir string, keep int) (int, []string, error) {
 // recordServerDBExport stores the outcome; the caller holds the export lock.
 // A failure keeps the time of the last good copy.
 func (m *Manager) recordServerDBExport(at time.Time, exportErr error) error {
-	state, err := LoadServerDBExportState(m.Resolved)
+	state, err := loadServerDBExportStateLocked(m.Resolved)
 	if err != nil {
 		// Do not replace a state file this build cannot read.
 		return err

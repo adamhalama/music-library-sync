@@ -166,7 +166,12 @@ Clients must treat an unknown `failure.kind` like `failed`. `navidrome.status` c
 (`udl navidrome export-db`) as `export` (`last_export_at`, `last_export_error`,
 `last_export_error_at`, each optional); all three are omitted in local mode.
 `remote` is also omitted when the server could not be reached, which is not
-the same as an empty server.
+the same as an empty server. Export history lives in
+`<data_dir>/udl-export-state.json`. If that file is absent, export/status and
+mirror-state loads migrate recognized legacy `last_export_*` fields from
+`udl-mirror-state.json` under the export lock. A mirror-state write refuses to
+drop those fields until migration succeeds; existing export state is never
+replaced by legacy history.
 
 `phone.connected` in the Navidrome config is a user acknowledgement, not an
 observation: nothing on the Mac can see the phone app, so the last setup step is

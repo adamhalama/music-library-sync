@@ -952,10 +952,16 @@ func LoadMirrorState(resolved Resolved) (MirrorState, error) {
 	if err := json.Unmarshal(payload, &state); err != nil {
 		return MirrorState{}, fmt.Errorf("parse %s: %w", MirrorStatePath(resolved), err)
 	}
+	if err := preserveLegacyServerDBExportState(resolved); err != nil {
+		return state, err
+	}
 	return state, nil
 }
 
 func saveMirrorState(resolved Resolved, state MirrorState) error {
+	if err := preserveLegacyServerDBExportState(resolved); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(resolved.DataDir, 0o700); err != nil {
 		return err
 	}
