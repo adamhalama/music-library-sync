@@ -279,10 +279,16 @@ remote:
   `<data_dir>/udl-mirror-state.json` and retried by the next push; `status`
   reports it, and a failed push, as a problem. The pending scan is recorded
   before the transfer starts, so a push interrupted mid-transfer still owes one.
-- No transfer starts while the server is scanning: the push waits for a
-  running scan (one a canceled push left behind, or one started from the phone
-  app) and is deferred, with nothing changed, if it outlasts the wait or the
-  server's scan state cannot be read. The next push retries.
+- Remote scans go through the SSH mirror gate, including playlist refreshes
+  and `--force-scan` (which scans even when nothing changed, not a full rescan).
+  The public Navidrome API is used for library, playlist and favourites reads,
+  not to start remote scans.
+- No transfer starts while the server is scanning: the gate checks scan state,
+  recovery/migration markers and server locks, then checks again under its lock
+  at the rsync hand-off. A busy or unknown state defers the push with nothing
+  changed; another mirror session is reported as busy. An explicit hand-off
+  refusal does not add scan debt. The next push retries. `status` also explains
+  when a recovery/migration scan or an unreachable server-side API blocks pushes.
 - Names starting with `..` (e.g. `...Ready For It.mp3`) are mirrored: Navidrome
   hides only names with a single leading dot.
 - The server's Navidrome must mount the mirror at the **same absolute path** as
@@ -303,6 +309,16 @@ remote:
   second server never starts on this Mac; stopping the local service is allowed.
 - The native app embeds its own `udl`: rebuild and reinstall it from a build
   that knows remote mode, or its config saves cannot preserve `mode: remote`.
+
+For a local, no-network gate integration check, set `UDL_MIRROR_GATE` to the
+absolute gate script path and optionally `UDL_MIRROR_RSYNC` to an rsync 3.x
+binary (otherwise it uses `rsync` on `PATH`), then run
+`go test ./internal/navidrome -run RealGate -count=1 -v`. These opt-in tests use
+throwaway databases, mirrors and locks; they verify the actual stderr refusal
+seen through rsync as well as backup export. The full remote acceptance test
+uses `UDL_NAVIDROME_REMOTE_E2E=1` and the `E2E_*` variables documented in
+`internal/navidrome/remote_acceptance_test.go`; its `E2E_SSH` wrapper must invoke
+a scan-capable gate with the harness's lock, loopback URL and credential paths.
 
 `rekordbox` commands:
 
