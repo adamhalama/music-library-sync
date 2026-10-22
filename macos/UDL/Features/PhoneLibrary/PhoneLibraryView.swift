@@ -2,7 +2,11 @@ import SwiftUI
 
 /// The Phone Library workspace: install Navidrome, run it as a UDL-owned
 /// service, create the account, generate the smart playlists, migrate Apple
-/// Music favorites, and hand the LAN address to Amperfy.
+/// Music favorites, and hand the server address to the phone app.
+///
+/// In remote mode (`navidrome.mode: remote`) Navidrome runs on another
+/// server and this Mac pushes a mirror to it, so the install, service, and
+/// setup cards give way to the mirror card and its Push now action.
 ///
 /// Every disabled control states its reason beside itself through
 /// `.constrained(by:)`, and every failure lands in this screen's
@@ -21,7 +25,9 @@ struct PhoneLibraryView: View {
         content
             .workspaceToolbar(
                 title: "Phone Library",
-                subtitle: "navidrome.status · navidrome.setup · navidrome.favorites"
+                subtitle: appState.isPhoneLibraryRemote
+                    ? "navidrome.status · navidrome.mirror.push · navidrome.favorites"
+                    : "navidrome.status · navidrome.setup · navidrome.favorites"
             ) {
                 if appState.phoneLibraryRunID != nil {
                     Button("Cancel", role: .destructive) {
@@ -117,10 +123,18 @@ struct PhoneLibraryView: View {
                 }
                 header
                 checklist
-                dependencyCard
-                serviceCard
+                if appState.isPhoneLibraryRemote {
+                    // Install, service, and setup manage a server on this Mac,
+                    // which remote mode refuses; the mirror card says so.
+                    mirrorCard
+                } else {
+                    dependencyCard
+                    serviceCard
+                }
                 accountCard
-                setupCard
+                if !appState.isPhoneLibraryRemote {
+                    setupCard
+                }
                 playlistsCard
                 favoritesCard
                 starredCard
@@ -134,7 +148,9 @@ struct PhoneLibraryView: View {
     private var header: some View {
         WorkspaceHeader(
             title: "Serve this Mac's library to your iPhone",
-            lede: "Navidrome runs on this Mac as a UDL-managed service and Amperfy downloads the library for offline playback. v1 is trusted home Wi-Fi over plain HTTP — never port-forward it."
+            lede: appState.isPhoneLibraryRemote
+                ? "Navidrome runs on your server and serves a mirror of this Mac's library, which UDL pushes after every sync. Your phone app downloads from the server, so this Mac does not need to be awake."
+                : "Navidrome runs on this Mac as a UDL-managed service and your phone app downloads the library for offline playback. v1 is trusted home Wi-Fi over plain HTTP — never port-forward it."
         )
     }
 
@@ -172,7 +188,7 @@ struct PhoneLibraryView: View {
                 }
                 if step.id == "phone", !step.isDone {
                     ConstraintNote(
-                        text: "UDL cannot see your phone. Once Amperfy reaches this Mac, mark it yourself — the address and account are in the Connect Amperfy card below.",
+                        text: "UDL cannot see your phone. Once your phone app reaches the server, mark it yourself — the address and account are in the Connect card below.",
                         severity: .info,
                         symbol: "iphone"
                     )
@@ -285,13 +301,80 @@ struct PhoneLibraryView: View {
         return nil
     }
 
+    // MARK: Remote mirror
+
+    /// Remote mode's replacement for the install, service, and setup cards:
+    /// where the phone connects, how current the server's mirror is, and the
+    /// one action this Mac takes — pushing it.
+    private var mirrorCard: some View {
+        let summary = appState.phoneLibraryRemoteSummary
+        let pushing = appState.phoneLibraryOperation == .mirrorPush
+        return Card(
+            title: "Server mirror",
+            subtitle: "This Mac pushes its library; the server runs Navidrome"
+        ) {
+            FieldRow("Phone server", summary.serverURL.isEmpty ? "not configured" : summary.serverURL)
+            FieldRow("SSH target", summary.sshTarget)
+            FieldRow("Last push", summary.lastPush)
+            FieldRow("Last scan", summary.lastScan)
+            FieldRow("Server library", summary.serverLibrary)
+            FieldRow("Server database", summary.serverDatabase)
+            FieldRow("Latest server backup", summary.latestServerBackup)
+            if let error = summary.lastPushError {
+                ConstraintNote(text: error, severity: .error, symbol: "exclamationmark.triangle")
+            }
+            if !summary.problems.isEmpty {
+                Divider()
+                SectionHeader(title: "Mirror problems")
+                ForEach(summary.problems, id: \.self) { problem in
+                    ConstraintNote(text: problem, severity: .warn)
+                }
+            }
+            if let outcome = appState.navidromeMirrorPushOutcome {
+                Divider()
+                if let planned = outcome.plannedDeletes {
+                    // Never a button: an over-limit deletion is what a moved or
+                    // half-mounted library looks like, so the override stays a
+                    // deliberate Terminal step.
+                    FieldRow("Planned deletions", "\(planned)")
+                }
+                ConstraintNote(
+                    text: outcome.message,
+                    severity: outcome.severity == .ok ? .info : outcome.severity,
+                    symbol: outcome.severity == .ok ? "checkmark.circle" : "exclamationmark.triangle"
+                )
+            }
+            HStack(spacing: 8) {
+                Button("Push now") { Task { await appState.pushNavidromeMirror() } }
+                    .buttonStyle(.borderedProminent)
+                    .constrained(by: pushReason)
+                if pushing {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer(minLength: 0)
+            }
+            ConstraintNote(
+                text: "Install, service, and managed-setup controls are hidden: in remote mode Navidrome runs on the server, and UDL will not start a second server on this Mac.",
+                symbol: "server.rack"
+            )
+        }
+    }
+
+    private var pushReason: String? {
+        if appState.isPhoneLibraryBusy { return busyReason }
+        if appState.navidromeStatus == nil {
+            return "Phone Library state has not loaded yet."
+        }
+        return nil
+    }
+
     // MARK: Account
 
     private var accountCard: some View {
         let status = appState.navidromeStatus
         return Card(
             title: "Account",
-            subtitle: "One shared account for UDL and Amperfy, so favorites and playlists refer to the same user"
+            subtitle: "One shared account for UDL and your phone app, so favorites and playlists refer to the same user"
         ) {
             FieldRow("Username", status?.username?.isEmpty == false ? status!.username! : "not set")
             FieldRow("Password", status?.passwordStored == true ? "saved in macOS Keychain" : "not saved")
@@ -301,7 +384,9 @@ struct PhoneLibraryView: View {
             }
 
             ConstraintNote(
-                text: "Create the first admin account at the local server address, then save the same password here. UDL stores it only in macOS Keychain.",
+                text: appState.isPhoneLibraryRemote
+                    ? "Create the first admin account on the server's Navidrome, then save the same password here. UDL stores it only in macOS Keychain."
+                    : "Create the first admin account at the local server address, then save the same password here. UDL stores it only in macOS Keychain.",
                 symbol: "person.badge.key"
             )
             HStack(spacing: 8) {
@@ -570,7 +655,7 @@ struct PhoneLibraryView: View {
     private var starredCard: some View {
         Card(
             title: "Likes from the phone",
-            subtitle: "Read-only. Stars made in Amperfy are canonical in Navidrome."
+            subtitle: "Read-only. Stars made in your phone app are canonical in Navidrome."
         ) {
             if let starred = appState.navidromeStarred {
                 FieldRow("Starred on the server", "\(starred.count)")
@@ -621,29 +706,40 @@ struct PhoneLibraryView: View {
 
     private var connectionCard: some View {
         let connection = appState.phoneConnection
-        return Card(title: "Connect Amperfy", subtitle: "Home Wi-Fi only") {
+        let remote = appState.isPhoneLibraryRemote
+        return Card(
+            title: "Connect your phone app",
+            subtitle: remote ? "The address your phone uses to reach the server" : "Home Wi-Fi only"
+        ) {
             if connection.isReady {
                 FieldRow("Server", connection.serverURL)
                 FieldRow("Username", connection.username)
                 FieldRow("Approximate download", connection.approximateLibrarySize)
             }
             ConstraintNote(
-                text: "In Amperfy, add a Subsonic/Ampache server using this address and the shared account, then download the All Music playlist for offline playback.",
+                text: "In your phone app, add a Subsonic server using this address and the shared account, then download the All Music playlist for offline playback.",
                 symbol: "iphone.and.arrow.forward"
             )
-            ConstraintNote(
-                text: "iOS asks for Local Network permission the first time Amperfy reaches this Mac. Allow it, or the server will look unreachable.",
-                symbol: "wifi"
-            )
-            ConstraintNote(
-                text: "This address is reachable on your home network only. Never forward this port on your router.",
-                severity: .warn,
-                symbol: "lock.shield"
-            )
+            if remote {
+                ConstraintNote(
+                    text: "This is the configured server.url. The phone talks to the server directly; this Mac only pushes the library to it.",
+                    symbol: "server.rack"
+                )
+            } else {
+                ConstraintNote(
+                    text: "iOS asks for Local Network permission the first time your phone app reaches this Mac. Allow it, or the server will look unreachable.",
+                    symbol: "wifi"
+                )
+                ConstraintNote(
+                    text: "This address is reachable on your home network only. Never forward this port on your router.",
+                    severity: .warn,
+                    symbol: "lock.shield"
+                )
+            }
             // The last checklist step happens on the phone, where UDL cannot
-            // see it: Amperfy announces itself through no API this app reads.
-            // So it is acknowledged here, and the wording never pretends the
-            // Mac checked.
+            // see it: the phone app announces itself through no API this app
+            // reads. So it is acknowledged here, and the wording never
+            // pretends the Mac checked.
             if appState.navidromeStatus?.phoneConnected == true {
                 ConstraintNote(
                     text: "You marked the phone as connected. UDL cannot verify this itself.",
@@ -658,7 +754,9 @@ struct PhoneLibraryView: View {
                 }
                 .constrained(by: connection.isReady
                     ? nil
-                    : "The LAN address is known once the service is running and the account is set.")
+                    : remote
+                        ? "Set server.url and the account username in the Navidrome config first."
+                        : "The LAN address is known once the service is running and the account is set.")
                 if appState.navidromeStatus?.phoneConnected == true {
                     Button("Mark as not connected") {
                         Task { await appState.setPhoneConnected(false) }
@@ -700,7 +798,9 @@ struct PhoneLibraryView: View {
             return "Save the account password first; UDL needs it to read the server."
         }
         if !status.reachable {
-            return "The server is not reachable. Start the service and check the account."
+            return status.isRemote
+                ? "The server is not reachable. Check that it is running and that this Mac can reach server.url."
+                : "The server is not reachable. Start the service and check the account."
         }
         return nil
     }
@@ -722,13 +822,17 @@ struct PhoneLibraryView: View {
                 FieldRow("Tracks", "\(status?.libraryTracks ?? 0)")
                 FieldRow("Scanning", status?.scanning == true ? "yes" : "no")
             }
-            InspectorSection(title: "Backups") {
+            // In remote mode these are the server's backups: status lists them
+            // and backup.create makes one there. Nothing is backed up locally.
+            InspectorSection(title: appState.isPhoneLibraryRemote ? "Server backups" : "Backups") {
                 FieldRow("Retained", "\(status?.backupCount ?? 0)")
                 if let latest = status?.latestBackup {
                     FieldRow("Latest", latest.path)
                 }
-                Button("Create backup now") { Task { await appState.createNavidromeBackup() } }
-                    .constrained(by: appState.isPhoneLibraryBusy ? busyReason : nil)
+                Button(appState.isPhoneLibraryRemote ? "Create server backup now" : "Create backup now") {
+                    Task { await appState.createNavidromeBackup() }
+                }
+                .constrained(by: appState.isPhoneLibraryBusy ? busyReason : nil)
             }
             if let problems = status?.problems, !problems.isEmpty {
                 InspectorSection(title: "Problems") {

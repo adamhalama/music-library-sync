@@ -44,7 +44,7 @@ extension AppState {
         }
     }
 
-    /// Records the user's acknowledgement that Amperfy reaches this Mac. It is
+    /// Records the user's acknowledgement that the phone app reaches the server. It is
     /// the last setup step and the only one nothing here can observe, so it is
     /// stored in the feature config where the checklist reads it back.
     func setPhoneConnected(_ connected: Bool) async {
@@ -207,6 +207,22 @@ extension AppState {
         }
     }
 
+    /// Remote mode: push the library to the server's mirror, then rescan and
+    /// re-apply Date Added. The outcome — including a delete-limit refusal,
+    /// which the app never overrides — is reported on this screen.
+    func pushNavidromeMirror() async {
+        guard navidromeStatus?.isRemote == true else {
+            phoneLibraryStatus = .failure("Push now is only available in remote mode.")
+            return
+        }
+        guard !isPhoneLibraryBusy, phoneLibraryRunID == nil else { return }
+        navidromeMirrorPush = nil
+        navidromeMirrorPushOutcome = nil
+        await startPhoneLibraryOperation(.mirrorPush) { client in
+            try await client.pushNavidromeMirror()
+        }
+    }
+
     func cancelPhoneLibraryOperation() async {
         guard let runID = phoneLibraryRunID else { return }
         await cancelRun(runID)
@@ -242,6 +258,19 @@ extension AppState {
         let operation = phoneLibraryOperation
         phoneLibraryRunID = nil
         phoneLibraryOperation = nil
+
+        // A push reports through its own outcome on success and failure alike:
+        // the result carries the refreshed mirror state and, for a refusal,
+        // why nothing was pushed.
+        if case .mirrorPush = operation {
+            let result = finished.result.flatMap { try? decodeWire(NavidromeMirrorPushResult.self, from: $0) }
+            let outcome = NavidromeMirrorPushOutcome(exitCode: finished.exitCode, error: finished.error, result: result)
+            navidromeMirrorPush = result
+            navidromeMirrorPushOutcome = outcome
+            phoneLibraryStatus = WorkflowStatus(message: outcome.message, severity: outcome.severity)
+            Task { await refreshPhoneLibraryStatus() }
+            return
+        }
 
         if finished.exitCode != 0 {
             phoneLibraryStatus = finished.exitCode == 130
@@ -347,6 +376,9 @@ extension AppState {
             let created = finished.result.flatMap { try? decodeWire(NavidromeBackupResult.self, from: $0) }
             phoneLibraryStatus = WorkflowStatus(message: created?.message ?? "Backup created.")
             Task { await refreshPhoneLibraryStatus() }
+        case .mirrorPush:
+            // Handled above, before the exit-code split.
+            break
         case nil:
             break
         }
@@ -360,7 +392,7 @@ extension AppState {
         phoneLibraryRunID = nil
         phoneLibraryStatus = WorkflowStatus(
             message: wasMutating
-                ? "Backend connection ended. No install, setup, or import step was resumed or replayed."
+                ? "Backend connection ended. No install, setup, import, or push step was resumed or replayed."
                 : "Backend connection ended. The step was not resumed.",
             severity: .error
         )
@@ -376,6 +408,8 @@ extension AppState {
         navidromeGenreDerivation = nil
         navidromeGenreApproval = [:]
         navidromePlaylistRefresh = nil
+        navidromeMirrorPush = nil
+        navidromeMirrorPushOutcome = nil
         phoneLibraryOperation = nil
         phoneLibraryRunID = nil
         phoneLibraryStatus = nil
@@ -388,8 +422,14 @@ extension AppState {
     }
 
     var phoneConnection: PhoneConnectionDetails {
-        PhoneConnectionDetails(status: navidromeStatus)
+        PhoneConnectionDetails(status: navidromeStatus, configuredServerURL: navidromeConfig?.config.server.url)
     }
+
+    var phoneLibraryRemoteSummary: PhoneLibraryRemoteSummary {
+        PhoneLibraryRemoteSummary(status: navidromeStatus, configuredServerURL: navidromeConfig?.config.server.url)
+    }
+
+    var isPhoneLibraryRemote: Bool { navidromeStatus?.isRemote == true }
 
     var isPhoneLibraryBusy: Bool { phoneLibraryOperation != nil }
 }

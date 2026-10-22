@@ -48,8 +48,8 @@ struct NavidromePlaylistsConfig: Codable, Sendable, Equatable {
     }
 }
 
-/// The phone-side setup step, which nothing on this Mac can observe. Amperfy
-/// does not announce itself through any API UDL reads, so this is the user's
+/// The phone-side setup step, which nothing on this Mac can observe. The phone
+/// app does not announce itself through any API UDL reads, so this is the user's
 /// own acknowledgement rather than a probe.
 struct NavidromePhoneConfig: Codable, Sendable, Equatable {
     var connected: Bool
@@ -205,6 +205,16 @@ struct NavidromeStatus: Codable, Sendable, Equatable {
     /// Self-reported, from the config. Not an observation of the phone.
     let phoneConnected: Bool
     @DefaultEmpty var problems: [String]
+    /// `"remote"` when Navidrome runs on another machine and this Mac pushes
+    /// a mirror to it. Absent from local-mode statuses and from backends that
+    /// predate remote mode, which both mean local. These are `var` so the
+    /// memberwise initialiser defaults them to `nil` at existing call sites.
+    var mode: String?
+    /// The server side of the mirror, absent when the server could not be
+    /// asked (the reason is then one of `problems`).
+    var remote: NavidromeRemoteStatus?
+    /// What this Mac recorded about its pushes.
+    var mirror: NavidromeMirrorState?
 
     enum CodingKeys: String, CodingKey {
         case enabled, reachable, server, scanning, username
@@ -221,10 +231,104 @@ struct NavidromeStatus: Codable, Sendable, Equatable {
         case logPath = "log_path"
         case phoneConnected = "phone_connected"
         case problems
+        case mode, remote, mirror
+    }
+
+    /// In remote mode the dependency and service fields describe nothing on
+    /// this Mac, and the local-only controls do not apply.
+    var isRemote: Bool { mode == "remote" }
+}
+
+// MARK: - Remote mirror
+
+/// The mirror on the server, as `udl-mirror status` reports it. Every field is
+/// optional: the gate's reply is passed through, and a missing number must
+/// read as "unknown" rather than fail the whole status.
+struct NavidromeRemoteStatus: Codable, Sendable, Equatable {
+    let sshTarget: String?
+    let library: NavidromeRemoteLibrary?
+    let database: NavidromeRemoteDatabase?
+    @DefaultEmpty var udlBackups: [NavidromeBackupInfo]
+    @DefaultEmpty var navidromeBackups: [NavidromeBackupInfo]
+    let disk: NavidromeRemoteDisk?
+
+    enum CodingKeys: String, CodingKey {
+        case sshTarget = "ssh_target"
+        case library, database, disk
+        case udlBackups = "udl_backups"
+        case navidromeBackups = "navidrome_backups"
+    }
+}
+
+struct NavidromeRemoteLibrary: Codable, Sendable, Equatable {
+    let path: String?
+    let files: Int?
+    let bytes: Int64?
+    /// Raw RFC 3339 text; parsed only for display.
+    let newestMtime: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, files, bytes
+        case newestMtime = "newest_mtime"
+    }
+}
+
+struct NavidromeRemoteDatabase: Codable, Sendable, Equatable {
+    let path: String?
+    let present: Bool?
+    let sizeBytes: Int64?
+    let tracks: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, present, tracks, error
+        case sizeBytes = "size_bytes"
+    }
+}
+
+struct NavidromeRemoteDisk: Codable, Sendable, Equatable {
+    let freeBytes: Int64?
+    let totalBytes: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case freeBytes = "free_bytes"
+        case totalBytes = "total_bytes"
+    }
+}
+
+/// What this Mac knows about the mirror between pushes. Timestamps stay raw
+/// RFC 3339 strings, like every other display-only time in this feature, so a
+/// format this build cannot parse degrades one row instead of the status.
+struct NavidromeMirrorState: Codable, Sendable, Equatable {
+    let lastPushAt: String?
+    let lastScanAt: String?
+    let lastErrorAt: String?
+    let lastPushError: String?
+    let scanPending: Bool?
+    let datesPending: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case lastPushAt = "last_push_at"
+        case lastScanAt = "last_scan_at"
+        case lastErrorAt = "last_error_at"
+        case lastPushError = "last_push_error"
+        case scanPending = "scan_pending"
+        case datesPending = "dates_pending"
     }
 }
 
 struct NavidromeEnsureParams: Codable, Sendable { let confirm: Bool }
+
+/// `navidrome.mirror.push` params. `allow_deletes` is deliberately not sent:
+/// raising the delete limit stays an explicit CLI step
+/// (`udl navidrome push --allow-deletes N`), never a button.
+struct NavidromeMirrorPushParams: Codable, Sendable {
+    let forceScan: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case forceScan = "force_scan"
+    }
+}
 
 struct NavidromeServiceControlParams: Codable, Sendable { let action: String }
 
@@ -569,6 +673,246 @@ struct NavidromeStarredTrack: Codable, Sendable, Equatable, Identifiable {
     let path: String?
 }
 
+// MARK: - Mirror push
+
+/// One rsync push, as `navidrome.mirror.push` reports it.
+struct NavidromePushReport: Codable, Sendable, Equatable {
+    let changed: Int?
+    let deleted: Int?
+    @DefaultEmpty var items: [String]
+    let warning: String?
+    let plannedDeletes: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case changed, deleted, items, warning
+        case plannedDeletes = "planned_deletes"
+    }
+}
+
+/// The Date Added reconcile that follows a scan; only its summary is shown.
+struct NavidromeMirrorDates: Codable, Sendable, Equatable {
+    let updated: Int?
+    let message: String?
+}
+
+/// Why a push did not go through. `kind` is `busy`, `delete_limit`,
+/// `canceled` or `failed`; anything else is treated as `failed`.
+struct NavidromeMirrorPushFailure: Codable, Sendable, Equatable {
+    let kind: String
+    let detail: String?
+    let plannedDeletes: Int?
+    let allowDeletesCommand: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, detail
+        case plannedDeletes = "planned_deletes"
+        case allowDeletesCommand = "allow_deletes_command"
+    }
+}
+
+/// The terminal result of `navidrome.mirror.push`, on success and on failure.
+struct NavidromeMirrorPushResult: Codable, Sendable, Equatable {
+    let push: NavidromePushReport?
+    let scanned: Bool?
+    let dates: NavidromeMirrorDates?
+    @DefaultEmpty var warnings: [String]
+    let mirror: NavidromeMirrorState?
+    let failure: NavidromeMirrorPushFailure?
+}
+
+/// What the screen says after a push, derived from the run's terminal frame
+/// alone so it can be tested without the UI. A delete-limit refusal carries
+/// its planned count and the CLI override; the app never offers that
+/// override as a button.
+struct NavidromeMirrorPushOutcome: Equatable {
+    enum Kind: Equatable {
+        case pushed
+        case busy
+        case deleteLimit(plannedDeletes: Int, command: String)
+        case canceled
+        case failed
+    }
+
+    let kind: Kind
+    let message: String
+    let severity: Severity
+
+    init(exitCode: Int, error: String?, result: NavidromeMirrorPushResult?) {
+        let failure = result?.failure
+        if exitCode == 0 && failure == nil {
+            kind = .pushed
+            let push = result?.push
+            var parts = ["Pushed to the server: \(push?.changed ?? 0) changed, \(push?.deleted ?? 0) deleted."]
+            if result?.scanned == true {
+                parts.append("The server rescanned the library.")
+            } else if (push?.changed ?? 0) + (push?.deleted ?? 0) == 0 {
+                parts.append("Nothing changed, so no scan was needed.")
+            }
+            if let dates = result?.dates?.message, !dates.isEmpty {
+                parts.append(dates)
+            }
+            let warnings = result?.warnings ?? []
+            parts.append(contentsOf: warnings)
+            message = parts.joined(separator: " ")
+            severity = warnings.isEmpty ? .ok : .warn
+            return
+        }
+        let detail = failure?.detail.flatMap { $0.isEmpty ? nil : $0 }
+            ?? error.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "The push failed with exit code \(exitCode)."
+        switch failure?.kind {
+        case "busy":
+            kind = .busy
+            message = detail
+            severity = .warn
+        case "delete_limit":
+            let planned = failure?.plannedDeletes ?? result?.push?.plannedDeletes ?? 0
+            let command = failure?.allowDeletesCommand ?? "udl navidrome push --allow-deletes \(planned)"
+            kind = .deleteLimit(plannedDeletes: planned, command: command)
+            message = "The push was refused: it would delete \(planned) file(s) from the server, more than the delete limit allows. Nothing was changed. If the deletions are intended, run `\(command)` in Terminal; the app does not override the limit."
+            severity = .error
+        case "canceled":
+            kind = .canceled
+            message = "Push canceled. The server keeps serving the previous mirror; the next push resumes."
+            severity = .warn
+        default:
+            if exitCode == 130 {
+                kind = .canceled
+                message = "Push canceled. The server keeps serving the previous mirror; the next push resumes."
+                severity = .warn
+            } else {
+                kind = .failed
+                message = "The push failed; the server keeps serving the previous mirror. \(detail)"
+                severity = .error
+            }
+        }
+    }
+
+    /// The planned deletion count of a delete-limit refusal, if this is one.
+    var plannedDeletes: Int? {
+        if case .deleteLimit(let planned, _) = kind { return planned }
+        return nil
+    }
+}
+
+/// Time and size wording for the remote cards. Pure functions over raw wire
+/// strings, so a timestamp this build cannot parse shows as-is.
+enum PhoneLibraryFormat {
+    /// Parses Go's RFC 3339 output, with or without (nanosecond) fractions.
+    static func date(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: raw) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let date = plain.date(from: raw) { return date }
+        // Some Foundation versions reject more than three fractional digits;
+        // the sub-second part is irrelevant for display.
+        let trimmed = raw.replacingOccurrences(of: #"\.[0-9]+"#, with: "", options: .regularExpression)
+        return plain.date(from: trimmed)
+    }
+
+    /// "5 minutes ago", stated coarsely; a time in the future reads as now.
+    static func relative(_ date: Date, now: Date) -> String {
+        let seconds = Int(now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "just now"
+        case ..<3600:
+            let minutes = seconds / 60
+            return minutes == 1 ? "1 minute ago" : "\(minutes) minutes ago"
+        case ..<86_400:
+            let hours = seconds / 3600
+            return hours == 1 ? "1 hour ago" : "\(hours) hours ago"
+        default:
+            let days = seconds / 86_400
+            return days == 1 ? "1 day ago" : "\(days) days ago"
+        }
+    }
+
+    static func absolute(_ date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// "5 minutes ago (2026-10-22 10:15)", the raw text when it cannot be
+    /// parsed, or `never` when there is nothing.
+    static func moment(_ raw: String?, now: Date = Date(), timeZone: TimeZone = .current, never: String = "never") -> String {
+        guard let raw, !raw.isEmpty else { return never }
+        guard let date = date(raw) else { return raw }
+        return "\(relative(date, now: now)) (\(absolute(date, timeZone: timeZone)))"
+    }
+
+    static func bytes(_ value: Int64?) -> String {
+        guard let value, value >= 0 else { return "unknown size" }
+        let gib = Double(value) / Double(1 << 30)
+        if gib >= 1 { return String(format: "%.1f GiB", gib) }
+        return String(format: "%.0f MiB", Double(value) / Double(1 << 20))
+    }
+}
+
+/// The remote card's rows, derived from status and config alone.
+struct PhoneLibraryRemoteSummary: Equatable {
+    /// The address the phone uses: the configured `server.url`.
+    let serverURL: String
+    let sshTarget: String
+    let lastPush: String
+    let lastScan: String
+    let lastPushError: String?
+    let serverLibrary: String
+    let serverDatabase: String
+    let databaseHealthy: Bool
+    let latestServerBackup: String
+    /// The status problems — stale or failed pushes, an unreachable server,
+    /// a library rooted at the wrong path.
+    let problems: [String]
+
+    init(status: NavidromeStatus?, configuredServerURL: String?, now: Date = Date(), timeZone: TimeZone = .current) {
+        serverURL = configuredServerURL ?? ""
+        let remote = status?.remote
+        let mirror = status?.mirror
+        sshTarget = remote?.sshTarget ?? "—"
+        lastPush = PhoneLibraryFormat.moment(mirror?.lastPushAt, now: now, timeZone: timeZone)
+        lastScan = PhoneLibraryFormat.moment(mirror?.lastScanAt, now: now, timeZone: timeZone)
+        if let error = mirror?.lastPushError, !error.isEmpty {
+            let when = PhoneLibraryFormat.moment(mirror?.lastErrorAt, now: now, timeZone: timeZone, never: "at an unknown time")
+            lastPushError = "Last push failed \(when): \(error)"
+        } else {
+            lastPushError = nil
+        }
+        if let library = remote?.library {
+            let files = library.files.map { "\($0) files" } ?? "unknown file count"
+            serverLibrary = "\(files) · \(PhoneLibraryFormat.bytes(library.bytes))"
+        } else {
+            serverLibrary = "unknown (the server did not answer)"
+        }
+        if let database = remote?.database {
+            if let error = database.error, !error.isEmpty {
+                serverDatabase = "unreadable: \(error)"
+                databaseHealthy = false
+            } else if database.present == true {
+                serverDatabase = database.tracks.map { "\($0) tracks" } ?? "present"
+                databaseHealthy = true
+            } else {
+                serverDatabase = "not created yet"
+                databaseHealthy = false
+            }
+        } else {
+            serverDatabase = "unknown (the server did not answer)"
+            databaseHealthy = false
+        }
+        if let backup = status?.latestBackup {
+            latestServerBackup = "\(backup.path) · \(PhoneLibraryFormat.moment(backup.createdAt, now: now, timeZone: timeZone, never: "unknown time"))"
+        } else {
+            latestServerBackup = "none yet"
+        }
+        problems = status?.problems ?? []
+    }
+}
+
 struct NavidromeBackupResult: Codable, Sendable, Equatable {
     let backup: NavidromeBackupInfo?
     let command: String?
@@ -600,6 +944,7 @@ enum PhoneLibraryOperation: Equatable, Sendable {
     case favoriteApply
     case favoriteList
     case backup
+    case mirrorPush
 
     /// True for steps that change the machine or the server. These are never
     /// replayed after a backend restart.
@@ -624,6 +969,7 @@ enum PhoneLibraryOperation: Equatable, Sendable {
         case .favoriteApply: "Backing up, then starring exact matches…"
         case .favoriteList: "Reading what is starred on the server…"
         case .backup: "Creating a database backup…"
+        case .mirrorPush: "Pushing the library to the server, then rescanning…"
         }
     }
 }
@@ -670,14 +1016,24 @@ struct PhoneLibraryProgress: Equatable {
             steps.append(PhoneLibraryStep(id: id, title: title, state: state))
         }
 
-        step("dependency", "Install Navidrome",
-             done: status.dependency.ready,
-             blocked: status.dependency.homebrewInstalled ? nil : "Homebrew is not installed.")
-        step("service", "Install and start the managed service",
-             done: status.service.isRunning,
-             blocked: status.service.owned || status.service.state == "not_installed"
-                ? nil
-                : "A Navidrome LaunchAgent exists that UDL does not manage.")
+        if status.isRemote {
+            // The server runs Navidrome, so nothing is installed or started
+            // here; the Mac's one job is to keep the mirror current.
+            let mirror = status.mirror
+            let pushed = mirror?.lastPushAt != nil && (mirror?.lastPushError ?? "").isEmpty
+            step("mirror", "Push the library to the server",
+                 done: pushed,
+                 blocked: (mirror?.lastPushError ?? "").isEmpty ? nil : "The last push failed. Push again once the cause is fixed.")
+        } else {
+            step("dependency", "Install Navidrome",
+                 done: status.dependency.ready,
+                 blocked: status.dependency.homebrewInstalled ? nil : "Homebrew is not installed.")
+            step("service", "Install and start the managed service",
+                 done: status.service.isRunning,
+                 blocked: status.service.owned || status.service.state == "not_installed"
+                    ? nil
+                    : "A Navidrome LaunchAgent exists that UDL does not manage.")
+        }
         step("account", "Create the admin account and save its password",
              done: status.passwordStored && !(status.username ?? "").isEmpty)
         step("library", "Scan the music library",
@@ -685,9 +1041,9 @@ struct PhoneLibraryProgress: Equatable {
         step("playlists", "Create the managed smart playlists",
              done: status.managedPlaylists.count >= 3)
         // The only step that happens on another device. Nothing here can see
-        // Amperfy, so this reflects what the user marked in the Connect card
-        // rather than a probe — stated as such wherever it is shown.
-        step("phone", "Connect Amperfy over home Wi-Fi",
+        // the phone app, so this reflects what the user marked in the Connect
+        // card rather than a probe — stated as such wherever it is shown.
+        step("phone", status.isRemote ? "Connect your phone app to the server" : "Connect your phone app over home Wi-Fi",
              done: status.phoneConnected)
         self.steps = steps
     }
@@ -699,7 +1055,7 @@ struct PhoneLibraryProgress: Equatable {
     var current: PhoneLibraryStep? { steps.first { $0.state == .current } }
 }
 
-/// The connection details a user copies into Amperfy.
+/// The connection details a user copies into the phone app.
 struct PhoneConnectionDetails: Equatable {
     let serverURL: String
     let username: String
@@ -707,8 +1063,14 @@ struct PhoneConnectionDetails: Equatable {
     /// before starting a full offline download.
     let approximateLibrarySize: String
 
-    init(status: NavidromeStatus?) {
-        serverURL = status?.service.lanURL ?? status?.service.localURL ?? ""
+    /// In remote mode the phone talks to the server, so the address is the
+    /// configured `server.url`; locally it is the running service's LAN URL.
+    init(status: NavidromeStatus?, configuredServerURL: String? = nil) {
+        if status?.isRemote == true {
+            serverURL = configuredServerURL ?? ""
+        } else {
+            serverURL = status?.service.lanURL ?? status?.service.localURL ?? ""
+        }
         username = status?.username ?? ""
         let tracks = status?.libraryTracks ?? 0
         if tracks > 0 {

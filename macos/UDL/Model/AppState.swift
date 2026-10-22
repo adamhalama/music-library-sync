@@ -225,6 +225,10 @@ final class AppState: ObservableObject {
     /// is evidence; the user removes rather than re-adds.
     @Published var navidromeGenreApproval: [String: Bool] = [:]
     @Published var navidromePlaylistRefresh: NavidromePlaylistRefreshResult?
+    /// The last `navidrome.mirror.push` result and what the screen said about
+    /// it, kept so a delete-limit refusal stays visible next to Push now.
+    @Published var navidromeMirrorPush: NavidromeMirrorPushResult?
+    @Published var navidromeMirrorPushOutcome: NavidromeMirrorPushOutcome?
     @Published var phoneLibraryOperation: PhoneLibraryOperation?
     @Published var phoneLibraryRunID: String?
     @Published var phoneLibraryStatus: WorkflowStatus?
