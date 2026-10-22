@@ -1,5 +1,10 @@
 import Foundation
 import XCTest
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 @testable import UDL
 
 final class PhoneLibraryTests: XCTestCase {
@@ -1124,6 +1129,112 @@ final class PhoneLibraryReloadTests: XCTestCase {
         XCTAssertNil(state.phoneLibraryStatus)
         XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
         await rpc.connection.close()
+    }
+
+    func testReopenBlocksConfigChangingActionsUntilBothReadsFinish() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+        let plan: JSONValue = .object(["checksum_sha256": .string("fixture")])
+        state.navidromeSetupPlan = NavidromeSetupPlanPresentation(plan)
+        state.navidromeFavoritePlan = NavidromeFavoritePlanPresentation(plan)
+        state.navidromeGenreDerivation = NavidromeGenreDerivation(
+            sourcePlaylist: "fixture", sourceTrackCount: 1, matchedCount: 1, genres: ["House"],
+            unmatchedPaths: [], genrelessPaths: [], outsideLibrary: [], currentAllowlist: [], allowlistChanged: true
+        )
+        let reopen = Task { await state.loadPhoneLibrary() }
+        let config = try await rpc.readRequest(.navidromeConfigRead)
+        XCTAssertTrue(state.isPhoneLibraryBusy)
+        XCTAssertTrue(state.phoneLibraryBusyReason?.contains("configuration and status are loading") ?? false)
+        await state.setPhoneConnected(true)
+        assertNoRequest(rpc)
+        try rpc.reply(config, result: configValue(server: "server-b"))
+        let status = try await rpc.readRequest(.navidromeStatus)
+        // B's config arrived, but the published pair must remain A until its
+        // status arrives. None of these actions may use that stale cached A.
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example.ts.net")
+        await state.setPhoneConnected(true)
+        await state.savePhoneLibraryPassword("fixture")
+        await state.saveNavidromeGenres()
+        await state.applyNavidromeSetup()
+        await state.registerNavidromePlaylists()
+        await state.applyNavidromeFavorites()
+        await state.refreshNavidromePlaylists()
+        await state.controlNavidromeService("start")
+        await state.installNavidrome()
+        await state.pushNavidromeMirror()
+        await state.createNavidromeBackup()
+        assertNoRequest(rpc)
+        XCTAssertNil(state.phoneLibraryOperation)
+        XCTAssertFalse(state.phoneLibraryConfigSaving)
+        XCTAssertTrue(state.isPhoneLibraryBusy)
+        try rpc.reply(status, result: statusValue(tracks: 2))
+        await reopen.value
+        XCTAssertFalse(state.isPhoneLibraryBusy)
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-b.example.ts.net")
+        await rpc.connection.close()
+    }
+
+    func testAcknowledgementRereadsTheFreshestConfigAndSerializesWrites() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+        let mark = Task { await state.setPhoneConnected(true) }
+        let freshRead = try await rpc.readRequest(.navidromeConfigRead)
+        XCTAssertTrue(state.isPhoneLibraryBusy)
+        XCTAssertTrue(state.phoneLibraryBusyReason?.contains("Saving Phone Library configuration") ?? false)
+        await state.setPhoneConnected(false)
+        assertNoRequest(rpc)
+        var fresh = try decode(NavidromeConfigResult.self, configValue(server: "server-b")).config
+        fresh.backup.count = 11
+        fresh.playlists.hardBounceGenres = ["New externally edited genre"]
+        try rpc.reply(freshRead, result: NavidromeConfigResult(path: "/fixture/navidrome.yaml", config: fresh, content: "").jsonValue(using: .agent))
+        let write = try await rpc.readRequest(.navidromeConfigWrite)
+        let sent = try decode(NavidromeConfig.self, XCTUnwrap(write["params"]?.objectValue?["config"]))
+        fresh.phone.connected = true
+        XCTAssertEqual(sent, fresh, "only phone.connected may differ from the freshly read config")
+        await state.setPhoneConnected(false)
+        assertNoRequest(rpc)
+        try rpc.reply(write, result: configValue(server: "server-b", connected: true))
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-b", connected: true))
+        try rpc.reply(try await rpc.readRequest(.navidromeStatus), result: statusValue(tracks: 2))
+        await mark.value
+        XCTAssertFalse(state.isPhoneLibraryBusy)
+        XCTAssertFalse(state.phoneLibraryConfigSaving)
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-b.example.ts.net")
+        XCTAssertEqual(state.navidromeConfig?.config.phone.connected, true)
+        await rpc.connection.close()
+    }
+
+    func testFailedFreshConfigReadNeverWritesTheCachedConfig() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        let mark = Task { await state.setPhoneConnected(true) }
+        try rpc.fail(try await rpc.readRequest(.navidromeConfigRead), message: "cannot read current configuration")
+        await mark.value
+        assertNoRequest(rpc)
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+        XCTAssertFalse(state.isPhoneLibraryBusy)
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example.ts.net")
+        await rpc.connection.close()
+    }
+
+    private func assertNoRequest(_ rpc: AgentRPCFixture, file: StaticString = #filePath, line: UInt = #line) {
+        var descriptor = pollfd(fd: rpc.outbound.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0)
+        XCTAssertEqual(poll(&descriptor, 1, 0), 0, "a constrained action must not send an RPC", file: file, line: line)
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ value: JSONValue) throws -> T {
+        try JSONDecoder.agent.decode(type, from: JSONEncoder.agent.encode(value))
     }
 
     private func configValue(server: String = "music-server", connected: Bool = false) throws -> JSONValue {

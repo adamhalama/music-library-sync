@@ -775,8 +775,8 @@ struct PhoneLibraryView: View {
         }
     }
 
-    /// The acknowledgement writes the feature config, so it waits for the
-    /// config to be loaded and for any running operation to finish.
+    /// The acknowledgement writes the feature config, so it waits for every
+    /// config/status reload, save, and running operation to finish.
     private var phoneAcknowledgementReason: String? {
         if appState.isPhoneLibraryBusy { return busyReason }
         if appState.navidromeConfig == nil {
@@ -787,9 +787,7 @@ struct PhoneLibraryView: View {
 
     // MARK: Shared reasons
 
-    private var busyReason: String? {
-        appState.phoneLibraryOperation.map { "\($0.label) Wait for it to finish or cancel it." }
-    }
+    private var busyReason: String? { appState.phoneLibraryBusyReason }
 
     private var serverReason: String? {
         if appState.isPhoneLibraryBusy { return busyReason }

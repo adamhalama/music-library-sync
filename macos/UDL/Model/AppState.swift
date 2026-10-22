@@ -235,6 +235,7 @@ final class AppState: ObservableObject {
     /// All outstanding reads constrain actions, but only the newest generation
     /// may publish. Session reset also retires that generation.
     @Published var phoneLibraryLoads: Set<UUID> = []
+    @Published var phoneLibraryConfigSaving = false
     var phoneLibraryLoadGeneration = UUID()
     /// A successful read clears only the error that a read itself published.
     var phoneLibraryLoadFailure: WorkflowStatus?

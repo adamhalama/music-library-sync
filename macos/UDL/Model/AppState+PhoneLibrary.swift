@@ -45,38 +45,37 @@ extension AppState {
         await loadPhoneLibrary()
     }
 
-    func savePhoneLibraryConfig(_ config: NavidromeConfig) async -> Bool {
-        guard let client else { return false }
-        do {
-            navidromeConfig = try await client.writeNavidromeConfig(config)
-            await refreshPhoneLibraryStatus()
-            return true
-        } catch {
-            phoneLibraryStatus = .failure("Phone Library config could not save: \(error.localizedDescription)")
-            return false
-        }
-    }
-
     /// Records the user's acknowledgement that the phone app reaches the server. It is
     /// the last setup step and the only one nothing here can observe, so it is
     /// stored in the feature config where the checklist reads it back.
     func setPhoneConnected(_ connected: Bool) async {
-        guard var config = navidromeConfig?.config else {
-            phoneLibraryStatus = .failure("Phone Library config has not loaded yet.")
-            return
+        guard let client, !isPhoneLibraryBusy else { return }
+        phoneLibraryConfigSaving = true
+        defer { phoneLibraryConfigSaving = false }
+        do {
+            // This RPC writes the whole config. Never copy the screen's cached
+            // value: an external editor may have changed it since the last load.
+            var config = try await client.readNavidromeConfig().config
+            try Task.checkCancellation()
+            if config.phone.connected != connected {
+                config.phone.connected = connected
+                _ = try await client.writeNavidromeConfig(config)
+            }
+            // Publish the config/status pair through the same owned load path.
+            await refreshPhoneLibraryStatus()
+            guard phoneLibraryLoadFailure == nil else { return }
+            phoneLibraryStatus = connected
+                ? "Marked the phone as connected. UDL cannot verify this itself."
+                : "Marked the phone as not connected."
+        } catch {
+            phoneLibraryStatus = .failure("Phone Library config could not save: \(error.localizedDescription)")
         }
-        guard config.phone.connected != connected else { return }
-        config.phone.connected = connected
-        guard await savePhoneLibraryConfig(config) else { return }
-        phoneLibraryStatus = connected
-            ? "Marked the phone as connected. UDL cannot verify this itself."
-            : "Marked the phone as not connected."
     }
 
     /// Saves the account password to macOS Keychain through the one credential
     /// path that writes secrets. The value is never held in `AppState`.
     func savePhoneLibraryPassword(_ password: String) async {
-        guard let client else { return }
+        guard let client, !isPhoneLibraryBusy else { return }
         let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             phoneLibraryStatus = .failure("Enter the Navidrome account password before saving.")
@@ -245,7 +244,7 @@ extension AppState {
         _ operation: PhoneLibraryOperation,
         start: (UDLClient) async throws -> RunIDResult
     ) async {
-        guard let client, phoneLibraryRunID == nil, phoneLibraryOperation == nil else { return }
+        guard let client, phoneLibraryRunID == nil, !isPhoneLibraryBusy else { return }
         clearNotResumed(.phoneLibrary)
         phoneLibraryOperation = operation
         phoneLibraryStatus = WorkflowStatus(message: operation.label)
@@ -415,6 +414,7 @@ extension AppState {
     func clearPhoneLibrarySession() {
         phoneLibraryLoadGeneration = UUID()
         phoneLibraryLoads = []
+        phoneLibraryConfigSaving = false
         phoneLibraryLoadFailure = nil
         navidromeConfig = nil
         navidromeStatus = nil
@@ -447,5 +447,16 @@ extension AppState {
 
     var isPhoneLibraryRemote: Bool { navidromeStatus?.isRemote == true }
 
-    var isPhoneLibraryBusy: Bool { phoneLibraryOperation != nil }
+    var isPhoneLibraryBusy: Bool { phoneLibraryBusyReason != nil }
+
+    /// Shared by the action guards and the view's `.constrained(by:)` notes.
+    var phoneLibraryBusyReason: String? {
+        if !phoneLibraryLoads.isEmpty {
+            return "Phone Library configuration and status are loading. Wait for them to finish."
+        }
+        if phoneLibraryConfigSaving {
+            return "Saving Phone Library configuration. Wait for it to finish."
+        }
+        return phoneLibraryOperation.map { "\($0.label) Wait for it to finish or cancel it." }
+    }
 }
