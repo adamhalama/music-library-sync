@@ -759,6 +759,24 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertTrue(failed.message.contains("rsync exit 12"))
         XCTAssertTrue(failed.message.contains("previous mirror"))
 
+        let deferred = NavidromeMirrorPushOutcome(exitCode: 1, error: "the server is scanning", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "server_scanning", "detail": "the server is scanning or its scan state is unknown; the push was deferred and nothing was changed: Navidrome was still scanning after 5m0s; the next push retries"}}
+        """))
+        XCTAssertEqual(deferred.kind, .serverScanning)
+        XCTAssertEqual(deferred.severity, .warn)
+        XCTAssertTrue(deferred.message.contains("deferred"))
+        XCTAssertTrue(deferred.message.contains("Nothing was changed"))
+        XCTAssertTrue(deferred.message.contains("still scanning after 5m0s"))
+
+        // A kind this build does not know reads as a plain failure.
+        let unknown = NavidromeMirrorPushOutcome(exitCode: 1, error: "x", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "some_future_kind", "detail": "something new"}}
+        """))
+        XCTAssertEqual(unknown.kind, .failed)
+        XCTAssertTrue(unknown.message.contains("something new"))
+
         // A terminal frame without a decodable result still says what failed.
         let bare = NavidromeMirrorPushOutcome(exitCode: 1, error: "run result exceeds frame limit", result: nil)
         XCTAssertEqual(bare.kind, .failed)

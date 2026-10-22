@@ -696,7 +696,8 @@ struct NavidromeMirrorDates: Codable, Sendable, Equatable {
 }
 
 /// Why a push did not go through. `kind` is `busy`, `delete_limit`,
-/// `canceled` or `failed`; anything else is treated as `failed`.
+/// `server_scanning`, `canceled` or `failed`; anything else is treated as
+/// `failed`.
 struct NavidromeMirrorPushFailure: Codable, Sendable, Equatable {
     let kind: String
     let detail: String?
@@ -729,6 +730,9 @@ struct NavidromeMirrorPushOutcome: Equatable {
         case pushed
         case busy
         case deleteLimit(plannedDeletes: Int, command: String)
+        /// Deferred before the transfer because the server was scanning or
+        /// its scan state could not be read. Nothing changed.
+        case serverScanning
         case canceled
         case failed
     }
@@ -771,6 +775,12 @@ struct NavidromeMirrorPushOutcome: Equatable {
             kind = .deleteLimit(plannedDeletes: planned, command: command)
             message = "The push was refused: it would delete \(planned) file(s) from the server, more than the delete limit allows. Nothing was changed. If the deletions are intended, run `\(command)` in Terminal; the app does not override the limit."
             severity = .error
+        case "server_scanning":
+            // A scan reading a half-applied mirror gives moved tracks new IDs,
+            // so the push waits for the server rather than racing its scan.
+            kind = .serverScanning
+            message = "The push was deferred: the server is scanning, or its scan state could not be read. Nothing was changed. Push again once the scan finishes; the scheduled push also retries. \(detail)"
+            severity = .warn
         case "canceled":
             kind = .canceled
             message = "Push canceled. The server keeps serving the previous mirror; the next push resumes."
