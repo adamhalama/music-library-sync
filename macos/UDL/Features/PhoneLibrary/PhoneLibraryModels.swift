@@ -921,6 +921,9 @@ struct PhoneLibraryRemoteSummary: Equatable {
     let serverDatabase: String
     let databaseHealthy: Bool
     let latestServerBackup: String
+    /// How many backups the server retains. Like the latest backup, known
+    /// only when the server's status call answered.
+    let serverBackupCount: String
     /// When the server's database was last copied to this Mac, and why the
     /// most recent attempt failed, if it did.
     let lastServerDBCopy: String
@@ -963,10 +966,20 @@ struct PhoneLibraryRemoteSummary: Equatable {
             serverDatabase = "unknown (the server did not answer)"
             databaseHealthy = false
         }
-        if let backup = status?.latestBackup {
+        // The backup inventory comes from the server's answer; without one
+        // it is unknown, which must not read as "none yet" or 0.
+        if status == nil {
+            latestServerBackup = "unknown"
+            serverBackupCount = "unknown"
+        } else if remote == nil {
+            latestServerBackup = "unavailable (the server did not answer)"
+            serverBackupCount = latestServerBackup
+        } else if let backup = status?.latestBackup {
             latestServerBackup = "\(backup.path) · \(PhoneLibraryFormat.moment(backup.createdAt, now: now, timeZone: timeZone, never: "unknown time"))"
+            serverBackupCount = "\(status?.backupCount ?? 0)"
         } else {
             latestServerBackup = "none yet"
+            serverBackupCount = "\(status?.backupCount ?? 0)"
         }
         if let export = status?.serverDBExport {
             lastServerDBCopy = PhoneLibraryFormat.moment(export.lastExportAt, now: now, timeZone: timeZone)

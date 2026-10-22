@@ -595,11 +595,45 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertNil(summary.lastServerDBCopyError)
         XCTAssertEqual(summary.problems.count, 1)
 
+        XCTAssertEqual(summary.serverBackupCount, "2")
+
         let never = PhoneLibraryRemoteSummary(status: nil, configuredServerURL: nil, now: now, timeZone: utc)
         XCTAssertEqual(never.lastPush, "never")
         XCTAssertEqual(never.serverURL, "")
-        XCTAssertEqual(never.latestServerBackup, "none yet")
+        XCTAssertEqual(never.latestServerBackup, "unknown")
+        XCTAssertEqual(never.serverBackupCount, "unknown")
         XCTAssertFalse(never.databaseHealthy)
+    }
+
+    /// The server's backup inventory is known only when its status call
+    /// answered. An unreachable server is "unavailable", not "none yet" / 0;
+    /// only an answer with no backups reads as none.
+    func testServerBackupsAreUnavailableWhenTheServerDidNotAnswer() throws {
+        let unreachable = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data("""
+        {
+          "enabled": true, "music_dir": "/m", "data_dir": "/d", "playlists_dir": "/p",
+          "password_stored": true,
+          "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "problems": []},
+          "service": {"state": "remote", "loaded": false, "owned": false, "problems": []},
+          "reachable": false, "server": {}, "library_tracks": 0, "scanning": false,
+          "managed_playlists": null, "backup_count": 0, "phone_connected": false,
+          "problems": ["the mirror server is not reachable over SSH (udl-mirror): timeout"],
+          "mode": "remote", "mirror": {}
+        }
+        """.utf8))
+        let down = PhoneLibraryRemoteSummary(status: unreachable, configuredServerURL: nil)
+        XCTAssertEqual(down.latestServerBackup, "unavailable (the server did not answer)")
+        XCTAssertEqual(down.serverBackupCount, "unavailable (the server did not answer)")
+
+        let emptyJSON = Self.remoteStatusJSON
+            .replacingOccurrences(of: #""backup_count": 2,"#, with: #""backup_count": 0,"#)
+            .replacingOccurrences(of: #""latest_backup": {"path": "/srv/navidrome/backups/udl-20261022.db", "size_bytes": 1048576, "created_at": "2026-10-22T09:30:00.123456789Z"},"#, with: "")
+        let empty = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(emptyJSON.utf8))
+        XCTAssertNotNil(empty.remote)
+        XCTAssertNil(empty.latestBackup)
+        let none = PhoneLibraryRemoteSummary(status: empty, configuredServerURL: nil)
+        XCTAssertEqual(none.latestServerBackup, "none yet")
+        XCTAssertEqual(none.serverBackupCount, "0")
     }
 
     /// The weekly off-server copy of the server's database: when it last

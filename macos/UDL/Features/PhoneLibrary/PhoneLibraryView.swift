@@ -829,7 +829,12 @@ struct PhoneLibraryView: View {
             // In remote mode these are the server's backups: status lists them
             // and backup.create makes one there. Nothing is backed up locally.
             InspectorSection(title: appState.isPhoneLibraryRemote ? "Server backups" : "Backups") {
-                FieldRow("Retained", "\(status?.backupCount ?? 0)")
+                if appState.isPhoneLibraryRemote {
+                    // Known only when the server answered; never a false 0.
+                    FieldRow("Retained", appState.phoneLibraryRemoteSummary.serverBackupCount)
+                } else {
+                    FieldRow("Retained", "\(status?.backupCount ?? 0)")
+                }
                 if let latest = status?.latestBackup {
                     FieldRow("Latest", latest.path)
                 }
