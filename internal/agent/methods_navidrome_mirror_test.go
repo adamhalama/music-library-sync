@@ -562,3 +562,36 @@ func TestMirrorPushCanceledDuringTheTransferStillOwesAScan(t *testing.T) {
 		t.Fatalf("the owed scan must run on the next push: %+v scans=%d", second, *scans)
 	}
 }
+
+func TestMirrorPushCanceledDuringItsScanFinishesCanceled(t *testing.T) {
+	fake, api := newHeldScanSubsonic(t)
+	runner := &mirrorTestRunner{reply: func(_ context.Context, name string, args []string) (navidrome.RemoteOutput, error) {
+		switch {
+		case args[0] == "--version":
+			return navidrome.RemoteOutput{Stdout: []byte(mirrorTestRsyncVersion)}, nil
+		case name == navidrome.DefaultRemoteRsyncPath && !containsArg(args, "--dry-run"):
+			return navidrome.RemoteOutput{Stdout: []byte(">f+++++++++ 01 Song.mp3\n")}, nil
+		}
+		return navidrome.RemoteOutput{}, nil
+	}}
+	server, output, _ := newMirrorPushServer(t, runner, api, false)
+	runID := startMirrorPush(t, server, map[string]any{})
+	select {
+	case <-fake.seen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the push never started its scan")
+	}
+	if _, rpcErr := server.cancelRun(mustJSON(t, map[string]string{"run_id": runID})); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	terminal := awaitMirrorPush(t, output, runID)
+	if terminal.ExitCode != exitcode.Interrupted || terminal.Error == "" ||
+		terminal.Result.Failure == nil || terminal.Result.Failure.Kind != "canceled" {
+		t.Fatalf("a cancel after the transfer is still a canceled run: %+v", terminal)
+	}
+	// The partial result stays: the transfer happened and the scan is owed.
+	if terminal.Result.Push.Changed != 1 || terminal.Result.Scanned || len(terminal.Result.Warnings) == 0 ||
+		terminal.Result.Mirror == nil || !terminal.Result.Mirror.ScanPending || terminal.Result.Mirror.LastPushAt == nil {
+		t.Fatalf("result = %+v mirror = %+v", terminal.Result, terminal.Result.Mirror)
+	}
+}

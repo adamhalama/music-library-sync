@@ -110,6 +110,11 @@ var ErrMirrorBusy = errors.New("another udl push to the mirror is running; this 
 // on the server.
 var ErrServerScanning = errors.New("the server is scanning or its scan state is unknown; the push was deferred and nothing was changed")
 
+// MirrorCanceledAfterPush describes a push canceled after its transfer
+// completed: SyncMirror reports the cut-short scan or Date Added step as a
+// warning, and callers report the run itself as canceled.
+const MirrorCanceledAfterPush = "the push was canceled after its transfer; the scan and Date Added it still owes are retried by the next push"
+
 // mirrorFreeFloor is the free space a push must leave on the server; the
 // gate enforces the same floor per session.
 const mirrorFreeFloor = 20 << 30

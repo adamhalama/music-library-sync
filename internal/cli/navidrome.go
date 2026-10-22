@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/signal"
 	"strings"
 
 	"github.com/jaa/update-downloads/internal/auth"
@@ -69,7 +71,11 @@ A failed push leaves the server serving its previous, complete mirror.
 			opts := navidrome.ManualPushOptions(allowDeletes, forceScan)
 			opts.Scan = opts.Scan && !noScan
 			opts.Dates = opts.Dates && !noDates
-			result, err := manager.SyncMirror(cmd.Context(), opts)
+			// Ctrl-C ends rsync and the scan wait cleanly, so the outcome
+			// and the pending flags are recorded before exiting 130.
+			ctx, stop := signal.NotifyContext(cmd.Context(), interruptSignals()...)
+			defer stop()
+			result, err := manager.SyncMirror(ctx, opts)
 			if app.Opts.JSON {
 				if encodeErr := json.NewEncoder(app.IO.Out).Encode(result); encodeErr != nil {
 					return encodeErr
@@ -93,10 +99,7 @@ A failed push leaves the server serving its previous, complete mirror.
 				}
 				printProblems(app, result.Warnings)
 			}
-			if err != nil {
-				return withExitCode(exitcode.RuntimeFailure, err)
-			}
-			return nil
+			return mirrorPushExit(ctx, err)
 		},
 	}
 	cmd.Flags().BoolVar(&noScan, "no-scan", false, "push only; do not request a scan")
@@ -104,6 +107,22 @@ A failed push leaves the server serving its previous, complete mirror.
 	cmd.Flags().BoolVar(&noDates, "no-dates", false, "skip the Date Added reconcile after the scan")
 	cmd.Flags().IntVar(&allowDeletes, "allow-deletes", 0, "allow up to this many file deletions for one intended reorganisation")
 	return cmd
+}
+
+// mirrorPushExit maps a finished push to the command's exit. A push
+// interrupted after its transfer returns no error from SyncMirror (the cut
+// scan is a warning), but the command was still interrupted.
+func mirrorPushExit(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		if err == nil {
+			err = fmt.Errorf("%s: %w", navidrome.MirrorCanceledAfterPush, ctx.Err())
+		}
+		return withExitCode(exitcode.Interrupted, err)
+	}
+	if err != nil {
+		return withExitCode(exitcode.RuntimeFailure, err)
+	}
+	return nil
 }
 
 func navidromeManager(app *AppContext, skipCredentials bool) (*navidrome.Manager, error) {

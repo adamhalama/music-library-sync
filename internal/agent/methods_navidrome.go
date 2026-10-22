@@ -508,6 +508,12 @@ func pushNavidromeMirror(ctx context.Context, manager *navidrome.Manager, reques
 	} else {
 		result.Warnings = append(result.Warnings, err.Error())
 	}
+	if pushErr == nil && ctx.Err() != nil {
+		// SyncMirror reports a scan or Date Added step cut short as a
+		// warning, but the run itself was canceled. The partial result and
+		// the recorded pending flags stay; the next push finishes the rest.
+		pushErr = fmt.Errorf("%s: %w", navidrome.MirrorCanceledAfterPush, ctx.Err())
+	}
 	if pushErr == nil {
 		return result, nil, exitcode.Success
 	}
