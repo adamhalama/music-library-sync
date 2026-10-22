@@ -54,10 +54,32 @@ const (
 // hidden files on the server, such as temp files orphaned by a crash, are
 // deleted like any other stray file, and rsync still protects its own
 // `.~tmp~` partial folder.
-var mirrorFilters = []string{
-	"--filter=+ ..*",
-	"--filter=-s .*",
-	"--filter=-s *.part", "--filter=-s *.partial", "--filter=-s *.tmp", "--filter=-s *.crdownload",
+var mirrorFilters = func() []string {
+	filters := []string{"--filter=+ ..*", "--filter=-s .*"}
+	for _, pattern := range mirrorExcluded {
+		filters = append(filters, "--filter=-s "+pattern)
+	}
+	return filters
+}()
+
+// mirrorExcluded are the non-hidden names the push never sends, unless the
+// earlier "..*" include matched first. The rules apply to folders too.
+var mirrorExcluded = []string{"*.part", "*.partial", "*.tmp", "*.crdownload"}
+
+// excludedMirrorName follows the same first-match order as mirrorFilters.
+func excludedMirrorName(name string) bool {
+	if strings.HasPrefix(name, "..") {
+		return false
+	}
+	if isHiddenName(name) {
+		return true
+	}
+	for _, pattern := range mirrorExcluded {
+		if matched, _ := filepath.Match(pattern, name); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // isHiddenName mirrors Navidrome's rule for hidden files and folders.
@@ -446,16 +468,53 @@ func checkPushSource(musicDir, playlistsPath string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("music_dir %s is not a directory", musicDir)
 	}
-	entries, err := os.ReadDir(musicDir)
+	// Resolve only the configured root, as rsync's trailing slash does. The
+	// walk never follows symlink entries inside it (rsync does not use --links).
+	root, err := filepath.EvalSymlinks(musicDir)
 	if err != nil {
 		return fmt.Errorf("read music_dir %s: %w", musicDir, err)
 	}
-	for _, entry := range entries {
-		if !isHiddenName(entry.Name()) && entry.Name() != filepath.Clean(playlistsPath) {
-			return nil
-		}
+	found, err := findPushSourceFile(root, playlistsPath, maxPushSourceEntries)
+	if err != nil {
+		return fmt.Errorf("read music_dir %s: %w", musicDir, err)
+	}
+	if found {
+		return nil
 	}
 	return fmt.Errorf("music_dir %s is empty; refusing to push an empty library over the mirror", musicDir)
+}
+
+// Bound an unexpectedly large empty tree; exhausting the budget refuses the
+// push rather than treating an unexamined subtree as evidence of a library.
+const maxPushSourceEntries = 100_000
+
+func findPushSourceFile(root, playlistsPath string, maxEntries int) (bool, error) {
+	playlists := filepath.Join(root, filepath.Clean(playlistsPath))
+	found, visited := false, 0
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		visited++
+		if visited > maxEntries {
+			return fmt.Errorf("source check exceeded %d entries; refusing to push an unverified library", maxEntries)
+		}
+		if path == playlists || excludedMirrorName(entry.Name()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type().IsRegular() {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found, err
 }
 
 func lastLines(text string, n int) string {
@@ -554,9 +613,6 @@ func (m *Manager) RemoteStatus(ctx context.Context) (RemoteStatus, error) {
 	return status, nil
 }
 
-// mirrorExcluded are the non-hidden names the push never sends.
-var mirrorExcluded = []string{"*.part", "*.partial", "*.tmp", "*.crdownload"}
-
 // localLibraryShape counts the files the push would mirror and finds the
 // newest modification time, matching the gate's own `status` walk.
 func localLibraryShape(musicDir string) (files int, newest time.Time, err error) {
@@ -571,7 +627,7 @@ func localLibraryShape(musicDir string) (files int, newest time.Time, err error)
 		if path == root {
 			return nil
 		}
-		if isHiddenName(entry.Name()) {
+		if excludedMirrorName(entry.Name()) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -579,11 +635,6 @@ func localLibraryShape(musicDir string) (files int, newest time.Time, err error)
 		}
 		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil
-		}
-		for _, pattern := range mirrorExcluded {
-			if matched, _ := filepath.Match(pattern, entry.Name()); matched {
-				return nil
-			}
 		}
 		info, err := entry.Info()
 		if err != nil {

@@ -175,18 +175,90 @@ func TestParseItemizedChanges(t *testing.T) {
 	}
 }
 
-func TestPushRefusesAnEmptyLibrary(t *testing.T) {
-	cfg, resolved := remoteTestConfig(t)
-	writeFile(t, filepath.Join(resolved.MusicDir, ".DS_Store"))
-	// A playlist refresh recreates this folder on its own; it is not a library.
-	writeFile(t, filepath.Join(resolved.MusicDir, "udl-playlists", "All Music.nsp"))
-	runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
-		t.Fatal("no command may run for an empty library")
-		return RemoteOutput{}, nil
-	}}
-	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
-	if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "empty") {
-		t.Fatalf("err = %v", err)
+func TestPushSourceRequiresAnEligibleFile(t *testing.T) {
+	cases := []struct {
+		name      string
+		dirs      []string
+		files     []string
+		playlists string
+		wantOK    bool
+	}{
+		{name: "empty directory"},
+		{name: "empty nested directories", dirs: []string{"Artist/Album"}},
+		{name: "managed playlists only", files: []string{"udl-playlists/All Music.nsp"}},
+		{name: "nested managed playlists only", playlists: "managed/playlists", files: []string{"managed/playlists/All Music.nsp"}},
+		{name: "excluded partial files", files: []string{"Artist/a.mp3.part", "b.partial", "c.tmp", "d.crdownload"}},
+		{name: "excluded partial directory", files: []string{"Album.part/a.mp3"}},
+		{name: "hidden files and directories", files: []string{".DS_Store", "Artist/.a.mp3", ".hidden/a.mp3"}},
+		{name: "nested audio", files: []string{"Artist/Album/a.mp3"}, wantOK: true},
+		{name: "double dot name", files: []string{"..Album/...Ready For It.mp3"}, wantOK: true},
+		{name: "double dot include wins over partial exclude", files: []string{"Artist/..a.part"}, wantOK: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, resolved := remoteTestConfig(t)
+			if tc.playlists != "" {
+				resolved.PlaylistsPath = tc.playlists
+			}
+			for _, dir := range tc.dirs {
+				if err := os.MkdirAll(filepath.Join(resolved.MusicDir, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, file := range tc.files {
+				writeFile(t, filepath.Join(resolved.MusicDir, file))
+			}
+			err := checkPushSource(resolved.MusicDir, resolved.PlaylistsPath)
+			if tc.wantOK {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "empty; refusing to push") {
+				t.Fatalf("err = %v", err)
+			}
+			runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
+				t.Fatal("no command may run for an empty library")
+				return RemoteOutput{}, nil
+			}}
+			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+			if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "empty") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestPushSourceDoesNotFollowSymlinkEntries(t *testing.T) {
+	music, outside := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(outside, "a.mp3"))
+	for _, target := range []string{outside, filepath.Join(outside, "a.mp3")} {
+		link := filepath.Join(music, filepath.Base(target))
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := checkPushSource(music, DefaultPlaylistsPath); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("symlinks are not transferable files: %v", err)
+	}
+}
+
+func TestPushSourceWalkIsBoundedAndStopsAtFirstFile(t *testing.T) {
+	music := t.TempDir()
+	writeFile(t, filepath.Join(music, "a.mp3"))
+	writeFile(t, filepath.Join(music, "b.mp3"))
+	if found, err := findPushSourceFile(music, DefaultPlaylistsPath, 1); !found || err != nil {
+		t.Fatalf("stop at the first eligible file: found=%v err=%v", found, err)
+	}
+	if err := os.Remove(filepath.Join(music, "a.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(music, "a-empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := findPushSourceFile(music, DefaultPlaylistsPath, 1); found || err == nil || !strings.Contains(err.Error(), "exceeded 1 entries") {
+		t.Fatalf("refuse when the walk budget is exhausted: found=%v err=%v", found, err)
 	}
 }
 
