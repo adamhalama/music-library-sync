@@ -127,11 +127,13 @@ type Status struct {
 	// this Mac, not an observation. See PhoneConfig.
 	PhoneConnected bool     `json:"phone_connected"`
 	Problems       []string `json:"problems"`
-	// Mode, Remote and Mirror are set only in remote mode, where Dependency
-	// and Service describe nothing on this Mac and stay empty.
-	Mode   string        `json:"mode,omitempty"`
-	Remote *RemoteStatus `json:"remote,omitempty"`
-	Mirror *MirrorState  `json:"mirror,omitempty"`
+	// Mode, Remote, Mirror and Export are set only in remote mode, where
+	// Dependency and Service describe nothing on this Mac and stay empty.
+	// Export is the off-server copy of the server's database.
+	Mode   string               `json:"mode,omitempty"`
+	Remote *RemoteStatus        `json:"remote,omitempty"`
+	Mirror *MirrorState         `json:"mirror,omitempty"`
+	Export *ServerDBExportState `json:"export,omitempty"`
 }
 
 // Status inspects dependency, service, and — when credentials exist — server
@@ -476,6 +478,10 @@ func (m *Manager) remoteStatusInto(ctx context.Context, status *Status) {
 		status.Mirror = &state
 	}
 	status.Problems = append(status.Problems, m.mirrorProblems()...)
+	if state, err := LoadServerDBExportState(m.Resolved); err == nil {
+		status.Export = &state
+	}
+	status.Problems = append(status.Problems, m.serverDBExportProblems()...)
 	// A status view must render promptly even when the server is down.
 	remoteCtx, cancel := context.WithTimeout(ctx, remoteStatusTimeout)
 	defer cancel()

@@ -162,7 +162,11 @@ server was scanning, or its scan state could not be read, when the real
 transfer was about to start; the push was deferred with nothing changed and the
 next push retries), `canceled` (exit `130` after `run.cancel`), or `failed`.
 Clients must treat an unknown `failure.kind` like `failed`. `navidrome.status` carries the same push state as
-`mirror` and the server side as `remote`; both are omitted in local mode.
+`mirror`, the server side as `remote`, and the off-server database copy
+(`udl navidrome export-db`) as `export` (`last_export_at`, `last_export_error`,
+`last_export_error_at`, each optional); all three are omitted in local mode.
+`remote` is also omitted when the server could not be reached, which is not
+the same as an empty server.
 
 `phone.connected` in the Navidrome config is a user acknowledgement, not an
 observation: nothing on the Mac can see the phone app, so the last setup step is

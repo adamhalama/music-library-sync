@@ -77,9 +77,12 @@ func TestExportServerDBWritesAVerifiedCopy(t *testing.T) {
 	if call[0] != DefaultRemoteSSHPath || call[len(call)-2] != "udl-mirror" || call[len(call)-1] != "udl-mirror export-db" {
 		t.Fatalf("ssh call = %v", call)
 	}
-	state, err := LoadMirrorState(manager.Resolved)
+	state, err := LoadServerDBExportState(manager.Resolved)
 	if err != nil || state.LastExportAt == nil || !state.LastExportAt.Equal(result.ExportedAt) || state.LastExportError != "" {
 		t.Fatalf("state = %+v, %v", state, err)
+	}
+	if _, err := os.Stat(MirrorStatePath(manager.Resolved)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the export must not touch the mirror state: %v", err)
 	}
 }
 
@@ -114,7 +117,7 @@ func TestExportServerDBRejectsBadReplies(t *testing.T) {
 			if entries, _ := os.ReadDir(ServerDBExportDir(manager.Resolved)); len(entries) != 0 {
 				t.Fatalf("a rejected export must write nothing: %v", entries)
 			}
-			state, _ := LoadMirrorState(manager.Resolved)
+			state, _ := LoadServerDBExportState(manager.Resolved)
 			if state.LastExportError == "" || state.LastExportErrorAt == nil || state.LastExportAt != nil {
 				t.Fatalf("the failure must be recorded: %+v", state)
 			}
@@ -221,7 +224,7 @@ func TestExportServerDBHonoursOutDirAndRefusesToClobber(t *testing.T) {
 	if _, err := manager.ExportServerDB(context.Background(), ServerDBExportOptions{OutDir: out}); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("err = %v", err)
 	}
-	state, _ := LoadMirrorState(manager.Resolved)
+	state, _ := LoadServerDBExportState(manager.Resolved)
 	if state.LastExportAt == nil || state.LastExportError == "" {
 		t.Fatalf("a later failure keeps the last good time and records the error: %+v", state)
 	}
@@ -234,67 +237,86 @@ func TestExportServerDBNeedsRemoteMode(t *testing.T) {
 	if _, err := manager.ExportServerDB(context.Background(), ServerDBExportOptions{}); err == nil {
 		t.Fatal("local mode must refuse")
 	}
-	if _, err := os.Stat(MirrorStatePath(resolved)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(ServerDBExportStatePath(resolved)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a refused export must not write state: %v", err)
 	}
 }
 
-func TestExportStateWaitsForARunningPushAndKeepsItsState(t *testing.T) {
-	restoreWait, restorePoll := exportStateLockWait, exportStateLockPoll
-	exportStateLockWait, exportStateLockPoll = 10*time.Second, 10*time.Millisecond
-	defer func() { exportStateLockWait, exportStateLockPoll = restoreWait, restorePoll }()
-
-	payload := fakeSQLite(512)
-	downloaded := make(chan struct{})
-	manager, _ := exportManager(t, nil, 0)
-	manager.Remote = (&scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
-		close(downloaded)
-		return RemoteOutput{Stdout: exportReply(payload, nil)}, nil
-	}}).run
-
-	// A push holds the lock for the whole download and writes its own state.
-	unlock, err := lockMirror(manager.Resolved)
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := manager.ExportServerDB(context.Background(), ServerDBExportOptions{})
-		done <- err
-	}()
-	<-downloaded
-	pushed := time.Date(2026, 10, 25, 9, 59, 0, 0, time.UTC)
-	if err := saveMirrorState(manager.Resolved, MirrorState{LastPushAt: &pushed, ScanPending: true}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if state, _ := LoadMirrorState(manager.Resolved); state.LastExportAt != nil {
-		t.Fatal("the export wrote state while a push held the lock")
-	}
-	unlock()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	state, err := LoadMirrorState(manager.Resolved)
-	if err != nil || state.LastExportAt == nil || state.LastPushAt == nil || !state.ScanPending {
-		t.Fatalf("the export must merge into the push's state: %+v, %v", state, err)
-	}
-}
-
-func TestExportStillSucceedsWhenTheStateLockNeverFrees(t *testing.T) {
-	restoreWait, restorePoll := exportStateLockWait, exportStateLockPoll
-	exportStateLockWait, exportStateLockPoll = 50*time.Millisecond, 10*time.Millisecond
-	defer func() { exportStateLockWait, exportStateLockPoll = restoreWait, restorePoll }()
-
+func TestExportDoesNotWaitForARunningPush(t *testing.T) {
 	manager, _ := exportManager(t, exportReply(fakeSQLite(512), nil), 0)
+	// A push holds the mirror lock for minutes; the export owns its own
+	// state file and must neither wait for it nor touch the push's state.
 	unlock, err := lockMirror(manager.Resolved)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unlock()
+	pushed := time.Date(2026, 10, 25, 9, 59, 0, 0, time.UTC)
+	if err := saveMirrorState(manager.Resolved, MirrorState{LastPushAt: &pushed, ScanPending: true}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(MirrorStatePath(manager.Resolved))
+	start := time.Now()
 	result, err := manager.ExportServerDB(context.Background(), ServerDBExportOptions{})
-	if err != nil || result.Path == "" || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "could not record") {
+	if err != nil || len(result.Warnings) != 0 || time.Since(start) > 5*time.Second {
 		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if state, _ := LoadServerDBExportState(manager.Resolved); state.LastExportAt == nil {
+		t.Fatalf("the export must be recorded: %+v", state)
+	}
+	if after, _ := os.ReadFile(MirrorStatePath(manager.Resolved)); !bytes.Equal(before, after) {
+		t.Fatalf("the mirror state changed:\n%s\n%s", before, after)
+	}
+}
+
+func TestASecondConcurrentExportIsRefusedWithoutTouchingState(t *testing.T) {
+	manager, runner := exportManager(t, exportReply(fakeSQLite(512), nil), 0)
+	unlock, err := lockServerDBExport(manager.Resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if _, err := manager.ExportServerDB(context.Background(), ServerDBExportOptions{}); !errors.Is(err, ErrServerDBExportBusy) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("a refused export must not download: %v", runner.calls)
+	}
+	if _, err := os.Stat(ServerDBExportStatePath(manager.Resolved)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused export must not write state: %v", err)
+	}
+}
+
+func TestAnOlderMirrorStateWriterCannotEraseTheExportRecord(t *testing.T) {
+	now := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
+	manager, _ := exportManager(t, exportReply(fakeSQLite(512), nil), 0)
+	if _, err := manager.ExportServerDB(context.Background(), ServerDBExportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// A build from before the export (8e0c403, the app's embedded udl)
+	// rewrites the mirror state with only the fields it knows.
+	type olderMirrorState struct {
+		LastPushAt  *time.Time `json:"last_push_at,omitempty"`
+		ScanPending bool       `json:"scan_pending,omitempty"`
+	}
+	raw, _ := os.ReadFile(MirrorStatePath(manager.Resolved))
+	var older olderMirrorState
+	_ = json.Unmarshal(raw, &older)
+	older.ScanPending = true
+	rewritten, _ := json.Marshal(older)
+	if err := os.WriteFile(MirrorStatePath(manager.Resolved), rewritten, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := LoadServerDBExportState(manager.Resolved)
+	if err != nil || state.LastExportAt == nil {
+		t.Fatalf("the export record must survive: %+v, %v", state, err)
+	}
+	manager.Now = func() time.Time { return now.Add(30 * 24 * time.Hour) }
+	if problems := strings.Join(manager.serverDBExportProblems(), "\n"); !strings.Contains(problems, "30 days ago") {
+		t.Fatalf("a stale copy must still be reported: %q", problems)
+	}
+	if wire, _ := json.Marshal(MirrorState{ScanPending: true}); strings.Contains(string(wire), "export") {
+		t.Fatalf("the mirror state must not carry export fields: %s", wire)
 	}
 }
 
@@ -304,13 +326,13 @@ func TestExportProblems(t *testing.T) {
 	stale := now.Add(-15 * 24 * time.Hour)
 	failed := now.Add(-time.Hour)
 	cases := map[string]struct {
-		state MirrorState
+		state ServerDBExportState
 		want  string
 	}{
-		"never":  {MirrorState{}, ""},
-		"recent": {MirrorState{LastExportAt: &recent}, ""},
-		"stale":  {MirrorState{LastExportAt: &stale}, "15 days ago"},
-		"failed": {MirrorState{LastExportAt: &recent, LastExportError: "boom", LastExportErrorAt: &failed}, "failed"},
+		"never":  {ServerDBExportState{}, ""},
+		"recent": {ServerDBExportState{LastExportAt: &recent}, ""},
+		"stale":  {ServerDBExportState{LastExportAt: &stale}, "15 days ago"},
+		"failed": {ServerDBExportState{LastExportAt: &recent, LastExportError: "boom", LastExportErrorAt: &failed}, "failed"},
 	}
 	for name, tc := range cases {
 		problems := exportProblems(tc.state, now)
@@ -325,15 +347,15 @@ func TestExportProblems(t *testing.T) {
 		}
 	}
 
-	// Status surfaces them through the mirror problems.
+	// Status surfaces them from the export's own state file.
 	manager, _ := exportManager(t, nil, 0)
 	manager.Now = func() time.Time { return now }
-	if err := saveMirrorState(manager.Resolved, MirrorState{LastPushAt: &recent, LastExportAt: &stale}); err != nil {
+	if err := saveServerDBExportState(manager.Resolved, ServerDBExportState{LastExportAt: &stale}); err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(manager.mirrorProblems(), "\n")
+	joined := strings.Join(manager.serverDBExportProblems(), "\n")
 	if !strings.Contains(joined, "off-server copy") {
-		t.Fatalf("mirror problems = %s", joined)
+		t.Fatalf("export problems = %s", joined)
 	}
 }
 

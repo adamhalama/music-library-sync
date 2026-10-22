@@ -6,3 +6,8 @@ package navidrome
 func lockMirror(Resolved) (func(), error) {
 	return func() {}, nil
 }
+
+// lockServerDBExport is a no-op where flock is unavailable.
+func lockServerDBExport(Resolved) (func(), error) {
+	return func() {}, nil
+}

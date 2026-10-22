@@ -57,13 +57,14 @@ var sqliteMagic = []byte("SQLite format 3\x00")
 // touches anything else in the folder.
 var serverDBExportName = regexp.MustCompile(`^navidrome-server-\d{8}T\d{6}Z\.db$`)
 
-// exportStateLockWait bounds how long recording the outcome waits for a push
-// that holds the mirror lock (the post-sync push is capped at 20 minutes).
-// Variables so tests can shorten them.
-var (
-	exportStateLockWait = 25 * time.Minute
-	exportStateLockPoll = 2 * time.Second
-)
+// ServerDBExportStateFileName records the export's outcome on this Mac. It is
+// separate from the mirror state so neither writer can drop the other's
+// fields, and the export never waits for a push's lock.
+const ServerDBExportStateFileName = "udl-export-state.json"
+
+// ErrServerDBExportBusy means another export is running on this Mac (the
+// weekly launchd job and a manual run); this one did nothing.
+var ErrServerDBExportBusy = errors.New("another `udl navidrome export-db` is running; this one was skipped")
 
 // errServerDBExportTooLarge stops reading a reply past the cap.
 var errServerDBExportTooLarge = fmt.Errorf("the server's database export is larger than %d MiB; refusing it", maxServerDBExportBytes>>20)
@@ -105,13 +106,53 @@ func ServerDBExportDir(resolved Resolved) string {
 	return filepath.Join(resolved.DataDir, ServerDBExportDirName)
 }
 
+// ServerDBExportState is what this Mac knows about its off-server copies.
+type ServerDBExportState struct {
+	LastExportAt      *time.Time `json:"last_export_at,omitempty"`
+	LastExportError   string     `json:"last_export_error,omitempty"`
+	LastExportErrorAt *time.Time `json:"last_export_error_at,omitempty"`
+}
+
+// ServerDBExportStatePath is the export's state file in the data directory.
+func ServerDBExportStatePath(resolved Resolved) string {
+	return filepath.Join(resolved.DataDir, ServerDBExportStateFileName)
+}
+
+// LoadServerDBExportState reads the state; a missing file means no export
+// has run yet.
+func LoadServerDBExportState(resolved Resolved) (ServerDBExportState, error) {
+	var state ServerDBExportState
+	payload, err := os.ReadFile(ServerDBExportStatePath(resolved))
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return ServerDBExportState{}, fmt.Errorf("parse %s: %w", ServerDBExportStatePath(resolved), err)
+	}
+	return state, nil
+}
+
+func saveServerDBExportState(resolved Resolved, state ServerDBExportState) error {
+	if err := os.MkdirAll(resolved.DataDir, 0o700); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return AtomicWrite(ServerDBExportStatePath(resolved), append(payload, '\n'), 0o600)
+}
+
 // ExportServerDB pulls a verified copy of the server's Navidrome database,
 // writes it atomically (0600) and keeps the newest opts.Keep copies. The
-// outcome is recorded in the mirror state, which status reports.
+// outcome is recorded in the export's own state file, which status reports.
 //
-// The download runs without the mirror lock; only the short state update
-// takes it, so a running push neither blocks the transfer nor loses its own
-// state writes.
+// One export runs at a time per Mac (ErrServerDBExportBusy otherwise); it
+// never takes the mirror lock, so a running push neither blocks it nor
+// loses its own state writes.
 func (m *Manager) ExportServerDB(ctx context.Context, opts ServerDBExportOptions) (ServerDBExportResult, error) {
 	result := ServerDBExportResult{Removed: []string{}, Warnings: []string{}}
 	remote, err := m.requireRemote()
@@ -127,13 +168,19 @@ func (m *Manager) ExportServerDB(ctx context.Context, opts ServerDBExportOptions
 	if strings.TrimSpace(opts.OutDir) == "" {
 		opts.OutDir = ServerDBExportDir(m.Resolved)
 	}
+	unlock, err := lockServerDBExport(m.Resolved)
+	if err != nil {
+		// The running export owns the state file; record nothing.
+		return result, err
+	}
+	defer unlock()
 	result, err = m.exportServerDB(ctx, remote, opts, result)
 	at := m.now()
 	if err == nil {
 		at = result.ExportedAt
 	}
-	if recordErr := m.recordServerDBExport(ctx, at, err); recordErr != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the export in the mirror state: %v", recordErr))
+	if recordErr := m.recordServerDBExport(at, err); recordErr != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("could not record the export: %v", recordErr))
 	}
 	return result, err
 }
@@ -313,17 +360,10 @@ func rotateServerDBExports(dir string, keep int) (int, []string, error) {
 	return len(names) - len(removed), removed, errors.Join(errs...)
 }
 
-// recordServerDBExport stores the outcome in the mirror state. SyncMirror
-// loads the state once and rewrites it under lockMirror, so this waits for
-// the lock (a push can run for minutes) and holds it only for the
-// read-modify-write.
-func (m *Manager) recordServerDBExport(ctx context.Context, at time.Time, exportErr error) error {
-	unlock, err := lockMirrorWait(ctx, m.Resolved, exportStateLockWait)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	state, err := LoadMirrorState(m.Resolved)
+// recordServerDBExport stores the outcome; the caller holds the export lock.
+// A failure keeps the time of the last good copy.
+func (m *Manager) recordServerDBExport(at time.Time, exportErr error) error {
+	state, err := LoadServerDBExportState(m.Resolved)
 	if err != nil {
 		// Do not replace a state file this build cannot read.
 		return err
@@ -333,31 +373,20 @@ func (m *Manager) recordServerDBExport(ctx context.Context, at time.Time, export
 	} else {
 		state.LastExportError, state.LastExportErrorAt = exportErr.Error(), &at
 	}
-	return saveMirrorState(m.Resolved, state)
+	return saveServerDBExportState(m.Resolved, state)
 }
 
-// lockMirrorWait retries the non-blocking mirror lock until it is free, the
-// wait runs out, or ctx ends. The recording deliberately outlives the
-// transfer's own timeout but not the caller's context.
-func lockMirrorWait(ctx context.Context, resolved Resolved, wait time.Duration) (func(), error) {
-	deadline := time.Now().Add(wait)
-	for {
-		unlock, err := lockMirror(resolved)
-		if !errors.Is(err, ErrMirrorBusy) {
-			return unlock, err
-		}
-		if !time.Now().Before(deadline) {
-			return nil, fmt.Errorf("a mirror push held the state lock for over %s", wait)
-		}
-		if err := sleepCtx(ctx, exportStateLockPoll); err != nil {
-			return nil, err
-		}
+func (m *Manager) serverDBExportProblems() []string {
+	state, err := LoadServerDBExportState(m.Resolved)
+	if err != nil {
+		return []string{err.Error()}
 	}
+	return exportProblems(state, m.now())
 }
 
 // exportProblems flags a failed or stale off-server copy. A Mac that never
 // exported is not flagged: the copy is opt-in until the launchd job exists.
-func exportProblems(state MirrorState, now time.Time) []string {
+func exportProblems(state ServerDBExportState, now time.Time) []string {
 	problems := []string{}
 	last := "never"
 	if state.LastExportAt != nil {
