@@ -674,6 +674,17 @@ final class PhoneLibraryTests: XCTestCase {
             return XCTFail("a failed last push must block the mirror step")
         }
         XCTAssertTrue(reason.contains("last push failed"))
+
+        // Files reached the server but its scan (or the Date Added step after
+        // it) has not completed: the mirror is not current yet.
+        for (scanPending, datesPending) in [(true, false), (false, true)] {
+            let owed = PhoneLibraryProgress(status: remote(NavidromeMirrorState(
+                lastPushAt: "2026-10-22T10:00:00Z", lastScanAt: nil, lastErrorAt: nil,
+                lastPushError: nil, scanPending: scanPending, datesPending: datesPending
+            )))
+            XCTAssertFalse(owed.steps.first?.isDone ?? true, "scan_pending=\(scanPending) dates_pending=\(datesPending)")
+            XCTAssertEqual(owed.current?.id, "mirror")
+        }
     }
 
     func testRemoteConnectionUsesTheConfiguredServerURL() {
@@ -743,6 +754,49 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(outcome.kind, .pushed)
         XCTAssertEqual(outcome.severity, .warn)
         XCTAssertTrue(outcome.message.contains("no scan was requested"))
+        // Without the recorded mirror state, nothing says no scan was owed.
+        XCTAssertFalse(outcome.message.contains("no scan was needed"))
+    }
+
+    /// What the push says about its scan comes from the recorded pending
+    /// flags and `scanned`, never from the transfer counts alone.
+    func testAPushDescribesItsScanFromThePendingFlags() throws {
+        // Nothing new, but the scan an earlier push owed ran now.
+        let retried = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": true, "warnings": [],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "last_scan_at": "2026-10-22T10:01:00Z"}}
+        """))
+        XCTAssertEqual(retried.severity, .ok)
+        XCTAssertTrue(retried.message.contains("still owed"), retried.message)
+        XCTAssertFalse(retried.message.contains("no scan was needed"))
+
+        // Nothing new, and the owed scan timed out again.
+        let stillOwed = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false,
+         "warnings": ["pushed, but the scan did not complete: wait for the running Navidrome scan: context deadline exceeded"],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "scan_pending": true}}
+        """))
+        XCTAssertEqual(stillOwed.severity, .warn)
+        XCTAssertFalse(stillOwed.message.contains("no scan was needed"), stillOwed.message)
+        XCTAssertTrue(stillOwed.message.contains("not finished scanning"), stillOwed.message)
+
+        // The scan ran but Date Added did not.
+        let datesOwed = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 2, "deleted": 0}, "scanned": true,
+         "warnings": ["Date Added was not reconciled: udl-mirror apply-dates: database is locked"],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "last_scan_at": "2026-10-22T10:01:00Z", "dates_pending": true}}
+        """))
+        XCTAssertEqual(datesOwed.severity, .warn)
+        XCTAssertTrue(datesOwed.message.contains("rescanned"))
+        XCTAssertTrue(datesOwed.message.contains("Date Added was not re-applied yet"), datesOwed.message)
+
+        // A genuine no-op.
+        let noop = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z"}}
+        """))
+        XCTAssertEqual(noop.severity, .ok)
+        XCTAssertTrue(noop.message.contains("no scan was needed"))
     }
 
     /// The refusal names the planned count and the CLI override; there is no

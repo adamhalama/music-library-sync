@@ -764,19 +764,32 @@ struct NavidromeMirrorPushOutcome: Equatable {
         if exitCode == 0 && failure == nil {
             kind = .pushed
             let push = result?.push
+            let changes = (push?.changed ?? 0) + (push?.deleted ?? 0)
+            // What happened to the scan and Date Added comes from `scanned`
+            // and the pending flags recorded after the run: a push that
+            // transferred nothing can still owe, or have just run, a scan.
+            let mirror = result?.mirror
+            let scanOwed = mirror?.scanPending == true
+            let datesOwed = mirror?.datesPending == true
             var parts = ["Pushed to the server: \(push?.changed ?? 0) changed, \(push?.deleted ?? 0) deleted."]
             if result?.scanned == true {
-                parts.append("The server rescanned the library.")
-            } else if (push?.changed ?? 0) + (push?.deleted ?? 0) == 0 {
+                parts.append(changes == 0
+                    ? "Nothing new was pushed, but the server ran the scan an earlier push still owed."
+                    : "The server rescanned the library.")
+            } else if scanOwed {
+                parts.append("The server has not finished scanning the pushed files yet; the next push retries the scan.")
+            } else if changes == 0 && mirror != nil {
                 parts.append("Nothing changed, so no scan was needed.")
             }
-            if let dates = result?.dates?.message, !dates.isEmpty {
+            if datesOwed {
+                parts.append("Date Added was not re-applied yet; the next push retries it.")
+            } else if let dates = result?.dates?.message, !dates.isEmpty {
                 parts.append(dates)
             }
             let warnings = result?.warnings ?? []
             parts.append(contentsOf: warnings)
             message = parts.joined(separator: " ")
-            severity = warnings.isEmpty ? .ok : .warn
+            severity = warnings.isEmpty && !scanOwed && !datesOwed ? .ok : .warn
             return
         }
         let detail = failure?.detail.flatMap { $0.isEmpty ? nil : $0 }
@@ -1063,11 +1076,16 @@ struct PhoneLibraryProgress: Equatable {
         if status.isRemote {
             // The server runs Navidrome, so nothing is installed or started
             // here; the Mac's one job is to keep the mirror current.
+            // Done only once the server has indexed the push: files that
+            // arrived but were not scanned, or whose Date Added was not
+            // re-applied, leave the step current until a push finishes them.
             let mirror = status.mirror
-            let pushed = mirror?.lastPushAt != nil && (mirror?.lastPushError ?? "").isEmpty
+            let failed = !(mirror?.lastPushError ?? "").isEmpty
+            let current = mirror?.lastPushAt != nil && !failed
+                && mirror?.scanPending != true && mirror?.datesPending != true
             step("mirror", "Push the library to the server",
-                 done: pushed,
-                 blocked: (mirror?.lastPushError ?? "").isEmpty ? nil : "The last push failed. Push again once the cause is fixed.")
+                 done: current,
+                 blocked: failed ? "The last push failed. Push again once the cause is fixed." : nil)
         } else {
             step("dependency", "Install Navidrome",
                  done: status.dependency.ready,
