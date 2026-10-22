@@ -36,6 +36,7 @@ and importing favorites are explicit, confirmed actions.
 	cmd.AddCommand(newNavidromeBackupCommand(app))
 	cmd.AddCommand(newNavidromeDatesCommand(app))
 	cmd.AddCommand(newNavidromePushCommand(app))
+	cmd.AddCommand(newNavidromeExportDBCommand(app))
 	return cmd
 }
 

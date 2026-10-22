@@ -36,6 +36,7 @@ func TestNavidromeCommandTreeIsRegistered(t *testing.T) {
 		{"navidrome", "favorites", "list", "--help"},
 		{"navidrome", "phone", "--help"},
 		{"navidrome", "backup", "create", "--help"},
+		{"navidrome", "export-db", "--help"},
 	} {
 		app, _, _ := newNavidromeTestApp()
 		root := newRootCommand(app)
