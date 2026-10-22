@@ -25,6 +25,12 @@ extension AppState {
             let status = try await client.navidromeStatus()
             try Task.checkCancellation()
             guard phoneLibraryLoadGeneration == generation else { return }
+            if let previousConfig = navidromeConfig, let previousStatus = navidromeStatus,
+               previousConfig.config.server.url != config.config.server.url || previousStatus.isRemote != status.isRemote {
+                // Results and reviewed plans belong to the server they read or
+                // changed, not whichever server a later refresh discovers.
+                clearPhoneLibraryServerResults()
+            }
             navidromeConfig = config
             navidromeStatus = status
             if let failure = phoneLibraryLoadFailure, phoneLibraryStatus == failure {
@@ -247,6 +253,8 @@ extension AppState {
         guard let client, phoneLibraryRunID == nil, !isPhoneLibraryBusy else { return }
         clearNotResumed(.phoneLibrary)
         phoneLibraryOperation = operation
+        let serverGeneration = phoneLibraryServerGeneration
+        phoneLibraryOperationServerGeneration = serverGeneration
         phoneLibraryStatus = WorkflowStatus(message: operation.label)
         do {
             let started = try await start(client)
@@ -255,11 +263,15 @@ extension AppState {
             await cancelPendingWorkIfReady(.phoneLibrary)
         } catch JSONRPCConnectionError.remote(_, let message, _) {
             phoneLibraryOperation = nil
+            phoneLibraryOperationServerGeneration = nil
             await cancelPendingWorkIfReady(.phoneLibrary)
+            guard serverGeneration == phoneLibraryServerGeneration else { return }
             phoneLibraryStatus = .failure(message)
         } catch {
             phoneLibraryOperation = nil
+            phoneLibraryOperationServerGeneration = nil
             await cancelPendingWorkIfReady(.phoneLibrary)
+            guard serverGeneration == phoneLibraryServerGeneration else { return }
             phoneLibraryStatus = .failure(error.localizedDescription)
         }
     }
@@ -268,8 +280,19 @@ extension AppState {
 
     func applyPhoneLibraryFinished(_ finished: RunFinishedNotification) {
         let operation = phoneLibraryOperation
+        let serverGeneration = phoneLibraryOperationServerGeneration
         phoneLibraryRunID = nil
         phoneLibraryOperation = nil
+        phoneLibraryOperationServerGeneration = nil
+        // Reopening can discover a different server while an earlier run is
+        // finishing. Its late result must not repopulate that server's cards.
+        if let serverGeneration, serverGeneration != phoneLibraryServerGeneration {
+            phoneLibraryStatus = WorkflowStatus(
+                message: "The server configuration changed during the previous operation. Its results were not attached to this server. Refresh status before continuing.",
+                severity: .warn
+            )
+            return
+        }
 
         // A push reports through its own outcome on success and failure alike:
         // the result carries the refreshed mirror state and, for a refusal,
@@ -401,6 +424,7 @@ extension AppState {
         guard phoneLibraryOperation != nil || phoneLibraryRunID != nil else { return false }
         let wasMutating = phoneLibraryOperation?.isMutating ?? false
         phoneLibraryOperation = nil
+        phoneLibraryOperationServerGeneration = nil
         phoneLibraryRunID = nil
         phoneLibraryStatus = WorkflowStatus(
             message: wasMutating
@@ -418,16 +442,23 @@ extension AppState {
         phoneLibraryLoadFailure = nil
         navidromeConfig = nil
         navidromeStatus = nil
+        clearPhoneLibraryServerResults()
+        phoneLibraryOperation = nil
+        phoneLibraryOperationServerGeneration = nil
+        phoneLibraryRunID = nil
+    }
+
+    private func clearPhoneLibraryServerResults() {
+        phoneLibraryServerGeneration = UUID()
         navidromeSetupPlan = nil
         navidromeFavoritePlan = nil
         navidromeFavoriteResult = nil
+        navidromeStarred = nil
         navidromeGenreDerivation = nil
         navidromeGenreApproval = [:]
         navidromePlaylistRefresh = nil
         navidromeMirrorPush = nil
         navidromeMirrorPushOutcome = nil
-        phoneLibraryOperation = nil
-        phoneLibraryRunID = nil
         phoneLibraryStatus = nil
     }
 

@@ -237,6 +237,8 @@ final class AppState: ObservableObject {
     @Published var phoneLibraryLoads: Set<UUID> = []
     @Published var phoneLibraryConfigSaving = false
     var phoneLibraryLoadGeneration = UUID()
+    var phoneLibraryServerGeneration = UUID()
+    var phoneLibraryOperationServerGeneration: UUID?
     /// A successful read clears only the error that a read itself published.
     var phoneLibraryLoadFailure: WorkflowStatus?
     @Published private(set) var onboarding: OnboardingResult?

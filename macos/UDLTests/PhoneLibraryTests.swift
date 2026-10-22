@@ -1228,6 +1228,123 @@ final class PhoneLibraryReloadTests: XCTestCase {
         await rpc.connection.close()
     }
 
+    func testServerURLOrModeChangeClearsServerScopedResults() async throws {
+        for change in ["url", "mode", "neither"] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+            state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+            try seedServerResults(state)
+            let load = Task { await state.loadPhoneLibrary() }
+            try await answerLoad(rpc, server: change == "url" ? "server-b" : "server-a", tracks: 2, remote: change != "mode")
+            await load.value
+            XCTAssertEqual(state.navidromeStatus?.libraryTracks, 2)
+            if change == "neither" {
+                XCTAssertNotNil(state.navidromeStarred)
+                XCTAssertNotNil(state.navidromeMirrorPush)
+                XCTAssertNotNil(state.navidromeMirrorPushOutcome)
+                XCTAssertNotNil(state.navidromeSetupPlan)
+                XCTAssertNotNil(state.navidromeFavoritePlan)
+                XCTAssertNotNil(state.navidromeFavoriteResult)
+                XCTAssertNotNil(state.navidromeGenreDerivation)
+                XCTAssertFalse(state.navidromeGenreApproval.isEmpty)
+                XCTAssertNotNil(state.navidromePlaylistRefresh)
+                XCTAssertEqual(state.phoneLibraryStatus?.message, "Result from the previous inspection.")
+            } else {
+                assertServerResultsCleared(state)
+                XCTAssertNil(state.phoneLibraryStatus, "an old server's operation message is also server-scoped")
+            }
+            await rpc.connection.close()
+        }
+    }
+
+    func testFailedServerChangePreservesThePreviousServersResults() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+        try seedServerResults(state)
+        let load = Task { await state.loadPhoneLibrary() }
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-b"))
+        try rpc.fail(try await rpc.readRequest(.navidromeStatus), message: "new server unavailable")
+        await load.value
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example.ts.net")
+        XCTAssertEqual(state.navidromeStarred?.tracks.first?.id, "server-a-track")
+        XCTAssertNotNil(state.navidromeMirrorPushOutcome)
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+        state.clearPhoneLibrarySession()
+        assertServerResultsCleared(state)
+        await rpc.connection.close()
+    }
+
+    func testLateInspectionOrPushResultCannotRepopulateADifferentServer() async throws {
+        for push in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+            state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+            let start = Task {
+                if push { await state.pushNavidromeMirror() }
+                else { await state.listNavidromeStarred() }
+            }
+            try rpc.reply(try await rpc.readRequest(push ? .navidromeMirrorPush : .navidromeFavoritesList), result: .object(["run_id": .string("server-a-run")]))
+            await start.value
+            let load = Task { await state.loadPhoneLibrary() }
+            try await answerLoad(rpc, server: "server-b", tracks: 2)
+            await load.value
+            let result: JSONValue = push ? .object([:]) : .object([
+                "count": .number(1), "tracks": .array([.object(["id": .string("server-a-track"), "title": .string("Only on the previous server")])]),
+            ])
+            state.applyPhoneLibraryFinished(RunFinishedNotification(runID: "server-a-run", result: result, error: nil, exitCode: 0))
+            assertServerResultsCleared(state)
+            XCTAssertNil(state.phoneLibraryOperation)
+            XCTAssertNil(state.phoneLibraryRunID)
+            XCTAssertEqual(state.phoneLibraryStatus?.severity, .warn)
+            XCTAssertTrue(state.phoneLibraryStatus?.message.contains("server configuration changed") ?? false)
+            await rpc.connection.close()
+        }
+    }
+
+    private func seedServerResults(_ state: AppState) throws {
+        state.navidromeStarred = NavidromeStarredListResult(count: 1, tracks: [
+            NavidromeStarredTrack(id: "server-a-track", title: "Only on the previous server", artist: nil, album: nil, path: nil),
+        ])
+        state.navidromeMirrorPush = try decode(NavidromeMirrorPushResult.self, .object([:]))
+        state.navidromeMirrorPushOutcome = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: state.navidromeMirrorPush)
+        let plan: JSONValue = .object(["checksum_sha256": .string("fixture")])
+        state.navidromeSetupPlan = NavidromeSetupPlanPresentation(plan)
+        state.navidromeFavoritePlan = NavidromeFavoritePlanPresentation(plan)
+        state.navidromeFavoriteResult = NavidromeFavoriteApplyResult(
+            backupPath: "/fixture/backup.db", newlyStarred: ["server-a-track"], alreadyStarred: 0,
+            finalStarred: 1, parityVerified: true, compensated: [], recoveryCommand: nil, message: nil
+        )
+        state.navidromeGenreDerivation = NavidromeGenreDerivation(
+            sourcePlaylist: "fixture", sourceTrackCount: 1, matchedCount: 1, genres: ["House"],
+            unmatchedPaths: [], genrelessPaths: [], outsideLibrary: [], currentAllowlist: [], allowlistChanged: true
+        )
+        state.navidromeGenreApproval = ["House": true]
+        state.navidromePlaylistRefresh = NavidromePlaylistRefreshResult(generated: [], imported: [], scanned: true, warnings: [])
+        state.phoneLibraryStatus = "Result from the previous inspection."
+    }
+
+    private func assertServerResultsCleared(_ state: AppState, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertNil(state.navidromeStarred, file: file, line: line)
+        XCTAssertNil(state.navidromeMirrorPush, file: file, line: line)
+        XCTAssertNil(state.navidromeMirrorPushOutcome, file: file, line: line)
+        XCTAssertNil(state.navidromeSetupPlan, file: file, line: line)
+        XCTAssertNil(state.navidromeFavoritePlan, file: file, line: line)
+        XCTAssertNil(state.navidromeFavoriteResult, file: file, line: line)
+        XCTAssertNil(state.navidromeGenreDerivation, file: file, line: line)
+        XCTAssertTrue(state.navidromeGenreApproval.isEmpty, file: file, line: line)
+        XCTAssertNil(state.navidromePlaylistRefresh, file: file, line: line)
+    }
+
     private func assertNoRequest(_ rpc: AgentRPCFixture, file: StaticString = #filePath, line: UInt = #line) {
         var descriptor = pollfd(fd: rpc.outbound.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0)
         XCTAssertEqual(poll(&descriptor, 1, 0), 0, "a constrained action must not send an RPC", file: file, line: line)
