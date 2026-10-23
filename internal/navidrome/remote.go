@@ -395,8 +395,16 @@ func (m *Manager) push(ctx context.Context, allowDeletes int, beforeTransfer fun
 // exist under both names until a clean push. rsync 3.x writes this diagnostic
 // to stdout; accept either stream so it cannot become a scan-safe warning.
 func deletionsSkipped(out RemoteOutput) bool {
-	return bytes.Contains(out.Stdout, []byte("skipping file deletion")) ||
-		bytes.Contains(out.Stderr, []byte("skipping file deletion"))
+	for _, output := range [][]byte{out.Stdout, out.Stderr} {
+		for _, line := range bytes.Split(output, []byte("\n")) {
+			// Match the whole message, never a filename in itemized output
+			// or a quoted path in an unrelated permission error.
+			if bytes.Equal(bytes.TrimSpace(line), []byte("IO error encountered -- skipping file deletion")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkServerSpace refuses a push that would leave the server below the free

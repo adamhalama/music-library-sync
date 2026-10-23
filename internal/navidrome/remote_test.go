@@ -324,6 +324,33 @@ func TestPushRefusesOpenrsync(t *testing.T) {
 	}
 }
 
+func TestDeletionsSkippedMatchesOnlyDiagnosticLines(t *testing.T) {
+	const diagnostic = "IO error encountered -- skipping file deletion"
+	cases := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   bool
+	}{
+		{name: "stdout diagnostic", stdout: diagnostic + "\n", want: true},
+		{name: "stderr diagnostic", stderr: diagnostic + "\n", want: true},
+		{name: "trimmed CRLF diagnostic", stdout: "\t " + diagnostic + " \r\n", want: true},
+		{name: "transferred filename", stdout: ">f+++++++++ skipping file deletion.mp3\n"},
+		{name: "deleted filename", stdout: "*deleting   skipping file deletion.mp3\n"},
+		{name: "filename equals diagnostic", stdout: ">f+++++++++ " + diagnostic + "\n"},
+		{name: "unreadable filename", stderr: "rsync: send_files failed to open \"skipping file deletion.mp3\": Permission denied (13)\n"},
+		{name: "message fragment", stderr: "skipping file deletion"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RemoteOutput{Stdout: []byte(tc.stdout), Stderr: []byte(tc.stderr)}
+			if got := deletionsSkipped(out); got != tc.want {
+				t.Fatalf("deletionsSkipped = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPushClassifiesRsyncExits(t *testing.T) {
 	cases := []struct {
 		code    int
@@ -787,7 +814,7 @@ func TestAnUnreadableFileIsAWarningButAnUnreadableFolderBlocksTheScan(t *testing
 	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
 	server, scans := mirrorServer(t)
 
-	fileErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ b.mp3\n*deleting   Old/x.mp3\n"),
+	fileErr := RemoteOutput{ExitCode: rsyncExitPartial, Stdout: []byte(">f+++++++++ skipping file deletion.mp3\n*deleting   Old/x.mp3\n"),
 		Stderr: []byte("rsync: [sender] send_files failed to open \"/m/c.mp3\": Permission denied (13)\n")}
 	fileRunner := pushRunner(t, fileErr, "", `{"ok":true,"entries":1}`)
 	manager := &Manager{Config: cfg, Resolved: resolved, Remote: fileRunner.run,
