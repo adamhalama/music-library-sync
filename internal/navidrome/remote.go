@@ -571,7 +571,10 @@ func findPushSourceFile(ctx context.Context, root, playlistsPath string, maxEntr
 						return false, fmt.Errorf("source check exceeded %d eligible entries; refusing to push an unverified library", maxEntries)
 					}
 					if entry.Type().IsRegular() {
-						return true, nil
+						if readablePushSourceFile(entryPath) {
+							return true, nil
+						}
+						continue // unreadable files cannot establish a safe source
 					}
 					directories = append(directories, entryPath)
 				}

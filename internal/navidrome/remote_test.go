@@ -291,6 +291,38 @@ func TestPushSourceDoesNotFollowSymlinkEntries(t *testing.T) {
 	}
 }
 
+func TestPushSourceRequiresAReadableFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode-000 files")
+	}
+	for _, readable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "only unreadable", true: "readable nested track"}[readable], func(t *testing.T) {
+			cfg, resolved := remoteTestConfig(t)
+			unreadable := filepath.Join(resolved.MusicDir, "unreadable.mp3")
+			writeFile(t, unreadable)
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+			if readable {
+				writeFile(t, filepath.Join(resolved.MusicDir, "Artist", "readable.mp3"))
+				if err := checkPushSource(context.Background(), resolved.MusicDir, resolved.PlaylistsPath); err != nil {
+					t.Fatalf("unreadable candidates must not hide a readable nested track: %v", err)
+				}
+				return
+			}
+			runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
+				t.Fatal("an unreadable-only library must not reach a subprocess")
+				return RemoteOutput{}, nil
+			}}
+			manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+			if _, err := manager.push(context.Background(), 0, nil); err == nil || !strings.Contains(err.Error(), "empty; refusing to push") {
+				t.Fatalf("an unreadable-only library must be refused: %v", err)
+			}
+		})
+	}
+}
+
 func TestPushSourceFiltersBeforeChargingBudget(t *testing.T) {
 	music := t.TempDir()
 	for _, file := range []string{".hidden-a", ".hidden-b", "a.part", "b.partial", "c.tmp", "d.crdownload", "udl-playlists/All Music.nsp", "Artist/z.mp3"} {
