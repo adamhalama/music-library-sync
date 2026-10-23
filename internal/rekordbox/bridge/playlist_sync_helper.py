@@ -20,6 +20,14 @@ def playlist_content_ids(db: Rekordbox6Database, playlist_id: str) -> List[str]:
     return [str(row.ContentID) for row in rows]
 
 
+def is_deleted(row) -> bool:
+    """Rekordbox soft-deletes rows by setting rb_local_deleted instead of
+    removing them. A track removed from the collection and imported again
+    leaves its old row behind with the same FolderPath, so tombstones must
+    never take part in path matching or count as existing content."""
+    return bool(getattr(row, "rb_local_deleted", 0))
+
+
 def inspect_db(db_dir_raw: str) -> Dict[str, Any]:
     db_dir = Path(db_dir_raw).expanduser().resolve()
     db_path = db_dir / "master.db"
@@ -39,6 +47,8 @@ def inspect_db(db_dir_raw: str) -> Dict[str, Any]:
 
         contents = []
         for row in db.get_content().all():
+            if is_deleted(row):
+                continue
             artist = getattr(getattr(row, "Artist", None), "Name", "")
             album = getattr(getattr(row, "Album", None), "Name", "")
             contents.append(
@@ -117,7 +127,8 @@ def rewrite_playlist(db: Rekordbox6Database, req: Dict[str, Any]):
 
     missing_content = []
     for content_id in final_content_ids:
-        if db.get_content(ID=content_id) is None:
+        content = db.get_content(ID=content_id)
+        if content is None or is_deleted(content):
             missing_content.append(content_id)
     if missing_content:
         raise RuntimeError(f"Planned content IDs no longer exist: {', '.join(missing_content)}")
