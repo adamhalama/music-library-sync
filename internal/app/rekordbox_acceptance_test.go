@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -158,6 +159,82 @@ func TestRekordboxIsolatedApplyAndRestore(t *testing.T) {
 		len(plan.FinalContentIDs),
 		result.BackupPath,
 	)
+}
+
+// TestRekordboxInspectSkipsSoftDeletedContent is opt-in like the apply test
+// above. Rekordbox keeps a removed-then-reimported track's old djmdContent row
+// as a tombstone (rb_local_deleted=1) with the same FolderPath; if inspect
+// reported it, every reimported track would plan as an ambiguous path match.
+//
+// Run with:
+//
+//	UDL_REKORDBOX_ACCEPTANCE_PYTHON=/path/to/python go test ./internal/app \
+//	  -run TestRekordboxInspectSkipsSoftDeletedContent -count=1 -v
+func TestRekordboxInspectSkipsSoftDeletedContent(t *testing.T) {
+	pythonBin := strings.TrimSpace(os.Getenv("UDL_REKORDBOX_ACCEPTANCE_PYTHON"))
+	if pythonBin == "" {
+		t.Skip("set UDL_REKORDBOX_ACCEPTANCE_PYTHON to a Python runtime with pyrekordbox")
+	}
+	if !filepath.IsAbs(pythonBin) {
+		t.Fatal("UDL_REKORDBOX_ACCEPTANCE_PYTHON must be an absolute path")
+	}
+
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "rekordbox-db")
+	fixtureDir := filepath.Clean("../../experiments/rb-date-order/pyrekordbox-lab/sandbox-db")
+	if err := copyAcceptanceTree(fixtureDir, dbDir); err != nil {
+		t.Fatalf("copy isolated fixture: %v", err)
+	}
+
+	ctx := context.Background()
+	client := bridge.Client{PythonBin: pythonBin}
+	inspect, err := client.Inspect(ctx, dbDir)
+	if err != nil {
+		t.Fatalf("inspect isolated fixture: %v", err)
+	}
+	_, tracks := acceptanceTargetAndTracks(t, inspect)
+	live := tracks[0].Path
+	var tombstone bridge.Content
+	for _, content := range inspect.Contents {
+		if content.FolderPath == tracks[1].Path {
+			tombstone = content
+		}
+	}
+
+	// Turn the second uniquely pathed row into a tombstone of the first one.
+	script := `
+import sys
+from pathlib import Path
+from pyrekordbox import Rekordbox6Database
+db_dir = Path(sys.argv[1])
+db = Rekordbox6Database(path=db_dir / "master.db", db_dir=db_dir)
+row = db.get_content(ID=sys.argv[2])
+row.FolderPath = sys.argv[3]
+row.rb_local_deleted = 1
+db.commit()
+db.close()
+`
+	cmd := exec.CommandContext(ctx, pythonBin, "-c", script, dbDir, tombstone.ID, live)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tombstone fixture row: %v: %s", err, output)
+	}
+
+	after, err := client.Inspect(ctx, dbDir)
+	if err != nil {
+		t.Fatalf("inspect tombstoned fixture: %v", err)
+	}
+	matches := 0
+	for _, content := range after.Contents {
+		if content.ID == tombstone.ID {
+			t.Fatalf("inspect reported soft-deleted content %q", tombstone.ID)
+		}
+		if playlistsync.NormalizePath(content.FolderPath) == playlistsync.NormalizePath(live) {
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("live path %q matched %d contents, want 1", live, matches)
+	}
 }
 
 func acceptanceTargetAndTracks(t *testing.T, inspect bridge.InspectResponse) (bridge.Playlist, []music.Track) {
