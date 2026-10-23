@@ -128,7 +128,16 @@ public func XCTUnwrap<T>(
     file: StaticString = #filePath,
     line: UInt = #line
 ) throws -> T {
-    if let value = try expression() { return value }
+    let value: T?
+    do {
+        value = try expression()
+    } catch {
+        let supplied = message()
+        let detail = supplied.isEmpty ? "threw: \(error)" : "\(supplied): threw: \(error)"
+        XCTFailureRecorder.record(detail, file: file, line: line)
+        throw error
+    }
+    if let value { return value }
     let supplied = message()
     let detail = supplied.isEmpty ? "expected non-nil value" : supplied
     XCTFailureRecorder.record(detail, file: file, line: line)
