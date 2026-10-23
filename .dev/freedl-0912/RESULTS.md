@@ -47,10 +47,10 @@ Portable proof for reviewers:
 
 Local source evidence:
 
-- [Full 46-track quality table](~/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.md)
-- [Machine-readable audit](~/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.json)
-- [Capture and promotion ledgers](~/dev/music-down/statefiles/freedl/upgrade-09-12/logs)
-- [Original-file backups](~/dev/music-down/statefiles/freedl/upgrade-09-12/backups)
+- Full 46-track quality table: `~/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.md`
+- Machine-readable audit: `~/dev/music-down/statefiles/freedl/upgrade-09-12/quality-audit.json`
+- Capture and promotion ledgers: `~/dev/music-down/statefiles/freedl/upgrade-09-12/logs`
+- Original-file backups: `~/dev/music-down/statefiles/freedl/upgrade-09-12/backups`
 
 ## Gate exception and unchanged files
 
