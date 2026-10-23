@@ -18,6 +18,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/exitcode"
+	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -156,9 +157,10 @@ Operational notes:
 				"scdl-freedl": scdlfreedl.New(),
 			}
 			useCase := workflows.SyncUseCase{
-				Registry: registry,
-				Runner:   runner,
-				Emitter:  emitter,
+				Registry:         registry,
+				Runner:           runner,
+				Emitter:          emitter,
+				NavidromeOptions: navidrome.ManagerOptions{ConfigPath: app.Opts.NavidromeConfigPath},
 			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)

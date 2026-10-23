@@ -222,9 +222,10 @@ func (s *Server) startFreeDLCapture(params json.RawMessage) (any, *RPCError) {
 		progress := output.NewStructuredProgressTracker(nil)
 		emitter := &agentSyncEmitter{conn: s.Conn, runID: runID, tracker: tracker, progress: progress}
 		useCase := app.SyncUseCase{
-			Registry: s.syncAdapterRegistry(),
-			Runner:   s.syncExecRunner(),
-			Emitter:  emitter,
+			Registry:         s.syncAdapterRegistry(),
+			Runner:           s.syncExecRunner(),
+			Emitter:          emitter,
+			NavidromeOptions: s.navidromeOptions(),
 		}
 		result, runErr := useCase.Run(ctx, runCfg, app.SyncRequest{
 			SourceIDs: []string{job.ID}, Plan: true, PlanLimit: job.PlanLimit,

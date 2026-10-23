@@ -77,7 +77,7 @@ use that advertised inventory rather than a hard-coded count.
 | Paired playlist sync | `playlistSync.inspect`, `playlistSync.plan`, `playlistSync.apply` |
 | Free DL | `freedl.config.read`, `freedl.config.write`, `freedl.plan.start`, `freedl.capture.start`, `freedl.promotionPlan.build`, `freedl.promote.apply` |
 | Rekordbox | `rekordbox.config.read`, `rekordbox.config.write`, `rekordbox.deps.status`, `rekordbox.deps.ensure`, `rekordbox.deps.reset`, `rekordbox.inspect`, `rekordbox.plan`, `rekordbox.apply` |
-| Navidrome | `navidrome.config.read`, `navidrome.config.write`, `navidrome.deps.status`, `navidrome.deps.ensure`, `navidrome.status`, `navidrome.service.control`, `navidrome.setup.plan`, `navidrome.setup.apply`, `navidrome.playlists.refresh`, `navidrome.playlists.deriveGenres`, `navidrome.playlists.saveGenres`, `navidrome.favorites.plan`, `navidrome.favorites.apply`, `navidrome.favorites.list`, `navidrome.backup.create` |
+| Navidrome | `navidrome.config.read`, `navidrome.config.write`, `navidrome.deps.status`, `navidrome.deps.ensure`, `navidrome.status`, `navidrome.service.control`, `navidrome.setup.plan`, `navidrome.setup.apply`, `navidrome.playlists.refresh`, `navidrome.playlists.deriveGenres`, `navidrome.playlists.saveGenres`, `navidrome.favorites.plan`, `navidrome.favorites.apply`, `navidrome.favorites.list`, `navidrome.backup.create`, `navidrome.mirror.push` |
 
 ## Method contracts
 
@@ -137,9 +137,12 @@ marked **run** return `{"run_id":"…"}` immediately and terminate through
 | `navidrome.favorites.apply` | signed `plan` | **run** returning backup path, newly starred IDs, and parity |
 | `navidrome.favorites.list` | `{}` | **run** returning `count` and the server's starred `tracks`, path-sorted |
 | `navidrome.backup.create` | `{}` | **run** returning the created database backup |
+| `navidrome.mirror.push` | optional `allow_deletes` (int, default 0), `force_scan` (bool) | remote mode only: **run** pushing the mirror, then scanning and re-applying Date Added like `udl navidrome push`; returns `push`, `scanned`, `dates`, `warnings`, the refreshed `mirror` state, and `failure` when the push did not go through |
 
-The Navidrome account password is never carried by any of these methods. It
-lives only in macOS Keychain and is written through `credentials.save`.
+The Mac's Navidrome account password is never carried by any of these methods.
+It lives in macOS Keychain and is written through `credentials.save`. Remote
+scans use the gate's separately provisioned server-side credential, which is
+never sent by the Mac or returned through this protocol.
 `navidrome.setup.apply` and `navidrome.favorites.apply` reject a plan whose
 checksum does not verify, so a stale plan is refused rather than replayed.
 
@@ -149,8 +152,66 @@ touches Apple Music, so it is the one favourites method that works without a
 Music automation grant. Its ordering matches the `navidrome-favorites` snapshot,
 so a listing and a refreshed snapshot can be compared line for line.
 
+`navidrome.mirror.push` exists only in remote mode; a local config is refused
+with `-32602` and a `detail` before any run starts. Inside the run,
+`failure.kind` tells the app what happened without parsing the error text:
+`busy` (another push — the post-sync hook, the scheduled push, or a CLI push —
+holds the local data directory's or the server's mirror lock; nothing changed), `delete_limit` (the preflight
+refused; `failure.planned_deletes` and `failure.allow_deletes_command` name the
+count and the explicit `udl navidrome push --allow-deletes N` override, which
+the app deliberately does not offer as one click), `server_scanning` (the
+server was scanning, a scan job/recovery/migration scan was pending, or its scan
+state could not be read at the pre-transfer check or the gate's rsync hand-off;
+the push was deferred with nothing changed and any earlier `scan_pending`
+value is preserved), `canceled` (exit `130` after `run.cancel`), or `failed`
+(including invalid/unreadable server control locks, reported as a server
+configuration problem with a repair hint, not another busy push).
+Clients must treat an unknown `failure.kind` like `failed`. `navidrome.status` carries the same push state as
+`mirror`, the server side as `remote`, and the off-server database copy
+(`udl navidrome export-db`) as `export` (`last_export_at`, `last_export_error`,
+`last_export_error_at`, each optional); all three are omitted in local mode.
+`remote` is also omitted when the server could not be reached, which is not
+the same as an empty server. Export history lives in
+`<data_dir>/udl-export-state.json`. If that file is absent, export/status and
+mirror-state loads migrate recognized legacy `last_export_*` fields from
+`udl-mirror-state.json` under the export lock. A mirror-state write refuses to
+drop those fields until migration succeeds; existing export state is never
+replaced by legacy history.
+
+In remote mode `remote.scan` carries the forced-command gate's scan state, not
+an inference from the Mac's last push. Its optional fields are `ok`, `scanning`
+(boolean; omitted when unknown), `api_error`, `lock_error`, `mirror_busy`, `scan_job_busy`,
+`recovery_pending`, `migration_scan_pending`, `enforcement`, and `libraries`
+(rows with `id`, `last_scan_at`, `last_scan_started_at`, and
+`full_scan_in_progress`). False/empty fields may be omitted; an explicitly
+known idle `scanning: false` is retained. `remote.scan` itself is omitted if an
+older gate does not report it. Recovery/migration scan debt, `lock_error`
+(server configuration), and an unreachable server-side Navidrome API also appear
+as plain-language `problems`. `lock_error` takes precedence over conservative
+busy flags when refusing a push. An `api_error` within a successful gate status
+reply does not discard the reachable server's database, disk or backup fields;
+only the scan API state is unknown. The whole SSH status request retains a
+10-second budget; the gate's shorter API probe leaves time to return these
+partial diagnostics.
+
+All remote scan triggers (mirror push including `force_scan`, playlist refresh,
+and the post-sync hook) use SSH `udl-mirror scan`, never the public API's
+`startScan`. Playlist/favourites reads still use the API. The gate's timeout is
+the combined idle/finish wait budget, rounded up to seconds and capped at one
+hour. `force_scan` requests a normal scan even if nothing changed, not a full
+rescan. A pending/timeout or failed scan keeps `mirror.scan_pending` for the next
+push. Opted-in Date Added intent is recorded as `mirror.dates_pending` alongside
+scan debt, before transfer/scan success, including when a push skips its scan.
+A failed scan or a later `--no-dates` retry preserves that date debt; only a
+successful reconciliation settles it. A busy `apply-dates` keeps the debt and
+reports a warning. Only a confirmed completed gate scan clears scan debt. A
+generic rsync interruption may already have changed files and keeps its
+pre-transfer scan/date debt; an explicit gate hand-off refusal proves that
+nothing transferred and restores both prior values. A completed no-op transfer
+adds no new debt unless a scan was already owed or explicitly forced.
+
 `phone.connected` in the Navidrome config is a user acknowledgement, not an
-observation: nothing on the Mac can see Amperfy, so the last setup step is
+observation: nothing on the Mac can see the phone app, so the last setup step is
 recorded through `navidrome.config.write` and read back on `navidrome.status`
 as `phone_connected`. No method claims to have verified the phone.
 

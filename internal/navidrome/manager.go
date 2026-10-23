@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,11 @@ type Manager struct {
 	Run    CommandRunner
 	API    *Client
 	APIErr error
+
+	// Remote runs rsync and ssh in remote mode; BirthTime reads creation
+	// times for the Date Added manifest. Both are nil outside tests.
+	Remote    RemoteRunner
+	BirthTime BirthTimeFunc
 }
 
 // NewManager loads configuration and resolves credentials.
@@ -121,6 +127,13 @@ type Status struct {
 	// this Mac, not an observation. See PhoneConfig.
 	PhoneConnected bool     `json:"phone_connected"`
 	Problems       []string `json:"problems"`
+	// Mode, Remote, Mirror and Export are set only in remote mode, where
+	// Dependency and Service describe nothing on this Mac and stay empty.
+	// Export is the off-server copy of the server's database.
+	Mode   string               `json:"mode,omitempty"`
+	Remote *RemoteStatus        `json:"remote,omitempty"`
+	Mirror *MirrorState         `json:"mirror,omitempty"`
+	Export *ServerDBExportState `json:"export,omitempty"`
 }
 
 // Status inspects dependency, service, and — when credentials exist — server
@@ -142,20 +155,24 @@ func (m *Manager) Status(ctx context.Context) Status {
 		Problems:       []string{},
 	}
 	status.PasswordStored = auth.HasNavidromePassword()
-	status.Dependency = m.Deps.Status(ctx)
-	status.Problems = append(status.Problems, status.Dependency.Problems...)
-	status.Service = m.Svc.Status(ctx, m.Config, m.Resolved)
-	status.Problems = append(status.Problems, status.Service.Problems...)
-	status.Problems = append(status.Problems, m.staleManagedFiles(ctx)...)
-
-	if backups, err := Backups(m.Resolved); err == nil {
-		status.BackupCount = len(backups)
-		if len(backups) > 0 {
-			latest := backups[0]
-			status.LatestBackup = &latest
-		}
+	if m.Config.IsRemote() {
+		m.remoteStatusInto(ctx, &status)
 	} else {
-		status.Problems = append(status.Problems, err.Error())
+		status.Dependency = m.Deps.Status(ctx)
+		status.Problems = append(status.Problems, status.Dependency.Problems...)
+		status.Service = m.Svc.Status(ctx, m.Config, m.Resolved)
+		status.Problems = append(status.Problems, status.Service.Problems...)
+		status.Problems = append(status.Problems, m.staleManagedFiles(ctx)...)
+
+		if backups, err := Backups(m.Resolved); err == nil {
+			status.BackupCount = len(backups)
+			if len(backups) > 0 {
+				latest := backups[0]
+				status.LatestBackup = &latest
+			}
+		} else {
+			status.Problems = append(status.Problems, err.Error())
+		}
 	}
 
 	client, err := m.Client()
@@ -208,12 +225,30 @@ func (m *Manager) Status(ctx context.Context) Status {
 
 // SetupPlan builds a checksummed setup plan.
 func (m *Manager) SetupPlan(ctx context.Context) (SetupPlan, error) {
+	if err := m.ServiceControlAllowed("setup"); err != nil {
+		return SetupPlan{}, err
+	}
 	return m.planner().Plan(ctx, m.Config, m.ConfigPath)
 }
 
 // ApplySetup revalidates and performs a setup plan.
 func (m *Manager) ApplySetup(ctx context.Context, plan SetupPlan) (ApplyResult, error) {
+	if err := m.ServiceControlAllowed("setup"); err != nil {
+		return ApplyResult{}, err
+	}
 	return m.planner().Apply(ctx, m.Config, plan)
+}
+
+// ServiceControlAllowed refuses anything that would bring up Navidrome on
+// this Mac while the remote server is the one serving the phone: two servers
+// would split stars and plays between them. Stopping stays allowed — it is
+// part of moving to the server.
+func (m *Manager) ServiceControlAllowed(action string) error {
+	if !m.Config.IsRemote() || action == "stop" {
+		return nil
+	}
+	return fmt.Errorf("navidrome %s manages a server on this Mac, but navidrome.mode is remote and %s serves the phone; set mode back to local first to run Navidrome here again",
+		action, m.Config.Server.URL)
 }
 
 func (m *Manager) planner() Planner {
@@ -242,10 +277,14 @@ func (m *Manager) staleManagedFiles(ctx context.Context) []string {
 }
 
 // RefreshPlaylists regenerates the managed `.nsp` files and re-imports them.
+// In remote mode the files reach the server by a push before the scan.
 func (m *Manager) RefreshPlaylists(ctx context.Context) (PlaylistRefreshResult, error) {
 	client, err := m.Client()
 	if err != nil {
 		return RefreshManagedPlaylists(ctx, m.Config, m.Resolved, nil)
+	}
+	if m.Config.IsRemote() {
+		return RefreshManagedPlaylists(ctx, m.Config, m.Resolved, pushingRefreshClient{manager: m, client: client})
 	}
 	return RefreshManagedPlaylists(ctx, m.Config, m.Resolved, client)
 }
@@ -374,28 +413,119 @@ func (m *Manager) ApplyFavorites(ctx context.Context, plan FavoritePlan) (Favori
 		return FavoriteApplyResult{}, err
 	}
 	backup := func(backupCtx context.Context) (Backup, error) {
-		result, err := CreateBackup(backupCtx, m.Run, m.Deps.BinaryPath(), m.Resolved)
+		result, err := m.CreateBackup(backupCtx)
 		return result.Backup, err
 	}
 	return ApplyFavoritePlan(ctx, m.Config, m.Resolved, plan, favorites, client, backup)
 }
 
 // ReconcileDateAdded makes Date Added mean the file's real creation time.
+//
+// On a mirror the server's own birth times are push times, so the local
+// `created_at = birth_time` rewrite would be wrong there; this Mac supplies
+// the creation times instead and the server applies them.
 func (m *Manager) ReconcileDateAdded(ctx context.Context) (ReconcileResult, error) {
+	if m.Config.IsRemote() {
+		// Explicit reconciles settle the same date intent as push-driven ones.
+		// Serialize the state update with pushes so it cannot overwrite debt.
+		unlock, err := lockMirror(m.Resolved)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		defer unlock()
+		state, err := LoadMirrorState(m.Resolved)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		result, err := m.reconcileDateAddedRemote(ctx, false)
+		if err != nil {
+			return result, err
+		}
+		state.recordDates(result)
+		if err := saveMirrorState(m.Resolved, state); err != nil {
+			return result, fmt.Errorf("Date Added was reconciled, but its mirror state could not be recorded: %w", err)
+		}
+		return result, nil
+	}
 	return ReconcileDateAdded(ctx, m.Run, m.Resolved, func(backupCtx context.Context) (Backup, error) {
 		result, err := CreateBackup(backupCtx, m.Run, m.Deps.BinaryPath(), m.Resolved)
 		return result.Backup, err
 	})
 }
 
-// CreateBackup makes an explicit database backup.
+// PreviewDateAdded reports what a remote Date Added reconcile would change.
+func (m *Manager) PreviewDateAdded(ctx context.Context) (ReconcileResult, error) {
+	if !m.Config.IsRemote() {
+		return ReconcileResult{}, errors.New("a Date Added preview is only available in remote mode")
+	}
+	return m.reconcileDateAddedRemote(ctx, true)
+}
+
+// CreateBackup makes an explicit database backup, on the server in remote
+// mode.
 func (m *Manager) CreateBackup(ctx context.Context) (BackupResult, error) {
+	if m.Config.IsRemote() {
+		return m.RemoteBackup(ctx)
+	}
 	return CreateBackup(ctx, m.Run, m.Deps.BinaryPath(), m.Resolved)
+}
+
+// ListBackups lists retained backups newest first: the local backup folder,
+// or in remote mode the server's UDL-made and scheduled backups together.
+func (m *Manager) ListBackups(ctx context.Context) ([]Backup, error) {
+	if !m.Config.IsRemote() {
+		return Backups(m.Resolved)
+	}
+	status, err := m.RemoteStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return mergeBackups(status), nil
+}
+
+func mergeBackups(status RemoteStatus) []Backup {
+	all := append(append([]Backup{}, status.UDLBackups...), status.NavidromeBackups...)
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return all
+}
+
+func (m *Manager) remoteStatusInto(ctx context.Context, status *Status) {
+	status.Mode = ModeRemote
+	status.Service = ServiceStatus{State: ServiceRemote, Problems: []string{}}
+	status.Dependency = DependencyStatus{Problems: []string{}}
+	if state, err := LoadMirrorState(m.Resolved); err == nil {
+		status.Mirror = &state
+	}
+	status.Problems = append(status.Problems, m.mirrorProblems()...)
+	if state, err := LoadServerDBExportState(m.Resolved); err == nil {
+		status.Export = &state
+	}
+	status.Problems = append(status.Problems, m.serverDBExportProblems()...)
+	// A status view must render promptly even when the server is down.
+	remoteCtx, cancel := context.WithTimeout(ctx, remoteStatusTimeout)
+	defer cancel()
+	remote, err := m.RemoteStatus(remoteCtx)
+	if err != nil {
+		status.Problems = append(status.Problems, err.Error())
+		return
+	}
+	status.Remote = &remote
+	backups := mergeBackups(remote)
+	status.BackupCount = len(backups)
+	if len(backups) > 0 {
+		latest := backups[0]
+		status.LatestBackup = &latest
+	}
+	status.Problems = append(status.Problems, m.remoteProblems(remote)...)
+	status.Problems = append(status.Problems, m.staleMirrorProblems(remote)...)
 }
 
 // RequestScan asks Navidrome to rescan. Callers that must not fail on an
 // unavailable server should use RequestScanBestEffort instead.
 func (m *Manager) RequestScan(ctx context.Context, full bool) error {
+	if m.Config.IsRemote() {
+		return m.scanRemote(ctx, full, 0, 0)
+	}
 	client, err := m.Client()
 	if err != nil {
 		return err
@@ -422,8 +552,35 @@ func RequestScanBestEffort(ctx context.Context, opts ManagerOptions) (bool, stri
 	if err != nil {
 		return false, fmt.Sprintf("Navidrome scan skipped: %v", err)
 	}
-	if err := manager.RequestScan(ctx, false); err != nil {
+	if manager.Config.IsRemote() {
+		// The push is the point of the hook in remote mode, so it runs under
+		// the caller's (longer) budget rather than the local request limit.
+		// The scan waits stay short: a scan that outlasts them is left
+		// pending and finished by the next push.
+		result, err := manager.SyncMirror(ctx, MirrorOptions{
+			Scan: true, Dates: true, IdleWait: postSyncScanIdleWait, FinishWait: postSyncScanFinishWait,
+		})
+		if err != nil {
+			return false, fmt.Sprintf("Navidrome mirror push incomplete; the server may be partly updated; the next `udl navidrome push` completes it: %v", err)
+		}
+		return result.Scanned, strings.Join(result.Warnings, "; ")
+	}
+	// A slow or wedged local server must not hold up the end of a sync.
+	scanCtx, cancel := context.WithTimeout(ctx, localScanRequestTimeout)
+	defer cancel()
+	if err := manager.RequestScan(scanCtx, false); err != nil {
 		return false, fmt.Sprintf("Navidrome scan request failed: %v", err)
 	}
 	return true, ""
 }
+
+const (
+	// localScanRequestTimeout bounds the post-sync scan request to a local server.
+	localScanRequestTimeout = 15 * time.Second
+	// postSyncScanIdleWait and postSyncScanFinishWait bound how long the end
+	// of a sync waits on a remote server's scan.
+	postSyncScanIdleWait   = time.Minute
+	postSyncScanFinishWait = 2 * time.Minute
+	// remoteStatusTimeout bounds the SSH status call behind every status view.
+	remoteStatusTimeout = 10 * time.Second
+)

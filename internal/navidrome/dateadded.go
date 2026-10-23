@@ -20,6 +20,12 @@ type ReconcileResult struct {
 	Candidates   int    `json:"candidates"`
 	Updated      int    `json:"updated"`
 	Message      string `json:"message"`
+	// Remote mode also re-derives album Date Added and reports files the
+	// server has not indexed yet.
+	AlbumsUpdated   int      `json:"albums_updated,omitempty"`
+	Unmatched       int      `json:"unmatched,omitempty"`
+	UnmatchedSample []string `json:"unmatched_sample,omitempty"`
+	Rejected        int      `json:"rejected,omitempty"`
 }
 
 // DatabasePath is the managed Navidrome database.

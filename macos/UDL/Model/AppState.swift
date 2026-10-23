@@ -225,9 +225,22 @@ final class AppState: ObservableObject {
     /// is evidence; the user removes rather than re-adds.
     @Published var navidromeGenreApproval: [String: Bool] = [:]
     @Published var navidromePlaylistRefresh: NavidromePlaylistRefreshResult?
+    /// The last `navidrome.mirror.push` result and what the screen said about
+    /// it, kept so a delete-limit refusal stays visible next to Push now.
+    @Published var navidromeMirrorPush: NavidromeMirrorPushResult?
+    @Published var navidromeMirrorPushOutcome: NavidromeMirrorPushOutcome?
     @Published var phoneLibraryOperation: PhoneLibraryOperation?
     @Published var phoneLibraryRunID: String?
     @Published var phoneLibraryStatus: WorkflowStatus?
+    /// All outstanding reads constrain actions, but only the newest generation
+    /// may publish. Session reset also retires that generation.
+    @Published var phoneLibraryLoads: Set<UUID> = []
+    @Published var phoneLibraryConfigSaving = false
+    var phoneLibraryLoadGeneration = UUID()
+    var phoneLibraryServerGeneration = UUID()
+    var phoneLibraryOperationServerGeneration: UUID?
+    /// A successful read clears only the error that a read itself published.
+    var phoneLibraryLoadFailure: WorkflowStatus?
     @Published private(set) var onboarding: OnboardingResult?
     @Published private(set) var startupAttention: StartupAttentionResult?
     @Published private(set) var configFile: ConfigFileResult?

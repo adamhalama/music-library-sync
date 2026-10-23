@@ -17,6 +17,7 @@ import (
 	"github.com/jaa/update-downloads/internal/auth"
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/output"
 	compactstate "github.com/jaa/update-downloads/internal/output/compact"
 	"github.com/jaa/update-downloads/internal/runstate"
@@ -632,8 +633,9 @@ func (m tuiSyncModel) startRunCmd(runCtx context.Context) tea.Cmd {
 				"scdl":        scdl.New(),
 				"scdl-freedl": scdlfreedl.New(),
 			},
-			Runner:  engine.NewSubprocessRunner(m.app.IO.In, io.Discard, io.Discard),
-			Emitter: emitter,
+			Runner:           engine.NewSubprocessRunner(m.app.IO.In, io.Discard, io.Discard),
+			Emitter:          emitter,
+			NavidromeOptions: navidrome.ManagerOptions{ConfigPath: m.app.Opts.NavidromeConfigPath},
 		}
 		req := m.buildSyncRequest(selectedIDs)
 		sourceByID := map[string]config.Source{}

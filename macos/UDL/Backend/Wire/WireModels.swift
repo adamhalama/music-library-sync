@@ -122,6 +122,7 @@ enum AgentMethod: String, Codable, CaseIterable, Sendable {
     case navidromeFavoritesApply = "navidrome.favorites.apply"
     case navidromeFavoritesList = "navidrome.favorites.list"
     case navidromeBackupCreate = "navidrome.backup.create"
+    case navidromeMirrorPush = "navidrome.mirror.push"
 }
 
 struct EmptyParams: Codable, Sendable {}

@@ -11,59 +11,86 @@ extension AppState {
     // MARK: - Loading
 
     func loadPhoneLibrary() async {
-        guard let client else { return }
+        // A config save owns a fresh read/write plus its final paired reload.
+        // Coalesce reopen/Refresh into that reload rather than allowing a read
+        // to race the whole-config write after its initial busy guard.
+        guard !phoneLibraryConfigSaving else { return }
+        await reloadPhoneLibrary()
+    }
+
+    private func reloadPhoneLibrary() async {
+        guard let client, !Task.isCancelled else { return }
+        let generation = UUID()
+        phoneLibraryLoadGeneration = generation
+        phoneLibraryLoads.insert(generation)
+        defer { phoneLibraryLoads.remove(generation) }
         do {
-            async let config = client.readNavidromeConfig()
-            async let status = client.navidromeStatus()
-            let loaded = try await (config, status)
-            navidromeConfig = loaded.0
-            navidromeStatus = loaded.1
+            // Keep the configured URL and server state together, even after
+            // the config changes outside the app. Publish neither on failure.
+            let config = try await client.readNavidromeConfig()
+            try Task.checkCancellation()
+            guard phoneLibraryLoadGeneration == generation else { return }
+            let status = try await client.navidromeStatus()
+            try Task.checkCancellation()
+            guard phoneLibraryLoadGeneration == generation else { return }
+            if let previousConfig = navidromeConfig, let previousStatus = navidromeStatus,
+               previousConfig.config.server.url != config.config.server.url || previousStatus.isRemote != status.isRemote {
+                // Results and reviewed plans belong to the server they read or
+                // changed, not whichever server a later refresh discovers.
+                clearPhoneLibraryServerResults()
+            }
+            navidromeConfig = config
+            navidromeStatus = status
+            if let failure = phoneLibraryLoadFailure, phoneLibraryStatus == failure {
+                phoneLibraryStatus = nil
+            }
+            phoneLibraryLoadFailure = nil
+        } catch is CancellationError {
+            // Navigation cancels the view's .task; the cached pair stays valid.
         } catch {
-            phoneLibraryStatus = .failure("Phone Library state could not load: \(error.localizedDescription)")
+            guard !Task.isCancelled, phoneLibraryLoadGeneration == generation else { return }
+            let failure = WorkflowStatus.failure("Phone Library state could not load: \(error.localizedDescription)")
+            phoneLibraryLoadFailure = failure
+            phoneLibraryStatus = failure
         }
     }
 
     func refreshPhoneLibraryStatus() async {
-        guard let client else { return }
-        do {
-            navidromeStatus = try await client.navidromeStatus()
-        } catch {
-            phoneLibraryStatus = .failure("Phone Library status could not refresh: \(error.localizedDescription)")
-        }
+        await loadPhoneLibrary()
     }
 
-    func savePhoneLibraryConfig(_ config: NavidromeConfig) async -> Bool {
-        guard let client else { return false }
-        do {
-            navidromeConfig = try await client.writeNavidromeConfig(config)
-            await refreshPhoneLibraryStatus()
-            return true
-        } catch {
-            phoneLibraryStatus = .failure("Phone Library config could not save: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    /// Records the user's acknowledgement that Amperfy reaches this Mac. It is
+    /// Records the user's acknowledgement that the phone app reaches the server. It is
     /// the last setup step and the only one nothing here can observe, so it is
     /// stored in the feature config where the checklist reads it back.
     func setPhoneConnected(_ connected: Bool) async {
-        guard var config = navidromeConfig?.config else {
-            phoneLibraryStatus = .failure("Phone Library config has not loaded yet.")
-            return
+        guard let client, !isPhoneLibraryBusy else { return }
+        phoneLibraryConfigSaving = true
+        defer { phoneLibraryConfigSaving = false }
+        do {
+            // This RPC writes the whole config. Never copy the screen's cached
+            // value: an external editor may have changed it since the last load.
+            var config = try await client.readNavidromeConfig().config
+            try Task.checkCancellation()
+            if config.phone.connected != connected {
+                config.phone.connected = connected
+                _ = try await client.writeNavidromeConfig(config)
+            }
+            // Publish the config/status pair while retaining the save's action
+            // constraint. External reads coalesce into this final reload.
+            await reloadPhoneLibrary()
+            guard phoneLibraryLoadFailure == nil else { return }
+            phoneLibraryStatus = connected
+                ? "Marked the phone as connected. UDL cannot verify this itself."
+                : "Marked the phone as not connected."
+        } catch {
+            phoneLibraryStatus = .failure("Phone Library config could not save: \(error.localizedDescription)")
         }
-        guard config.phone.connected != connected else { return }
-        config.phone.connected = connected
-        guard await savePhoneLibraryConfig(config) else { return }
-        phoneLibraryStatus = connected
-            ? "Marked the phone as connected. UDL cannot verify this itself."
-            : "Marked the phone as not connected."
     }
 
     /// Saves the account password to macOS Keychain through the one credential
     /// path that writes secrets. The value is never held in `AppState`.
     func savePhoneLibraryPassword(_ password: String) async {
-        guard let client else { return }
+        guard let client, !isPhoneLibraryBusy else { return }
         let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             phoneLibraryStatus = .failure("Enter the Navidrome account password before saving.")
@@ -207,6 +234,22 @@ extension AppState {
         }
     }
 
+    /// Remote mode: push the library to the server's mirror, then rescan and
+    /// re-apply Date Added. The outcome — including a delete-limit refusal,
+    /// which the app never overrides — is reported on this screen.
+    func pushNavidromeMirror() async {
+        guard navidromeStatus?.isRemote == true else {
+            phoneLibraryStatus = .failure("Push now is only available in remote mode.")
+            return
+        }
+        guard !isPhoneLibraryBusy, phoneLibraryRunID == nil else { return }
+        navidromeMirrorPush = nil
+        navidromeMirrorPushOutcome = nil
+        await startPhoneLibraryOperation(.mirrorPush) { client in
+            try await client.pushNavidromeMirror()
+        }
+    }
+
     func cancelPhoneLibraryOperation() async {
         guard let runID = phoneLibraryRunID else { return }
         await cancelRun(runID)
@@ -216,9 +259,11 @@ extension AppState {
         _ operation: PhoneLibraryOperation,
         start: (UDLClient) async throws -> RunIDResult
     ) async {
-        guard let client, phoneLibraryRunID == nil, phoneLibraryOperation == nil else { return }
+        guard let client, phoneLibraryRunID == nil, !isPhoneLibraryBusy else { return }
         clearNotResumed(.phoneLibrary)
         phoneLibraryOperation = operation
+        let serverGeneration = phoneLibraryServerGeneration
+        phoneLibraryOperationServerGeneration = serverGeneration
         phoneLibraryStatus = WorkflowStatus(message: operation.label)
         do {
             let started = try await start(client)
@@ -227,11 +272,15 @@ extension AppState {
             await cancelPendingWorkIfReady(.phoneLibrary)
         } catch JSONRPCConnectionError.remote(_, let message, _) {
             phoneLibraryOperation = nil
+            phoneLibraryOperationServerGeneration = nil
             await cancelPendingWorkIfReady(.phoneLibrary)
+            guard serverGeneration == phoneLibraryServerGeneration else { return }
             phoneLibraryStatus = .failure(message)
         } catch {
             phoneLibraryOperation = nil
+            phoneLibraryOperationServerGeneration = nil
             await cancelPendingWorkIfReady(.phoneLibrary)
+            guard serverGeneration == phoneLibraryServerGeneration else { return }
             phoneLibraryStatus = .failure(error.localizedDescription)
         }
     }
@@ -240,8 +289,32 @@ extension AppState {
 
     func applyPhoneLibraryFinished(_ finished: RunFinishedNotification) {
         let operation = phoneLibraryOperation
+        let serverGeneration = phoneLibraryOperationServerGeneration
         phoneLibraryRunID = nil
         phoneLibraryOperation = nil
+        phoneLibraryOperationServerGeneration = nil
+        // Reopening can discover a different server while an earlier run is
+        // finishing. Its late result must not repopulate that server's cards.
+        if let serverGeneration, serverGeneration != phoneLibraryServerGeneration {
+            phoneLibraryStatus = WorkflowStatus(
+                message: "The server configuration changed during the previous operation. Its results were not attached to this server. Refresh status before continuing.",
+                severity: .warn
+            )
+            return
+        }
+
+        // A push reports through its own outcome on success and failure alike:
+        // the result carries the refreshed mirror state and, for a refusal,
+        // why nothing was pushed.
+        if case .mirrorPush = operation {
+            let result = finished.result.flatMap { try? decodeWire(NavidromeMirrorPushResult.self, from: $0) }
+            let outcome = NavidromeMirrorPushOutcome(exitCode: finished.exitCode, error: finished.error, result: result)
+            navidromeMirrorPush = result
+            navidromeMirrorPushOutcome = outcome
+            phoneLibraryStatus = WorkflowStatus(message: outcome.message, severity: outcome.severity)
+            Task { await refreshPhoneLibraryStatus() }
+            return
+        }
 
         if finished.exitCode != 0 {
             phoneLibraryStatus = finished.exitCode == 130
@@ -347,6 +420,9 @@ extension AppState {
             let created = finished.result.flatMap { try? decodeWire(NavidromeBackupResult.self, from: $0) }
             phoneLibraryStatus = WorkflowStatus(message: created?.message ?? "Backup created.")
             Task { await refreshPhoneLibraryStatus() }
+        case .mirrorPush:
+            // Handled above, before the exit-code split.
+            break
         case nil:
             break
         }
@@ -357,10 +433,11 @@ extension AppState {
         guard phoneLibraryOperation != nil || phoneLibraryRunID != nil else { return false }
         let wasMutating = phoneLibraryOperation?.isMutating ?? false
         phoneLibraryOperation = nil
+        phoneLibraryOperationServerGeneration = nil
         phoneLibraryRunID = nil
         phoneLibraryStatus = WorkflowStatus(
             message: wasMutating
-                ? "Backend connection ended. No install, setup, or import step was resumed or replayed."
+                ? "Backend connection ended. No install, setup, import, or push step was resumed or replayed."
                 : "Backend connection ended. The step was not resumed.",
             severity: .error
         )
@@ -368,16 +445,29 @@ extension AppState {
     }
 
     func clearPhoneLibrarySession() {
+        phoneLibraryLoadGeneration = UUID()
+        phoneLibraryLoads = []
+        phoneLibraryConfigSaving = false
+        phoneLibraryLoadFailure = nil
         navidromeConfig = nil
         navidromeStatus = nil
+        clearPhoneLibraryServerResults()
+        phoneLibraryOperation = nil
+        phoneLibraryOperationServerGeneration = nil
+        phoneLibraryRunID = nil
+    }
+
+    private func clearPhoneLibraryServerResults() {
+        phoneLibraryServerGeneration = UUID()
         navidromeSetupPlan = nil
         navidromeFavoritePlan = nil
         navidromeFavoriteResult = nil
+        navidromeStarred = nil
         navidromeGenreDerivation = nil
         navidromeGenreApproval = [:]
         navidromePlaylistRefresh = nil
-        phoneLibraryOperation = nil
-        phoneLibraryRunID = nil
+        navidromeMirrorPush = nil
+        navidromeMirrorPushOutcome = nil
         phoneLibraryStatus = nil
     }
 
@@ -388,8 +478,25 @@ extension AppState {
     }
 
     var phoneConnection: PhoneConnectionDetails {
-        PhoneConnectionDetails(status: navidromeStatus)
+        PhoneConnectionDetails(status: navidromeStatus, configuredServerURL: navidromeConfig?.config.server.url)
     }
 
-    var isPhoneLibraryBusy: Bool { phoneLibraryOperation != nil }
+    var phoneLibraryRemoteSummary: PhoneLibraryRemoteSummary {
+        PhoneLibraryRemoteSummary(status: navidromeStatus, configuredServerURL: navidromeConfig?.config.server.url)
+    }
+
+    var isPhoneLibraryRemote: Bool { navidromeStatus?.isRemote == true }
+
+    var isPhoneLibraryBusy: Bool { phoneLibraryBusyReason != nil }
+
+    /// Shared by the action guards and the view's `.constrained(by:)` notes.
+    var phoneLibraryBusyReason: String? {
+        if !phoneLibraryLoads.isEmpty {
+            return "Phone Library configuration and status are loading. Wait for them to finish."
+        }
+        if phoneLibraryConfigSaving {
+            return "Saving Phone Library configuration. Wait for it to finish."
+        }
+        return phoneLibraryOperation.map { "\($0.label) Wait for it to finish or cancel it." }
+    }
 }

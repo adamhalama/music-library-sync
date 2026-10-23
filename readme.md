@@ -248,6 +248,78 @@ home network):
   distinct spelling (`Hard Bounce` and `HARD BOUNCE` are two entries).
 - The account password lives only in macOS Keychain. It never appears in configuration, plans, logs, or command arguments.
 
+Remote mode (`mode: remote` in `navidrome.yaml`) serves a mirror of
+`~/Music/downloaded` from an always-on server instead of this Mac. The Mac stays
+the only place the library is downloaded and edited; the server keeps serving
+its mirror while the Mac sleeps. Pushes are not all-or-nothing: a failed push is
+incomplete, the server may be partly updated, and the next push completes it.
+
+```yaml
+mode: remote
+server:
+  url: https://music-server.<tailnet>.ts.net:4533
+  username: jaa
+remote:
+  ssh_target: udl-mirror          # ~/.ssh/config Host alias for the mirror key
+  rsync_path: /opt/homebrew/bin/rsync
+  max_delete: 250
+```
+
+- `udl navidrome push [--no-scan] [--force-scan] [--no-dates] [--allow-deletes N]`:
+  mirror the library with rsync over SSH, then — when anything changed — wait
+  for the server to be idle, rescan, and re-apply Date Added. A sync does this
+  on its own; run it after any other library change. A launchd job can run it
+  periodically as a fallback.
+- A dry run comes first: a push that would delete more than `max_delete` files
+  is refused before anything changes (a moved or missing library folder looks
+  like that). Pass `--allow-deletes N` for an intended reorganisation.
+- The server scans only when udl asks, after a complete push (no watcher, no
+  scheduled scan), so a push that stopped half-way is never indexed. A scan or
+  Date Added step that did not finish is recorded in
+  `<data_dir>/udl-mirror-state.json` and retried by the next push; `status`
+  reports it, and a failed push, as a problem. The pending scan is recorded
+  before the transfer starts, so a push interrupted mid-transfer still owes one.
+- Remote scans go through the SSH mirror gate, including playlist refreshes
+  and `--force-scan` (which scans even when nothing changed, not a full rescan).
+  The public Navidrome API is used for library, playlist and favourites reads,
+  not to start remote scans.
+- No transfer starts while the server is scanning: the gate checks scan state,
+  recovery/migration markers and server locks, then checks again under its lock
+  at the rsync hand-off. A busy or unknown state defers the push with nothing
+  changed; another mirror session is reported as busy. An explicit hand-off
+  refusal does not add scan debt. The next push retries. `status` also explains
+  when a recovery/migration scan or an unreachable server-side API blocks pushes.
+- Names starting with `..` (e.g. `...Ready For It.mp3`) are mirrored: Navidrome
+  hides only names with a single leading dot.
+- The server's Navidrome must mount the mirror at the **same absolute path** as
+  `music_dir` and report real paths, so every path it returns is a real path
+  on this Mac. `udl navidrome status` flags a server library rooted elsewhere.
+- rsync must be 3.x (`brew install rsync`); `/usr/bin/rsync` on current macOS
+  is openrsync and is refused.
+- The server's own creation times are push times, so `udl navidrome dates
+  reconcile` sends this Mac's APFS creation times and the server applies them
+  (after its own backup). `--dry-run` reports what would change.
+- `backup create` / `list` act on the server's database in remote mode.
+- `udl navidrome export-db [--out <folder>] [--keep N]` pulls a verified copy of
+  the server's database to this Mac. The destination filesystem must support
+  hard links (for example, exFAT is refused) so publication never overwrites an
+  existing copy. The export lock is per `data_dir`, not per Mac: configurations
+  with different data directories do not share it.
+- Setup, service start/restart and `deps ensure` refuse in remote mode, so a
+  second server never starts on this Mac; stopping the local service is allowed.
+- The native app embeds its own `udl`: rebuild and reinstall it from a build
+  that knows remote mode, or its config saves cannot preserve `mode: remote`.
+
+For a local, no-network gate integration check, set `UDL_MIRROR_GATE` to the
+absolute gate script path and optionally `UDL_MIRROR_RSYNC` to an rsync 3.x
+binary (otherwise it uses `rsync` on `PATH`), then run
+`go test ./internal/navidrome -run RealGate -count=1 -v`. These opt-in tests use
+throwaway databases, mirrors and locks; they verify the actual stderr refusal
+seen through rsync as well as backup export. The full remote acceptance test
+uses `UDL_NAVIDROME_REMOTE_E2E=1` and the `E2E_*` variables documented in
+`internal/navidrome/remote_acceptance_test.go`; its `E2E_SSH` wrapper must invoke
+a scan-capable gate with the harness's lock, loopback URL and credential paths.
+
 `rekordbox` commands:
 
 - `udl rekordbox config path|show`: inspect the standalone Rekordbox configuration.

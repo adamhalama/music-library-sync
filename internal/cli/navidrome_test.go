@@ -2,12 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/jaa/update-downloads/internal/exitcode"
 	"github.com/jaa/update-downloads/internal/navidrome"
 )
 
@@ -36,12 +39,48 @@ func TestNavidromeCommandTreeIsRegistered(t *testing.T) {
 		{"navidrome", "favorites", "list", "--help"},
 		{"navidrome", "phone", "--help"},
 		{"navidrome", "backup", "create", "--help"},
+		{"navidrome", "export-db", "--help"},
+		{"navidrome", "push", "--help"},
 	} {
 		app, _, _ := newNavidromeTestApp()
 		root := newRootCommand(app)
 		root.SetArgs(args)
 		if err := root.Execute(); err != nil {
 			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestNavidromePushHelpWarnsAboutPartialUpdates(t *testing.T) {
+	app, out, _ := newNavidromeTestApp()
+	root := newRootCommand(app)
+	root.SetOut(out)
+	root.SetArgs([]string{"navidrome", "push", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"failed push is incomplete", "server may be partly updated", "next push\ncompletes it"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("push help must say %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "previous, complete mirror") {
+		t.Fatalf("push help must not promise an unchanged mirror: %s", text)
+	}
+}
+
+func TestNavidromeExportHelpStatesFilesystemAndLockScope(t *testing.T) {
+	app, out, _ := newNavidromeTestApp()
+	root := newRootCommand(app)
+	root.SetOut(out)
+	root.SetArgs([]string{"navidrome", "export-db", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"filesystem must support hard links", "refused rather than risking replacement", "per data_dir, not per Mac"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("export help must say %q: %s", want, out.String())
 		}
 	}
 }
@@ -209,7 +248,7 @@ func TestPrintSetupPlanNamesEveryMutation(t *testing.T) {
 	plan := navidrome.SetupPlan{
 		ServerVersion: "0.63.2",
 		BinaryPath:    "/opt/homebrew/bin/navidrome",
-		MusicDir:      "/Users/jaa/Music/downloaded",
+		MusicDir:      "/Users/example/Music/downloaded",
 		Directories: []navidrome.PlannedDirectory{
 			{Label: "data", Path: "/data", Exists: false},
 			{Label: "cache", Path: "/cache", Exists: true},
@@ -259,6 +298,32 @@ func TestPrintStarredFavoritesRendersEveryShape(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("listing missing %q: %q", want, rendered)
+		}
+	}
+}
+
+func TestNavidromePushExitsInterruptedWhenCanceledAfterTheTransfer(t *testing.T) {
+	live := context.Background()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	cases := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want int
+	}{
+		{"success", live, nil, exitcode.Success},
+		{"failed", live, errors.New("boom"), exitcode.RuntimeFailure},
+		{"canceled during the scan", canceled, nil, exitcode.Interrupted},
+		{"canceled during the transfer", canceled, context.Canceled, exitcode.Interrupted},
+	}
+	for _, tc := range cases {
+		err := mirrorPushExit(tc.ctx, tc.err)
+		if got := mapExitCode(err); got != tc.want {
+			t.Errorf("%s: exit = %d (%v), want %d", tc.name, got, err, tc.want)
+		}
+		if tc.want == exitcode.Interrupted && err == nil {
+			t.Errorf("%s: an interrupted push must say so", tc.name)
 		}
 	}
 }

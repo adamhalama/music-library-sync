@@ -1,4 +1,10 @@
+import Foundation
 import XCTest
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 @testable import UDL
 
 final class PhoneLibraryTests: XCTestCase {
@@ -12,9 +18,9 @@ final class PhoneLibraryTests: XCTestCase {
         {
           "enabled": true,
           "config_path": "/tmp/navidrome.yaml",
-          "music_dir": "/Users/jaa/Music/downloaded",
-          "data_dir": "/Users/jaa/Library/Application Support/UDL/Navidrome",
-          "playlists_dir": "/Users/jaa/Music/downloaded/.udl/playlists",
+          "music_dir": "/Users/example/Music/downloaded",
+          "data_dir": "/Users/example/Library/Application Support/UDL/Navidrome",
+          "playlists_dir": "/Users/example/Music/downloaded/.udl/playlists",
           "username": "jaa",
           "password_stored": false,
           "dependency": {
@@ -458,6 +464,496 @@ final class PhoneLibraryTests: XCTestCase {
         )
     }
 
+    // MARK: Remote mode
+
+    /// What `navidrome.status` sends in remote mode, including the nulls Go
+    /// produces for empty slices and its nanosecond timestamps.
+    static let remoteStatusJSON = """
+    {
+      "enabled": true,
+      "music_dir": "/Users/example/Music/downloaded",
+      "data_dir": "/Users/example/Library/Application Support/UDL/Navidrome",
+      "playlists_dir": "/Users/example/Music/downloaded/.udl/playlists",
+      "username": "jaa",
+      "password_stored": true,
+      "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "ffmpeg_installed": false, "problems": []},
+      "service": {"state": "remote", "loaded": false, "owned": false, "problems": []},
+      "reachable": true,
+      "server": {"type": "navidrome", "server_version": "0.63.2"},
+      "library_tracks": 1574,
+      "scanning": false,
+      "managed_playlists": null,
+      "backup_count": 2,
+      "latest_backup": {"path": "/srv/navidrome/backups/udl-20261022.db", "size_bytes": 1048576, "created_at": "2026-10-22T09:30:00.123456789Z"},
+      "phone_connected": false,
+      "problems": ["the server has not finished scanning the last push; the next `udl navidrome push` retries it"],
+      "mode": "remote",
+      "remote": {
+        "ssh_target": "udl-mirror",
+        "library": {"path": "/Users/example/Music/downloaded", "files": 1580, "bytes": 10093173555, "newest_mtime": "2026-10-22T08:00:00Z"},
+        "database": {"path": "/data/navidrome.db", "present": true, "size_bytes": 52428800, "tracks": 1574, "libraries": null},
+        "udl_backups": null,
+        "navidrome_backups": [{"path": "/srv/navidrome/backups/navidrome_backup_x.db", "size_bytes": 9, "created_at": "2026-10-21T03:00:00Z"}],
+        "disk": {"free_bytes": 400000000000, "total_bytes": 500000000000}
+      },
+      "mirror": {
+        "last_push_at": "2026-10-22T10:00:00.123456789Z",
+        "last_scan_at": "2026-10-22T10:01:00Z",
+        "scan_pending": true,
+        "a_future_field": 1
+      },
+      "export": {"last_export_at": "2026-10-20T11:00:00.5Z"}
+    }
+    """
+
+    func testRemoteModeStatusDecodesServerAndMirrorState() throws {
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(Self.remoteStatusJSON.utf8))
+        XCTAssertTrue(status.isRemote)
+        XCTAssertEqual(status.managedPlaylists, [])
+        XCTAssertEqual(status.remote?.sshTarget, "udl-mirror")
+        XCTAssertEqual(status.remote?.library?.files, 1580)
+        XCTAssertEqual(status.remote?.library?.bytes, 10_093_173_555)
+        XCTAssertEqual(status.remote?.library?.newestMtime, "2026-10-22T08:00:00Z")
+        XCTAssertEqual(status.remote?.database?.tracks, 1574)
+        XCTAssertEqual(status.remote?.database?.present, true)
+        XCTAssertNil(status.remote?.database?.error)
+        // Go's nil slice arrives as null and must read as empty.
+        XCTAssertEqual(status.remote?.udlBackups, [])
+        XCTAssertEqual(status.remote?.navidromeBackups.count, 1)
+        XCTAssertEqual(status.remote?.disk?.freeBytes, 400_000_000_000)
+        // Timestamps stay verbatim; unknown mirror fields are ignored.
+        XCTAssertEqual(status.mirror?.lastPushAt, "2026-10-22T10:00:00.123456789Z")
+        XCTAssertEqual(status.mirror?.scanPending, true)
+        XCTAssertNil(status.mirror?.datesPending)
+        XCTAssertNil(status.mirror?.lastPushError)
+        XCTAssertEqual(status.serverDBExport?.lastExportAt, "2026-10-20T11:00:00.5Z")
+        XCTAssertNil(status.serverDBExport?.lastExportError)
+    }
+
+    /// A backend that predates remote mode — or a local install — sends no
+    /// mode, remote, or mirror. That must decode and read as local.
+    func testAStatusWithoutRemoteFieldsDecodesAsLocal() throws {
+        let payload = """
+        {
+          "enabled": true, "music_dir": "/m", "data_dir": "/d", "playlists_dir": "/p",
+          "password_stored": false,
+          "dependency": {"homebrew_installed": true, "installed": true, "minimum_version": "0.63.2", "version_supported": true, "problems": null},
+          "service": {"state": "running", "loaded": true, "owned": true, "problems": null},
+          "reachable": false, "server": {}, "library_tracks": 0, "scanning": false,
+          "managed_playlists": null, "backup_count": 0, "phone_connected": false, "problems": null
+        }
+        """
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(payload.utf8))
+        XCTAssertNil(status.mode)
+        XCTAssertNil(status.remote)
+        XCTAssertNil(status.mirror)
+        XCTAssertNil(status.serverDBExport)
+        XCTAssertFalse(status.isRemote)
+    }
+
+    /// The server could not be asked: remote mode with no `remote` object, and
+    /// a gate reply missing most of its numbers. Neither may fail decoding.
+    func testARemoteStatusWithoutServerDetailsStillDecodes() throws {
+        let unreachable = """
+        {
+          "enabled": true, "music_dir": "/m", "data_dir": "/d", "playlists_dir": "/p",
+          "password_stored": true,
+          "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "problems": []},
+          "service": {"state": "remote", "loaded": false, "owned": false, "problems": []},
+          "reachable": false, "server": {}, "library_tracks": 0, "scanning": false,
+          "managed_playlists": null, "backup_count": 0, "phone_connected": false,
+          "problems": ["the mirror server is not reachable over SSH (udl-mirror): timeout"],
+          "mode": "remote", "mirror": {}
+        }
+        """
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(unreachable.utf8))
+        XCTAssertTrue(status.isRemote)
+        XCTAssertNil(status.remote)
+        XCTAssertNil(status.mirror?.lastPushAt)
+
+        let sparse = try JSONDecoder.agent.decode(
+            NavidromeRemoteStatus.self,
+            from: Data(#"{"library": {}, "database": {"present": false}, "udl_backups": null}"#.utf8)
+        )
+        XCTAssertNil(sparse.sshTarget)
+        XCTAssertNil(sparse.library?.files)
+        XCTAssertEqual(sparse.udlBackups, [])
+        XCTAssertEqual(sparse.navidromeBackups, [], "an absent collection reads as empty too")
+    }
+
+    func testRemoteSummaryStatesWhatThePhoneUsesAndHowCurrentTheMirrorIs() throws {
+        let status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(Self.remoteStatusJSON.utf8))
+        let now = try XCTUnwrap(PhoneLibraryFormat.date("2026-10-22T10:05:30Z"))
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let summary = PhoneLibraryRemoteSummary(
+            status: status, configuredServerURL: "https://music-server.example.ts.net:4533", now: now, timeZone: utc
+        )
+        XCTAssertEqual(summary.serverURL, "https://music-server.example.ts.net:4533")
+        XCTAssertEqual(summary.sshTarget, "udl-mirror")
+        XCTAssertEqual(summary.lastPush, "5 minutes ago (2026-10-22 10:00)")
+        XCTAssertEqual(summary.lastScan, "4 minutes ago (2026-10-22 10:01)")
+        XCTAssertNil(summary.lastPushError)
+        XCTAssertEqual(summary.serverLibrary, "1580 files · 9.4 GiB")
+        XCTAssertEqual(summary.serverDatabase, "1574 tracks")
+        XCTAssertTrue(summary.databaseHealthy)
+        XCTAssertEqual(summary.latestServerBackup, "/srv/navidrome/backups/udl-20261022.db · 35 minutes ago (2026-10-22 09:30)")
+        XCTAssertEqual(summary.lastServerDBCopy, "1 day ago (2026-10-20 11:00)")
+        XCTAssertNil(summary.lastServerDBCopyError)
+        XCTAssertEqual(summary.problems.count, 1)
+
+        XCTAssertEqual(summary.serverBackupCount, "2")
+
+        let never = PhoneLibraryRemoteSummary(status: nil, configuredServerURL: nil, now: now, timeZone: utc)
+        XCTAssertEqual(never.lastPush, "never")
+        XCTAssertEqual(never.serverURL, "")
+        XCTAssertEqual(never.latestServerBackup, "unknown")
+        XCTAssertEqual(never.serverBackupCount, "unknown")
+        XCTAssertFalse(never.databaseHealthy)
+    }
+
+    /// The server's backup inventory is known only when its status call
+    /// answered. An unreachable server is "unavailable", not "none yet" / 0;
+    /// only an answer with no backups reads as none.
+    func testServerBackupsAreUnavailableWhenTheServerDidNotAnswer() throws {
+        let unreachable = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data("""
+        {
+          "enabled": true, "music_dir": "/m", "data_dir": "/d", "playlists_dir": "/p",
+          "password_stored": true,
+          "dependency": {"homebrew_installed": false, "installed": false, "minimum_version": "", "version_supported": false, "problems": []},
+          "service": {"state": "remote", "loaded": false, "owned": false, "problems": []},
+          "reachable": false, "server": {}, "library_tracks": 0, "scanning": false,
+          "managed_playlists": null, "backup_count": 0, "phone_connected": false,
+          "problems": ["the mirror server is not reachable over SSH (udl-mirror): timeout"],
+          "mode": "remote", "mirror": {}
+        }
+        """.utf8))
+        let down = PhoneLibraryRemoteSummary(status: unreachable, configuredServerURL: nil)
+        XCTAssertEqual(down.latestServerBackup, "unavailable (the server did not answer)")
+        XCTAssertEqual(down.serverBackupCount, "unavailable (the server did not answer)")
+
+        let emptyJSON = Self.remoteStatusJSON
+            .replacingOccurrences(of: #""backup_count": 2,"#, with: #""backup_count": 0,"#)
+            .replacingOccurrences(of: #""latest_backup": {"path": "/srv/navidrome/backups/udl-20261022.db", "size_bytes": 1048576, "created_at": "2026-10-22T09:30:00.123456789Z"},"#, with: "")
+        let empty = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(emptyJSON.utf8))
+        XCTAssertNotNil(empty.remote)
+        XCTAssertNil(empty.latestBackup)
+        let none = PhoneLibraryRemoteSummary(status: empty, configuredServerURL: nil)
+        XCTAssertEqual(none.latestServerBackup, "none yet")
+        XCTAssertEqual(none.serverBackupCount, "0")
+    }
+
+    /// The weekly off-server copy of the server's database: when it last
+    /// worked, or why the last one failed. A backend that predates the
+    /// export reports nothing, which is not the same as "never".
+    func testRemoteSummaryShowsTheLastServerDatabaseCopy() throws {
+        let now = try XCTUnwrap(PhoneLibraryFormat.date("2026-10-22T10:05:30Z"))
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        var status = try JSONDecoder.agent.decode(NavidromeStatus.self, from: Data(Self.remoteStatusJSON.utf8))
+        func summary() -> PhoneLibraryRemoteSummary {
+            PhoneLibraryRemoteSummary(status: status, configuredServerURL: nil, now: now, timeZone: utc)
+        }
+
+        status.serverDBExport = try JSONDecoder.agent.decode(NavidromeServerDBExportState.self, from: Data("""
+        {"last_export_at": "2026-10-11T11:00:00Z", "last_export_error": "the mirror server is not reachable over SSH (udl-mirror): timeout",
+         "last_export_error_at": "2026-10-22T10:00:00Z"}
+        """.utf8))
+        XCTAssertEqual(summary().lastServerDBCopy, "10 days ago (2026-10-11 11:00)")
+        XCTAssertEqual(summary().lastServerDBCopyError,
+                       "Last copy failed 5 minutes ago (2026-10-22 10:00): the mirror server is not reachable over SSH (udl-mirror): timeout")
+
+        status.serverDBExport = try JSONDecoder.agent.decode(NavidromeServerDBExportState.self, from: Data("{}".utf8))
+        XCTAssertEqual(summary().lastServerDBCopy, "never")
+        XCTAssertNil(summary().lastServerDBCopyError)
+
+        status.serverDBExport = nil
+        XCTAssertEqual(summary().lastServerDBCopy, "not reported by this backend")
+    }
+
+    func testFormatParsesGoTimestampsAndKeepsWhatItCannotParse() throws {
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let nanos = try XCTUnwrap(PhoneLibraryFormat.date("2026-10-22T10:00:00.123456789Z"))
+        XCTAssertEqual(PhoneLibraryFormat.absolute(nanos, timeZone: utc), "2026-10-22 10:00")
+        XCTAssertNotNil(PhoneLibraryFormat.date("2026-10-22T12:00:00+02:00"))
+        XCTAssertEqual(PhoneLibraryFormat.moment("yesterday-ish"), "yesterday-ish")
+        XCTAssertEqual(PhoneLibraryFormat.moment(nil), "never")
+        XCTAssertEqual(PhoneLibraryFormat.relative(nanos, now: nanos.addingTimeInterval(-30)), "just now")
+        XCTAssertEqual(PhoneLibraryFormat.relative(nanos, now: nanos.addingTimeInterval(3 * 86_400 + 5)), "3 days ago")
+        XCTAssertEqual(PhoneLibraryFormat.bytes(nil), "unknown size")
+        XCTAssertEqual(PhoneLibraryFormat.bytes(5 << 20), "5 MiB")
+    }
+
+    /// Remote mode has nothing to install or start on this Mac; the checklist
+    /// asks for a successful push instead, so the badge can reach zero.
+    func testRemoteProgressReplacesTheLocalInstallSteps() {
+        let local = makeStatus(
+            dependencyReady: false, homebrewInstalled: false, serviceState: "remote",
+            passwordStored: true, username: "jaa", reachable: true,
+            libraryTracks: 1574, playlistCount: 3, phoneConnected: true
+        )
+        func remote(_ mirror: NavidromeMirrorState?) -> NavidromeStatus {
+            var status = local
+            status.mode = "remote"
+            status.mirror = mirror
+            return status
+        }
+        let neverPushed = PhoneLibraryProgress(status: remote(nil))
+        XCTAssertEqual(neverPushed.steps.map(\.id), ["mirror", "account", "library", "playlists", "phone"])
+        XCTAssertEqual(neverPushed.current?.id, "mirror")
+
+        let pushed = PhoneLibraryProgress(status: remote(NavidromeMirrorState(
+            lastPushAt: "2026-10-22T10:00:00Z", lastScanAt: nil, lastErrorAt: nil,
+            lastPushError: nil, scanPending: nil, datesPending: nil
+        )))
+        XCTAssertEqual(pushed.remaining, 0)
+
+        let failed = PhoneLibraryProgress(status: remote(NavidromeMirrorState(
+            lastPushAt: "2026-10-22T10:00:00Z", lastScanAt: nil, lastErrorAt: "2026-10-22T11:00:00Z",
+            lastPushError: "mirror push failed (rsync exit 12)", scanPending: nil, datesPending: nil
+        )))
+        guard case .blocked(let reason)? = failed.steps.first?.state else {
+            return XCTFail("a failed last push must block the mirror step")
+        }
+        XCTAssertTrue(reason.contains("last push failed"))
+
+        // Files reached the server but its scan (or the Date Added step after
+        // it) has not completed: the mirror is not current yet.
+        for (scanPending, datesPending) in [(true, false), (false, true)] {
+            let owed = PhoneLibraryProgress(status: remote(NavidromeMirrorState(
+                lastPushAt: "2026-10-22T10:00:00Z", lastScanAt: nil, lastErrorAt: nil,
+                lastPushError: nil, scanPending: scanPending, datesPending: datesPending
+            )))
+            XCTAssertFalse(owed.steps.first?.isDone ?? true, "scan_pending=\(scanPending) dates_pending=\(datesPending)")
+            XCTAssertEqual(owed.current?.id, "mirror")
+        }
+    }
+
+    func testRemoteConnectionUsesTheConfiguredServerURL() {
+        var status = makeStatus(
+            dependencyReady: false, homebrewInstalled: false, serviceState: "remote",
+            passwordStored: true, username: "jaa", reachable: true,
+            libraryTracks: 10, playlistCount: 3
+        )
+        // A local status ignores the configured URL and keeps the LAN address.
+        XCTAssertEqual(
+            PhoneConnectionDetails(status: status, configuredServerURL: "https://server:4533").serverURL,
+            "http://mac.local:4533"
+        )
+        status.mode = "remote"
+        let remote = PhoneConnectionDetails(status: status, configuredServerURL: "https://server:4533")
+        XCTAssertEqual(remote.serverURL, "https://server:4533")
+        XCTAssertTrue(remote.isReady)
+        XCTAssertFalse(PhoneConnectionDetails(status: status).isReady, "remote mode without server.url has no address")
+    }
+
+    func testMirrorPushIsAMutatingOperation() {
+        XCTAssertTrue(PhoneLibraryOperation.mirrorPush.isMutating)
+        XCTAssertFalse(PhoneLibraryOperation.mirrorPush.label.isEmpty)
+    }
+
+    func testMirrorPushParamsNeverRaiseTheDeleteLimit() throws {
+        let encoded = try JSONEncoder.agent.encode(NavidromeMirrorPushParams(forceScan: false))
+        XCTAssertEqual(String(decoding: encoded, as: UTF8.self), #"{"force_scan":false}"#)
+    }
+
+    // MARK: Push outcomes
+
+    private func decodePush(_ json: String) throws -> NavidromeMirrorPushResult {
+        try JSONDecoder.agent.decode(NavidromeMirrorPushResult.self, from: Data(json.utf8))
+    }
+
+    func testASuccessfulPushReportsCountsAndScan() throws {
+        let result = try decodePush("""
+        {
+          "push": {"command": "rsync …", "started_at": "2026-10-22T10:00:00Z", "finished_at": "2026-10-22T10:00:05Z",
+                   "changed": 3, "deleted": 1, "items": null},
+          "scanned": true,
+          "dates": {"database_path": "udl-mirror:navidrome.db", "candidates": 3, "updated": 3,
+                    "message": "Date Added now matches file creation time for 3 track(s)"},
+          "warnings": null,
+          "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "last_scan_at": "2026-10-22T10:01:00Z"}
+        }
+        """)
+        XCTAssertEqual(result.push?.items, [])
+        XCTAssertEqual(result.warnings, [])
+        XCTAssertEqual(result.mirror?.lastScanAt, "2026-10-22T10:01:00Z")
+        let outcome = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: result)
+        XCTAssertEqual(outcome.kind, .pushed)
+        XCTAssertEqual(outcome.severity, .ok)
+        XCTAssertTrue(outcome.message.contains("3 changed, 1 deleted"))
+        XCTAssertTrue(outcome.message.contains("rescanned"))
+        XCTAssertTrue(outcome.message.contains("Date Added now matches"))
+        XCTAssertNil(outcome.plannedDeletes)
+    }
+
+    func testAPushWithWarningsIsAWarningNotASuccess() throws {
+        let result = try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false,
+         "warnings": ["pushed, but no scan was requested: the Navidrome API is not available"]}
+        """)
+        let outcome = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: result)
+        XCTAssertEqual(outcome.kind, .pushed)
+        XCTAssertEqual(outcome.severity, .warn)
+        XCTAssertTrue(outcome.message.contains("no scan was requested"))
+        // Without the recorded mirror state, nothing says no scan was owed.
+        XCTAssertFalse(outcome.message.contains("no scan was needed"))
+    }
+
+    /// What the push says about its scan comes from the recorded pending
+    /// flags and `scanned`, never from the transfer counts alone.
+    func testAPushDescribesItsScanFromThePendingFlags() throws {
+        // Nothing new, but the scan an earlier push owed ran now.
+        let retried = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": true, "warnings": [],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "last_scan_at": "2026-10-22T10:01:00Z"}}
+        """))
+        XCTAssertEqual(retried.severity, .ok)
+        XCTAssertTrue(retried.message.contains("still owed"), retried.message)
+        XCTAssertFalse(retried.message.contains("no scan was needed"))
+
+        // Nothing new, and the owed scan timed out again.
+        let stillOwed = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false,
+         "warnings": ["pushed, but the scan did not complete: wait for the running Navidrome scan: context deadline exceeded"],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "scan_pending": true}}
+        """))
+        XCTAssertEqual(stillOwed.severity, .warn)
+        XCTAssertFalse(stillOwed.message.contains("no scan was needed"), stillOwed.message)
+        XCTAssertTrue(stillOwed.message.contains("not finished scanning"), stillOwed.message)
+
+        // The scan ran but Date Added did not.
+        let datesOwed = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 2, "deleted": 0}, "scanned": true,
+         "warnings": ["Date Added was not reconciled: udl-mirror apply-dates: database is locked"],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z", "last_scan_at": "2026-10-22T10:01:00Z", "dates_pending": true}}
+        """))
+        XCTAssertEqual(datesOwed.severity, .warn)
+        XCTAssertTrue(datesOwed.message.contains("rescanned"))
+        XCTAssertTrue(datesOwed.message.contains("Date Added was not re-applied yet"), datesOwed.message)
+
+        // A genuine no-op.
+        let noop = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "mirror": {"last_push_at": "2026-10-22T10:00:05Z"}}
+        """))
+        XCTAssertEqual(noop.severity, .ok)
+        XCTAssertTrue(noop.message.contains("no scan was needed"))
+    }
+
+    /// The refusal names the planned count and the CLI override; there is no
+    /// one-click way past it.
+    func testADeleteLimitRefusalCarriesTheCountAndTheCLIOverride() throws {
+        let error = "push refused by the delete limit: it would delete 300 files from the server (limit 250), so nothing was pushed. … run `udl navidrome push --allow-deletes 300`"
+        let result = try decodePush("""
+        {
+          "push": {"changed": 0, "deleted": 0, "planned_deletes": 300},
+          "scanned": false, "warnings": [],
+          "mirror": {"last_push_error": "push refused by the delete limit", "last_error_at": "2026-10-22T10:00:00Z"},
+          "failure": {"kind": "delete_limit", "detail": "\(error)", "planned_deletes": 300,
+                      "allow_deletes_command": "udl navidrome push --allow-deletes 300"}
+        }
+        """)
+        let outcome = NavidromeMirrorPushOutcome(exitCode: 1, error: error, result: result)
+        XCTAssertEqual(outcome.kind, .deleteLimit(plannedDeletes: 300, command: "udl navidrome push --allow-deletes 300"))
+        XCTAssertEqual(outcome.plannedDeletes, 300)
+        XCTAssertEqual(outcome.severity, .error)
+        XCTAssertTrue(outcome.message.contains("300 file(s)"))
+        XCTAssertTrue(outcome.message.contains("`udl navidrome push --allow-deletes 300`"))
+        XCTAssertTrue(outcome.message.contains("Nothing was changed"))
+    }
+
+    func testBusyCanceledAndFailedPushesMapToDistinctOutcomes() throws {
+        let busy = NavidromeMirrorPushOutcome(exitCode: 1, error: "A push is already running", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "busy", "detail": "A push is already running (a sync's post-sync push…); this one was skipped and nothing changed."}}
+        """))
+        XCTAssertEqual(busy.kind, .busy)
+        XCTAssertEqual(busy.severity, .warn)
+        XCTAssertTrue(busy.message.contains("already running"))
+
+        let canceled = NavidromeMirrorPushOutcome(exitCode: 130, error: "mirror preflight did not finish: context canceled", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "canceled", "detail": "mirror preflight did not finish: context canceled"}}
+        """))
+        XCTAssertEqual(canceled.kind, .canceled)
+        XCTAssertEqual(canceled.severity, .warn)
+
+        let failed = NavidromeMirrorPushOutcome(exitCode: 1, error: "mirror push failed (rsync exit 12): protocol", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "failed", "detail": "mirror push failed (rsync exit 12): protocol"}}
+        """))
+        XCTAssertEqual(failed.kind, .failed)
+        XCTAssertEqual(failed.severity, .error)
+        XCTAssertTrue(failed.message.contains("rsync exit 12"))
+        XCTAssertTrue(failed.message.contains("push again"))
+
+        let deferred = NavidromeMirrorPushOutcome(exitCode: 1, error: "the server is scanning", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "server_scanning", "detail": "the server is scanning or its scan state is unknown; the push was deferred and nothing was changed: Navidrome was still scanning after 5m0s; the next push retries"}}
+        """))
+        XCTAssertEqual(deferred.kind, .serverScanning)
+        XCTAssertEqual(deferred.severity, .warn)
+        XCTAssertTrue(deferred.message.contains("deferred"))
+        XCTAssertTrue(deferred.message.contains("Nothing was changed"))
+        XCTAssertTrue(deferred.message.contains("still scanning after 5m0s"))
+
+        // A kind this build does not know reads as a plain failure.
+        let unknown = NavidromeMirrorPushOutcome(exitCode: 1, error: "x", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "failure": {"kind": "some_future_kind", "detail": "something new"}}
+        """))
+        XCTAssertEqual(unknown.kind, .failed)
+        XCTAssertTrue(unknown.message.contains("something new"))
+
+        // A terminal frame without a decodable result still says what failed.
+        let bare = NavidromeMirrorPushOutcome(exitCode: 1, error: "run result exceeds frame limit", result: nil)
+        XCTAssertEqual(bare.kind, .failed)
+        XCTAssertTrue(bare.message.contains("run result exceeds frame limit"))
+        let bareCancel = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: nil)
+        XCTAssertEqual(bareCancel.kind, .canceled)
+    }
+
+    /// rsync is not transactional across the tree: a failed or canceled push
+    /// may have changed part of the mirror, so the app says so and asks for
+    /// another push instead of promising the previous mirror.
+    func testAnInterruptedPushSaysItIsIncomplete() throws {
+        let partialFailure = NavidromeMirrorPushOutcome(exitCode: 1, error: "mirror push did not finish: signal: killed", result: try decodePush("""
+        {"push": {"changed": 5, "deleted": 2}, "scanned": false, "warnings": [],
+         "mirror": {"last_push_error": "mirror push did not finish: signal: killed", "scan_pending": true},
+         "failure": {"kind": "failed", "detail": "mirror push did not finish: signal: killed"}}
+        """))
+        XCTAssertEqual(partialFailure.kind, .failed)
+        for text in ["did not complete", "partly updated", "push again", "signal: killed"] {
+            XCTAssertTrue(partialFailure.message.contains(text), "\(text): \(partialFailure.message)")
+        }
+        XCTAssertFalse(partialFailure.message.contains("previous mirror"))
+
+        // Canceled mid-transfer: nothing itemized arrived, but the recorded
+        // owed scan says the transfer had started. The detail is kept.
+        let partialCancel = NavidromeMirrorPushOutcome(exitCode: 130, error: "mirror push did not finish: context canceled", result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "mirror": {"scan_pending": true},
+         "failure": {"kind": "canceled", "detail": "mirror push did not finish: context canceled"}}
+        """))
+        XCTAssertEqual(partialCancel.kind, .canceled)
+        for text in ["canceled", "partly updated", "push again", "mirror push did not finish: context canceled"] {
+            XCTAssertTrue(partialCancel.message.contains(text), "\(text): \(partialCancel.message)")
+        }
+        XCTAssertFalse(partialCancel.message.contains("previous mirror"))
+
+        // Canceled in the preflight: the recorded state shows nothing owed.
+        let early = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: try decodePush("""
+        {"push": {"changed": 0, "deleted": 0}, "scanned": false, "warnings": [],
+         "mirror": {"last_push_error": "mirror preflight did not finish: context canceled"},
+         "failure": {"kind": "canceled", "detail": "mirror preflight did not finish: context canceled"}}
+        """))
+        XCTAssertTrue(early.message.contains("nothing changed on the server"), early.message)
+        XCTAssertTrue(early.message.contains("mirror preflight did not finish"))
+
+        // Without a result nothing is known, so the cautious wording applies.
+        let bare = NavidromeMirrorPushOutcome(exitCode: 130, error: nil, result: nil)
+        XCTAssertTrue(bare.message.contains("partly updated"), bare.message)
+    }
+
     // MARK: Fixtures
 
     private func makeService(state: String, owned: Bool) -> NavidromeServiceStatus {
@@ -466,7 +962,7 @@ final class PhoneLibraryTests: XCTestCase {
             loaded: state == "running",
             pid: state == "running" ? 4242 : nil,
             lastExitStatus: nil,
-            launchAgentPath: "/Users/jaa/Library/LaunchAgents/com.jaa.udl.navidrome.plist",
+            launchAgentPath: "/Users/example/Library/LaunchAgents/com.jaa.udl.navidrome.plist",
             owned: owned,
             localURL: "http://localhost:4533",
             lanURL: "http://mac.local:4533",
@@ -493,9 +989,9 @@ final class PhoneLibraryTests: XCTestCase {
         return NavidromeStatus(
             enabled: true,
             configPath: "/tmp/navidrome.yaml",
-            musicDir: "/Users/jaa/Music/downloaded",
+            musicDir: "/Users/example/Music/downloaded",
             dataDir: "/d",
-            playlistsDir: "/Users/jaa/Music/downloaded/.udl/playlists",
+            playlistsDir: "/Users/example/Music/downloaded/.udl/playlists",
             username: username,
             passwordStored: passwordStored,
             dependency: NavidromeDependencyStatus(
@@ -520,5 +1016,369 @@ final class PhoneLibraryTests: XCTestCase {
             phoneConnected: phoneConnected,
             problems: []
         )
+    }
+}
+
+/// Hold real RPC replies to exercise refresh ownership and navigation races.
+/// These regressions are adapted from the round-4 adversarial review probes.
+@MainActor
+final class PhoneLibraryReloadTests: XCTestCase {
+    func testNavigationCancellationAtEitherReadIsNotAFailure() async throws {
+        for cancelAtStatus in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            let load = Task { await state.loadPhoneLibrary() }
+            let config = try await rpc.readRequest(.navidromeConfigRead)
+            if cancelAtStatus {
+                try rpc.reply(config, result: configValue())
+                _ = try await rpc.readRequest(.navidromeStatus)
+            }
+            load.cancel()
+            await load.value
+            XCTAssertNil(state.phoneLibraryStatus)
+            XCTAssertNil(state.navidromeConfig)
+            XCTAssertNil(state.navidromeStatus)
+            XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+            await rpc.connection.close()
+        }
+    }
+
+    func testSuccessfulRetryClearsItsLoadFailureButNotAnActionFailure() async throws {
+        for actionFailure in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            let first = Task { await state.loadPhoneLibrary() }
+            try rpc.fail(try await rpc.readRequest(.navidromeConfigRead), message: "temporary configuration error")
+            await first.value
+            XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+            let recovery = AppState.WorkflowStatus.failure("Import failed; keep the recovery command.")
+            if actionFailure { state.phoneLibraryStatus = recovery }
+            let retry = Task { await state.refreshPhoneLibraryStatus() }
+            try await answerLoad(rpc, tracks: 2)
+            await retry.value
+            XCTAssertEqual(state.navidromeStatus?.libraryTracks, 2)
+            XCTAssertEqual(state.phoneLibraryStatus, actionFailure ? recovery : nil)
+            XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+            await rpc.connection.close()
+        }
+    }
+
+    func testOlderReloadCannotOverwriteNewerRefreshOrItsError() async throws {
+        for oldFails in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            let old = Task { await state.loadPhoneLibrary() }
+            try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-a"))
+            let oldStatus = try await rpc.readRequest(.navidromeStatus)
+            let new = Task { await state.refreshPhoneLibraryStatus() }
+            try await answerLoad(rpc, server: "server-b", tracks: 2)
+            await new.value
+            XCTAssertEqual(state.phoneLibraryLoads.count, 1, "the superseded read is still in flight")
+            if oldFails { try rpc.fail(oldStatus, message: "obsolete failure") }
+            else { try rpc.reply(oldStatus, result: statusValue(tracks: 1)) }
+            await old.value
+            XCTAssertEqual(state.phoneConnection.serverURL, "https://server-b.example.ts.net")
+            XCTAssertEqual(state.navidromeStatus?.libraryTracks, 2)
+            XCTAssertNil(state.phoneLibraryStatus)
+            XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+            await rpc.connection.close()
+        }
+    }
+
+    func testOlderLoadCannotReleaseTheNewerLoadsConstraint() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        let old = Task { await state.loadPhoneLibrary() }
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-a"))
+        let oldStatus = try await rpc.readRequest(.navidromeStatus)
+        let new = Task { await state.refreshPhoneLibraryStatus() }
+        let newConfig = try await rpc.readRequest(.navidromeConfigRead)
+        try rpc.reply(oldStatus, result: statusValue(tracks: 1))
+        await old.value
+        XCTAssertEqual(state.phoneLibraryLoads.count, 1)
+        XCTAssertNil(state.navidromeConfig, "an obsolete load must not publish even before the newer one finishes")
+        try rpc.reply(newConfig, result: configValue(server: "server-b"))
+        try rpc.reply(try await rpc.readRequest(.navidromeStatus), result: statusValue(tracks: 2))
+        await new.value
+        XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+        XCTAssertEqual(state.phoneConnection.serverURL, "https://server-b.example.ts.net")
+        await rpc.connection.close()
+    }
+
+    func testSessionResetRetiresAnOutstandingLoad() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        let load = Task { await state.loadPhoneLibrary() }
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue())
+        let status = try await rpc.readRequest(.navidromeStatus)
+        state.clearPhoneLibrarySession()
+        try rpc.reply(status, result: statusValue(tracks: 1))
+        await load.value
+        XCTAssertNil(state.navidromeConfig)
+        XCTAssertNil(state.navidromeStatus)
+        XCTAssertNil(state.phoneLibraryStatus)
+        XCTAssertTrue(state.phoneLibraryLoads.isEmpty)
+        await rpc.connection.close()
+    }
+
+    func testReopenBlocksConfigChangingActionsUntilBothReadsFinish() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+        let plan: JSONValue = .object(["checksum_sha256": .string("fixture")])
+        state.navidromeSetupPlan = NavidromeSetupPlanPresentation(plan)
+        state.navidromeFavoritePlan = NavidromeFavoritePlanPresentation(plan)
+        state.navidromeGenreDerivation = NavidromeGenreDerivation(
+            sourcePlaylist: "fixture", sourceTrackCount: 1, matchedCount: 1, genres: ["House"],
+            unmatchedPaths: [], genrelessPaths: [], outsideLibrary: [], currentAllowlist: [], allowlistChanged: true
+        )
+        let reopen = Task { await state.loadPhoneLibrary() }
+        let config = try await rpc.readRequest(.navidromeConfigRead)
+        XCTAssertTrue(state.isPhoneLibraryBusy)
+        XCTAssertTrue(state.phoneLibraryBusyReason?.contains("configuration and status are loading") ?? false)
+        await state.setPhoneConnected(true)
+        assertNoRequest(rpc)
+        try rpc.reply(config, result: configValue(server: "server-b"))
+        let status = try await rpc.readRequest(.navidromeStatus)
+        // B's config arrived, but the published pair must remain A until its
+        // status arrives. None of these actions may use that stale cached A.
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example.ts.net")
+        await state.setPhoneConnected(true)
+        await state.savePhoneLibraryPassword("fixture")
+        await state.saveNavidromeGenres()
+        await state.applyNavidromeSetup()
+        await state.registerNavidromePlaylists()
+        await state.applyNavidromeFavorites()
+        await state.refreshNavidromePlaylists()
+        await state.controlNavidromeService("start")
+        await state.installNavidrome()
+        await state.pushNavidromeMirror()
+        await state.createNavidromeBackup()
+        assertNoRequest(rpc)
+        XCTAssertNil(state.phoneLibraryOperation)
+        XCTAssertFalse(state.phoneLibraryConfigSaving)
+        XCTAssertTrue(state.isPhoneLibraryBusy)
+        try rpc.reply(status, result: statusValue(tracks: 2))
+        await reopen.value
+        XCTAssertFalse(state.isPhoneLibraryBusy)
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-b.example.ts.net")
+        await rpc.connection.close()
+    }
+
+    func testAcknowledgementRereadsTheFreshestConfigAndSerializesWrites() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+        let mark = Task { await state.setPhoneConnected(true) }
+        let freshRead = try await rpc.readRequest(.navidromeConfigRead)
+        XCTAssertTrue(state.isPhoneLibraryBusy)
+        XCTAssertTrue(state.phoneLibraryBusyReason?.contains("Saving Phone Library configuration") ?? false)
+        await state.setPhoneConnected(false)
+        await state.loadPhoneLibrary()
+        await state.refreshPhoneLibraryStatus()
+        assertNoRequest(rpc)
+        var fresh = try decode(NavidromeConfigResult.self, configValue(server: "server-b")).config
+        fresh.backup.count = 11
+        fresh.playlists.hardBounceGenres = ["New externally edited genre"]
+        try rpc.reply(freshRead, result: NavidromeConfigResult(path: "/fixture/navidrome.yaml", config: fresh, content: "").jsonValue(using: .agent))
+        let write = try await rpc.readRequest(.navidromeConfigWrite)
+        let sent = try decode(NavidromeConfig.self, XCTUnwrap(write["params"]?.objectValue?["config"]))
+        fresh.phone.connected = true
+        XCTAssertEqual(sent, fresh, "only phone.connected may differ from the freshly read config")
+        await state.setPhoneConnected(false)
+        await state.refreshPhoneLibraryStatus()
+        assertNoRequest(rpc)
+        try rpc.reply(write, result: configValue(server: "server-b", connected: true))
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-b", connected: true))
+        try rpc.reply(try await rpc.readRequest(.navidromeStatus), result: statusValue(tracks: 2))
+        await mark.value
+        XCTAssertFalse(state.isPhoneLibraryBusy)
+        XCTAssertFalse(state.phoneLibraryConfigSaving)
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-b.example.ts.net")
+        XCTAssertEqual(state.navidromeConfig?.config.phone.connected, true)
+        await rpc.connection.close()
+    }
+
+    func testFailedFreshConfigReadNeverWritesTheCachedConfig() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        let mark = Task { await state.setPhoneConnected(true) }
+        try rpc.fail(try await rpc.readRequest(.navidromeConfigRead), message: "cannot read current configuration")
+        await mark.value
+        assertNoRequest(rpc)
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+        XCTAssertFalse(state.isPhoneLibraryBusy)
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example.ts.net")
+        await rpc.connection.close()
+    }
+
+    func testServerURLOrModeChangeClearsServerScopedResults() async throws {
+        for change in ["url", "mode", "neither"] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+            state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+            try seedServerResults(state)
+            let load = Task { await state.loadPhoneLibrary() }
+            try await answerLoad(rpc, server: change == "url" ? "server-b" : "server-a", tracks: 2, remote: change != "mode")
+            await load.value
+            XCTAssertEqual(state.navidromeStatus?.libraryTracks, 2)
+            if change == "neither" {
+                XCTAssertNotNil(state.navidromeStarred)
+                XCTAssertNotNil(state.navidromeMirrorPush)
+                XCTAssertNotNil(state.navidromeMirrorPushOutcome)
+                XCTAssertNotNil(state.navidromeSetupPlan)
+                XCTAssertNotNil(state.navidromeFavoritePlan)
+                XCTAssertNotNil(state.navidromeFavoriteResult)
+                XCTAssertNotNil(state.navidromeGenreDerivation)
+                XCTAssertFalse(state.navidromeGenreApproval.isEmpty)
+                XCTAssertNotNil(state.navidromePlaylistRefresh)
+                XCTAssertEqual(state.phoneLibraryStatus?.message, "Result from the previous inspection.")
+            } else {
+                assertServerResultsCleared(state)
+                XCTAssertNil(state.phoneLibraryStatus, "an old server's operation message is also server-scoped")
+            }
+            await rpc.connection.close()
+        }
+    }
+
+    func testFailedServerChangePreservesThePreviousServersResults() async throws {
+        let rpc = AgentRPCFixture()
+        await rpc.connection.start()
+        defer { rpc.closePipes() }
+        let state = AppState(client: rpc.client)
+        state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+        state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+        try seedServerResults(state)
+        let load = Task { await state.loadPhoneLibrary() }
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: "server-b"))
+        try rpc.fail(try await rpc.readRequest(.navidromeStatus), message: "new server unavailable")
+        await load.value
+        XCTAssertEqual(state.navidromeConfig?.config.server.url, "https://server-a.example.ts.net")
+        XCTAssertEqual(state.navidromeStarred?.tracks.first?.id, "server-a-track")
+        XCTAssertNotNil(state.navidromeMirrorPushOutcome)
+        XCTAssertEqual(state.phoneLibraryStatus?.severity, .error)
+        state.clearPhoneLibrarySession()
+        assertServerResultsCleared(state)
+        await rpc.connection.close()
+    }
+
+    func testLateInspectionOrPushResultCannotRepopulateADifferentServer() async throws {
+        for push in [false, true] {
+            let rpc = AgentRPCFixture()
+            await rpc.connection.start()
+            defer { rpc.closePipes() }
+            let state = AppState(client: rpc.client)
+            state.navidromeConfig = try decode(NavidromeConfigResult.self, configValue(server: "server-a"))
+            state.navidromeStatus = try decode(NavidromeStatus.self, statusValue())
+            let start = Task {
+                if push { await state.pushNavidromeMirror() }
+                else { await state.listNavidromeStarred() }
+            }
+            try rpc.reply(try await rpc.readRequest(push ? .navidromeMirrorPush : .navidromeFavoritesList), result: .object(["run_id": .string("server-a-run")]))
+            await start.value
+            let load = Task { await state.loadPhoneLibrary() }
+            try await answerLoad(rpc, server: "server-b", tracks: 2)
+            await load.value
+            let result: JSONValue = push ? .object([:]) : .object([
+                "count": .number(1), "tracks": .array([.object(["id": .string("server-a-track"), "title": .string("Only on the previous server")])]),
+            ])
+            state.applyPhoneLibraryFinished(RunFinishedNotification(runID: "server-a-run", result: result, error: nil, exitCode: 0))
+            assertServerResultsCleared(state)
+            XCTAssertNil(state.phoneLibraryOperation)
+            XCTAssertNil(state.phoneLibraryRunID)
+            XCTAssertEqual(state.phoneLibraryStatus?.severity, .warn)
+            XCTAssertTrue(state.phoneLibraryStatus?.message.contains("server configuration changed") ?? false)
+            await rpc.connection.close()
+        }
+    }
+
+    private func seedServerResults(_ state: AppState) throws {
+        state.navidromeStarred = NavidromeStarredListResult(count: 1, tracks: [
+            NavidromeStarredTrack(id: "server-a-track", title: "Only on the previous server", artist: nil, album: nil, path: nil),
+        ])
+        state.navidromeMirrorPush = try decode(NavidromeMirrorPushResult.self, .object([:]))
+        state.navidromeMirrorPushOutcome = NavidromeMirrorPushOutcome(exitCode: 0, error: nil, result: state.navidromeMirrorPush)
+        let plan: JSONValue = .object(["checksum_sha256": .string("fixture")])
+        state.navidromeSetupPlan = NavidromeSetupPlanPresentation(plan)
+        state.navidromeFavoritePlan = NavidromeFavoritePlanPresentation(plan)
+        state.navidromeFavoriteResult = NavidromeFavoriteApplyResult(
+            backupPath: "/fixture/backup.db", newlyStarred: ["server-a-track"], alreadyStarred: 0,
+            finalStarred: 1, parityVerified: true, compensated: [], recoveryCommand: nil, message: nil
+        )
+        state.navidromeGenreDerivation = NavidromeGenreDerivation(
+            sourcePlaylist: "fixture", sourceTrackCount: 1, matchedCount: 1, genres: ["House"],
+            unmatchedPaths: [], genrelessPaths: [], outsideLibrary: [], currentAllowlist: [], allowlistChanged: true
+        )
+        state.navidromeGenreApproval = ["House": true]
+        state.navidromePlaylistRefresh = NavidromePlaylistRefreshResult(generated: [], imported: [], scanned: true, warnings: [])
+        state.phoneLibraryStatus = "Result from the previous inspection."
+    }
+
+    private func assertServerResultsCleared(_ state: AppState, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertNil(state.navidromeStarred, file: file, line: line)
+        XCTAssertNil(state.navidromeMirrorPush, file: file, line: line)
+        XCTAssertNil(state.navidromeMirrorPushOutcome, file: file, line: line)
+        XCTAssertNil(state.navidromeSetupPlan, file: file, line: line)
+        XCTAssertNil(state.navidromeFavoritePlan, file: file, line: line)
+        XCTAssertNil(state.navidromeFavoriteResult, file: file, line: line)
+        XCTAssertNil(state.navidromeGenreDerivation, file: file, line: line)
+        XCTAssertTrue(state.navidromeGenreApproval.isEmpty, file: file, line: line)
+        XCTAssertNil(state.navidromePlaylistRefresh, file: file, line: line)
+    }
+
+    private func assertNoRequest(_ rpc: AgentRPCFixture, file: StaticString = #filePath, line: UInt = #line) {
+        var descriptor = pollfd(fd: rpc.outbound.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0)
+        XCTAssertEqual(poll(&descriptor, 1, 0), 0, "a constrained action must not send an RPC", file: file, line: line)
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ value: JSONValue) throws -> T {
+        try JSONDecoder.agent.decode(type, from: JSONEncoder.agent.encode(value))
+    }
+
+    private func configValue(server: String = "music-server", connected: Bool = false) throws -> JSONValue {
+        let result = NavidromeConfigResult(path: "/fixture/navidrome.yaml", config: NavidromeConfig(
+            version: 1, enabled: true,
+            server: NavidromeServerConfig(url: "https://\(server).example.ts.net", username: "fixture", port: 4533, address: ""),
+            paths: NavidromePathsConfig(musicDir: "/m", dataDir: "/d", cacheDir: "/c", logFile: "/l", configFile: "/f", backupDir: "/b", playlistsPath: ".udl/playlists"),
+            scan: NavidromeScanConfig(schedule: "@every 1h"),
+            backup: NavidromeBackupConfig(schedule: "0 3 * * *", count: 7),
+            playlists: NavidromePlaylistsConfig(hardBounceGenres: [], appleHardBouncePlaylist: "HARD BOUNCE"),
+            phone: NavidromePhoneConfig(connected: connected)
+        ), content: "")
+        return try result.jsonValue(using: .agent)
+    }
+
+    private func statusValue(tracks: Int = 1, remote: Bool = true) throws -> JSONValue {
+        var value = try XCTUnwrap(JSONDecoder().decode(JSONValue.self, from: Data(PhoneLibraryTests.remoteStatusJSON.utf8)).objectValue)
+        value["library_tracks"] = .number(Double(tracks))
+        value["mode"] = .string(remote ? "remote" : "local")
+        return .object(value)
+    }
+
+    private func answerLoad(_ rpc: AgentRPCFixture, server: String = "music-server", tracks: Int = 1, remote: Bool = true) async throws {
+        try rpc.reply(try await rpc.readRequest(.navidromeConfigRead), result: configValue(server: server))
+        try rpc.reply(try await rpc.readRequest(.navidromeStatus), result: statusValue(tracks: tracks, remote: remote))
     }
 }

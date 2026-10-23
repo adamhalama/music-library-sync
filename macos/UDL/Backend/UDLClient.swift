@@ -200,4 +200,10 @@ actor UDLClient {
     func createNavidromeBackup() async throws -> RunIDResult {
         try await connection.call(.navidromeBackupCreate, params: EmptyParams())
     }
+    /// Remote mode only: push the mirror, rescan, and re-apply Date Added —
+    /// the same run as `udl navidrome push`. The delete limit is never raised
+    /// from the app.
+    func pushNavidromeMirror(forceScan: Bool = false) async throws -> RunIDResult {
+        try await connection.call(.navidromeMirrorPush, params: NavidromeMirrorPushParams(forceScan: forceScan))
+    }
 }

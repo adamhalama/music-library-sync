@@ -17,6 +17,7 @@ import (
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
 	"github.com/jaa/update-downloads/internal/freedl"
+	"github.com/jaa/update-downloads/internal/navidrome"
 	"github.com/jaa/update-downloads/internal/output"
 	"github.com/jaa/update-downloads/internal/playlists"
 )
@@ -601,8 +602,9 @@ func runFreeDLCapture(ctx context.Context, app *AppContext, main config.Config, 
 			"scdl":        scdl.New(),
 			"scdl-freedl": scdlfreedl.New(),
 		},
-		Runner:  engine.NewSubprocessRunner(app.IO.In, io.Discard, io.Discard),
-		Emitter: emitter,
+		Runner:           engine.NewSubprocessRunner(app.IO.In, io.Discard, io.Discard),
+		Emitter:          emitter,
+		NavidromeOptions: navidrome.ManagerOptions{ConfigPath: app.Opts.NavidromeConfigPath},
 	}
 	interaction := freeDLCaptureInteraction{selected: selected, order: freeDLDownloadOrder(plan.Job.DownloadOrder)}
 	result, err := useCase.Run(ctx, runCfg, workflows.SyncRequest{

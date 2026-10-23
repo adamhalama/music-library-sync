@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os/signal"
 	"strings"
 
 	"github.com/jaa/update-downloads/internal/auth"
@@ -15,10 +18,11 @@ import (
 func newNavidromeCommand(app *AppContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "navidrome",
-		Short: "Manage the local Navidrome server that serves the phone library",
+		Short: "Manage the Navidrome server that serves the phone library",
 		Long: strings.TrimSpace(`
-Manage the UDL-owned Navidrome service that publishes ~/Music/downloaded to
-Amperfy on the home network.
+Manage the Navidrome server that publishes ~/Music/downloaded to your phone
+app: a UDL-owned service on this Mac, or — with navidrome.mode: remote — a
+mirror on another server that UDL pushes to.
 
 Status and doctor checks never change the system. Installing, applying setup,
 and importing favorites are explicit, confirmed actions.
@@ -33,7 +37,93 @@ and importing favorites are explicit, confirmed actions.
 	cmd.AddCommand(newNavidromePhoneCommand(app))
 	cmd.AddCommand(newNavidromeBackupCommand(app))
 	cmd.AddCommand(newNavidromeDatesCommand(app))
+	cmd.AddCommand(newNavidromePushCommand(app))
+	cmd.AddCommand(newNavidromeExportDBCommand(app))
 	return cmd
+}
+
+// newNavidromePushCommand mirrors the library to a remote server. A sync
+// pushes on its own; this is for every other change to the library (Free DL
+// promotion, a manual edit) and is what the launchd fallback runs.
+func newNavidromePushCommand(app *AppContext) *cobra.Command {
+	var noScan, forceScan, noDates bool
+	var allowDeletes int
+	cmd := &cobra.Command{
+		Use:   "push",
+		Short: "Mirror the library to the remote Navidrome server and rescan it",
+		Long: strings.TrimSpace(`
+Only for navidrome.mode: remote. Pushes ~/Music/downloaded to the server's
+mirror with rsync over SSH, then — when anything changed — waits for the
+server to be idle, rescans, and re-applies Date Added from this Mac's file
+creation times.
+
+A failed push is incomplete: the server may be partly updated. The next push
+completes it.
+`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := navidromeManager(app, false)
+			if err != nil {
+				return err
+			}
+			if !manager.Config.IsRemote() {
+				return withExitCode(exitcode.InvalidConfig,
+					fmt.Errorf("navidrome push needs navidrome.mode: remote; the local server reads ~/Music/downloaded directly"))
+			}
+			opts := navidrome.ManualPushOptions(allowDeletes, forceScan)
+			opts.Scan = opts.Scan && !noScan
+			opts.Dates = opts.Dates && !noDates
+			// Ctrl-C ends rsync and the scan wait cleanly, so the outcome
+			// and the pending flags are recorded before exiting 130.
+			ctx, stop := signal.NotifyContext(cmd.Context(), interruptSignals()...)
+			defer stop()
+			result, err := manager.SyncMirror(ctx, opts)
+			if app.Opts.JSON {
+				if encodeErr := json.NewEncoder(app.IO.Out).Encode(result); encodeErr != nil {
+					return encodeErr
+				}
+			} else {
+				fmt.Fprintf(app.IO.Out, "Pushed: %d changed, %d deleted\n", result.Push.Changed, result.Push.Deleted)
+				if errors.Is(err, navidrome.ErrDeleteLimit) {
+					fmt.Fprintf(app.IO.Out, "Planned deletions: %d (nothing was changed)\n", result.Push.PlannedDeletes)
+				}
+				if errors.Is(err, navidrome.ErrServerScanning) {
+					fmt.Fprintln(app.IO.Out, "Deferred: the server is scanning or its scan state is unknown, so nothing was pushed; push again when it is idle and reachable")
+				}
+				if app.Opts.Verbose {
+					for _, item := range result.Push.Items {
+						fmt.Fprintf(app.IO.Out, "  %s\n", item)
+					}
+				}
+				fmt.Fprintf(app.IO.Out, "Scanned: %s\n", yesNo(result.Scanned))
+				if result.Dates != nil {
+					fmt.Fprintln(app.IO.Out, result.Dates.Message)
+				}
+				printProblems(app, result.Warnings)
+			}
+			return mirrorPushExit(ctx, err)
+		},
+	}
+	cmd.Flags().BoolVar(&noScan, "no-scan", false, "push only; do not request a scan")
+	cmd.Flags().BoolVar(&forceScan, "force-scan", false, "scan even when the push changed nothing")
+	cmd.Flags().BoolVar(&noDates, "no-dates", false, "skip the Date Added reconcile after the scan")
+	cmd.Flags().IntVar(&allowDeletes, "allow-deletes", 0, "allow up to this many file deletions for one intended reorganisation")
+	return cmd
+}
+
+// mirrorPushExit maps a finished push to the command's exit. A push
+// interrupted after its transfer returns no error from SyncMirror (the cut
+// scan is a warning), but the command was still interrupted.
+func mirrorPushExit(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		if err == nil {
+			err = fmt.Errorf("%s: %w", navidrome.MirrorCanceledAfterPush, ctx.Err())
+		}
+		return withExitCode(exitcode.Interrupted, err)
+	}
+	if err != nil {
+		return withExitCode(exitcode.RuntimeFailure, err)
+	}
+	return nil
 }
 
 func navidromeManager(app *AppContext, skipCredentials bool) (*navidrome.Manager, error) {
@@ -109,6 +199,10 @@ func newNavidromeDepsCommand(app *AppContext) *cobra.Command {
 		Short: "Install or upgrade Navidrome through Homebrew",
 		Long:  "This changes your machine. It requires --confirm.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if manager, err := navidromeManager(app, true); err == nil && manager.Config.IsRemote() {
+				return withExitCode(exitcode.InvalidConfig, fmt.Errorf(
+					"navidrome.mode is remote: the server runs Navidrome, so there is nothing to install on this Mac"))
+			}
 			result, err := navidrome.DependencyChecker{}.Ensure(cmd.Context(), confirm)
 			if app.Opts.JSON {
 				_ = json.NewEncoder(app.IO.Out).Encode(result)
@@ -141,9 +235,18 @@ func newNavidromeStatusCommand(app *AppContext) *cobra.Command {
 			}
 			fmt.Fprintf(app.IO.Out, "Enabled: %s\n", yesNo(status.Enabled))
 			fmt.Fprintf(app.IO.Out, "Music: %s\n", status.MusicDir)
-			fmt.Fprintf(app.IO.Out, "Service: %s\n", status.Service.State)
-			fmt.Fprintf(app.IO.Out, "Transcoder: %s\n",
-				orDash(status.Dependency.FFmpegPath))
+			if status.Mode == navidrome.ModeRemote {
+				fmt.Fprintf(app.IO.Out, "Server: %s (remote mirror)\n", manager.Config.Server.URL)
+				if remote := status.Remote; remote != nil {
+					fmt.Fprintf(app.IO.Out, "Mirror: %d files, %d bytes on %s\n",
+						remote.Library.Files, remote.Library.Bytes, remote.SSHTarget)
+					fmt.Fprintf(app.IO.Out, "Server disk free: %d bytes\n", remote.Disk.FreeBytes)
+				}
+			} else {
+				fmt.Fprintf(app.IO.Out, "Service: %s\n", status.Service.State)
+				fmt.Fprintf(app.IO.Out, "Transcoder: %s\n",
+					orDash(status.Dependency.FFmpegPath))
+			}
 			if status.Service.LocalURL != "" {
 				fmt.Fprintf(app.IO.Out, "Local: %s\n", status.Service.LocalURL)
 			}
@@ -168,15 +271,16 @@ func newNavidromeStatusCommand(app *AppContext) *cobra.Command {
 }
 
 // newNavidromePhoneCommand records the one setup step that happens on the
-// phone. Nothing here can observe Amperfy, so the acknowledgement is stored
+// phone. Nothing here can observe the phone app, so the acknowledgement is stored
 // where every surface reads it from: the feature config.
 func newNavidromePhoneCommand(app *AppContext) *cobra.Command {
 	connected := true
 	cmd := &cobra.Command{
 		Use:   "phone",
-		Short: "Record whether Amperfy on the phone reaches this Mac",
+		Short: "Record whether your phone app reaches the Navidrome server",
 		Long: strings.TrimSpace(`
-Mark the phone as connected once Amperfy can reach this Mac over home Wi-Fi.
+Mark the phone as connected once your phone app can reach the Navidrome
+server.
 
 This is self-reported. UDL cannot observe the phone, and marking it changes
 nothing about the server — only the setup checklist.
@@ -197,7 +301,7 @@ nothing about the server — only the setup checklist.
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&connected, "connected", true, "Whether Amperfy on the phone reaches this Mac")
+	cmd.Flags().BoolVar(&connected, "connected", true, "Whether your phone app reaches the Navidrome server")
 	return cmd
 }
 
@@ -491,7 +595,7 @@ func printStarredFavorites(app *AppContext, songs []navidrome.Song) {
 
 func newNavidromeDatesCommand(app *AppContext) *cobra.Command {
 	cmd := &cobra.Command{Use: "dates", Short: "Manage how Date Added is derived"}
-	cmd.AddCommand(&cobra.Command{
+	reconcile := &cobra.Command{
 		Use:   "reconcile",
 		Short: "Make Date Added mean the file's real creation time",
 		Long: strings.TrimSpace(`
@@ -502,13 +606,25 @@ managed smart playlists and a client's own "Date Added" sort.
 
 A database backup is taken first. The operation is idempotent and safe to run
 while the server is running.
+
+In remote mode the server cannot know this Mac's creation times, so UDL sends
+them and the server applies them; --dry-run reports what would change.
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			manager, err := navidromeManager(app, true)
 			if err != nil {
 				return err
 			}
-			result, err := manager.ReconcileDateAdded(cmd.Context())
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			if dryRun && !manager.Config.IsRemote() {
+				return withExitCode(exitcode.InvalidConfig, fmt.Errorf("--dry-run is only available in remote mode"))
+			}
+			var result navidrome.ReconcileResult
+			if dryRun {
+				result, err = manager.PreviewDateAdded(cmd.Context())
+			} else {
+				result, err = manager.ReconcileDateAdded(cmd.Context())
+			}
 			if err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
@@ -521,7 +637,9 @@ while the server is running.
 			fmt.Fprintln(app.IO.Out, result.Message)
 			return nil
 		},
-	})
+	}
+	reconcile.Flags().Bool("dry-run", false, "remote mode: report what would change without writing")
+	cmd.AddCommand(reconcile)
 	return cmd
 }
 
@@ -554,7 +672,7 @@ func newNavidromeBackupCommand(app *AppContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := navidrome.Backups(manager.Resolved)
+			items, err := manager.ListBackups(cmd.Context())
 			if err != nil {
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}

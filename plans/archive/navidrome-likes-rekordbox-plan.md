@@ -46,7 +46,7 @@ path that turns Navidrome stars into a snapshot.
 
 ## Evidence
 
-Driving `bin/udl agent --working-dir /Users/jaa` over the wire, exactly as the
+Driving `bin/udl agent --working-dir /Users/example` over the wire, exactly as the
 app does:
 
 - `playlists.list` returns the `favorites` definition **and** its snapshot.
