@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -322,7 +323,7 @@ func (m *Manager) push(ctx context.Context, allowDeletes int, beforeTransfer fun
 	if err != nil {
 		return PushResult{}, err
 	}
-	if err := checkPushSource(m.Resolved.MusicDir, m.Resolved.PlaylistsPath); err != nil {
+	if err := checkPushSource(ctx, m.Resolved.MusicDir, m.Resolved.PlaylistsPath); err != nil {
 		return PushResult{}, err
 	}
 	run := m.remoteRunner()
@@ -470,7 +471,10 @@ func rsyncExitError(out RemoteOutput, step string) error {
 // checkPushSource refuses to mirror a missing or empty library: with
 // --delete, that would empty the server. The managed playlists folder does
 // not count, because a playlist refresh recreates it on its own.
-func checkPushSource(musicDir, playlistsPath string) error {
+func checkPushSource(ctx context.Context, musicDir, playlistsPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	info, err := os.Stat(musicDir)
 	if err != nil {
 		return fmt.Errorf("music_dir %s is not available: %w", musicDir, err)
@@ -484,7 +488,7 @@ func checkPushSource(musicDir, playlistsPath string) error {
 	if err != nil {
 		return fmt.Errorf("read music_dir %s: %w", musicDir, err)
 	}
-	found, err := findPushSourceFile(root, playlistsPath, maxPushSourceEntries)
+	found, err := findPushSourceFile(ctx, root, playlistsPath, maxPushSourceEntries, maxPushSourceRawEntries)
 	if err != nil {
 		return fmt.Errorf("read music_dir %s: %w", musicDir, err)
 	}
@@ -494,52 +498,96 @@ func checkPushSource(musicDir, playlistsPath string) error {
 	return fmt.Errorf("music_dir %s is empty; refusing to push an empty library over the mirror", musicDir)
 }
 
-// Bound an unexpectedly large empty tree; exhausting the budget refuses the
-// push rather than treating an unexamined subtree as evidence of a library.
-const maxPushSourceEntries = 100_000
+// Bound both eligible entries and the raw work spent filtering them. A large
+// hidden/partial tree does not consume the useful budget, but neither budget
+// can be exhausted as evidence of a nonempty library. The eligible-entry cap
+// also bounds the breadth-first directory queue.
+const (
+	maxPushSourceEntries    = 100_000
+	maxPushSourceRawEntries = 1_000_000
+	pushSourceReadBatchSize = 128
+)
 
-func findPushSourceFile(root, playlistsPath string, maxEntries int) (bool, error) {
+func findPushSourceFile(ctx context.Context, root, playlistsPath string, maxEntries, maxRawEntries int) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	playlists := filepath.Join(root, filepath.Clean(playlistsPath))
 	playlistsInfo, err := os.Stat(playlists)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-	found, visited := false, 0
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	visited, raw := 0, 0
+	directories := []string{root}
+	for len(directories) > 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
-		if path == root {
-			return nil
-		}
-		visited++
-		if visited > maxEntries {
-			return fmt.Errorf("source check exceeded %d entries; refusing to push an unverified library", maxEntries)
-		}
-		if path == playlists || excludedMirrorName(entry.Name()) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() && playlistsInfo != nil {
-			info, err := entry.Info()
+		path := directories[0]
+		directories[0] = ""
+		directories = directories[1:]
+		// Finish this directory's files before entering any child directory.
+		// ReadDir(n) avoids WalkDir's unbounded read-and-sort of the whole
+		// directory and gives cancellation a checkpoint between batches.
+		found, err := func() (bool, error) {
+			directory, err := os.Open(path)
 			if err != nil {
-				return err
+				return false, err
 			}
-			// APFS aliases case and Unicode spellings. The managed directory
-			// is not library evidence under any spelling of the same inode.
-			if os.SameFile(info, playlistsInfo) {
-				return filepath.SkipDir
+			defer directory.Close()
+			for {
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+				entries, readErr := directory.ReadDir(pushSourceReadBatchSize)
+				for _, entry := range entries {
+					if err := ctx.Err(); err != nil {
+						return false, err
+					}
+					raw++
+					if raw > maxRawEntries {
+						return false, fmt.Errorf("source check exceeded %d raw entries; refusing to push an unverified library", maxRawEntries)
+					}
+					entryPath := filepath.Join(path, entry.Name())
+					if entryPath == playlists || excludedMirrorName(entry.Name()) {
+						continue
+					}
+					if entry.IsDir() && playlistsInfo != nil {
+						info, err := entry.Info()
+						if err != nil {
+							return false, err
+						}
+						// APFS aliases case and Unicode spellings. The managed
+						// directory cannot count under any spelling of its inode.
+						if os.SameFile(info, playlistsInfo) {
+							continue
+						}
+					}
+					if !entry.IsDir() && !entry.Type().IsRegular() {
+						continue // rsync does not send symlinks or special files
+					}
+					visited++
+					if visited > maxEntries {
+						return false, fmt.Errorf("source check exceeded %d eligible entries; refusing to push an unverified library", maxEntries)
+					}
+					if entry.Type().IsRegular() {
+						return true, nil
+					}
+					directories = append(directories, entryPath)
+				}
+				if readErr != nil {
+					if errors.Is(readErr, io.EOF) {
+						return false, nil
+					}
+					return false, readErr
+				}
 			}
+		}()
+		if err != nil || found {
+			return found, err
 		}
-		if entry.Type().IsRegular() {
-			found = true
-			return fs.SkipAll
-		}
-		return nil
-	})
-	return found, err
+	}
+	return false, ctx.Err()
 }
 
 func lastLines(text string, n int) string {

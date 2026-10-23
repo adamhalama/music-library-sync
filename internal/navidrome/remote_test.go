@@ -208,7 +208,7 @@ func TestPushSourceRequiresAnEligibleFile(t *testing.T) {
 			for _, file := range tc.files {
 				writeFile(t, filepath.Join(resolved.MusicDir, file))
 			}
-			err := checkPushSource(resolved.MusicDir, resolved.PlaylistsPath)
+			err := checkPushSource(context.Background(), resolved.MusicDir, resolved.PlaylistsPath)
 			if tc.wantOK {
 				if err != nil {
 					t.Fatal(err)
@@ -270,7 +270,7 @@ func TestPushSourceExcludesManagedPlaylistsByIdentity(t *testing.T) {
 				t.Fatalf("managed playlists with an alias must not count as library content: %v", err)
 			}
 			writeFile(t, filepath.Join(resolved.MusicDir, "Artist", "a.mp3"))
-			if err := checkPushSource(resolved.MusicDir, resolved.PlaylistsPath); err != nil {
+			if err := checkPushSource(context.Background(), resolved.MusicDir, resolved.PlaylistsPath); err != nil {
 				t.Fatalf("a real track outside the managed directory must still count: %v", err)
 			}
 		})
@@ -286,8 +286,85 @@ func TestPushSourceDoesNotFollowSymlinkEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := checkPushSource(music, DefaultPlaylistsPath); err == nil || !strings.Contains(err.Error(), "empty") {
+	if err := checkPushSource(context.Background(), music, DefaultPlaylistsPath); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("symlinks are not transferable files: %v", err)
+	}
+}
+
+func TestPushSourceFiltersBeforeChargingBudget(t *testing.T) {
+	music := t.TempDir()
+	for _, file := range []string{".hidden-a", ".hidden-b", "a.part", "b.partial", "c.tmp", "d.crdownload", "udl-playlists/All Music.nsp", "Artist/z.mp3"} {
+		writeFile(t, filepath.Join(music, file))
+	}
+	if found, err := findPushSourceFile(context.Background(), music, DefaultPlaylistsPath, 2, maxPushSourceRawEntries); !found || err != nil {
+		t.Fatalf("excluded entries must not consume the eligible-file budget: found=%v err=%v", found, err)
+	}
+}
+
+func TestPushSourceChecksParentFilesBeforeLargeSubtrees(t *testing.T) {
+	music := t.TempDir()
+	for _, dir := range []string{"A/1", "A/2", "A/3", "A/4"} {
+		if err := os.MkdirAll(filepath.Join(music, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(music, "z.mp3"))
+	if found, err := findPushSourceFile(context.Background(), music, DefaultPlaylistsPath, 2, maxPushSourceRawEntries); !found || err != nil {
+		t.Fatalf("a large subtree must not starve a top-level file: found=%v err=%v", found, err)
+	}
+}
+
+func TestPushSourceCancellationPreventsCommands(t *testing.T) {
+	cfg, resolved := remoteTestConfig(t)
+	writeFile(t, filepath.Join(resolved.MusicDir, "a.mp3"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := &scriptedRunner{reply: func(string, []string) (RemoteOutput, error) {
+		t.Fatal("a canceled source check must not reach a subprocess")
+		return RemoteOutput{}, nil
+	}}
+	manager := &Manager{Config: cfg, Resolved: resolved, Remote: runner.run}
+	if _, err := manager.push(ctx, 0, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation must survive the source check: %v", err)
+	}
+}
+
+func TestPushSourceRawBudgetStillBoundsExcludedEntries(t *testing.T) {
+	music := t.TempDir()
+	for _, file := range []string{".hidden-a", ".hidden-b", ".hidden-c"} {
+		writeFile(t, filepath.Join(music, file))
+	}
+	if found, err := findPushSourceFile(context.Background(), music, DefaultPlaylistsPath, 1, 2); found || err == nil || !strings.Contains(err.Error(), "exceeded 2 raw entries") {
+		t.Fatalf("excluded entries must still have a hard work bound: found=%v err=%v", found, err)
+	}
+}
+
+// Cancel from a context checkpoint rather than racing a timer with the walk.
+type sourceWalkCancelContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	checks   int
+	cancelAt int
+}
+
+func (c *sourceWalkCancelContext) Err() error {
+	c.checks++
+	if c.checks == c.cancelAt {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestPushSourceWalkHonorsCancellationDuringEnumeration(t *testing.T) {
+	music := t.TempDir()
+	for i := 0; i < 2*pushSourceReadBatchSize; i++ {
+		writeFile(t, filepath.Join(music, ".hidden-"+time.Duration(i).String()))
+	}
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &sourceWalkCancelContext{Context: base, cancel: cancel, cancelAt: 4}
+	if found, err := findPushSourceFile(ctx, music, DefaultPlaylistsPath, 1, maxPushSourceRawEntries); found || !errors.Is(err, context.Canceled) {
+		t.Fatalf("an in-progress source check must stop on cancellation: found=%v err=%v checks=%d", found, err, ctx.checks)
 	}
 }
 
@@ -295,16 +372,20 @@ func TestPushSourceWalkIsBoundedAndStopsAtFirstFile(t *testing.T) {
 	music := t.TempDir()
 	writeFile(t, filepath.Join(music, "a.mp3"))
 	writeFile(t, filepath.Join(music, "b.mp3"))
-	if found, err := findPushSourceFile(music, DefaultPlaylistsPath, 1); !found || err != nil {
+	if found, err := findPushSourceFile(context.Background(), music, DefaultPlaylistsPath, 1, maxPushSourceRawEntries); !found || err != nil {
 		t.Fatalf("stop at the first eligible file: found=%v err=%v", found, err)
 	}
-	if err := os.Remove(filepath.Join(music, "a.mp3")); err != nil {
-		t.Fatal(err)
+	for _, file := range []string{"a.mp3", "b.mp3"} {
+		if err := os.Remove(filepath.Join(music, file)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Mkdir(filepath.Join(music, "a-empty"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{"a-empty", "b-empty"} {
+		if err := os.Mkdir(filepath.Join(music, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if found, err := findPushSourceFile(music, DefaultPlaylistsPath, 1); found || err == nil || !strings.Contains(err.Error(), "exceeded 1 entries") {
+	if found, err := findPushSourceFile(context.Background(), music, DefaultPlaylistsPath, 1, maxPushSourceRawEntries); found || err == nil || !strings.Contains(err.Error(), "exceeded 1 eligible entries") {
 		t.Fatalf("refuse when the walk budget is exhausted: found=%v err=%v", found, err)
 	}
 }
