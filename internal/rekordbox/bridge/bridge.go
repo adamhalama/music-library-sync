@@ -107,6 +107,89 @@ func (c Client) ApplyBatch(ctx context.Context, req ApplyBatchRequest) (ApplyBat
 	return resp, err
 }
 
+// SourceImportInspectRequest lists the collection rows under one folder.
+type SourceImportInspectRequest struct {
+	DBDir        string `json:"db_dir"`
+	FolderPrefix string `json:"folder_prefix"`
+}
+
+type SourceImportContent struct {
+	ID         string `json:"id"`
+	FolderPath string `json:"folder_path"`
+	// CreatedAt is UTC with milliseconds, e.g. 2026-09-19T14:10:27.120Z.
+	CreatedAt string `json:"created_at"`
+	StockDate string `json:"stock_date"`
+}
+
+type SourceImportInspectResponse struct {
+	Contents []SourceImportContent `json:"contents"`
+}
+
+// SourceImportTags are written onto an imported row.
+type SourceImportTags struct {
+	Title       string `json:"title"`
+	Artist      string `json:"artist,omitempty"`
+	Album       string `json:"album,omitempty"`
+	Genre       string `json:"genre,omitempty"`
+	Label       string `json:"label,omitempty"`
+	Comment     string `json:"comment,omitempty"`
+	Year        int    `json:"year,omitempty"`
+	TrackNo     int    `json:"track_no,omitempty"`
+	DiscNo      int    `json:"disc_no,omitempty"`
+	DurationSec int    `json:"duration_sec,omitempty"`
+	BitRateKbps int    `json:"bit_rate_kbps,omitempty"`
+	SampleRate  int    `json:"sample_rate,omitempty"`
+	BitDepth    int    `json:"bit_depth,omitempty"`
+}
+
+const (
+	SourceImportActionImport = "import"
+	SourceImportActionUpdate = "update"
+)
+
+// SourceImportApplyRow is one row of an import: either a new file ("import")
+// or an existing track whose Date Added moves ("update"). Rows are applied in
+// order inside one transaction.
+type SourceImportApplyRow struct {
+	Key               string            `json:"key"`
+	Action            string            `json:"action"`
+	ContentID         string            `json:"content_id,omitempty"`
+	Path              string            `json:"path"`
+	ExpectedCreatedAt string            `json:"expected_created_at,omitempty"`
+	CreatedAt         string            `json:"created_at"`
+	StockDate         string            `json:"stock_date"`
+	Tags              *SourceImportTags `json:"tags,omitempty"`
+}
+
+type SourceImportApplyRequest struct {
+	DBDir string                 `json:"db_dir"`
+	Rows  []SourceImportApplyRow `json:"rows"`
+}
+
+type SourceImportAppliedRow struct {
+	Key       string `json:"key"`
+	ContentID string `json:"content_id"`
+	Path      string `json:"path"`
+	CreatedAt string `json:"created_at"`
+	StockDate string `json:"stock_date"`
+}
+
+type SourceImportApplyResponse struct {
+	Rows []SourceImportAppliedRow `json:"rows"`
+}
+
+func (c Client) SourceImportInspect(ctx context.Context, req SourceImportInspectRequest) (SourceImportInspectResponse, error) {
+	var resp SourceImportInspectResponse
+	err := c.run(ctx, map[string]any{"op": "source_import_inspect", "request": req}, &resp)
+	return resp, err
+}
+
+func (c Client) SourceImportApply(ctx context.Context, req SourceImportApplyRequest) (SourceImportApplyResponse, error) {
+	var resp SourceImportApplyResponse
+	err := c.run(ctx, map[string]any{"op": "source_import_apply", "request": req}, &resp)
+	return resp, err
+}
+
 func (c Client) run(ctx context.Context, payload any, out any) error {
 	pythonBin := strings.TrimSpace(c.PythonBin)
 	if pythonBin == "" {

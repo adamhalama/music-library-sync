@@ -44,6 +44,7 @@ func newRekordboxCommand(app *AppContext) *cobra.Command {
 	cmd.AddCommand(newRekordboxConfigCommand(app))
 	cmd.AddCommand(newRekordboxDepsCommand(app))
 	cmd.AddCommand(newRekordboxPlaylistSyncCommand(app))
+	cmd.AddCommand(newRekordboxImportSourceCommand(app))
 	return cmd
 }
 

@@ -914,7 +914,7 @@ func CheckRekordboxClosed(ctx context.Context, dbDir string) error {
 		return err
 	}
 	if len(processes) > 0 {
-		return fmt.Errorf("Rekordbox is running; close Rekordbox before using this command (%s)", strings.Join(processes, ", "))
+		return fmt.Errorf("Rekordbox or RBxport is running; close it before writing the Rekordbox library (%s)", strings.Join(processes, ", "))
 	}
 	for _, name := range []string{"master.db-wal", "master.db-shm"} {
 		path := filepath.Join(dbDir, name)
@@ -1162,23 +1162,34 @@ func rekordboxProcesses(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect running processes: %w", err)
 	}
+	return libraryWriterProcessNames(string(out)), nil
+}
+
+// libraryWriterProcessNames picks the processes that write the Rekordbox
+// library out of `ps -o comm=` output: Rekordbox itself and RBxport, which
+// edits the same master.db. Only the executable name is matched: macOS prints
+// the full path, and a checkout or worktree whose path mentions "rekordbox"
+// must not look like the application.
+func libraryWriterProcessNames(psOutput string) []string {
 	found := []string{}
 	seen := map[string]struct{}{}
-	for _, line := range strings.Split(string(out), "\n") {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "rekordbox") {
-			name := strings.TrimSpace(filepath.Base(line))
-			if name == "" {
-				name = strings.TrimSpace(line)
-			}
-			if _, exists := seen[name]; !exists {
-				found = append(found, name)
-				seen[name] = struct{}{}
-			}
+	for _, line := range strings.Split(psOutput, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		name := filepath.Base(trimmed)
+		lower := strings.ToLower(name)
+		if !strings.Contains(lower, "rekordbox") && !strings.Contains(lower, "rbxport") {
+			continue
+		}
+		if _, exists := seen[name]; !exists {
+			found = append(found, name)
+			seen[name] = struct{}{}
 		}
 	}
 	sort.Strings(found)
-	return found, nil
+	return found
 }
 
 func copyDir(src, dest string) error {
