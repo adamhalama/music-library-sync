@@ -180,7 +180,11 @@ func TestSyncSoundCloudAppendOnlyPreservesExistingBytes(t *testing.T) {
 	if got := policyRead(t, filepath.Join(f.target, "changed.m4a")); string(got) != "original changed audio" {
 		t.Fatalf("existing track changed: %q", got)
 	}
-	if got := policyRead(t, f.state); !bytes.Equal(got, append(append([]byte{}, f.stateBefore...), []byte("soundcloud 302 302.m4a\nsoundcloud 301 301.m4a\n")...)) {
+	publishedTarget, err := filepath.EvalSymlinks(f.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := policyRead(t, f.state); !bytes.Equal(got, append(append([]byte{}, f.stateBefore...), []byte("soundcloud 302 "+filepath.Join(publishedTarget, "302.m4a")+"\nsoundcloud 301 "+filepath.Join(publishedTarget, "301.m4a")+"\n")...)) {
 		t.Fatalf("state was rewritten: %q", got)
 	}
 	if got := policyRead(t, f.archive); !bytes.Equal(got, append(append([]byte{}, f.archiveBefore...), []byte("soundcloud 302\nsoundcloud 301\n")...)) {
@@ -247,5 +251,22 @@ func TestSyncSoundCloudAppendOnlyFailurePreservesExistingBytes(t *testing.T) {
 	stages, err := filepath.Glob(filepath.Join(f.target, ".udl-append-*"))
 	if err != nil || len(stages) != 0 {
 		t.Fatalf("failed staging remains: %v %v", stages, err)
+	}
+}
+
+func TestValidateCLIRejectsUnsafeAppendOnlyExtraArgs(t *testing.T) {
+	f := newPolicyFixture(t, true, "oldest_first")
+	payload := string(policyRead(t, f.config))
+	payload = strings.Replace(payload, "kind: scdl", "kind: scdl\n      extra_args: [--overwrite]", 1)
+	if err := os.WriteFile(f.config, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	app := &AppContext{IO: IOStreams{In: strings.NewReader(""), Out: out, ErrOut: errOut}}
+	root := newRootCommand(app)
+	root.SetArgs([]string{"--config", f.config, "validate"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "sync.append_only cannot safely use adapter.extra_args") || strings.Contains(out.String(), "Config is valid") {
+		t.Fatalf("unsafe config accepted: %v %s %s", err, out, errOut)
 	}
 }

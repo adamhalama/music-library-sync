@@ -173,3 +173,33 @@ func TestSCDLAppendOnlyPlanCannotSelectKnownGaps(t *testing.T) {
 		t.Fatalf("append-only plan entered rewriting state swap: %+v", execution)
 	}
 }
+
+func TestPublishAppendOnlySoundCloudTrackRecordsAbsolutePublishedPath(t *testing.T) {
+	root := t.TempDir()
+	stage, target := filepath.Join(root, "stage"), filepath.Join(root, "target")
+	for _, dir := range []string{stage, target} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(stage, "New Track.m4a"), []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state, archive := filepath.Join(root, "state"), filepath.Join(root, "archive")
+	before := "soundcloud 101 /music/Old Track.m4a\r\n"
+	if err := os.WriteFile(state, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishAppendOnlySoundCloudTrack(stage, target, state, archive, soundCloudSyncEntry{ID: "202", FilePath: "New Track.m4a"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(state)
+	want := before + "soundcloud 202 " + filepath.Join(target, "New Track.m4a") + "\n"
+	if err != nil || string(got) != want {
+		t.Fatalf("state = %q, want %q: %v", got, want, err)
+	}
+	parsed, err := parseSoundCloudSyncState(state)
+	if err != nil || parsed.ByID["202"].FilePath != filepath.Join(target, "New Track.m4a") {
+		t.Fatalf("published path did not round trip: %+v %v", parsed, err)
+	}
+}

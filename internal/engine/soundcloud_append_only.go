@@ -197,10 +197,17 @@ func publishAppendOnlySoundCloudTrack(stage, target, statePath, archivePath stri
 	}
 	// Link is atomic and fails if any file or symlink occupies the destination.
 	// The stage is on the same filesystem; removing it only unlinks its private name.
-	if err := os.Link(path, filepath.Join(target, name)); err != nil {
+	publishedPath, err := filepath.Abs(filepath.Join(target, name))
+	if err != nil {
+		return err
+	}
+	if strings.ContainsAny(publishedPath, "\r\n") {
+		return fmt.Errorf("published path contains a newline")
+	}
+	if err := os.Link(path, publishedPath); err != nil {
 		return fmt.Errorf("cannot add %s without overwriting: %w", name, err)
 	}
-	if err := appendSoundCloudPreservingLines(statePath, fmt.Sprintf("soundcloud %s %s\n", entry.ID, name)); err != nil {
+	if err := appendSoundCloudPreservingLines(statePath, fmt.Sprintf("soundcloud %s %s\n", entry.ID, publishedPath)); err != nil {
 		return err
 	}
 	return appendSoundCloudPreservingLines(archivePath, fmt.Sprintf("soundcloud %s\n", entry.ID))

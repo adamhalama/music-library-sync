@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateSuccess(t *testing.T) {
 	cfg := Config{
@@ -218,4 +221,16 @@ func validRekordboxConfigForTest() Config {
 
 func testBoolPtr(v bool) *bool {
 	return &v
+}
+
+func TestValidateRejectsUnsafeAppendOnlyExtraArgs(t *testing.T) {
+	for _, args := range [][]string{{"--overwrite"}, {"--path", "/tmp/other"}, {"--yt-dlp-args", "--exec arbitrary"}} {
+		cfg := validRekordboxConfigForTest()
+		cfg.Sources[0].Sync.AppendOnly = true
+		cfg.Sources[0].Adapter.ExtraArgs = args
+		err := Validate(cfg)
+		if err == nil || !strings.Contains(err.Error(), "sync.append_only cannot safely use adapter.extra_args") {
+			t.Fatalf("unsafe args %v validated: %v", args, err)
+		}
+	}
 }
