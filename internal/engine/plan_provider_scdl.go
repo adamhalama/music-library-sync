@@ -145,13 +145,14 @@ func (p *SCDLPlanProvider) buildWithTracks(
 		}
 		toggleable := status != PlanRowAlreadyDownloaded
 		rows = append(rows, PlanRow{
-			Index:             i + 1,
-			RemoteID:          track.ID,
-			RemoteURL:         track.URL,
-			Title:             track.Title,
-			Status:            status,
-			Toggleable:        toggleable,
-			SelectedByDefault: toggleable,
+			EnumerationOldestFirst: SoundCloudEnumerationOldestFirst(source),
+			Index:                  i + 1,
+			RemoteID:               track.ID,
+			RemoteURL:              track.URL,
+			Title:                  track.Title,
+			Status:                 status,
+			Toggleable:             toggleable,
+			SelectedByDefault:      toggleable,
 		})
 	}
 

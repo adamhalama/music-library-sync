@@ -112,11 +112,13 @@ const (
 )
 
 type PlanRow struct {
-	Index             int
-	RemoteID          string
-	RemoteURL         string
-	Title             string
-	Status            PlanRowStatus
-	Toggleable        bool
-	SelectedByDefault bool
+	// EnumerationOldestFirst carries source ordering through generic selectors.
+	EnumerationOldestFirst bool
+	Index                  int
+	RemoteID               string
+	RemoteURL              string
+	Title                  string
+	Status                 PlanRowStatus
+	Toggleable             bool
+	SelectedByDefault      bool
 }

@@ -68,7 +68,7 @@ func TestSoundCloudSyncAndSelectionUseAddedOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manifest, err := BuildExecutionManifest(source.ID, plan.Rows(), []int{1, 3}, DownloadOrderOldestFirst, SoundCloudEnumerationOldestFirst(source))
+			manifest, err := BuildExecutionManifest(source.ID, plan.Rows(), []int{1, 3}, DownloadOrderOldestFirst)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -60,7 +60,11 @@ func BuildExecutionManifest(sourceID string, rows []PlanRow, selectedIndices []i
 		}
 	}
 
-	executionIndices := orderForExecution(selected, NormalizeDownloadOrder(order), enumerationOldestFirst...)
+	nativeOldest := len(rows) > 0 && rows[0].EnumerationOldestFirst
+	if len(enumerationOldestFirst) > 0 {
+		nativeOldest = enumerationOldestFirst[0]
+	}
+	executionIndices := orderForExecution(selected, NormalizeDownloadOrder(order), nativeOldest)
 	execution := make([]ExecutionEntry, 0, len(executionIndices))
 	for i, idx := range executionIndices {
 		entry := entriesByIndex[idx]
