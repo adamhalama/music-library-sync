@@ -4,6 +4,8 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+import unicodedata
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -220,6 +222,233 @@ def apply_batch(req: Dict[str, Any]) -> Dict[str, Any]:
         db.close()
 
 
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+
+def format_utc(value) -> str:
+    """created_at as UTC with milliseconds, the precision Rekordbox stores.
+
+    pyrekordbox hands back naive local datetimes, so astimezone() reads them
+    as local time before converting.
+    """
+    if value is None:
+        return ""
+    utc = value.astimezone(datetime.timezone.utc)
+    return utc.strftime(TIMESTAMP_FORMAT) + ".%03dZ" % (utc.microsecond // 1000)
+
+
+def parse_utc(raw: str) -> datetime.datetime:
+    text = str(raw).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    value = datetime.datetime.fromisoformat(text)
+    if value.tzinfo is None:
+        raise RuntimeError(f"timestamp {raw!r} has no time zone")
+    if value.microsecond < 1000:
+        # pyrekordbox writes milliseconds only and drops the seconds entirely
+        # when the fraction is zero; never hand it such a value.
+        raise RuntimeError(f"timestamp {raw!r} needs a non-zero millisecond fraction")
+    return value
+
+
+def nfc(value: str) -> str:
+    return unicodedata.normalize("NFC", value)
+
+
+def source_import_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
+    db_dir = Path(str(req["db_dir"])).expanduser().resolve()
+    prefix = str(req.get("folder_prefix") or "")
+    if not prefix:
+        raise RuntimeError("folder_prefix is required")
+    if not prefix.endswith("/"):
+        prefix += "/"
+    db = Rekordbox6Database(path=db_dir / "master.db", db_dir=db_dir)
+    try:
+        # Filter in Python: SQLite compares bytes, and macOS paths can be
+        # stored NFC or NFD, so a SQL prefix filter can miss existing rows.
+        prefix_key = nfc(prefix)
+        rows = [
+            row
+            for row in db.get_content().order_by(tables.DjmdContent.ID).all()
+            if nfc(str(row.FolderPath or "")).startswith(prefix_key)
+        ]
+        contents = [
+            {
+                "id": str(row.ID),
+                "folder_path": str(row.FolderPath or ""),
+                "created_at": format_utc(row.created_at),
+                "stock_date": str(row.StockDate or ""),
+            }
+            for row in rows
+        ]
+        return {"contents": contents}
+    finally:
+        db.close()
+
+
+def lookup_or_add(db: Rekordbox6Database, table, adder, name: str, cache: Dict[str, str]) -> str:
+    name = (name or "").strip()
+    if not name:
+        return None
+    key = f"{table.__tablename__}:{name}"
+    if key in cache:
+        return cache[key]
+    row = db.query(table).filter_by(Name=name).order_by(table.ID).first()
+    value = str(row.ID) if row is not None else str(adder(name).ID)
+    cache[key] = value
+    return value
+
+
+def import_content(db: Rekordbox6Database, row: Dict[str, Any], cache: Dict[str, str]):
+    path = Path(str(row["path"]))
+    if not path.is_file():
+        raise RuntimeError(f"file to import no longer exists: {path}")
+    tags = row.get("tags") or {}
+    kwargs: Dict[str, Any] = {
+        "Title": str(tags.get("title") or path.stem),
+        "FileNameS": "",
+        "Commnt": str(tags.get("comment") or ""),
+        "Length": int(tags.get("duration_sec") or 0),
+        "BitRate": int(tags.get("bit_rate_kbps") or 0),
+        "BitDepth": int(tags.get("bit_depth") or 0),
+        "SampleRate": int(tags.get("sample_rate") or 0),
+        "ReleaseYear": int(tags.get("year") or 0),
+        "TrackNo": int(tags.get("track_no") or 0),
+        "DiscNo": int(tags.get("disc_no") or 0),
+        "Rating": 0,
+        "ColorID": 0,
+        "DJPlayCount": 0,
+    }
+    artist_id = lookup_or_add(db, tables.DjmdArtist, db.add_artist, tags.get("artist"), cache)
+    if artist_id:
+        kwargs["ArtistID"] = artist_id
+    album_id = lookup_or_add(db, tables.DjmdAlbum, db.add_album, tags.get("album"), cache)
+    if album_id:
+        kwargs["AlbumID"] = album_id
+    genre_id = lookup_or_add(db, tables.DjmdGenre, db.add_genre, tags.get("genre"), cache)
+    if genre_id:
+        kwargs["GenreID"] = genre_id
+    label_id = lookup_or_add(db, tables.DjmdLabel, db.add_label, tags.get("label"), cache)
+    if label_id:
+        kwargs["LabelID"] = label_id
+    return create_content(db, path, **kwargs)
+
+
+def create_content(db: Rekordbox6Database, path: Path, **kwargs: Any):
+    """Rekordbox6Database.add_content with text primary keys.
+
+    pyrekordbox's add_content stores integer IDs while rows loaded from the
+    database have text IDs; SQLAlchemy then cannot order a flush that updates
+    both kinds (commit's USN bump touches every changed row). Rekordbox itself
+    writes text, so the new row does too. Otherwise this matches add_content.
+    """
+    path_string = str(path)
+    path_key = nfc(path_string)
+    # Compare NFC forms: the same macOS path may be stored NFC or NFD.
+    existing = db.query(tables.DjmdContent.FolderPath).all()
+    if any(nfc(str(folder or "")) == path_key for (folder,) in existing):
+        raise RuntimeError(f"{path_string} is already in the Rekordbox collection")
+    file_type_name = path.suffix.lstrip(".").upper()
+    file_type = getattr(tables.FileType, file_type_name, None)
+    if file_type is None:
+        raise RuntimeError(f"unsupported audio file type: {path.suffix}")
+    content_id = str(db.generate_unused_id(tables.DjmdContent))
+    file_id = str(db.generate_unused_id(tables.DjmdContent, id_field_name="rb_file_id"))
+    content_link = db.get_menu_items(Name="TRACK").one()
+    device = db.get_device().first()
+    today = datetime.date.today()
+    content = tables.DjmdContent.create(
+        ID=content_id,
+        UUID=str(uuid.uuid4()),
+        ContentLink=content_link.rb_local_usn,
+        DateCreated=today,
+        DeviceID=device.ID,
+        FileNameL=path.name,
+        FileSize=path.stat().st_size,
+        FileType=file_type.value,
+        FolderPath=path_string,
+        HotCueAutoLoad="on",
+        MasterDBID=device.MasterDBID,
+        MasterSongID=content_id,
+        StockDate=today,
+        rb_file_id=file_id,
+        **kwargs,
+    )
+    db.add(content)
+    db.flush()
+    return content
+
+
+def source_import_apply(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Import new files and rewrite Date Added in one transaction.
+
+    Every row carries the state it was planned against: an update names the
+    content ID, its path and the created_at it had; an import names a path the
+    collection must not hold yet. Any drift aborts the whole batch.
+    """
+    db_dir = Path(str(req["db_dir"])).expanduser().resolve()
+    rows = list(req.get("rows") or [])
+    db = Rekordbox6Database(path=db_dir / "master.db", db_dir=db_dir)
+    cache: Dict[str, str] = {}
+    try:
+        for row in rows:
+            if row.get("action") not in ("import", "update"):
+                raise RuntimeError(f"unsupported source import action: {row.get('action')!r}")
+            parse_utc(row["created_at"])
+
+        # pyrekordbox gives new rows integer primary keys while loaded rows
+        # carry text keys, and SQLAlchemy cannot flush a mix of both for one
+        # table. Imports therefore go first and are flushed on their own;
+        # existing rows are only touched afterwards.
+        content_ids: Dict[int, str] = {}
+        for index, row in enumerate(rows):
+            if row["action"] != "import":
+                continue
+            content = import_content(db, row, cache)
+            content.created_at = parse_utc(row["created_at"])
+            content.StockDate = str(row["stock_date"])
+            db.flush()
+            content_ids[index] = str(content.ID)
+
+        for index, row in enumerate(rows):
+            if row["action"] != "update":
+                continue
+            content = db.get_content(ID=str(row["content_id"]))
+            if content is None:
+                raise RuntimeError(f"Rekordbox track {row['content_id']} no longer exists")
+            if nfc(str(content.FolderPath or "")) != nfc(str(row["path"])):
+                raise RuntimeError(f"Rekordbox track {row['content_id']} moved since planning")
+            if format_utc(content.created_at) != str(row.get("expected_created_at") or ""):
+                raise RuntimeError(f"Rekordbox track {row['content_id']} Date Added changed since planning")
+            content.created_at = parse_utc(row["created_at"])
+            content.StockDate = str(row["stock_date"])
+            content_ids[index] = str(content.ID)
+        db.flush()
+        db.commit(autoinc=True)
+
+        results = []
+        for index, row in enumerate(rows):
+            key = str(row.get("key") or "")
+            stored = db.get_content(ID=content_ids[index])
+            if stored is None:
+                raise RuntimeError(f"Rekordbox track {content_ids[index]} missing after commit")
+            results.append(
+                {
+                    "key": key,
+                    "content_id": str(stored.ID),
+                    "path": str(stored.FolderPath or ""),
+                    "created_at": format_utc(stored.created_at),
+                    "stock_date": str(stored.StockDate or ""),
+                }
+            )
+        return {"rows": results}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def main() -> int:
     try:
         request = json.load(sys.stdin)
@@ -230,6 +459,10 @@ def main() -> int:
             response = apply_playlist(request["request"])
         elif op == "apply_batch":
             response = apply_batch(request["request"])
+        elif op == "source_import_inspect":
+            response = source_import_inspect(request["request"])
+        elif op == "source_import_apply":
+            response = source_import_apply(request["request"])
         else:
             raise RuntimeError(f"Unsupported helper operation: {op!r}")
         print(json.dumps(response, ensure_ascii=False, separators=(",", ":")))

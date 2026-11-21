@@ -164,6 +164,8 @@ Global flags:
 - Plan SHA-256 values are integrity checks, not cryptographic signatures.
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
+- `udl rekordbox import-source <spotify-source-id> [--genre <name>] [--step-seconds N] [--backup-dir <path>] [--force]`: import the source's downloaded files into the Rekordbox collection and set Date Added so it follows the Spotify playlist order, oldest (first in the playlist) to newest, one second apart. Order comes from the playlist's embed page and files from the source's sync state. Tracks already in the collection keep their Date Added when it already sorts correctly; re-running on an ordered collection writes nothing. `--genre` replaces the file's genre tag on newly imported tracks. `--dry-run` prints the planned order. A real run needs Rekordbox and RBxport closed and writes a full backup first.
+- Rekordbox sorts Date Added by `created_at`; RBxport sorts by the day only (`StockDate`) and breaks ties by database row order, so tracks imported on the same day in another order keep that order in RBxport.
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)
