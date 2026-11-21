@@ -3,7 +3,8 @@
 A database-free audio analyser that writes Rekordbox ANLZ files and a JSON result.
 This separate program is GPL-2.0-or-later (see LICENSE). It links the GPL crates
 from RBxport 1.10.0 at d0ff75b378ec85be891d9f3067ada1e82bad4cae; its decode
-pipeline is adapted from RBxport's src-tauri/src/analysis.rs. The MIT udl CLI
+pipeline is adapted from RBxport's src-tauri/src/analysis.rs
+(Copyright (c) 2026 Chris Le). The MIT udl CLI
 executes it as a subprocess and does not link these crates.
 
 Build with Rust 1.89 or newer:
