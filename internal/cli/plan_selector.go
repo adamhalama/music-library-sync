@@ -13,15 +13,16 @@ import (
 )
 
 type planSourceDetails struct {
-	SourceID   string
-	SourceType string
-	Adapter    string
-	URL        string
-	TargetDir  string
-	StateFile  string
-	PlanLimit  int
-	PlanWindow engine.PlanWindow
-	DryRun     bool
+	EnumerationOldestFirst bool
+	SourceID               string
+	SourceType             string
+	Adapter                string
+	URL                    string
+	TargetDir              string
+	StateFile              string
+	PlanLimit              int
+	PlanWindow             engine.PlanWindow
+	DryRun                 bool
 }
 
 type planSelectorModel struct {
@@ -301,15 +302,16 @@ func buildPlanSourceDetails(source config.Source, defaults config.Defaults, plan
 		stateFile = filepath.Clean(stateFile)
 	}
 	return planSourceDetails{
-		SourceID:   strings.TrimSpace(source.ID),
-		SourceType: string(source.Type),
-		Adapter:    strings.TrimSpace(source.Adapter.Kind),
-		URL:        sanitizePlanURL(url),
-		TargetDir:  targetDir,
-		StateFile:  stateFile,
-		PlanLimit:  planLimit,
-		PlanWindow: engine.NormalizePlanWindow(planWindow),
-		DryRun:     dryRun,
+		EnumerationOldestFirst: engine.SoundCloudEnumerationOldestFirst(source),
+		SourceID:               strings.TrimSpace(source.ID),
+		SourceType:             string(source.Type),
+		Adapter:                strings.TrimSpace(source.Adapter.Kind),
+		URL:                    sanitizePlanURL(url),
+		TargetDir:              targetDir,
+		StateFile:              stateFile,
+		PlanLimit:              planLimit,
+		PlanWindow:             engine.NormalizePlanWindow(planWindow),
+		DryRun:                 dryRun,
 	}
 }
 

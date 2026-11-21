@@ -172,7 +172,7 @@ func (p *scdlSourcePlan) Rows() []PlanRow {
 }
 
 func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApplyOptions) (sourcePlanExecution, error) {
-	manifest, err := CanonicalizeExecutionManifest(p.sourceForExec.ID, p.rows, manifest)
+	manifest, err := CanonicalizeExecutionManifest(p.sourceForExec.ID, p.rows, manifest, SoundCloudEnumerationOldestFirst(p.sourceForExec))
 	if err != nil {
 		return sourcePlanExecution{}, err
 	}
@@ -203,7 +203,7 @@ func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApp
 			selectedKnownGapIDs[track.ID] = struct{}{}
 		}
 	}
-	plannedTracks = orderForExecution(plannedTracks, downloadOrder)
+	plannedTracks = OrderSoundCloudTracks(p.sourceForExec, plannedTracks, downloadOrder)
 
 	preflight := p.preflight
 	preflight.PlannedDownloadCount = len(orderedSelectedPlaylistIDs)

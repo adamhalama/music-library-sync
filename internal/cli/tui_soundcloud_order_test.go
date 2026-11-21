@@ -30,3 +30,24 @@ func TestTUISyncSelectorDefaultsToConfiguredSourceOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestTUISoundCloudSelectorUsesAddedOrderForLikesAndSets(t *testing.T) {
+	for _, kind := range []string{"likes", "sets/sample"} {
+		t.Run(kind, func(t *testing.T) {
+			source := config.Source{ID: "sample", Type: config.SourceTypeSoundCloud, URL: "https://soundcloud.com/example/" + kind, Adapter: config.AdapterSpec{Kind: "scdl"}}
+			rows := []engine.PlanRow{{Index: 1, RemoteID: "a", Toggleable: true, SelectedByDefault: true}, {Index: 2, RemoteID: "b", Toggleable: true, SelectedByDefault: true}}
+			state := newTUIInteractiveSelectionState(tuiPlanSelectRequestMsg{SourceID: source.ID, Rows: rows, DownloadOrder: engine.DownloadOrderOldestFirst, Details: buildPlanSourceDetails(source, config.Defaults{}, 10, engine.PlanWindowFirst, true)})
+			first := 2
+			if kind == "sets/sample" {
+				first = 1
+			}
+			if state.manifest.Execution[0].Index != first {
+				t.Fatalf("wrong selector order: %+v", state.manifest)
+			}
+			state.setDownloadOrder(engine.DownloadOrderNewestFirst)
+			if state.manifest.Execution[0].Index == first {
+				t.Fatalf("toggle did not reverse: %+v", state.manifest)
+			}
+		})
+	}
+}

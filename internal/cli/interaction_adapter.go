@@ -33,7 +33,7 @@ func (i cliInteraction) SelectRows(sourceID string, rows []engine.PlanRow) (engi
 	if err != nil {
 		return engine.PlanSelectionResult{}, err
 	}
-	manifest, err := engine.BuildExecutionManifest(sourceID, rows, selected, engine.DownloadOrderNewestFirst)
+	manifest, err := engine.BuildExecutionManifest(sourceID, rows, selected, engine.DownloadOrderForSource(source), engine.SoundCloudEnumerationOldestFirst(source))
 	if err != nil {
 		return engine.PlanSelectionResult{}, err
 	}

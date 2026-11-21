@@ -786,7 +786,7 @@ func (s *tuiInteractiveSelectionState) rebuildManifest() {
 		}
 	}
 	sort.Ints(selected)
-	manifest, err := engine.BuildExecutionManifest(s.sourceID, rows, selected, s.downloadOrder)
+	manifest, err := engine.BuildExecutionManifest(s.sourceID, rows, selected, s.downloadOrder, s.details.EnumerationOldestFirst)
 	if err != nil {
 		s.manifest = engine.ExecutionManifest{
 			SourceID:      s.sourceID,

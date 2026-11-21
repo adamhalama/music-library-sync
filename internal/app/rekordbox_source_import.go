@@ -23,20 +23,22 @@ type RekordboxSourceImportBridge interface {
 	SourceImportApply(ctx context.Context, req bridge.SourceImportApplyRequest) (bridge.SourceImportApplyResponse, error)
 }
 
-// RekordboxSourceImportUseCase imports a udl Spotify source's local files into
+// RekordboxSourceImportUseCase imports a udl source's local files into
 // the Rekordbox collection with Date Added in the playlist's own order. The CLI
 // and the TUI share it; every side effect has a seam for tests.
 type RekordboxSourceImportUseCase struct {
-	Bridge        RekordboxSourceImportBridge
-	FetchOrder    func(ctx context.Context, playlistURL string) ([]engine.SpotifyPlaylistTrack, error)
-	LoadState     func(stateFilePath string) (map[string]engine.SpotifyStateEntry, error)
-	TagReader     sourceimport.TagReader
-	FileExists    func(path string) bool
-	Now           func() time.Time
-	Location      *time.Location
-	CheckClosed   func(context.Context, string) error
-	CreateBackup  func(context.Context, string, string, time.Time) (string, error)
-	EnsureRuntime func(context.Context, pyruntime.Request) (pyruntime.Runtime, error)
+	Bridge               RekordboxSourceImportBridge
+	FetchOrder           func(ctx context.Context, playlistURL string) ([]engine.SpotifyPlaylistTrack, error)
+	LoadState            func(stateFilePath string) (map[string]engine.SpotifyStateEntry, error)
+	FetchSoundCloudOrder func(context.Context, config.Source) ([]engine.SoundCloudRemoteTrack, error)
+	LoadSoundCloudState  func(string) (map[string]string, error)
+	TagReader            sourceimport.TagReader
+	FileExists           func(path string) bool
+	Now                  func() time.Time
+	Location             *time.Location
+	CheckClosed          func(context.Context, string) error
+	CreateBackup         func(context.Context, string, string, time.Time) (string, error)
+	EnsureRuntime        func(context.Context, pyruntime.Request) (pyruntime.Runtime, error)
 }
 
 type RekordboxSourceImportRequest struct {
@@ -104,13 +106,13 @@ func (u RekordboxSourceImportUseCase) Apply(ctx context.Context, req RekordboxSo
 }
 
 func sourceImportApplyRequest(plan sourceimport.Plan) bridge.SourceImportApplyRequest {
-	applyReq := bridge.SourceImportApplyRequest{DBDir: plan.DBDir}
+	applyReq := bridge.SourceImportApplyRequest{DBDir: plan.DBDir, AppendOnly: plan.AppendOnly, FolderPrefix: plan.TargetDir}
 	for _, row := range plan.Rows {
-		if !row.Changes() {
+		if !row.Changes() || plan.AppendOnly && row.Status != sourceimport.StatusImport {
 			continue
 		}
 		applyRow := bridge.SourceImportApplyRow{
-			Key:       row.SpotifyID,
+			Key:       row.ID,
 			Path:      row.Path,
 			CreatedAt: row.NewCreatedAt,
 			StockDate: row.NewStockDate,
@@ -131,7 +133,7 @@ func sourceImportApplyRequest(plan sourceimport.Plan) bridge.SourceImportApplyRe
 
 func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSourceImportRequest) (sourceimport.Plan, RekordboxSourceImportBridge, error) {
 	cfg := req.Config
-	source, err := findSpotifySource(cfg, req.SourceID)
+	source, err := findImportSource(cfg, req.SourceID)
 	if err != nil {
 		return sourceimport.Plan{}, nil, err
 	}
@@ -167,29 +169,9 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 		return sourceimport.Plan{}, nil, err
 	}
 
-	order, err := u.fetchOrder(ctx, source.URL)
+	tracks, localNotRemote, err := u.sourceTracks(ctx, source, statePath, targetDir)
 	if err != nil {
-		return sourceimport.Plan{}, nil, fmt.Errorf("read Spotify playlist order: %w", err)
-	}
-	state, err := u.loadState(statePath)
-	if err != nil {
-		return sourceimport.Plan{}, nil, fmt.Errorf("read sync state %s: %w", statePath, err)
-	}
-	tracks := make([]sourceimport.SourceTrack, 0, len(order))
-	for _, item := range order {
-		track := sourceimport.SourceTrack{
-			Position:  item.Position,
-			SpotifyID: item.ID,
-			Title:     item.Title,
-			Artist:    item.Artist,
-		}
-		if entry, ok := state[item.ID]; ok && strings.TrimSpace(entry.LocalPath) != "" {
-			track.Path = entry.LocalPath
-			if !filepath.IsAbs(track.Path) {
-				track.Path = filepath.Join(targetDir, track.Path)
-			}
-		}
-		tracks = append(tracks, track)
+		return sourceimport.Plan{}, nil, err
 	}
 
 	inspect, err := client.SourceImportInspect(ctx, bridge.SourceImportInspectRequest{DBDir: dbDir, FolderPrefix: targetDir})
@@ -215,19 +197,22 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 		step = time.Second
 	}
 	plan, err := sourceimport.BuildPlan(ctx, sourceimport.Input{
-		SourceID:      source.ID,
-		PlaylistURL:   source.URL,
-		TargetDir:     targetDir,
-		DBDir:         dbDir,
-		BackupDir:     backupDir,
-		Tracks:        tracks,
-		Contents:      contents,
-		ImportTime:    u.now(),
-		Step:          step,
-		Location:      u.Location,
-		GenreOverride: req.GenreOverride,
-		FileExists:    u.fileExists(),
-		TagReader:     u.tagReader(),
+		SourceID:       source.ID,
+		SourceType:     string(source.Type),
+		AppendOnly:     source.Sync.AppendOnly,
+		LocalNotRemote: localNotRemote,
+		PlaylistURL:    source.URL,
+		TargetDir:      targetDir,
+		DBDir:          dbDir,
+		BackupDir:      backupDir,
+		Tracks:         tracks,
+		Contents:       contents,
+		ImportTime:     u.now(),
+		Step:           step,
+		Location:       u.Location,
+		GenreOverride:  req.GenreOverride,
+		FileExists:     u.fileExists(),
+		TagReader:      u.tagReader(),
 	})
 	if err != nil {
 		return sourceimport.Plan{}, nil, err
@@ -238,7 +223,81 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 	return plan, client, nil
 }
 
-func findSpotifySource(cfg config.Config, id string) (config.Source, error) {
+func (u RekordboxSourceImportUseCase) sourceTracks(ctx context.Context, source config.Source, statePath, targetDir string) ([]sourceimport.SourceTrack, int, error) {
+	var tracks []sourceimport.SourceTrack
+	paths := map[string]string{}
+	switch source.Type {
+	case config.SourceTypeSpotify:
+		order, err := u.fetchOrder(ctx, source.URL)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read Spotify playlist order: %w", err)
+		}
+		state, err := u.loadState(statePath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read sync state: %w", err)
+		}
+		for id, entry := range state {
+			paths[id] = entry.LocalPath
+		}
+		for _, item := range order {
+			tracks = append(tracks, sourceimport.SourceTrack{Position: item.Position, ID: item.ID, Title: item.Title, Artist: item.Artist})
+		}
+	case config.SourceTypeSoundCloud:
+		fetch := u.FetchSoundCloudOrder
+		if fetch == nil {
+			fetch = engine.FetchSoundCloudOrder
+		}
+		order, err := fetch(ctx, source)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read SoundCloud order: %w", err)
+		}
+		load := u.LoadSoundCloudState
+		if load == nil {
+			load = engine.LoadSoundCloudStatePaths
+		}
+		paths, err = load(statePath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read sync state: %w", err)
+		}
+		for i, item := range engine.OrderSoundCloudTracks(source, order, engine.DownloadOrderOldestFirst) {
+			tracks = append(tracks, sourceimport.SourceTrack{Position: i + 1, ID: item.ID, Title: item.Title})
+		}
+	}
+	resolve := func(path string) string {
+		if strings.TrimSpace(path) == "" {
+			return ""
+		}
+		if !filepath.IsAbs(path) {
+			return filepath.Join(targetDir, path)
+		}
+		return path
+	}
+	remote := map[string]bool{}
+	for i := range tracks {
+		remote[tracks[i].ID] = true
+		tracks[i].Path = resolve(paths[tracks[i].ID])
+	}
+	absent := []string{}
+	for id, path := range paths {
+		path = resolve(path)
+		if remote[id] || path == "" || !u.fileExists()(path) {
+			continue
+		}
+		duplicate := false
+		for _, seen := range absent {
+			if sourceimport.SamePath(path, seen) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			absent = append(absent, path)
+		}
+	}
+	return tracks, len(absent), nil
+}
+
+func findImportSource(cfg config.Config, id string) (config.Source, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return config.Source{}, fmt.Errorf("source id is required")
@@ -247,8 +306,11 @@ func findSpotifySource(cfg config.Config, id string) (config.Source, error) {
 		if source.ID != id {
 			continue
 		}
-		if source.Type != config.SourceTypeSpotify {
-			return config.Source{}, fmt.Errorf("source %q is %s; only Spotify sources can be imported in playlist order", id, source.Type)
+		if source.Type != config.SourceTypeSpotify && source.Type != config.SourceTypeSoundCloud {
+			return config.Source{}, fmt.Errorf("source %q is %s; only Spotify and SoundCloud sources can be imported", id, source.Type)
+		}
+		if source.Type == config.SourceTypeSoundCloud && source.Adapter.Kind != "scdl" {
+			return config.Source{}, fmt.Errorf("source %q requires adapter.kind=scdl for import; scdl-freedl capture state does not guarantee an ID-to-file mapping", id)
 		}
 		if strings.TrimSpace(source.StateFile) == "" {
 			return config.Source{}, fmt.Errorf("source %q has no state_file", id)

@@ -396,6 +396,26 @@ def source_import_apply(req: Dict[str, Any]) -> Dict[str, Any]:
                 raise RuntimeError(f"unsupported source import action: {row.get('action')!r}")
             parse_utc(row["created_at"])
 
+        if req.get("append_only"):
+            if any(row["action"] != "import" for row in rows):
+                raise RuntimeError("append-only source import cannot update existing rows")
+            prefix = nfc(str(req.get("folder_prefix") or "").rstrip("/")) + "/"
+            if prefix == "/":
+                raise RuntimeError("append-only source import needs folder_prefix")
+            existing = [
+                content for content in db.get_content().all()
+                if nfc(str(content.FolderPath or "")).startswith(prefix)
+            ]
+            latest = max((format_utc(content.created_at) for content in existing), default="")
+            previous = parse_utc(latest) if latest else None
+            for row in rows:
+                if not nfc(str(row["path"])).startswith(prefix):
+                    raise RuntimeError("append-only import path is outside the source folder")
+                created = parse_utc(row["created_at"])
+                if previous is not None and created <= previous:
+                    raise RuntimeError("append-only Date Added must follow every existing source row")
+                previous = created
+
         # pyrekordbox gives new rows integer primary keys while loaded rows
         # carry text keys, and SQLAlchemy cannot flush a mix of both for one
         # table. Imports therefore go first and are flushed on their own;

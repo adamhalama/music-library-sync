@@ -1,6 +1,6 @@
 // Package sourceimport plans importing a udl source's local files into the
 // Rekordbox collection so that Date Added follows the source's own order
-// (oldest first). Planning is pure; the app layer feeds it the Spotify order,
+// (oldest first). Planning is pure; the app layer feeds it the remote order,
 // the sync state, the collection rows and file tags, and hands the plan to the
 // pyrekordbox bridge.
 package sourceimport
@@ -40,10 +40,10 @@ const StockDateLayout = "2006-01-02"
 
 // SourceTrack is one track of the source, in source order.
 type SourceTrack struct {
-	Position  int
-	SpotifyID string
-	Title     string
-	Artist    string
+	Position int
+	ID       string
+	Title    string
+	Artist   string
 	// Path is the absolute local path recorded by sync, or empty.
 	Path string
 }
@@ -59,13 +59,16 @@ type Content struct {
 // Input is everything BuildPlan needs; it does no I/O beyond FileExists and
 // ReadTags.
 type Input struct {
-	SourceID    string
-	PlaylistURL string
-	TargetDir   string
-	DBDir       string
-	BackupDir   string
-	Tracks      []SourceTrack
-	Contents    []Content
+	SourceID       string
+	SourceType     string
+	AppendOnly     bool
+	LocalNotRemote int
+	PlaylistURL    string
+	TargetDir      string
+	DBDir          string
+	BackupDir      string
+	Tracks         []SourceTrack
+	Contents       []Content
 	// ImportTime anchors Date Added for new tracks after the last existing one.
 	ImportTime time.Time
 	// Step separates consecutive tracks; at least one second so the seconds
@@ -81,7 +84,7 @@ type Input struct {
 
 type Row struct {
 	Position     int    `json:"position"`
-	SpotifyID    string `json:"spotify_id"`
+	ID           string `json:"spotify_id,omitempty"`
 	Title        string `json:"title"`
 	Artist       string `json:"artist,omitempty"`
 	Path         string `json:"path,omitempty"`
@@ -107,17 +110,21 @@ func (r Row) Changes() bool {
 }
 
 type Summary struct {
-	SourceTracks  int `json:"source_tracks"`
-	Existing      int `json:"existing"`
-	Import        int `json:"import"`
-	DateChanges   int `json:"date_changes"`
-	NotDownloaded int `json:"not_downloaded"`
-	FileMissing   int `json:"file_missing"`
-	DuplicatePath int `json:"duplicate_path"`
+	SourceTracks       int `json:"source_tracks"`
+	CollectionExisting int `json:"collection_existing,omitempty"`
+	LocalNotRemote     int `json:"local_not_remote,omitempty"`
+	Existing           int `json:"existing"`
+	Import             int `json:"import"`
+	DateChanges        int `json:"date_changes"`
+	NotDownloaded      int `json:"not_downloaded"`
+	FileMissing        int `json:"file_missing"`
+	DuplicatePath      int `json:"duplicate_path"`
 }
 
 type Plan struct {
 	Version       string   `json:"version"`
+	SourceType    string   `json:"source_type,omitempty"`
+	AppendOnly    bool     `json:"append_only,omitempty"`
 	GeneratedAt   string   `json:"generated_at"`
 	SourceID      string   `json:"source_id"`
 	PlaylistURL   string   `json:"playlist_url"`
@@ -166,6 +173,8 @@ func BuildPlan(ctx context.Context, in Input) (Plan, error) {
 
 	plan := Plan{
 		Version:       PlanVersion,
+		SourceType:    in.SourceType,
+		AppendOnly:    in.AppendOnly,
 		GeneratedAt:   in.ImportTime.UTC().Format(time.RFC3339),
 		SourceID:      in.SourceID,
 		PlaylistURL:   in.PlaylistURL,
@@ -193,18 +202,18 @@ func BuildPlan(ctx context.Context, in Input) (Plan, error) {
 	usedPaths := map[string]int{}
 	for _, track := range tracks {
 		row := Row{
-			Position:  track.Position,
-			SpotifyID: track.SpotifyID,
-			Title:     track.Title,
-			Artist:    track.Artist,
-			Path:      track.Path,
+			Position: track.Position,
+			ID:       track.ID,
+			Title:    track.Title,
+			Artist:   track.Artist,
+			Path:     track.Path,
 		}
 		switch {
 		case strings.TrimSpace(track.Path) == "":
 			row.Status = StatusNotDownloaded
 		case usedPaths[pathKey(track.Path)] > 0:
 			row.Status = StatusDuplicatePath
-		case !fileExists(track.Path):
+		case !fileExists(track.Path) && !(in.AppendOnly && byPath[pathKey(track.Path)].ID != ""):
 			row.Status = StatusFileMissing
 		default:
 			usedPaths[pathKey(track.Path)] = track.Position
@@ -234,8 +243,14 @@ func BuildPlan(ctx context.Context, in Input) (Plan, error) {
 		plan.Rows = append(plan.Rows, row)
 	}
 
-	assignTimeline(plan.Rows, in.Contents, in.ImportTime, in.Step, loc)
+	if in.AppendOnly {
+		assignAppendOnlyTimeline(plan.Rows, in.Contents, in.ImportTime, in.Step, loc)
+	} else {
+		assignTimeline(plan.Rows, in.Contents, in.ImportTime, in.Step, loc)
+	}
 	plan.Summary = summarize(plan.Rows)
+	plan.Summary.CollectionExisting = len(in.Contents)
+	plan.Summary.LocalNotRemote = in.LocalNotRemote
 	for _, row := range plan.Rows {
 		if row.Tags != nil && row.Tags.Source == TagSourceFilename {
 			plan.Warnings = append(plan.Warnings, "ffprobe not found; new tracks get title/artist from their file names only")
@@ -243,6 +258,28 @@ func BuildPlan(ctx context.Context, in Input) (Plan, error) {
 		}
 	}
 	return plan, nil
+}
+
+// Append-only imports follow every source row, including rows no longer remote.
+// Existing rows retain their exact stored values even when their order differs.
+func assignAppendOnlyTimeline(rows []Row, contents []Content, now time.Time, step time.Duration, loc *time.Location) {
+	last := now
+	for _, content := range contents {
+		if content.CreatedAt.After(last) {
+			last = content.CreatedAt
+		}
+	}
+	for i := range rows {
+		row := &rows[i]
+		switch row.Status {
+		case StatusExisting:
+			row.NewCreatedAt, row.NewStockDate = row.OldCreatedAt, row.OldStockDate
+		case StatusImport:
+			last = normalizeTimestamp(last.Add(step))
+			row.NewCreatedAt = FormatTimestamp(last)
+			row.NewStockDate = last.In(loc).Format(StockDateLayout)
+		}
+	}
 }
 
 func assignTimeline(rows []Row, contents []Content, importTime time.Time, step time.Duration, loc *time.Location) {
@@ -368,7 +405,7 @@ func summarize(rows []Row) Summary {
 func (p Plan) TimelineRows() []Row {
 	out := make([]Row, 0, len(p.Rows))
 	for _, row := range p.Rows {
-		if row.Status == StatusExisting || row.Status == StatusImport {
+		if row.Status == StatusImport || !p.AppendOnly && row.Status == StatusExisting {
 			out = append(out, row)
 		}
 	}

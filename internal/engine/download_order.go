@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/jaa/update-downloads/internal/config"
 )
@@ -63,9 +65,31 @@ func SupportsPlan(source config.Source) bool {
 		source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix"
 }
 
-func orderForExecution[T any](items []T, order DownloadOrder) []T {
+// SoundCloudEnumerationOldestFirst reports whether yt-dlp enumerates set
+// positions (earliest-added first), rather than a newest-first user stream.
+// User roots honor scdl's mode flags through effectiveSoundCloudListURL.
+func SoundCloudEnumerationOldestFirst(source config.Source) bool {
+	if source.Type != config.SourceTypeSoundCloud {
+		return false
+	}
+	parsed, err := url.Parse(effectiveSoundCloudListURL(source))
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	return len(parts) >= 2 && parts[1] == "sets" ||
+		len(parts) >= 2 && parts[0] == "playlists" && strings.HasPrefix(parsed.Hostname(), "api.")
+}
+
+// OrderSoundCloudTracks returns a copy in added order for this URL kind.
+func OrderSoundCloudTracks(source config.Source, tracks []SoundCloudRemoteTrack, order DownloadOrder) []SoundCloudRemoteTrack {
+	return orderForExecution(tracks, order, SoundCloudEnumerationOldestFirst(source))
+}
+
+func orderForExecution[T any](items []T, order DownloadOrder, enumerationOldestFirst ...bool) []T {
 	ordered := append([]T(nil), items...)
-	if NormalizeDownloadOrder(order) == DownloadOrderOldestFirst {
+	nativeOldest := len(enumerationOldestFirst) > 0 && enumerationOldestFirst[0]
+	if (NormalizeDownloadOrder(order) == DownloadOrderOldestFirst) != nativeOldest {
 		slices.Reverse(ordered)
 	}
 	return ordered

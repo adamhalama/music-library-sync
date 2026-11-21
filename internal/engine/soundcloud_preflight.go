@@ -606,3 +606,22 @@ func consumeLocalTitleMatch(available map[string]int, title string) bool {
 	available[key] = count - 1
 	return true
 }
+
+// FetchSoundCloudOrder reuses sync preflight enumeration without downloading.
+func FetchSoundCloudOrder(ctx context.Context, source config.Source) ([]SoundCloudRemoteTrack, error) {
+	return enumerateSoundCloudTracks(ctx, source)
+}
+
+// LoadSoundCloudStatePaths returns the ID-to-path mapping written by scdl.
+// Paths may be absolute or relative to the configured target directory.
+func LoadSoundCloudStatePaths(path string) (map[string]string, error) {
+	state, err := parseSoundCloudSyncState(path)
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]string, len(state.ByID))
+	for id, entry := range state.ByID {
+		paths[id] = entry.FilePath
+	}
+	return paths, nil
+}

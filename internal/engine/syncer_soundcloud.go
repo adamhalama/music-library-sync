@@ -177,7 +177,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	preflight := planStage.Preflight
 	knownGapIDs := planStage.KnownGapID
 	plannedIDs := planStage.PlannedID
-	plan.PlannedTracks = orderForExecution(orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
+	plan.PlannedTracks = OrderSoundCloudTracks(source, orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&
 		preflight.FirstExistingIndex > 0 &&
@@ -201,7 +201,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 			preflight = planStage.Preflight
 			knownGapIDs = planStage.KnownGapID
 			plannedIDs = planStage.PlannedID
-			plan.PlannedTracks = orderForExecution(orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
+			plan.PlannedTracks = OrderSoundCloudTracks(source, orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
 		}
 	}
 

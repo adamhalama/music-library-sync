@@ -162,8 +162,10 @@ type SourceImportApplyRow struct {
 }
 
 type SourceImportApplyRequest struct {
-	DBDir string                 `json:"db_dir"`
-	Rows  []SourceImportApplyRow `json:"rows"`
+	DBDir        string                 `json:"db_dir"`
+	AppendOnly   bool                   `json:"append_only,omitempty"`
+	FolderPrefix string                 `json:"folder_prefix,omitempty"`
+	Rows         []SourceImportApplyRow `json:"rows"`
 }
 
 type SourceImportAppliedRow struct {
