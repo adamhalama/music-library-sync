@@ -130,3 +130,30 @@ func TestSpotifyDeezerLookupErrorsWithoutDeezerID(t *testing.T) {
 		t.Fatalf("expected an error for a response without a track id, got found=%v err=%v", found, err)
 	}
 }
+
+func TestSpotifyDeezerLookupRetriesFailedTokenFetch(t *testing.T) {
+	lookup := newTestDeezerLookup(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "api.spotify.com" {
+			_, _ = w.Write([]byte(`{"external_ids":{"isrc":"DECH61500128"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":2106406247}`))
+	})
+	lookup.tokenReady = false
+	calls := 0
+	lookup.fetchToken = func(context.Context, auth.SpotifyCredentials) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", errors.New("timeout")
+		}
+		return "test-token", nil
+	}
+
+	if _, _, err := lookup.resolve(context.Background(), "717Yvrk8gwaVOqNPbIATn8"); err == nil {
+		t.Fatal("expected the first lookup to report the token failure")
+	}
+	deezerID, found, err := lookup.resolve(context.Background(), "717Yvrk8gwaVOqNPbIATn8")
+	if err != nil || !found || deezerID != "2106406247" {
+		t.Fatalf("second lookup = %q, %v, %v; want a fresh token and a match", deezerID, found, err)
+	}
+}

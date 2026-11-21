@@ -22,7 +22,6 @@ import (
 type spotifyDeezerLookup struct {
 	creds      auth.SpotifyCredentials
 	token      string
-	tokenErr   error
 	tokenReady bool
 	fetchToken func(context.Context, auth.SpotifyCredentials) (string, error)
 	client     *http.Client
@@ -60,10 +59,14 @@ func (l *spotifyDeezerLookup) resolve(ctx context.Context, spotifyTrackID string
 
 func (l *spotifyDeezerLookup) accessToken(ctx context.Context) (string, error) {
 	if !l.tokenReady {
-		l.token, l.tokenErr = l.fetchToken(ctx, l.creds)
-		l.tokenReady = true
+		// Cache only a successful token so a transient failure is retried on the next track.
+		token, err := l.fetchToken(ctx, l.creds)
+		if err != nil {
+			return "", err
+		}
+		l.token, l.tokenReady = token, true
 	}
-	return l.token, l.tokenErr
+	return l.token, nil
 }
 
 func (l *spotifyDeezerLookup) spotifyISRC(ctx context.Context, trackID string) (string, error) {
