@@ -197,15 +197,51 @@ func (s *Syncer) runSpotifyDeemix(
 		sourceFailed = true
 		sourceFailureMessage = fmt.Sprintf("[%s] resolve target_dir: %v", source.ID, targetDirErr)
 	}
+	deezerLookup := newSpotifyDeezerLookup(auth.SpotifyCredentials{
+		ClientID:     sourceForExec.SpotifyClientID,
+		ClientSecret: sourceForExec.SpotifyClientSecret,
+	})
 	for idx, trackID := range plannedTrackIDs {
 		if sourceFailed {
 			break
 		}
 		trackSource := sourceForExec
+		trackLabel := spotifyTrackDisplayNameFromState(trackID, plan.TrackMetadata, plan.State)
 		if trackID != "" {
 			trackSource.URL = spotifyTrackURL(trackID)
+			deezerID, found, lookupErr := lookupDeezerTrackForSpotifyFn(ctx, deezerLookup, trackID)
+			switch {
+			case lookupErr != nil:
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelWarn,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   fmt.Sprintf("[%s] deezer isrc lookup failed for %s, using spotify link: %v", source.ID, trackID, lookupErr),
+				})
+			case !found:
+				skippedUnavailable++
+				display := trackLabel
+				if display == "" {
+					display = trackID
+				}
+				skipMessage := fmt.Sprintf("[%s] [skip] %s (%s) (unavailable-on-deezer)", source.ID, trackID, display)
+				_ = s.Emitter.Emit(output.Event{
+					Timestamp: s.Now(),
+					Level:     output.LevelInfo,
+					Event:     output.EventSourcePreflight,
+					SourceID:  source.ID,
+					Message:   skipMessage,
+				})
+				if flow.Parser != nil {
+					flow.Parser.OnStdoutLine(skipMessage)
+					s.flushFlowParser(&flow, source)
+				}
+				continue
+			default:
+				trackSource.URL = deezerTrackURL(deezerID)
+			}
 		}
-		trackLabel := spotifyTrackDisplayNameFromState(trackID, plan.TrackMetadata, plan.State)
 		spec, buildErr := adapter.BuildExecSpec(trackSource, cfg.Defaults, timeout)
 		if buildErr != nil {
 			sourceFailed = true
