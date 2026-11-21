@@ -24,6 +24,10 @@ func NormalizeDownloadOrder(order DownloadOrder) DownloadOrder {
 	return DownloadOrderNewestFirst
 }
 
+func DownloadOrderForSource(source config.Source) DownloadOrder {
+	return NormalizeDownloadOrder(DownloadOrder(source.Sync.DownloadOrder))
+}
+
 func NormalizePlanWindow(window PlanWindow) PlanWindow {
 	if window == PlanWindowLatest {
 		return PlanWindowLatest

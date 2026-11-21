@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,9 @@ var enumerateSoundCloudTracksWithLimitFn = enumerateSoundCloudTracksWithLimit
 
 func effectiveSoundCloudListURL(source config.Source) string {
 	base := strings.TrimSpace(source.URL)
+	if SoundCloudURLHasResourcePath(base) {
+		return base
+	}
 	mode := detectSoundCloudMode(source.Adapter.ExtraArgs)
 	switch mode {
 	case "-t":
@@ -59,6 +63,13 @@ func effectiveSoundCloudListURL(source config.Source) string {
 	default:
 		return base
 	}
+}
+
+// SoundCloudURLHasResourcePath distinguishes a user root (where scdl's mode
+// selects likes/uploads/etc.) from an explicit track, set, or likes URL.
+func SoundCloudURLHasResourcePath(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && len(strings.Split(strings.Trim(parsed.Path, "/"), "/")) > 1
 }
 
 func detectSoundCloudMode(args []string) string {
@@ -115,6 +126,9 @@ func enumerateSoundCloudTracksWithLimit(ctx context.Context, source config.Sourc
 		"--print",
 		"%(id)s\t%(title)s\t%(webpage_url)s",
 	}
+	if source.Sync.AppendOnly {
+		args = append(args, "--ignore-config")
+	}
 	if limit > 0 {
 		args = append(args, "--playlist-end", strconv.Itoa(limit))
 	}
@@ -141,6 +155,9 @@ func enumerateSoundCloudTracksWithLimitStreaming(ctx context.Context, source con
 		"--flat-playlist",
 		"--print",
 		"%(id)s\t%(title)s\t%(webpage_url)s",
+	}
+	if source.Sync.AppendOnly {
+		args = append(args, "--ignore-config")
 	}
 	if limit > 0 {
 		args = append(args, "--playlist-end", strconv.Itoa(limit))
@@ -245,10 +262,11 @@ func parseSoundCloudSyncState(path string) (soundCloudSyncState, error) {
 		}
 
 		entry := soundCloudSyncEntry{RawLine: raw}
-		parts := strings.SplitN(raw, " ", 3)
-		if len(parts) == 3 && strings.TrimSpace(parts[0]) == "soundcloud" {
-			entry.ID = strings.TrimSpace(parts[1])
-			entry.FilePath = strings.TrimSpace(parts[2])
+		parts := strings.Fields(raw)
+		if len(parts) >= 3 && parts[0] == "soundcloud" {
+			rest := strings.TrimSpace(raw[len(parts[0]):])
+			entry.ID = parts[1]
+			entry.FilePath = strings.TrimSpace(rest[len(entry.ID):])
 			if entry.ID != "" {
 				state.ByID[entry.ID] = entry
 			}

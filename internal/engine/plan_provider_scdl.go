@@ -106,7 +106,7 @@ func (p *SCDLPlanProvider) buildWithTracks(
 		return nil, fmt.Errorf("parse archive file: %w", err)
 	}
 
-	needsLocalIndex := needsSoundCloudLocalIndex(tracks, stateStage.State, archiveStage.KnownIDs, targetDir)
+	needsLocalIndex := !source.Sync.AppendOnly && needsSoundCloudLocalIndex(tracks, stateStage.State, archiveStage.KnownIDs, targetDir)
 	localIndex := suppliedLocalIndex
 	if localIndex == nil {
 		cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
@@ -132,6 +132,7 @@ func (p *SCDLPlanProvider) buildWithTracks(
 		LocalIndex:     localIndex,
 		TargetDir:      targetDir,
 		Mode:           mode,
+		AppendOnly:     source.Sync.AppendOnly,
 	})
 
 	rows := make([]PlanRow, 0, len(tracks))
@@ -214,9 +215,10 @@ func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApp
 		SourcePreflight:         &preflight,
 		PlannedSoundCloudTracks: plannedTracks,
 		DownloadOrder:           downloadOrder,
+		StateSwap:               soundCloudStateSwap{AppendOnly: sourceForExec.Sync.AppendOnly},
 	}
 
-	if opts.DryRun || len(orderedSelectedPlaylistIDs) == 0 {
+	if opts.DryRun || len(orderedSelectedPlaylistIDs) == 0 || sourceForExec.Sync.AppendOnly {
 		return out, nil
 	}
 

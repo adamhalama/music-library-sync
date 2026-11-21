@@ -14,6 +14,7 @@ type soundCloudStateSwap struct {
 	TempSyncPath        string
 	OriginalArchivePath string
 	TempArchivePath     string
+	AppendOnly          bool
 }
 
 type soundCloudExecutionPlan struct {
@@ -82,7 +83,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	source config.Source,
 	opts SyncOptions,
 ) (soundCloudExecutionPlan, error) {
-	plan := soundCloudExecutionPlan{Source: source}
+	plan := soundCloudExecutionPlan{Source: source, DownloadOrder: DownloadOrderForSource(source), StateSwap: soundCloudStateSwap{AppendOnly: source.Sync.AppendOnly}}
 
 	stateFilePath, err := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
 	if err != nil {
@@ -97,6 +98,9 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting
 
 	if opts.NoPreflight {
+		if source.Sync.DownloadOrder != "" {
+			return plan, fmt.Errorf("sync.download_order requires preflight planning; remove --no-preflight")
+		}
 		if source.Adapter.Kind == "scdl-freedl" {
 			return plan, fmt.Errorf("soundcloud adapter.kind=scdl-freedl requires preflight planning; remove --no-preflight")
 		}
@@ -149,7 +153,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	archiveKnownIDs := archiveStage.KnownIDs
 
 	cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
-	needsLocalIndex := needsSoundCloudLocalIndex(tracks, state, archiveKnownIDs, targetDir)
+	needsLocalIndex := !source.Sync.AppendOnly && needsSoundCloudLocalIndex(tracks, state, archiveKnownIDs, targetDir)
 	localIndexStage, err := loadSoundCloudLocalIndexStage(soundCloudLocalIndexStageInput{
 		SourceID:  source.ID,
 		TargetDir: targetDir,
@@ -168,11 +172,11 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 		LocalIndex:     localIndexStage.Index,
 		TargetDir:      targetDir,
 		Mode:           mode,
+		AppendOnly:     source.Sync.AppendOnly,
 	})
 	preflight := planStage.Preflight
 	knownGapIDs := planStage.KnownGapID
 	plannedIDs := planStage.PlannedID
-	plan.DownloadOrder = DownloadOrderNewestFirst
 	plan.PlannedTracks = orderForExecution(orderPlannedSoundCloudTracks(tracks, plannedIDs), plan.DownloadOrder)
 	if askOnExisting &&
 		mode == SoundCloudModeBreak &&
@@ -192,6 +196,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 				LocalIndex:     localIndexStage.Index,
 				TargetDir:      targetDir,
 				Mode:           mode,
+				AppendOnly:     source.Sync.AppendOnly,
 			})
 			preflight = planStage.Preflight
 			knownGapIDs = planStage.KnownGapID
@@ -204,6 +209,19 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	breakOnExisting = mode == SoundCloudModeBreak
 	plan.Source.Sync.BreakOnExisting = &breakOnExisting
 
+	if source.Sync.AppendOnly {
+		return plan, nil
+	}
+	orderedSelection := source.Sync.DownloadOrder != "" && source.Adapter.Kind == "scdl"
+	if orderedSelection {
+		indexByID := map[string]int{}
+		for i, track := range tracks {
+			indexByID[track.ID] = i + 1
+		}
+		for _, track := range plan.PlannedTracks {
+			plan.Source.SelectedPlaylistIDs = append(plan.Source.SelectedPlaylistIDs, indexByID[track.ID])
+		}
+	}
 	if opts.DryRun {
 		return plan, nil
 	}
@@ -214,8 +232,17 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 			plannedKnownGapIDs[id] = struct{}{}
 		}
 	}
-	if len(plannedKnownGapIDs) > 0 {
-		tempStateFile, tempErr := writeFilteredSyncStateFile(stateFilePath, state, plannedKnownGapIDs)
+	if len(plannedKnownGapIDs) > 0 || orderedSelection {
+		removeStateIDs := plannedKnownGapIDs
+		if orderedSelection {
+			// scdl --sync deletes entries it does not visit. As in interactive
+			// selection, a partial ordered run must start with an empty sync state.
+			removeStateIDs = map[string]struct{}{}
+			for id := range state.ByID {
+				removeStateIDs[id] = struct{}{}
+			}
+		}
+		tempStateFile, tempErr := writeFilteredSyncStateFile(stateFilePath, state, removeStateIDs)
 		if tempErr != nil {
 			return plan, fmt.Errorf("prepare temporary sync state file: %w", tempErr)
 		}
@@ -231,6 +258,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 			TempSyncPath:        tempStateFile,
 			OriginalArchivePath: archivePath,
 			TempArchivePath:     tempArchiveFile,
+			AppendOnly:          source.Sync.AppendOnly,
 		}
 	}
 
@@ -252,6 +280,9 @@ func orderPlannedSoundCloudTracks(tracks []soundCloudRemoteTrack, plannedIDs map
 }
 
 func determineSoundCloudMode(source config.Source, opts SyncOptions) SoundCloudMode {
+	if source.Sync.AppendOnly {
+		return SoundCloudModeScanGaps
+	}
 	if opts.ScanGaps {
 		return SoundCloudModeScanGaps
 	}

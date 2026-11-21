@@ -32,6 +32,34 @@ func mergeCommittedSoundCloudSyncStateFile(originalPath string, tempPath string)
 	return cleanupTempFile(tempPath)
 }
 
+func mergeCommittedSoundCloudSyncStateFileAppendOnly(originalPath string, tempPath string) error {
+	originalState, err := parseSoundCloudSyncState(originalPath)
+	if err != nil {
+		return fmt.Errorf("parse original sync state: %w", err)
+	}
+	tempState, err := parseSoundCloudSyncState(tempPath)
+	if err != nil {
+		return fmt.Errorf("parse temporary sync state: %w", err)
+	}
+	seen := map[string]struct{}{}
+	for id := range originalState.ByID {
+		seen[id] = struct{}{}
+	}
+	for _, entry := range tempState.Entries {
+		if entry.ID == "" {
+			continue
+		}
+		if _, ok := seen[entry.ID]; ok {
+			continue
+		}
+		if err := appendSoundCloudPreservingLines(originalPath, entry.RawLine+"\n"); err != nil {
+			return err
+		}
+		seen[entry.ID] = struct{}{}
+	}
+	return cleanupTempFile(tempPath)
+}
+
 func mergeCommittedSoundCloudArchiveFile(originalPath string, tempPath string) error {
 	originalLines, err := readSoundCloudArchiveLines(originalPath)
 	if err != nil {
@@ -45,6 +73,36 @@ func mergeCommittedSoundCloudArchiveFile(originalPath string, tempPath string) e
 	mergedLines := mergeSoundCloudArchiveLines(originalLines, tempLines)
 	if err := writeSoundCloudLinesAtomically(originalPath, ".udl-archive-commit-*.txt", mergedLines); err != nil {
 		return err
+	}
+	return cleanupTempFile(tempPath)
+}
+
+func mergeCommittedSoundCloudArchiveFileAppendOnly(originalPath string, tempPath string) error {
+	original, err := readSoundCloudArchiveLines(originalPath)
+	if err != nil {
+		return fmt.Errorf("parse original archive: %w", err)
+	}
+	temp, err := readSoundCloudArchiveLines(tempPath)
+	if err != nil {
+		return fmt.Errorf("parse temporary archive: %w", err)
+	}
+	seen := map[string]struct{}{}
+	for _, line := range original {
+		if line.ID != "" {
+			seen[line.ID] = struct{}{}
+		}
+	}
+	for _, line := range temp {
+		if line.ID == "" {
+			continue
+		}
+		if _, ok := seen[line.ID]; ok {
+			continue
+		}
+		if err := appendSoundCloudPreservingLines(originalPath, line.Raw+"\n"); err != nil {
+			return err
+		}
+		seen[line.ID] = struct{}{}
 	}
 	return cleanupTempFile(tempPath)
 }

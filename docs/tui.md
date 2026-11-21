@@ -111,6 +111,8 @@ Selector header includes source config context:
 - current plan limit and run mode
 - current plan window for Spotify+deemix (`latest` by default)
 
+For SoundCloud sources, the download-order selector starts at `sync.download_order` from that source (`newest_first` or `oldest_first`). If it is omitted, the selector starts at `oldest_first`, matching the existing interactive default.
+
 The window control is intentionally hidden for SoundCloud because its `scdl` plan provider does not implement first/latest window switching. Spotify `latest` uses playlist `added_at` timestamps when available; public-page fallback uses the playlist tail in reverse order.
 
 The selector is rendered inline in the main content area instead of opening a separate overlay.

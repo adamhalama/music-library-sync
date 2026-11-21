@@ -136,6 +136,15 @@ func (s *Syncer) Sync(ctx context.Context, cfg config.Config, opts SyncOptions) 
 			result.Skipped++
 			continue
 		}
+		if err := validateSoundCloudAppendOnlyMode(source, opts); err != nil {
+			result.Failed++
+			result.Attempted++
+			_ = s.Emitter.Emit(output.Event{Timestamp: s.Now(), Level: output.LevelError, Event: output.EventSourceFailed, SourceID: source.ID, Message: err.Error()})
+			if !cfg.Defaults.ContinueOnError {
+				break
+			}
+			continue
+		}
 
 		if opts.Plan {
 			provider := s.planProviderForSource(source)
@@ -582,6 +591,9 @@ func (s *Syncer) runSource(
 	downloadOrder DownloadOrder,
 	opts SyncOptions,
 ) sourceRunOutcome {
+	if source.Sync.AppendOnly {
+		return s.runSoundCloudAppendOnly(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, plannedSoundCloudTracks, downloadOrder, opts)
+	}
 	if source.Type == config.SourceTypeSpotify && source.Adapter.Kind == "deemix" {
 		return s.runSpotifyDeemix(ctx, cfg, source, adapter, sourceForExec, sourcePreflight, spotifyDeemixPlan, opts)
 	}

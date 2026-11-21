@@ -105,6 +105,34 @@ func TestValidateFailure(t *testing.T) {
 	}
 }
 
+func TestValidateAppendOnlyAndDownloadOrder(t *testing.T) {
+	cfg := Config{Version: 1, Defaults: Defaults{StateDir: "/tmp/state", ArchiveFile: "archive.txt", Threads: 1, CommandTimeoutSeconds: 1}, Sources: []Source{{
+		ID: "sc", Type: SourceTypeSoundCloud, Enabled: true, TargetDir: "/tmp/music", URL: "https://soundcloud.com/example", StateFile: "sc.scdl",
+		Sync: SyncPolicy{AppendOnly: true, DownloadOrder: "oldest_first"}, Adapter: AdapterSpec{Kind: "scdl"},
+	}}}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected append-only config to validate: %v", err)
+	}
+	cfg.Sources[0].Sync.DownloadOrder = "middle"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected invalid download order")
+	}
+	cfg.Sources[0].Sync.DownloadOrder = "oldest_first"
+	cfg.Sources[0].Adapter.Kind = "scdl-freedl"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected append-only free-dl rejection")
+	}
+	cfg.Sources[0].Type = SourceTypeSpotify
+	cfg.Sources[0].Adapter.Kind = "deemix"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected SoundCloud settings to be rejected for Spotify")
+	}
+	cfg.Sources[0].Sync.AppendOnly = false
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected saved order to be rejected for Spotify")
+	}
+}
+
 // Validate covers the rekordbox block too, so a malformed one is reported at
 // load instead of surfacing only when a rekordbox command runs.
 func TestValidateRejectsInvalidRekordboxBlock(t *testing.T) {

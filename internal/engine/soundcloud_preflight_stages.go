@@ -120,6 +120,7 @@ type soundCloudPlanStageInput struct {
 	LocalIndex     map[string]int
 	TargetDir      string
 	Mode           SoundCloudMode
+	AppendOnly     bool
 }
 
 type soundCloudPlanStageResult struct {
@@ -145,6 +146,12 @@ func planSoundCloudPreflightStage(input soundCloudPlanStageInput) soundCloudPlan
 		}
 
 		knownCount++
+		if input.AppendOnly {
+			if firstExisting == 0 {
+				firstExisting = i + 1
+			}
+			continue
+		}
 		hasLocal := false
 		if knownFromState {
 			if stateEntryHasLocalFile(entry.FilePath, input.TargetDir) {
