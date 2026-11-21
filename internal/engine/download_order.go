@@ -77,8 +77,8 @@ func SoundCloudEnumerationOldestFirst(source config.Source) bool {
 		return false
 	}
 	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	return len(parts) >= 2 && parts[1] == "sets" ||
-		len(parts) >= 2 && parts[0] == "playlists" && strings.HasPrefix(parsed.Hostname(), "api.")
+	return len(parts) >= 3 && (parts[1] == "sets" || parts[1] == "playlists") ||
+		len(parts) >= 2 && parts[0] == "playlists"
 }
 
 // OrderSoundCloudTracks returns a copy in added order for this URL kind.

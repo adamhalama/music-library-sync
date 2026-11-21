@@ -20,9 +20,12 @@ func TestSoundCloudAddedOrderByURLKind(t *testing.T) {
 		{name: "comments", url: "https://soundcloud.com/example/comments"},
 		{name: "user likes", url: "https://soundcloud.com/example", args: []string{"-f"}},
 		{name: "user uploads", url: "https://soundcloud.com/example", args: []string{"-t"}},
-		{name: "user sets", url: "https://soundcloud.com/example", args: []string{"-p"}, oldest: true},
+		{name: "user sets", url: "https://soundcloud.com/example", args: []string{"-p"}},
+		{name: "user reposts", url: "https://soundcloud.com/example", args: []string{"-r"}},
+		{name: "user all", url: "https://soundcloud.com/example", args: []string{"-a"}},
 		{name: "set", url: "https://soundcloud.com/example/sets/sample?secret_token=sample", args: []string{"-f"}, oldest: true},
 		{name: "API playlist", url: "https://api.soundcloud.com/playlists/123", oldest: true},
+		{name: "web playlist", url: "https://soundcloud.com/example/playlists/sample", oldest: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := config.Source{Type: config.SourceTypeSoundCloud, URL: tc.url, Adapter: config.AdapterSpec{ExtraArgs: tc.args}}
