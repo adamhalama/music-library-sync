@@ -415,3 +415,5 @@ Dual-run transition is supported:
 ## License
 
 MIT — see `LICENCE`.
+
+`tools/rbl-analyse` is a separate GPL-2.0-or-later program; see its own LICENSE.
