@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
@@ -250,6 +251,10 @@ def parse_utc(raw: str) -> datetime.datetime:
     return value
 
 
+def nfc(value: str) -> str:
+    return unicodedata.normalize("NFC", value)
+
+
 def source_import_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
     db_dir = Path(str(req["db_dir"])).expanduser().resolve()
     prefix = str(req.get("folder_prefix") or "")
@@ -259,12 +264,14 @@ def source_import_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
         prefix += "/"
     db = Rekordbox6Database(path=db_dir / "master.db", db_dir=db_dir)
     try:
-        rows = (
-            db.get_content()
-            .filter(tables.DjmdContent.FolderPath.startswith(prefix))
-            .order_by(tables.DjmdContent.ID)
-            .all()
-        )
+        # Filter in Python: SQLite compares bytes, and macOS paths can be
+        # stored NFC or NFD, so a SQL prefix filter can miss existing rows.
+        prefix_key = nfc(prefix)
+        rows = [
+            row
+            for row in db.get_content().order_by(tables.DjmdContent.ID).all()
+            if nfc(str(row.FolderPath or "")).startswith(prefix_key)
+        ]
         contents = [
             {
                 "id": str(row.ID),
@@ -336,7 +343,10 @@ def create_content(db: Rekordbox6Database, path: Path, **kwargs: Any):
     writes text, so the new row does too. Otherwise this matches add_content.
     """
     path_string = str(path)
-    if db.query(tables.DjmdContent).filter_by(FolderPath=path_string).count() > 0:
+    path_key = nfc(path_string)
+    # Compare NFC forms: the same macOS path may be stored NFC or NFD.
+    existing = db.query(tables.DjmdContent.FolderPath).all()
+    if any(nfc(str(folder or "")) == path_key for (folder,) in existing):
         raise RuntimeError(f"{path_string} is already in the Rekordbox collection")
     file_type_name = path.suffix.lstrip(".").upper()
     file_type = getattr(tables.FileType, file_type_name, None)
@@ -406,7 +416,7 @@ def source_import_apply(req: Dict[str, Any]) -> Dict[str, Any]:
             content = db.get_content(ID=str(row["content_id"]))
             if content is None:
                 raise RuntimeError(f"Rekordbox track {row['content_id']} no longer exists")
-            if str(content.FolderPath or "") != str(row["path"]):
+            if nfc(str(content.FolderPath or "")) != nfc(str(row["path"])):
                 raise RuntimeError(f"Rekordbox track {row['content_id']} moved since planning")
             if format_utc(content.created_at) != str(row.get("expected_created_at") or ""):
                 raise RuntimeError(f"Rekordbox track {row['content_id']} Date Added changed since planning")
