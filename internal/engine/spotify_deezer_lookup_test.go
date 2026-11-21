@@ -91,3 +91,42 @@ func (base rewriteToServer) RoundTrip(req *http.Request) (*http.Response, error)
 	clone.URL.Host = target
 	return http.DefaultTransport.RoundTrip(clone)
 }
+
+func TestSpotifyDeezerLookupRefreshesExpiredToken(t *testing.T) {
+	lookup := newTestDeezerLookup(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "api.spotify.com" {
+			if r.Header.Get("Authorization") != "Bearer fresh-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"external_ids":{"isrc":"DECH61500128"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":2106406247}`))
+	})
+	lookup.token = "expired-token"
+	refreshes := 0
+	lookup.fetchToken = func(context.Context, auth.SpotifyCredentials) (string, error) {
+		refreshes++
+		return "fresh-token", nil
+	}
+
+	deezerID, found, err := lookup.resolve(context.Background(), "717Yvrk8gwaVOqNPbIATn8")
+	if err != nil || !found || deezerID != "2106406247" || refreshes != 1 {
+		t.Fatalf("resolve = %q, %v, %v after %d refreshes; want one refresh and a match", deezerID, found, err, refreshes)
+	}
+}
+
+func TestSpotifyDeezerLookupErrorsWithoutDeezerID(t *testing.T) {
+	lookup := newTestDeezerLookup(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "api.spotify.com" {
+			_, _ = w.Write([]byte(`{"external_ids":{"isrc":"DECH61500128"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	if _, found, err := lookup.resolve(context.Background(), "717Yvrk8gwaVOqNPbIATn8"); err == nil || found {
+		t.Fatalf("expected an error for a response without a track id, got found=%v err=%v", found, err)
+	}
+}

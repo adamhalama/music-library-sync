@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,11 +24,16 @@ type spotifyDeezerLookup struct {
 	token      string
 	tokenErr   error
 	tokenReady bool
+	fetchToken func(context.Context, auth.SpotifyCredentials) (string, error)
 	client     *http.Client
 }
 
 func newSpotifyDeezerLookup(creds auth.SpotifyCredentials) *spotifyDeezerLookup {
-	return &spotifyDeezerLookup{creds: creds, client: &http.Client{Timeout: 20 * time.Second}}
+	return &spotifyDeezerLookup{
+		creds:      creds,
+		fetchToken: fetchSpotifyAccessToken,
+		client:     &http.Client{Timeout: 20 * time.Second},
+	}
 }
 
 // lookupDeezerTrackForSpotifyFn returns the Deezer track ID for a Spotify track.
@@ -54,25 +60,35 @@ func (l *spotifyDeezerLookup) resolve(ctx context.Context, spotifyTrackID string
 
 func (l *spotifyDeezerLookup) accessToken(ctx context.Context) (string, error) {
 	if !l.tokenReady {
-		l.token, l.tokenErr = fetchSpotifyAccessToken(ctx, l.creds)
+		l.token, l.tokenErr = l.fetchToken(ctx, l.creds)
 		l.tokenReady = true
 	}
 	return l.token, l.tokenErr
 }
 
 func (l *spotifyDeezerLookup) spotifyISRC(ctx context.Context, trackID string) (string, error) {
-	token, err := l.accessToken(ctx)
-	if err != nil {
-		return "", err
-	}
 	var decoded struct {
 		ExternalIDs struct {
 			ISRC string `json:"isrc"`
 		} `json:"external_ids"`
 	}
-	headers := map[string]string{"Authorization": "Bearer " + token}
-	if err := l.getJSON(ctx, "https://api.spotify.com/v1/tracks/"+url.PathEscape(trackID), headers, &decoded); err != nil {
-		return "", fmt.Errorf("spotify track lookup: %w", err)
+	trackURL := "https://api.spotify.com/v1/tracks/" + url.PathEscape(trackID)
+	// Client-credentials tokens expire after about an hour; refresh once on 401.
+	for attempt := 0; ; attempt++ {
+		token, err := l.accessToken(ctx)
+		if err != nil {
+			return "", err
+		}
+		err = l.getJSON(ctx, trackURL, map[string]string{"Authorization": "Bearer " + token}, &decoded)
+		var statusErr httpStatusError
+		if err != nil && attempt == 0 && errors.As(err, &statusErr) && int(statusErr) == http.StatusUnauthorized {
+			l.tokenReady = false
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("spotify track lookup: %w", err)
+		}
+		break
 	}
 	isrc := strings.ToUpper(strings.TrimSpace(decoded.ExternalIDs.ISRC))
 	if isrc == "" {
@@ -101,10 +117,14 @@ func (l *spotifyDeezerLookup) deezerTrackByISRC(ctx context.Context, isrc string
 	}
 	deezerID := strings.TrimSpace(decoded.ID.String())
 	if deezerID == "" || deezerID == "0" {
-		return "", false, nil
+		return "", false, fmt.Errorf("deezer isrc lookup: response has no track id")
 	}
 	return deezerID, true, nil
 }
+
+type httpStatusError int
+
+func (e httpStatusError) Error() string { return fmt.Sprintf("status=%d", int(e)) }
 
 func (l *spotifyDeezerLookup) getJSON(ctx context.Context, rawURL string, headers map[string]string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -124,7 +144,7 @@ func (l *spotifyDeezerLookup) getJSON(ctx context.Context, rawURL string, header
 		return readErr
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("status=%d", resp.StatusCode)
+		return httpStatusError(resp.StatusCode)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("decode response: %w", err)
