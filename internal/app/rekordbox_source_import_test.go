@@ -282,6 +282,84 @@ func TestSoundCloudAppendOnlyImportSendsNoExistingRowUpdates(t *testing.T) {
 	}
 }
 
+func TestRekordboxSourceImportNewOnlyAppendsAfterExistingRowsAndNow(t *testing.T) {
+	configure := func(t *testing.T) (RekordboxSourceImportUseCase, *fakeSourceImportBridge, RekordboxSourceImportRequest) {
+		t.Helper()
+		useCase, fake, _, req := sourceImportFixture(t)
+		req.SourceID = "sc"
+		source := &req.Config.Sources[0]
+		source.URL = "https://soundcloud.com/example/sets/sample"
+		source.Adapter.Kind = "scdl"
+		source.Sync.AppendOnly = false
+		useCase.FetchSoundCloudOrder = func(context.Context, config.Source) ([]engine.SoundCloudRemoteTrack, error) {
+			return []engine.SoundCloudRemoteTrack{{ID: "new-a"}, {ID: "old-a"}, {ID: "new-b"}, {ID: "old-b"}}, nil
+		}
+		useCase.LoadSoundCloudState = func(string) (map[string]string, error) {
+			return map[string]string{
+				"new-a":  "New A.mp3",
+				"old-a":  "Fluke - Zion.mp3",
+				"new-b":  "New B.mp3",
+				"old-b":  "Vitalic - Poison Lips.mp3",
+				"absent": "Gone From Remote.mp3",
+			}, nil
+		}
+		fake.inspect.Contents = append(fake.inspect.Contents, bridge.SourceImportContent{
+			ID: "13", FolderPath: filepath.Join(source.TargetDir, "Gone From Remote.mp3"),
+			CreatedAt: "2027-01-01T00:00:00.500Z", StockDate: "2027-01-01",
+		})
+		return useCase, fake, req
+	}
+
+	useCase, _, req := configure(t)
+	plan, err := useCase.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AppendOnly || plan.Summary.DateChanges != 1 || !plan.Rows[3].Changes() || plan.Rows[3].ContentID != "12" {
+		t.Fatalf("without new-only expected the out-of-order existing row to be redated: %+v", plan)
+	}
+
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want [2]string
+	}{
+		{"after_latest_existing_row", useCase.Now(), [2]string{"2027-01-01T00:00:01.500Z", "2027-01-01T00:00:02.500Z"}},
+		{"after_run_time", time.Date(2028, 1, 1, 0, 0, 0, 500_000_000, time.UTC), [2]string{"2028-01-01T00:00:01.500Z", "2028-01-01T00:00:02.500Z"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useCase, fake, req := configure(t)
+			req.NewOnly = true
+			useCase.Now = func() time.Time { return tc.now }
+			plan, err := useCase.Plan(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Summary.DateChanges != 0 || plan.Rows[1].Changes() || plan.Rows[3].Changes() {
+				t.Fatalf("new-only must preserve existing rows: %+v", plan)
+			}
+			if _, err := useCase.Apply(context.Background(), req, plan); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.applied) != 1 {
+				t.Fatalf("expected one bridge request, got %d", len(fake.applied))
+			}
+			sent := fake.applied[0]
+			if !sent.AppendOnly || len(sent.Rows) != 2 || sent.Rows[0].Key != "new-a" || sent.Rows[1].Key != "new-b" {
+				t.Fatalf("expected only new imports in source order: %+v", sent)
+			}
+			for i, row := range sent.Rows {
+				if row.Action != bridge.SourceImportActionImport || row.ContentID != "" || row.ExpectedCreatedAt != "" {
+					t.Fatalf("existing row update leaked into new-only request: %+v", sent.Rows)
+				}
+				if row.CreatedAt != tc.want[i] || row.StockDate != tc.want[i][:10] {
+					t.Fatalf("wrong new timeline: %+v", sent.Rows)
+				}
+			}
+		})
+	}
+}
+
 func TestSoundCloudSourceImportUsesIDWhenPrivateTrackTitleIsUnavailable(t *testing.T) {
 	useCase, _, _, req := sourceImportFixture(t)
 	req.SourceID = "sc"

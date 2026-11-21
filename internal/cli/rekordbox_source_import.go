@@ -23,6 +23,7 @@ type rekordboxImportSourceFlags struct {
 	Genre       string
 	StepSeconds int
 	Force       bool
+	NewOnly     bool
 }
 
 func newRekordboxImportSourceCommand(app *AppContext) *cobra.Command {
@@ -39,8 +40,9 @@ scdl-freedl sources are not supported.
 Existing tracks keep Date Added when correctly ordered; otherwise it moves by
 whole seconds. Trailing new tracks get the current time. With sync.append_only,
 existing collection rows remain untouched and new imports follow both the
-current time and every existing source row, one step apart. Local tracks no
-longer listed remotely remain untouched. Re-running changes nothing.
+current time and every existing source row, one step apart. --new-only applies
+the same behavior for this run. Local tracks no longer listed remotely remain
+untouched. Re-running changes nothing.
 
 Use --dry-run to print the planned order without writing. A real run needs
 Rekordbox and RBxport closed and writes a full backup of the Rekordbox
@@ -71,6 +73,7 @@ directory first.`),
 				GenreOverride: flags.Genre,
 				Step:          time.Duration(flags.StepSeconds) * time.Second,
 				DryRun:        app.Opts.DryRun,
+				NewOnly:       flags.NewOnly,
 			}
 			useCase := workflows.RekordboxSourceImportUseCase{}
 			plan, err := useCase.Plan(ctx, req)
@@ -118,6 +121,7 @@ directory first.`),
 	cmd.Flags().StringVar(&flags.Genre, "genre", "", "Genre written on newly imported tracks instead of the file's genre tag")
 	cmd.Flags().IntVar(&flags.StepSeconds, "step-seconds", 1, "Seconds between consecutive tracks' Date Added")
 	cmd.Flags().BoolVar(&flags.Force, "force", false, "Write without an interactive confirmation")
+	cmd.Flags().BoolVar(&flags.NewOnly, "new-only", false, "Import only tracks not already in the collection")
 	return cmd
 }
 
@@ -137,7 +141,7 @@ func printSourceImportPlan(app *AppContext, plan sourceimport.Plan, final bool) 
 	}
 	fmt.Fprintf(out, "Order: %s, oldest first; Date Added %ds apart\n", order, plan.StepMillis/1000)
 	if plan.AppendOnly {
-		fmt.Fprintln(out, "Append-only: existing collection rows remain unchanged; new imports follow all existing source rows and the current time.")
+		fmt.Fprintln(out, "Existing collection rows remain unchanged; new imports follow all existing source rows and the current time.")
 	}
 	if plan.GenreOverride != "" {
 		fmt.Fprintf(out, "Genre for new tracks: %s\n", plan.GenreOverride)

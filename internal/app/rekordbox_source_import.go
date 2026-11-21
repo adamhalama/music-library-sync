@@ -51,6 +51,7 @@ type RekordboxSourceImportRequest struct {
 	GenreOverride string
 	Step          time.Duration
 	DryRun        bool
+	NewOnly       bool
 }
 
 type RekordboxSourceImportResult struct {
@@ -199,7 +200,7 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 	plan, err := sourceimport.BuildPlan(ctx, sourceimport.Input{
 		SourceID:       source.ID,
 		SourceType:     string(source.Type),
-		AppendOnly:     source.Sync.AppendOnly,
+		AppendOnly:     source.Sync.AppendOnly || req.NewOnly,
 		LocalNotRemote: localNotRemote,
 		PlaylistURL:    source.URL,
 		TargetDir:      targetDir,
