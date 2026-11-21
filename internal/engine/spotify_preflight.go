@@ -170,7 +170,114 @@ func enumerateSpotifyPlaylistTracksWithToken(
 	return tracks, nil
 }
 
+// enumerateSpotifyPlaylistTracksViaPage reads a public playlist without API
+// credentials. The embed page lists every track with title and artist; the
+// regular playlist page only exposes the first 30, so it is the last resort.
 func enumerateSpotifyPlaylistTracksViaPage(
+	ctx context.Context,
+	playlistID string,
+) ([]spotifyRemoteTrack, error) {
+	tracks, embedErr := enumerateSpotifyPlaylistTracksViaEmbed(ctx, playlistID)
+	if embedErr == nil {
+		return tracks, nil
+	}
+	tracks, pageErr := enumerateSpotifyPlaylistTracksViaPlaylistPage(ctx, playlistID)
+	if pageErr != nil {
+		return nil, fmt.Errorf("%v (embed page: %v)", pageErr, embedErr)
+	}
+	return tracks, nil
+}
+
+type spotifyEmbedPageData struct {
+	Props struct {
+		PageProps struct {
+			State struct {
+				Data struct {
+					Entity struct {
+						TrackList []struct {
+							URI      string `json:"uri"`
+							Title    string `json:"title"`
+							Subtitle string `json:"subtitle"`
+						} `json:"trackList"`
+					} `json:"entity"`
+				} `json:"data"`
+			} `json:"state"`
+		} `json:"pageProps"`
+	} `json:"props"`
+}
+
+var spotifyNextDataPattern = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</script>`)
+
+func enumerateSpotifyPlaylistTracksViaEmbed(
+	ctx context.Context,
+	playlistID string,
+) ([]spotifyRemoteTrack, error) {
+	embedURL := "https://open.spotify.com/embed/playlist/" + playlistID
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, embedURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create spotify embed request: %w", err)
+	}
+	req.Header.Set("User-Agent", "udl/spotify-deemix")
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("spotify embed request failed: %w", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read spotify embed response: %w", readErr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("spotify embed request failed: status=%d", resp.StatusCode)
+	}
+	return parseSpotifyEmbedPlaylistHTML(string(body))
+}
+
+func parseSpotifyEmbedPlaylistHTML(document string) ([]spotifyRemoteTrack, error) {
+	match := spotifyNextDataPattern.FindStringSubmatch(document)
+	if len(match) < 2 {
+		return nil, fmt.Errorf("spotify embed page has no __NEXT_DATA__ payload")
+	}
+	var data spotifyEmbedPageData
+	if err := json.Unmarshal([]byte(match[1]), &data); err != nil {
+		return nil, fmt.Errorf("decode spotify embed payload: %w", err)
+	}
+
+	tracks := make([]spotifyRemoteTrack, 0)
+	seen := map[string]struct{}{}
+	for i, item := range data.Props.PageProps.State.Data.Entity.TrackList {
+		if !strings.HasPrefix(item.URI, "spotify:track:") {
+			continue
+		}
+		id := extractSpotifyTrackID(strings.TrimPrefix(item.URI, "spotify:track:"))
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			title = id
+		}
+		tracks = append(tracks, spotifyRemoteTrack{
+			ID:       id,
+			URL:      spotifyTrackURL(id),
+			Title:    title,
+			Artist:   strings.TrimSpace(item.Subtitle),
+			Position: i + 1,
+		})
+	}
+	if len(tracks) == 0 {
+		return nil, fmt.Errorf("spotify embed page did not expose track IDs")
+	}
+	return tracks, nil
+}
+
+func enumerateSpotifyPlaylistTracksViaPlaylistPage(
 	ctx context.Context,
 	playlistID string,
 ) ([]spotifyRemoteTrack, error) {

@@ -99,3 +99,33 @@ func TestWriteSpotifyTrackMetadataCache(t *testing.T) {
 		t.Fatalf("unexpected second track cache: %+v", decoded.Tracks["5onvWxBJehSONyspmnrvhD"])
 	}
 }
+
+func TestParseSpotifyEmbedPlaylistHTML(t *testing.T) {
+	document := `<html><body><script id="__NEXT_DATA__" type="application/json">` +
+		`{"props":{"pageProps":{"state":{"data":{"entity":{"trackList":[` +
+		`{"uri":"spotify:track:41gXFhitx4whS6PsoXREzy","title":"Zion","subtitle":"Fluke"},` +
+		`{"uri":"spotify:episode:5onvWxBJehSONyspmnrvhD","title":"Podcast","subtitle":"Host"},` +
+		`{"uri":"spotify:track:41gXFhitx4whS6PsoXREzy","title":"Zion","subtitle":"Fluke"},` +
+		`{"uri":"spotify:track:0qPpFSdqIpzgNU6lHy3iF6","title":"","subtitle":"Vitalic"}` +
+		`]}}}}}}</script></body></html>`
+
+	tracks, err := parseSpotifyEmbedPlaylistHTML(document)
+	if err != nil {
+		t.Fatalf("parse embed: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("expected two unique tracks, got %+v", tracks)
+	}
+	if tracks[0].ID != "41gXFhitx4whS6PsoXREzy" || tracks[0].Title != "Zion" || tracks[0].Artist != "Fluke" || tracks[0].Position != 1 {
+		t.Fatalf("unexpected first track: %+v", tracks[0])
+	}
+	if tracks[1].ID != "0qPpFSdqIpzgNU6lHy3iF6" || tracks[1].Title != tracks[1].ID || tracks[1].Position != 4 {
+		t.Fatalf("unexpected second track: %+v", tracks[1])
+	}
+}
+
+func TestParseSpotifyEmbedPlaylistHTMLRequiresPayload(t *testing.T) {
+	if _, err := parseSpotifyEmbedPlaylistHTML(`<html></html>`); err == nil {
+		t.Fatal("expected error for page without __NEXT_DATA__")
+	}
+}
