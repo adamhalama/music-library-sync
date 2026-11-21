@@ -118,7 +118,7 @@ func TestRekordboxSourceImportPlanAndApplyWritesOrderedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(*events, ",") != "check,backup" {
+	if strings.Join(*events, ",") != "check,backup,check" {
 		t.Fatalf("expected guard before backup, got %v", *events)
 	}
 	if !result.Applied || result.BackupPath == "" || len(fake.applied) != 1 {
@@ -184,5 +184,36 @@ func TestRekordboxSourceImportRejectsNonSpotifySource(t *testing.T) {
 	req.SourceID = "sc"
 	if _, err := useCase.Plan(context.Background(), req); err == nil || !strings.Contains(err.Error(), "only Spotify sources") {
 		t.Fatalf("expected source type error, got %v", err)
+	}
+}
+
+func TestSourceImportAnalysesOnlyNewRowsWithExistingBackup(t *testing.T) {
+	use, fake, _, req := sourceImportFixture(t)
+	req.Analyse = true
+	req.AnalysisMode = "rekordbox"
+	called := false
+	use.Analyse = func(_ context.Context, r RekordboxAnalysisRequest) (RekordboxAnalysisResult, error) {
+		called = true
+		if len(r.ContentIDs) != 1 || r.ContentIDs[0] != "new-abroad" {
+			t.Fatalf("analysis selected existing rows: %v", r.ContentIDs)
+		}
+		if r.backupTaken == "" || r.Mode != "rekordbox" {
+			t.Fatalf("missing backup or mode: %+v", r)
+		}
+		if len(fake.applied) != 1 {
+			t.Fatal("analysis ran before import committed")
+		}
+		return RekordboxAnalysisResult{}, nil
+	}
+	plan, err := use.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := use.Apply(context.Background(), req, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || result.Analysis == nil {
+		t.Fatal("new rows were not analysed")
 	}
 }

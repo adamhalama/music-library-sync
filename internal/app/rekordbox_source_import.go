@@ -37,18 +37,24 @@ type RekordboxSourceImportUseCase struct {
 	CheckClosed   func(context.Context, string) error
 	CreateBackup  func(context.Context, string, string, time.Time) (string, error)
 	EnsureRuntime func(context.Context, pyruntime.Request) (pyruntime.Runtime, error)
+	Analyse       func(context.Context, RekordboxAnalysisRequest) (RekordboxAnalysisResult, error)
 }
 
 type RekordboxSourceImportRequest struct {
-	Config        config.Config
-	SourceID      string
-	DBDir         string
-	BackupDir     string
-	PythonBin     string
-	PythonPath    string
-	GenreOverride string
-	Step          time.Duration
-	DryRun        bool
+	Config             config.Config
+	SourceID           string
+	DBDir              string
+	BackupDir          string
+	PythonBin          string
+	PythonPath         string
+	GenreOverride      string
+	Step               time.Duration
+	Analyse            bool
+	AnalysisMode       string
+	Analyser           string
+	KeyNotation        string
+	AllowRunningOnCopy bool
+	DryRun             bool
 }
 
 type RekordboxSourceImportResult struct {
@@ -56,6 +62,7 @@ type RekordboxSourceImportResult struct {
 	DryRun      bool
 	Applied     bool
 	BackupPath  string
+	Analysis    *RekordboxAnalysisResult
 	AppliedRows []bridge.SourceImportAppliedRow
 }
 
@@ -78,7 +85,7 @@ func (u RekordboxSourceImportUseCase) Apply(ctx context.Context, req RekordboxSo
 	if req.DryRun || !plan.HasChanges() {
 		return result, nil
 	}
-	if err := u.checkClosed(ctx, plan.DBDir); err != nil {
+	if err := u.checkImportClosed(ctx, plan.DBDir, req.AllowRunningOnCopy); err != nil {
 		return result, err
 	}
 	client, err := u.bridge(ctx, req.Config, req)
@@ -91,6 +98,9 @@ func (u RekordboxSourceImportUseCase) Apply(ctx context.Context, req RekordboxSo
 		return result, err
 	}
 	result.BackupPath = backupPath
+	if err := u.checkImportClosed(ctx, plan.DBDir, req.AllowRunningOnCopy); err != nil {
+		return result, err
+	}
 	resp, err := client.SourceImportApply(ctx, applyReq)
 	if err != nil {
 		return result, fmt.Errorf("apply source import: %w", err)
@@ -100,6 +110,31 @@ func (u RekordboxSourceImportUseCase) Apply(ctx context.Context, req RekordboxSo
 	}
 	result.Applied = true
 	result.AppliedRows = resp.Rows
+	if req.Analyse {
+		analysisReq := RekordboxAnalysisRequest{Config: req.Config, DBDir: plan.DBDir, BackupDir: plan.BackupDir, PythonBin: req.PythonBin, PythonPath: req.PythonPath, Mode: req.AnalysisMode, Analyser: req.Analyser, KeyNotation: req.KeyNotation, AllowRunningOnCopy: req.AllowRunningOnCopy, backupTaken: backupPath}
+		for i, row := range applyReq.Rows {
+			if row.Action == bridge.SourceImportActionImport {
+				analysisReq.ContentIDs = append(analysisReq.ContentIDs, resp.Rows[i].ContentID)
+			}
+		}
+		if len(analysisReq.ContentIDs) > 0 {
+			var analysed RekordboxAnalysisResult
+			if u.Analyse != nil {
+				analysed, err = u.Analyse(ctx, analysisReq)
+			} else {
+				use := RekordboxAnalysisUseCase{CheckClosed: u.CheckClosed}
+				var planned RekordboxAnalysisResult
+				planned, err = use.Plan(ctx, analysisReq)
+				if err == nil {
+					analysed, err = use.Apply(ctx, analysisReq, planned)
+				}
+			}
+			result.Analysis = &analysed
+			if err != nil {
+				return result, fmt.Errorf("import committed; analysis failed: %w", err)
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -130,6 +165,14 @@ func sourceImportApplyRequest(plan sourceimport.Plan) bridge.SourceImportApplyRe
 }
 
 func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSourceImportRequest) (sourceimport.Plan, RekordboxSourceImportBridge, error) {
+	if req.Analyse {
+		if req.AnalysisMode != "" && req.AnalysisMode != "rbxport" && req.AnalysisMode != "rekordbox" {
+			return sourceimport.Plan{}, nil, fmt.Errorf("--analysis-mode must be rbxport or rekordbox")
+		}
+		if req.KeyNotation != "" && req.KeyNotation != "auto" && req.KeyNotation != "classic" && req.KeyNotation != "alphanumeric" {
+			return sourceimport.Plan{}, nil, fmt.Errorf("invalid key notation")
+		}
+	}
 	cfg := req.Config
 	source, err := findSpotifySource(cfg, req.SourceID)
 	if err != nil {
@@ -377,4 +420,11 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (u RekordboxSourceImportUseCase) checkImportClosed(ctx context.Context, dbDir string, allowCopy bool) error {
+	if u.CheckClosed != nil {
+		return u.CheckClosed(ctx, dbDir)
+	}
+	return playlistsync.CheckRekordboxClosedForCopy(ctx, dbDir, allowCopy)
 }

@@ -15,6 +15,9 @@ import (
 //go:embed playlist_sync_helper.py
 var helperScript string
 
+//go:embed analysis_helper.py
+var analysisScript string
+
 type Client struct {
 	PythonBin  string
 	PythonPath string
@@ -205,6 +208,10 @@ func (c Client) run(ctx context.Context, payload any, out any) error {
 	helperPath := filepath.Join(dir, "playlist_sync_helper.py")
 	if err := os.WriteFile(helperPath, []byte(helperScript), 0o700); err != nil {
 		return fmt.Errorf("write helper script: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "analysis_helper.py"), []byte(analysisScript), 0o600); err != nil {
+		return fmt.Errorf("write analysis bridge: %w", err)
 	}
 
 	body, err := json.Marshal(payload)

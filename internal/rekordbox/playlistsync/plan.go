@@ -908,13 +908,26 @@ func ReadPlan(path string) (Plan, error) {
 	return plan, nil
 }
 
+// CheckRekordboxClosed refuses all writes while a library writer is running.
 func CheckRekordboxClosed(ctx context.Context, dbDir string) error {
-	processes, err := rekordboxProcesses(ctx)
-	if err != nil {
-		return err
-	}
-	if len(processes) > 0 {
-		return fmt.Errorf("Rekordbox or RBxport is running; close it before writing the Rekordbox library (%s)", strings.Join(processes, ", "))
+	return CheckRekordboxClosedForCopy(ctx, dbDir, false)
+}
+
+// CheckRekordboxClosedForCopy can ignore writer processes for an explicitly
+// selected independent copy. Sidecars are refused even for copies.
+func CheckRekordboxClosedForCopy(ctx context.Context, dbDir string, allowCopy bool) error {
+	if allowCopy {
+		if err := ValidateLibraryCopy(dbDir); err != nil {
+			return err
+		}
+	} else {
+		processes, err := rekordboxProcesses(ctx)
+		if err != nil {
+			return err
+		}
+		if len(processes) > 0 {
+			return fmt.Errorf("Rekordbox or RBxport is running; close it before writing the Rekordbox library (%s)", strings.Join(processes, ", "))
+		}
 	}
 	for _, name := range []string{"master.db-wal", "master.db-shm"} {
 		path := filepath.Join(dbDir, name)
@@ -922,6 +935,49 @@ func CheckRekordboxClosed(ctx context.Context, dbDir string) error {
 			return fmt.Errorf("Rekordbox database sidecar exists while RB should be closed: %s", path)
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("inspect Rekordbox database sidecar %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// ValidateLibraryCopy rejects the default installation, its symlink aliases,
+// hard-linked database files, and share directories pointing back into it.
+func ValidateLibraryCopy(dbDir string) error {
+	live, err := config.ExpandPath(DefaultRekordboxDBDir)
+	if err != nil {
+		return err
+	}
+	live, err = filepath.Abs(live)
+	if err != nil {
+		return err
+	}
+	if resolved, e := filepath.EvalSymlinks(live); e == nil {
+		live = resolved
+	}
+	target, err := filepath.EvalSymlinks(dbDir)
+	if err != nil {
+		return err
+	}
+	target, err = filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	inside := func(path string) bool {
+		rel, e := filepath.Rel(live, path)
+		return e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	}
+	if inside(target) {
+		return fmt.Errorf("--allow-running-on-copy requires a library outside the live default %s", live)
+	}
+	for _, name := range []string{"master.db", "share"} {
+		path := filepath.Join(target, name)
+		if resolved, e := filepath.EvalSymlinks(path); e == nil && inside(resolved) {
+			return fmt.Errorf("copied library %s points into live library", name)
+		}
+		a, e1 := os.Stat(path)
+		b, e2 := os.Stat(filepath.Join(live, name))
+		if e1 == nil && e2 == nil && os.SameFile(a, b) {
+			return fmt.Errorf("copied library %s is shared with the live library", name)
 		}
 	}
 	return nil

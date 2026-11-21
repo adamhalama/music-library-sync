@@ -463,6 +463,9 @@ def main() -> int:
             response = source_import_inspect(request["request"])
         elif op == "source_import_apply":
             response = source_import_apply(request["request"])
+        elif op in ("analysis_inspect", "analysis_apply"):
+            from analysis_helper import analysis_inspect, analysis_apply
+            response = (analysis_inspect if op == "analysis_inspect" else analysis_apply)(request["request"])
         else:
             raise RuntimeError(f"Unsupported helper operation: {op!r}")
         print(json.dumps(response, ensure_ascii=False, separators=(",", ":")))

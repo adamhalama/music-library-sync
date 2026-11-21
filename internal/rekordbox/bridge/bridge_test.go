@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -168,5 +169,41 @@ func TestClientRunReportsUndecodableHelperOutput(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not json") {
 		t.Fatalf("expected raw output in decode error, got %v", err)
+	}
+}
+
+func TestAnalysisBridgeContract(t *testing.T) {
+	bin, requestPath, _ := stubPython(t, `{"contents":[{"id":"1","path":"/tmp/a.mp3","uuid":"abc-def","analysis_data_path":"","anlz_exists":false,"analysed":0}],"key_notation":"classic"}`, "", 0)
+	got, err := (Client{PythonBin: bin}).AnalysisInspect(context.Background(), AnalysisInspectRequest{DBDir: "/copy", ContentIDs: []string{"1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Contents) != 1 || got.KeyNotation != "classic" {
+		t.Fatalf("%+v", got)
+	}
+	data, err := os.ReadFile(requestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Op      string                 `json:"op"`
+		Request AnalysisInspectRequest `json:"request"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Op != "analysis_inspect" || payload.Request.DBDir != "/copy" {
+		t.Fatalf("%+v", payload)
+	}
+}
+
+func TestAnalysisSqliteFixtures(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	cmd := exec.Command(python, "-m", "unittest", "discover", "-s", ".", "-p", "analysis_helper_test.py", "-v")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sqlite fixtures: %v\n%s", err, out)
 	}
 }
