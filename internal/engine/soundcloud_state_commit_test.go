@@ -1,34 +1,11 @@
 package engine
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-func TestCommitTempStateFilesAppendOnlyPreservesExistingRawLines(t *testing.T) {
-	root := t.TempDir()
-	state, archive := filepath.Join(root, "source.scdl"), filepath.Join(root, "archive.txt")
-	tempState, tempArchive := filepath.Join(root, "temp.scdl"), filepath.Join(root, "temp.archive")
-	stateBefore := []byte("# keep\r\n\r\nsoundcloud 101 old.m4a\r\n")
-	archiveBefore := []byte("soundcloud 101\r\n\r\n")
-	for path, data := range map[string][]byte{state: stateBefore, archive: archiveBefore, tempState: []byte("soundcloud 101 renamed.m4a\nsoundcloud 202 new.m4a\nsoundcloud 202 new.m4a\n"), tempArchive: []byte("soundcloud 101\nsoundcloud 202\nsoundcloud 202\n")} {
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := commitTempStateFiles(soundCloudStateSwap{OriginalSyncPath: state, TempSyncPath: tempState, OriginalArchivePath: archive, TempArchivePath: tempArchive, AppendOnly: true}); err != nil {
-		t.Fatal(err)
-	}
-	for path, want := range map[string][]byte{state: append(append([]byte{}, stateBefore...), []byte("soundcloud 202 new.m4a\n")...), archive: append(append([]byte{}, archiveBefore...), []byte("soundcloud 202\n")...)} {
-		got, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("original prefix changed: %q %v", got, err)
-		}
-	}
-}
 
 func TestCommitTempStateFilesPreservesMissingKnownGapEntries(t *testing.T) {
 	tmp := t.TempDir()

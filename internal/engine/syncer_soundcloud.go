@@ -14,7 +14,6 @@ type soundCloudStateSwap struct {
 	TempSyncPath        string
 	OriginalArchivePath string
 	TempArchivePath     string
-	AppendOnly          bool
 }
 
 type soundCloudExecutionPlan struct {
@@ -83,7 +82,7 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 	source config.Source,
 	opts SyncOptions,
 ) (soundCloudExecutionPlan, error) {
-	plan := soundCloudExecutionPlan{Source: source, DownloadOrder: DownloadOrderForSource(source), StateSwap: soundCloudStateSwap{AppendOnly: source.Sync.AppendOnly}}
+	plan := soundCloudExecutionPlan{Source: source, DownloadOrder: DownloadOrderForSource(source)}
 
 	stateFilePath, err := config.ResolveStateFile(cfg.Defaults.StateDir, source.StateFile)
 	if err != nil {
@@ -258,7 +257,6 @@ func (s *Syncer) prepareSoundCloudExecutionPlan(
 			TempSyncPath:        tempStateFile,
 			OriginalArchivePath: archivePath,
 			TempArchivePath:     tempArchiveFile,
-			AppendOnly:          source.Sync.AppendOnly,
 		}
 	}
 

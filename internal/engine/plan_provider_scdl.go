@@ -216,7 +216,6 @@ func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApp
 		SourcePreflight:         &preflight,
 		PlannedSoundCloudTracks: plannedTracks,
 		DownloadOrder:           downloadOrder,
-		StateSwap:               soundCloudStateSwap{AppendOnly: sourceForExec.Sync.AppendOnly},
 	}
 
 	if opts.DryRun || len(orderedSelectedPlaylistIDs) == 0 || sourceForExec.Sync.AppendOnly {

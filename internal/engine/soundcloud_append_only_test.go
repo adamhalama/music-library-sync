@@ -101,9 +101,13 @@ func TestPublishAppendOnlySoundCloudTrackRefusesCollisionsAndEscapes(t *testing.
 				t.Fatal("unsafe publish succeeded")
 			}
 			for _, path := range []string{statePath, archivePath} {
+				want := []byte("original\r\n\n")
+				if path == archivePath && (mode == "existing file" || mode == "existing symlink") {
+					want = append(want, []byte("soundcloud 301\n")...)
+				}
 				payload, err := os.ReadFile(path)
-				if err != nil || !bytes.Equal(payload, []byte("original\r\n\n")) {
-					t.Fatalf("original state changed: %q %v", payload, err)
+				if err != nil || !bytes.Equal(payload, want) {
+					t.Fatalf("state = %q, want %q: %v", payload, want, err)
 				}
 			}
 			payload, err := os.ReadFile(oldFile)
@@ -201,5 +205,41 @@ func TestPublishAppendOnlySoundCloudTrackRecordsAbsolutePublishedPath(t *testing
 	parsed, err := parseSoundCloudSyncState(state)
 	if err != nil || parsed.ByID["202"].FilePath != filepath.Join(target, "New Track.m4a") {
 		t.Fatalf("published path did not round trip: %+v %v", parsed, err)
+	}
+}
+
+func TestPublishAppendOnlySoundCloudTrackKeepsArchiveWhenStateAppendFails(t *testing.T) {
+	root := t.TempDir()
+	stage, target := filepath.Join(root, "stage"), filepath.Join(root, "target")
+	state, archive := filepath.Join(root, "state"), filepath.Join(root, "archive")
+	for _, dir := range []string{stage, target, state} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(stage, "New Track.m4a"), []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishAppendOnlySoundCloudTrack(stage, target, state, archive, soundCloudSyncEntry{ID: "202", FilePath: "New Track.m4a"}); err == nil {
+		t.Fatal("expected state append to fail")
+	}
+	if _, err := os.Stat(filepath.Join(target, "New Track.m4a")); err != nil {
+		t.Fatalf("file was not published before state append failed: %v", err)
+	}
+	if err := os.Remove(state); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Defaults.StateDir = root
+	cfg.Defaults.ArchiveFile = archive
+	source := config.Source{ID: "sample", Type: config.SourceTypeSoundCloud, StateFile: "state", TargetDir: target, Sync: config.SyncPolicy{AppendOnly: true}, Adapter: config.AdapterSpec{Kind: "scdl"}}
+	tracks := []SoundCloudRemoteTrack{{ID: "202", Title: "Changed Title", URL: "https://soundcloud.com/example/202"}}
+	plan, err := NewSCDLPlanProvider().BuildWithTracks(context.Background(), cfg, source, SyncOptions{}, tracks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := plan.Rows()[0]
+	if row.Toggleable || row.SelectedByDefault || row.Status != PlanRowAlreadyDownloaded {
+		t.Fatalf("published ID can be downloaded again: %+v", row)
 	}
 }

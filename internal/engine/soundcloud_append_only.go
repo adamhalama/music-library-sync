@@ -204,13 +204,14 @@ func publishAppendOnlySoundCloudTrack(stage, target, statePath, archivePath stri
 	if strings.ContainsAny(publishedPath, "\r\n") {
 		return fmt.Errorf("published path contains a newline")
 	}
+	// Record the ID first so a later failure cannot cause another download.
+	if err := appendSoundCloudPreservingLines(archivePath, fmt.Sprintf("soundcloud %s\n", entry.ID)); err != nil {
+		return err
+	}
 	if err := os.Link(path, publishedPath); err != nil {
 		return fmt.Errorf("cannot add %s without overwriting: %w", name, err)
 	}
-	if err := appendSoundCloudPreservingLines(statePath, fmt.Sprintf("soundcloud %s %s\n", entry.ID, publishedPath)); err != nil {
-		return err
-	}
-	return appendSoundCloudPreservingLines(archivePath, fmt.Sprintf("soundcloud %s\n", entry.ID))
+	return appendSoundCloudPreservingLines(statePath, fmt.Sprintf("soundcloud %s %s\n", entry.ID, publishedPath))
 }
 
 func appendSoundCloudPreservingLines(path, line string) error {

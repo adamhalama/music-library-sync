@@ -122,10 +122,6 @@ func commitTempStateFiles(stateSwap soundCloudStateSwap) error {
 			if err := cleanupTempFile(stateSwap.TempSyncPath); err != nil {
 				return err
 			}
-		} else if stateSwap.AppendOnly {
-			if err := mergeCommittedSoundCloudSyncStateFileAppendOnly(stateSwap.OriginalSyncPath, stateSwap.TempSyncPath); err != nil {
-				return err
-			}
 		} else if err := mergeCommittedSoundCloudSyncStateFile(stateSwap.OriginalSyncPath, stateSwap.TempSyncPath); err != nil {
 			_ = cleanupTempFile(stateSwap.TempSyncPath)
 			return err
@@ -134,10 +130,6 @@ func commitTempStateFiles(stateSwap soundCloudStateSwap) error {
 	if strings.TrimSpace(stateSwap.TempArchivePath) != "" {
 		if strings.TrimSpace(stateSwap.OriginalArchivePath) == "" {
 			if err := cleanupTempFile(stateSwap.TempArchivePath); err != nil {
-				return err
-			}
-		} else if stateSwap.AppendOnly {
-			if err := mergeCommittedSoundCloudArchiveFileAppendOnly(stateSwap.OriginalArchivePath, stateSwap.TempArchivePath); err != nil {
 				return err
 			}
 		} else if err := mergeCommittedSoundCloudArchiveFile(stateSwap.OriginalArchivePath, stateSwap.TempArchivePath); err != nil {
