@@ -417,3 +417,5 @@ Dual-run transition is supported:
 MIT — see `LICENCE`.
 
 `tools/rbl-analyse` is a separate GPL-2.0-or-later program; see its own LICENSE.
+
+Rekordbox analysis: use `udl rekordbox analyse --content-id <id> --force` (or `--path-prefix`, `--playlist`, or `--all`) against a copied library. Planning is read-only; writes back up the library, publish `ANLZ0000.DAT/.EXT/.2EX`, and update its metadata in one transaction. Existing valid analysis is skipped unless `--reanalyse` is supplied. Key notation defaults to the convention detected from `djmdKey.ScaleName` rows; pass `--key-notation classic|alphanumeric` to override.
