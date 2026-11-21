@@ -183,10 +183,13 @@ func TestRekordboxSourceImportDetectsReadBackMismatch(t *testing.T) {
 }
 
 func TestRekordboxSourceImportRejectsUnsupportedSoundCloudAdapter(t *testing.T) {
-	useCase, _, _, req := sourceImportFixture(t)
-	req.SourceID = "sc"
-	if _, err := useCase.Plan(context.Background(), req); err == nil || !strings.Contains(err.Error(), "requires adapter.kind=scdl") {
-		t.Fatalf("expected source type error, got %v", err)
+	for _, kind := range []string{"", "scdl-freedl"} {
+		useCase, _, _, req := sourceImportFixture(t)
+		req.SourceID = "sc"
+		req.Config.Sources[0].Adapter.Kind = kind
+		if _, err := useCase.Plan(context.Background(), req); err == nil || !strings.Contains(err.Error(), "requires adapter.kind=scdl") {
+			t.Fatalf("expected adapter error for %q, got %v", kind, err)
+		}
 	}
 }
 
@@ -276,5 +279,22 @@ func TestSoundCloudAppendOnlyImportSendsNoExistingRowUpdates(t *testing.T) {
 	}
 	if second.HasChanges() {
 		t.Fatalf("second run planned writes: %+v", second)
+	}
+}
+
+func TestSoundCloudSourceImportUsesIDWhenPrivateTrackTitleIsUnavailable(t *testing.T) {
+	useCase, _, _, req := sourceImportFixture(t)
+	req.SourceID = "sc"
+	req.Config.Sources[0].Adapter.Kind = "scdl"
+	useCase.FetchSoundCloudOrder = func(context.Context, config.Source) ([]engine.SoundCloudRemoteTrack, error) {
+		return []engine.SoundCloudRemoteTrack{{ID: "123", Title: "NA"}}, nil
+	}
+	useCase.LoadSoundCloudState = func(string) (map[string]string, error) { return map[string]string{"123": "Artist - Track.m4a"}, nil }
+	plan, err := useCase.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Rows) != 1 || plan.Rows[0].ID != "123" || plan.Rows[0].Title != "" || plan.Rows[0].Tags.Title != "Track" || plan.Rows[0].Tags.Artist != "Artist" {
+		t.Fatalf("private metadata did not use ID and tags: %+v", plan)
 	}
 }

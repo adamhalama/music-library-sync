@@ -260,7 +260,11 @@ func (u RekordboxSourceImportUseCase) sourceTracks(ctx context.Context, source c
 			return nil, 0, fmt.Errorf("read sync state: %w", err)
 		}
 		for i, item := range engine.OrderSoundCloudTracks(source, order, engine.DownloadOrderOldestFirst) {
-			tracks = append(tracks, sourceimport.SourceTrack{Position: i + 1, ID: item.ID, Title: item.Title})
+			title := item.Title
+			if title == "NA" {
+				title = ""
+			}
+			tracks = append(tracks, sourceimport.SourceTrack{Position: i + 1, ID: item.ID, Title: title})
 		}
 	}
 	resolve := func(path string) string {

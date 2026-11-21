@@ -83,7 +83,8 @@ type Input struct {
 }
 
 type Row struct {
-	Position     int    `json:"position"`
+	Position int `json:"position"`
+	// ID keeps the legacy JSON key so existing Spotify plan consumers still work.
 	ID           string `json:"spotify_id,omitempty"`
 	Title        string `json:"title"`
 	Artist       string `json:"artist,omitempty"`

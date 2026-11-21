@@ -407,7 +407,7 @@ def source_import_apply(req: Dict[str, Any]) -> Dict[str, Any]:
                 if nfc(str(content.FolderPath or "")).startswith(prefix)
             ]
             latest = max((format_utc(content.created_at) for content in existing), default="")
-            previous = parse_utc(latest) if latest else None
+            previous = datetime.datetime.fromisoformat(latest.replace("Z", "+00:00")) if latest else None
             for row in rows:
                 if not nfc(str(row["path"])).startswith(prefix):
                     raise RuntimeError("append-only import path is outside the source folder")
