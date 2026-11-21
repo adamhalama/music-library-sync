@@ -111,6 +111,9 @@ directory first.`),
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
 			printSourceImportResult(app, result)
+			if result.Analysis != nil {
+				return analysisOutcomeError(*result.Analysis)
+			}
 			return nil
 		},
 	}

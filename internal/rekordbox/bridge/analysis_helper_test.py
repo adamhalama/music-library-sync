@@ -22,11 +22,11 @@ class AnalysisTests(unittest.TestCase):
         CREATE TABLE djmdKey(ID TEXT PRIMARY KEY, ScaleName TEXT, UUID TEXT,
           rb_data_status INTEGER, rb_local_data_status INTEGER, rb_local_deleted INTEGER DEFAULT 0,
           rb_local_synced INTEGER, usn INTEGER, rb_local_usn INTEGER, created_at TEXT, updated_at TEXT);
-        CREATE TABLE djmdPlaylist(ID TEXT, Name TEXT, rb_local_deleted INTEGER DEFAULT 0, rb_local_usn INTEGER);
+        CREATE TABLE djmdPlaylist(ID TEXT, Name TEXT, rb_local_deleted INTEGER DEFAULT 0, rb_local_usn INTEGER, Attribute INTEGER DEFAULT 0, SmartList TEXT);
         CREATE TABLE djmdSongPlaylist(PlaylistID TEXT, ContentID TEXT, rb_local_deleted INTEGER DEFAULT 0, rb_local_usn INTEGER);
         CREATE TABLE agentRegistry(registry_id TEXT, int_1 INTEGER, updated_at TEXT);
         INSERT INTO agentRegistry VALUES ('localUpdateCount', 5, 'old');
-        INSERT INTO djmdPlaylist VALUES ('p1','Mix',0,50);
+        INSERT INTO djmdPlaylist(ID,Name,rb_local_deleted,rb_local_usn) VALUES ('p1','Mix',0,50);
         INSERT INTO djmdSongPlaylist VALUES ('p1','1',0,3);
         INSERT INTO djmdContent(ID,FolderPath,UUID,AnalysisDataPath,Analysed,rb_local_usn)
           VALUES ('1','/music/one.mp3','abcdef-123456','',0,8),

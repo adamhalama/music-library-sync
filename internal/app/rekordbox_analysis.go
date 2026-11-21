@@ -41,8 +41,10 @@ type AnalysisTrackResult struct {
 }
 
 type RekordboxAnalysisResult struct {
-	DBDir, BackupPath, KeyNotation string
-	Tracks                         []AnalysisTrackResult
+	DBDir       string                `json:"db_dir"`
+	BackupPath  string                `json:"backup_path,omitempty"`
+	KeyNotation string                `json:"key_notation"`
+	Tracks      []AnalysisTrackResult `json:"tracks"`
 }
 
 func (u RekordboxAnalysisUseCase) normalized(req RekordboxAnalysisRequest) (RekordboxAnalysisRequest, error) {
@@ -72,12 +74,23 @@ func (u RekordboxAnalysisUseCase) normalized(req RekordboxAnalysisRequest) (Reko
 	if !req.All && len(req.ContentIDs) == 0 && len(req.PathPrefixes) == 0 && strings.TrimSpace(req.Playlist) == "" {
 		return req, fmt.Errorf("at least one selector is required: --content-id, --path-prefix, --playlist, or --all")
 	}
-	if req.BackupDir == "" {
-		req.BackupDir = "~/Music/rb-library-export"
+	for _, id := range req.ContentIDs {
+		if strings.TrimSpace(id) == "" {
+			return req, fmt.Errorf("--content-id must not be empty")
+		}
 	}
-	req.BackupDir, err = config.ExpandPath(req.BackupDir)
-	if err != nil {
-		return req, err
+	for i, prefix := range req.PathPrefixes {
+		if strings.TrimSpace(prefix) == "" {
+			return req, fmt.Errorf("--path-prefix must not be empty")
+		}
+		expanded, err := config.ExpandPath(prefix)
+		if err != nil {
+			return req, err
+		}
+		req.PathPrefixes[i], err = filepath.Abs(expanded)
+		if err != nil {
+			return req, err
+		}
 	}
 	return req, nil
 }
@@ -218,7 +231,7 @@ func (u RekordboxAnalysisUseCase) Apply(ctx context.Context, req RekordboxAnalys
 	}
 	for _, item := range applied.Rows {
 		for i := range planned.Tracks {
-			if planned.Tracks[i].Content.ID != item.ID {
+			if planned.Tracks[i].Content.ID != item.ID || planned.Tracks[i].Analysis == nil {
 				continue
 			}
 			if item.Error != "" {
@@ -280,7 +293,7 @@ func (u RekordboxAnalysisUseCase) bridge(ctx context.Context, req RekordboxAnaly
 	if u.Bridge != nil {
 		return u.Bridge, nil
 	}
-	rt, err := (pyruntime.Resolver{}).Ensure(ctx, pyruntime.Request{Config: req.Config, PythonBin: req.PythonBin, PythonPath: req.PythonPath, ExplicitPython: req.PythonBin != ""})
+	rt, err := (pyruntime.Resolver{}).Ensure(ctx, pyruntime.Request{Config: req.Config, PythonBin: req.PythonBin, PythonPath: req.PythonPath, ExplicitPython: req.PythonBin != "" || req.PythonPath != ""})
 	if err != nil {
 		return nil, err
 	}

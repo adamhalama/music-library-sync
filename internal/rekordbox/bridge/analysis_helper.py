@@ -38,12 +38,26 @@ def inspect_connection(conn, share, req):
     if not (ids or prefixes or playlist or req.get("all")):
         raise ValueError("at least one analysis selector is required")
     if playlist:
-        rows = conn.execute("SELECT ID FROM djmdPlaylist WHERE ID = ? AND rb_local_deleted = 0", (playlist,)).fetchall()
+        rows = conn.execute("SELECT ID, Attribute, SmartList FROM djmdPlaylist WHERE ID = ? AND rb_local_deleted = 0", (playlist,)).fetchall()
         if not rows:
-            rows = conn.execute("SELECT ID FROM djmdPlaylist WHERE Name = ? AND rb_local_deleted = 0", (playlist,)).fetchall()
+            rows = conn.execute("SELECT ID, Attribute, SmartList FROM djmdPlaylist WHERE Name = ? AND rb_local_deleted = 0", (playlist,)).fetchall()
         if len(rows) != 1:
             raise ValueError("playlist not found or ambiguous; use its ID")
-        selected.update(str(r[0]) for r in conn.execute("SELECT ContentID FROM djmdSongPlaylist WHERE PlaylistID = ? AND rb_local_deleted = 0", (rows[0][0],)))
+        playlist_id, attribute, smart_xml = rows[0]
+        if int(attribute or 0) == 0:
+            selected.update(str(r[0]) for r in conn.execute("SELECT ContentID FROM djmdSongPlaylist WHERE PlaylistID = ? AND rb_local_deleted = 0", (playlist_id,)))
+        elif int(attribute) == 4:
+            from pyrekordbox.db6.smartlist import SmartList
+            from pyrekordbox.db6 import tables
+            from sqlalchemy import select
+            from sqlalchemy.dialects import sqlite
+            smart = SmartList()
+            smart.parse(smart_xml)
+            query = select(tables.DjmdContent.ID).where(smart.filter_clause())
+            sql = str(query.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+            selected.update(str(r[0]) for r in conn.execute(sql))
+        else:
+            raise ValueError("--playlist selects a playlist, not a folder")
     contents = []
     found = set()
     for row in conn.execute("SELECT ID, FolderPath, UUID, AnalysisDataPath, Analysed FROM djmdContent WHERE rb_local_deleted = 0 ORDER BY ID"):
@@ -145,7 +159,7 @@ def write_metadata(conn, planned, result, relative):
             key_id = str(key[0])
         else:
             while True:
-                key_id = str(secrets.randbelow(2**28 - 1) + 1)
+                key_id = str(secrets.randbelow(2**32 - 1) + 1)
                 if not conn.execute("SELECT 1 FROM djmdKey WHERE ID=?", (key_id,)).fetchone():
                     break
             usn = next_usn(conn)
@@ -180,6 +194,7 @@ def publish_track(conn, db_dir, item, commit, rollback):
     target.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=".udl-analysis-", dir=target.parent))
     published = []
+    keep_staged = False
     try:
         for ext in EXTENSIONS:
             name = f"ANLZ0000.{ext}"
@@ -193,17 +208,28 @@ def publish_track(conn, db_dir, item, commit, rollback):
             published.append(name)
         commit()
         return dict(id=planned["id"], analysis_data_path=relative)
-    except Exception:
-        rollback()
+    except Exception as cause:
+        recovery_errors = []
+        try:
+            rollback()
+        except Exception as exc:
+            recovery_errors.append(f"database rollback: {exc}")
         for name in reversed(published):
-            previous = staged / (name + ".previous")
-            if previous.exists():
-                os.replace(previous, target / name)
-            else:
-                (target / name).unlink()
+            try:
+                previous = staged / (name + ".previous")
+                if previous.exists():
+                    os.replace(previous, target / name)
+                else:
+                    (target / name).unlink()
+            except Exception as exc:
+                recovery_errors.append(f"restore {name}: {exc}")
+        if recovery_errors:
+            keep_staged = True
+            raise RuntimeError(f"{cause}; recovery failed ({'; '.join(recovery_errors)}); originals retained at {staged}; restore the full library backup before continuing") from cause
         raise
     finally:
-        shutil.rmtree(staged)
+        if not keep_staged:
+            shutil.rmtree(staged)
 
 
 def analysis_apply(req):
