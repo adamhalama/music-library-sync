@@ -164,7 +164,7 @@ Global flags:
 - Plan SHA-256 values are integrity checks, not cryptographic signatures.
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
-- `udl rekordbox import-source <spotify-source-id> [--genre <name>] [--step-seconds N] [--backup-dir <path>] [--force]`: import the source's downloaded files into the Rekordbox collection and set Date Added so it follows the Spotify playlist order, oldest (first in the playlist) to newest, one second apart. Order comes from the playlist's embed page and files from the source's sync state. Tracks already in the collection keep their Date Added when it already sorts correctly; re-running on an ordered collection writes nothing. `--genre` replaces the file's genre tag on newly imported tracks. `--dry-run` prints the planned order. A real run needs Rekordbox and RBxport closed and writes a full backup first.
+- `udl rekordbox import-source <source-id> [--genre <name>] [--step-seconds N] [--backup-dir <path>] [--force] [--new-only]`: import downloaded files from a Spotify or SoundCloud `scdl` source into Rekordbox. Spotify uses playlist order. SoundCloud oldest first reverses likes, tracks, reposts, and other user streams that enumerate newest first, while sets/playlists keep their position order. Files come from the source state file. `scdl-freedl` is not supported. Existing rows are kept or redated as needed; append-only sources and `--new-only` never update existing rows and append new imports after every existing source row. `--genre` replaces file tags only when given. `--dry-run` prints status counts, first/last imports, genres, and existing/local-not-remote counts. A real run needs Rekordbox and RBxport closed and writes a full backup first.
 - Rekordbox sorts Date Added by `created_at`; RBxport sorts by the day only (`StockDate`) and breaks ties by database row order, so tracks imported on the same day in another order keep that order in RBxport.
 
 `promote-freedl` flags:
@@ -244,6 +244,10 @@ sources:
       break_on_existing: true
       ask_on_existing: false
       local_index_cache: false
+      # SoundCloud scdl only: preserve every existing file/state/archive entry.
+      append_only: false
+      # SoundCloud: newest_first (default) or oldest_first.
+      download_order: newest_first
     adapter:
       kind: "scdl"
       extra_args: ["-f"]
@@ -337,6 +341,10 @@ Notes:
 - Preflight known/gap counts are computed from both sync-state entries and SoundCloud download-archive IDs, which keeps counts accurate across interrupted runs where `scdl --sync` may not flush state.
 - SoundCloud preflight is split into explicit stages (`enumerate`, `load-state`, `load-archive`, `local-index`, `plan`) and skips local media scans when there are no archive-only known entries for a source.
 - `sync.local_index_cache` enables a persisted local index cache (per source under `defaults.state_dir`) to avoid repeated full target-dir rescans; cache rebuilds on miss, schema mismatch, hash mismatch, or target signature change.
+- `sync.append_only: true` is supported only for SoundCloud `scdl`. It downloads resolved new track URLs into a private staging directory, atomically adds files without overwriting, and appends state/archive entries while preserving existing bytes. It rejects `--no-preflight`, Free DL, overwrite/path/template options, and unsafe adapter arguments.
+- Append-only scans all enumerated entries for unknown IDs, including entries after an existing track; it ignores `break_on_existing`/`ask_on_existing` and never repairs known missing files. New files use `title [id].ext` in the target root. Existing files and Rekordbox rows are never renamed or updated. A filename collision, unexpected download ID/path, or unsupported filesystem hard link fails the source safely. A forced termination can leave a `<state_file>.append.lock`; remove it only after checking no append-only run is active.
+- `sync.download_order` is a per-SoundCloud-source `newest_first` or `oldest_first` setting and requires preflight. `oldest_first` means oldest-added first according to each URL kind: yt-dlp user streams (likes, tracks, reposts, and similar feeds) enumerate newest first and are reversed; sets and playlists enumerate earliest-added position first and keep their order. It does not infer upload dates. With no saved setting, non-interactive sync keeps `newest_first` and the interactive selector keeps `oldest_first`.
+- yt-dlp enumerates SoundCloud likes newest liked first and sets in their stored playlist position order. Flat-playlist output does not include dates. The underlying API can contain upload `created_at` and, for likes, event `created_at`, but yt-dlp's flat extractor drops them. Sets therefore retain their position order when `oldest_first` is selected; the setting orders enumeration and does not infer upload dates.
 - Default SoundCloud behavior breaks at first existing track; use `--scan-gaps` to scan full remote list and repair gaps. `--ask-on-existing` prompts once per source (TTY only, unless `--no-input`).
 - When preflight in break mode finds `planned=0`, `udl` marks the source up-to-date and skips launching `scdl`.
 - If a sync is interrupted or a source command fails, `udl` automatically cleans newly created partial artifacts (`*.part`, `*.ytdl`, and `*.scdl.lock` for `scdl`).

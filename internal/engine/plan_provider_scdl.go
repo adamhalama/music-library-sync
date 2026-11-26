@@ -106,7 +106,7 @@ func (p *SCDLPlanProvider) buildWithTracks(
 		return nil, fmt.Errorf("parse archive file: %w", err)
 	}
 
-	needsLocalIndex := needsSoundCloudLocalIndex(tracks, stateStage.State, archiveStage.KnownIDs, targetDir)
+	needsLocalIndex := !source.Sync.AppendOnly && needsSoundCloudLocalIndex(tracks, stateStage.State, archiveStage.KnownIDs, targetDir)
 	localIndex := suppliedLocalIndex
 	if localIndex == nil {
 		cacheEnabled := source.Sync.LocalIndexCache != nil && *source.Sync.LocalIndexCache
@@ -132,6 +132,7 @@ func (p *SCDLPlanProvider) buildWithTracks(
 		LocalIndex:     localIndex,
 		TargetDir:      targetDir,
 		Mode:           mode,
+		AppendOnly:     source.Sync.AppendOnly,
 	})
 
 	rows := make([]PlanRow, 0, len(tracks))
@@ -144,13 +145,14 @@ func (p *SCDLPlanProvider) buildWithTracks(
 		}
 		toggleable := status != PlanRowAlreadyDownloaded
 		rows = append(rows, PlanRow{
-			Index:             i + 1,
-			RemoteID:          track.ID,
-			RemoteURL:         track.URL,
-			Title:             track.Title,
-			Status:            status,
-			Toggleable:        toggleable,
-			SelectedByDefault: toggleable,
+			EnumerationOldestFirst: SoundCloudEnumerationOldestFirst(source),
+			Index:                  i + 1,
+			RemoteID:               track.ID,
+			RemoteURL:              track.URL,
+			Title:                  track.Title,
+			Status:                 status,
+			Toggleable:             toggleable,
+			SelectedByDefault:      toggleable,
 		})
 	}
 
@@ -171,7 +173,7 @@ func (p *scdlSourcePlan) Rows() []PlanRow {
 }
 
 func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApplyOptions) (sourcePlanExecution, error) {
-	manifest, err := CanonicalizeExecutionManifest(p.sourceForExec.ID, p.rows, manifest)
+	manifest, err := CanonicalizeExecutionManifest(p.sourceForExec.ID, p.rows, manifest, SoundCloudEnumerationOldestFirst(p.sourceForExec))
 	if err != nil {
 		return sourcePlanExecution{}, err
 	}
@@ -202,7 +204,7 @@ func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApp
 			selectedKnownGapIDs[track.ID] = struct{}{}
 		}
 	}
-	plannedTracks = orderForExecution(plannedTracks, downloadOrder)
+	plannedTracks = OrderSoundCloudTracks(p.sourceForExec, plannedTracks, downloadOrder)
 
 	preflight := p.preflight
 	preflight.PlannedDownloadCount = len(orderedSelectedPlaylistIDs)
@@ -216,7 +218,7 @@ func (p *scdlSourcePlan) ApplySelection(manifest ExecutionManifest, opts PlanApp
 		DownloadOrder:           downloadOrder,
 	}
 
-	if opts.DryRun || len(orderedSelectedPlaylistIDs) == 0 {
+	if opts.DryRun || len(orderedSelectedPlaylistIDs) == 0 || sourceForExec.Sync.AppendOnly {
 		return out, nil
 	}
 

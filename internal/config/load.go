@@ -45,9 +45,11 @@ type fileSource struct {
 }
 
 type fileSyncPolicy struct {
-	BreakOnExisting *bool `yaml:"break_on_existing"`
-	AskOnExisting   *bool `yaml:"ask_on_existing"`
-	LocalIndexCache *bool `yaml:"local_index_cache"`
+	BreakOnExisting *bool  `yaml:"break_on_existing"`
+	AskOnExisting   *bool  `yaml:"ask_on_existing"`
+	LocalIndexCache *bool  `yaml:"local_index_cache"`
+	AppendOnly      bool   `yaml:"append_only"`
+	DownloadOrder   string `yaml:"download_order"`
 }
 
 type fileAdapterSpec struct {
@@ -194,6 +196,8 @@ func applyFileConfig(cfg *Config, fc fileConfig) {
 					BreakOnExisting: copyBoolPtr(fs.Sync.BreakOnExisting),
 					AskOnExisting:   copyBoolPtr(fs.Sync.AskOnExisting),
 					LocalIndexCache: copyBoolPtr(fs.Sync.LocalIndexCache),
+					AppendOnly:      fs.Sync.AppendOnly,
+					DownloadOrder:   strings.TrimSpace(fs.Sync.DownloadOrder),
 				},
 				Adapter: AdapterSpec{
 					Kind:       strings.TrimSpace(fs.Adapter.Kind),

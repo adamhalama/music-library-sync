@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,22 +23,26 @@ type rekordboxImportSourceFlags struct {
 	Genre       string
 	StepSeconds int
 	Force       bool
+	NewOnly     bool
 }
 
 func newRekordboxImportSourceCommand(app *AppContext) *cobra.Command {
 	flags := rekordboxImportSourceFlags{StepSeconds: 1}
 	cmd := &cobra.Command{
 		Use:   "import-source <source-id>",
-		Short: "Import a Spotify source's local files into Rekordbox with Date Added in playlist order",
+		Short: "Import a Spotify or SoundCloud source into Rekordbox in source order",
 		Long: strings.TrimSpace(`
-Imports the local files of a configured Spotify source into the Rekordbox
-collection and sets Date Added so that sorting by Date Added follows the
-Spotify playlist order, oldest (first in the playlist) to newest.
+Imports local files of a configured Spotify or SoundCloud (scdl) source into
+Rekordbox. Date Added follows Spotify playlist order or SoundCloud added order:
+likes, tracks and reposts are reversed; sets retain playlist position order.
+scdl-freedl sources are not supported.
 
-Tracks already in the collection keep their Date Added when it already sorts
-correctly and move by whole seconds when it does not. New tracks after the
-last known one get the current time. Re-running on an ordered collection
-changes nothing.
+Existing tracks keep Date Added when correctly ordered; otherwise it moves by
+whole seconds. Trailing new tracks get the current time. With sync.append_only,
+existing collection rows remain untouched and new imports follow both the
+current time and every existing source row, one step apart. --new-only applies
+the same behavior for this run. Local tracks no longer listed remotely remain
+untouched. Re-running changes nothing.
 
 Use --dry-run to print the planned order without writing. A real run needs
 Rekordbox and RBxport closed and writes a full backup of the Rekordbox
@@ -68,6 +73,7 @@ directory first.`),
 				GenreOverride: flags.Genre,
 				Step:          time.Duration(flags.StepSeconds) * time.Second,
 				DryRun:        app.Opts.DryRun,
+				NewOnly:       flags.NewOnly,
 			}
 			useCase := workflows.RekordboxSourceImportUseCase{}
 			plan, err := useCase.Plan(ctx, req)
@@ -115,6 +121,7 @@ directory first.`),
 	cmd.Flags().StringVar(&flags.Genre, "genre", "", "Genre written on newly imported tracks instead of the file's genre tag")
 	cmd.Flags().IntVar(&flags.StepSeconds, "step-seconds", 1, "Seconds between consecutive tracks' Date Added")
 	cmd.Flags().BoolVar(&flags.Force, "force", false, "Write without an interactive confirmation")
+	cmd.Flags().BoolVar(&flags.NewOnly, "new-only", false, "Import only tracks not already in the collection")
 	return cmd
 }
 
@@ -128,7 +135,14 @@ func printSourceImportPlan(app *AppContext, plan sourceimport.Plan, final bool) 
 	out := app.IO.Out
 	fmt.Fprintf(out, "Source: %s (%s)\n", plan.SourceID, plan.PlaylistURL)
 	fmt.Fprintf(out, "Rekordbox: %s\n", plan.DBDir)
-	fmt.Fprintf(out, "Order: Spotify playlist order, oldest first; Date Added %ds apart\n", plan.StepMillis/1000)
+	order := "Spotify playlist order"
+	if plan.SourceType == "soundcloud" {
+		order = "SoundCloud added order (sets: position order; user streams: reversed)"
+	}
+	fmt.Fprintf(out, "Order: %s, oldest first; Date Added %ds apart\n", order, plan.StepMillis/1000)
+	if plan.AppendOnly {
+		fmt.Fprintln(out, "Existing collection rows remain unchanged; new imports follow all existing source rows and the current time.")
+	}
 	if plan.GenreOverride != "" {
 		fmt.Fprintf(out, "Genre for new tracks: %s\n", plan.GenreOverride)
 	}
@@ -147,7 +161,7 @@ func printSourceImportPlan(app *AppContext, plan sourceimport.Plan, final bool) 
 		default:
 			action = "skip"
 		}
-		name := firstNonEmpty(strings.TrimSpace(strings.TrimSpace(row.Artist)+" – "+strings.TrimSpace(row.Title)), row.SpotifyID)
+		name := sourceImportTrackName(row)
 		if row.Status != sourceimport.StatusExisting && row.Status != sourceimport.StatusImport {
 			fmt.Fprintf(out, "  %3d  %-8s  %-19s  %s [%s]\n", row.Position, action, "", name, row.Status)
 			continue
@@ -156,8 +170,35 @@ func printSourceImportPlan(app *AppContext, plan sourceimport.Plan, final bool) 
 	}
 	fmt.Fprintln(out)
 	s := plan.Summary
-	fmt.Fprintf(out, "Spotify tracks: %d  in collection: %d  to import: %d  Date Added changes: %d  skipped: %d\n",
-		s.SourceTracks, s.Existing, s.Import, s.DateChanges, s.NotDownloaded+s.FileMissing+s.DuplicatePath)
+	fmt.Fprintf(out, "Source tracks: %d  existing: %d  import: %d  Date Added changes: %d\n", s.SourceTracks, s.Existing, s.Import, s.DateChanges)
+	fmt.Fprintf(out, "Skipped: not_downloaded=%d  file_missing=%d  duplicate_path=%d\n", s.NotDownloaded, s.FileMissing, s.DuplicatePath)
+	fmt.Fprintf(out, "Source rows already in collection: %d\nLocal files no longer remote (left alone): %d\n", s.CollectionExisting, s.LocalNotRemote)
+	imports := []sourceimport.Row{}
+	genres := map[string]int{}
+	for _, row := range plan.Rows {
+		if row.Status != sourceimport.StatusImport {
+			continue
+		}
+		imports = append(imports, row)
+		genre := "(empty)"
+		if row.Tags != nil && strings.TrimSpace(row.Tags.Genre) != "" {
+			genre = row.Tags.Genre
+		}
+		genres[genre]++
+	}
+	if len(imports) > 0 {
+		fmt.Fprintf(out, "First to import: %s\nLast to import: %s\n", sourceImportTrackName(imports[0]), sourceImportTrackName(imports[len(imports)-1]))
+		names := make([]string, 0, len(genres))
+		for name := range genres {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(out, "Genre to import: %s (%d)\n", name, genres[name])
+		}
+	} else {
+		fmt.Fprintln(out, "First/last to import: none\nGenres to import: none")
+	}
 	for _, warning := range plan.Warnings {
 		fmt.Fprintf(app.IO.ErrOut, "WARN: %s\n", warning)
 	}
@@ -166,10 +207,24 @@ func printSourceImportPlan(app *AppContext, plan sourceimport.Plan, final bool) 
 	}
 	switch {
 	case !plan.HasChanges():
-		fmt.Fprintln(out, "Rekordbox already matches the Spotify order; nothing to write.")
+		fmt.Fprintln(out, "Rekordbox already matches the source import plan; nothing to write.")
 	case app.Opts.DryRun:
 		fmt.Fprintf(out, "Dry run: no backup or database changes written. A real run backs up %s under %s first.\n", plan.DBDir, plan.BackupDir)
 	}
+}
+
+func sourceImportTrackName(row sourceimport.Row) string {
+	title, artist := strings.TrimSpace(row.Title), strings.TrimSpace(row.Artist)
+	if title == "" && row.Tags != nil {
+		title = strings.TrimSpace(row.Tags.Title)
+	}
+	if artist == "" && row.Tags != nil {
+		artist = strings.TrimSpace(row.Tags.Artist)
+	}
+	if artist != "" && title != "" {
+		return artist + " – " + title
+	}
+	return firstNonEmpty(title, artist, row.ID)
 }
 
 func printSourceImportResult(app *AppContext, result workflows.RekordboxSourceImportResult) {

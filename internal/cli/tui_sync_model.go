@@ -70,7 +70,7 @@ func (m tuiSyncModel) Update(msg tea.Msg) (tuiSyncModel, tea.Cmd) {
 					m.sources = append(m.sources, source)
 					m.selected[source.ID] = !m.isInteractiveSyncWorkflow() || engine.SupportsPlan(source)
 					if m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
-						m.interactiveOrders[source.ID] = engine.DownloadOrderOldestFirst
+						m.interactiveOrders[source.ID] = defaultTUIDownloadOrder(source)
 					}
 					if m.isInteractiveSyncWorkflow() && engine.SupportsPlanWindow(source) {
 						m.interactiveWindows[source.ID] = engine.DefaultPlanWindowForSource(source)
@@ -988,9 +988,19 @@ func (m tuiSyncModel) downloadOrderForSourceID(sourceID string) engine.DownloadO
 	}
 	source, ok := m.interactiveSourceByID(sourceID)
 	if ok && m.isInteractiveSyncWorkflow() && engine.SupportsDownloadOrder(source) {
-		return engine.DownloadOrderOldestFirst
+		return defaultTUIDownloadOrder(source)
+	}
+	if ok {
+		return engine.DownloadOrderForSource(source)
 	}
 	return engine.DownloadOrderNewestFirst
+}
+
+func defaultTUIDownloadOrder(source config.Source) engine.DownloadOrder {
+	if source.Sync.DownloadOrder != "" {
+		return engine.DownloadOrderForSource(source)
+	}
+	return engine.DownloadOrderOldestFirst
 }
 
 func (m tuiSyncModel) currentInteractiveSourceSupportsDownloadOrder() bool {

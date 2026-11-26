@@ -87,6 +87,57 @@ func TestBuildExecSpecIncludesSyncFile(t *testing.T) {
 	}
 }
 
+func TestBuildExecSpecAppendOnlyRequiresStagingAndManagedPaths(t *testing.T) {
+	source, defaults := setupSCDLTest(t)
+	source.Sync.AppendOnly = true
+	if _, err := New().BuildExecSpec(source, defaults, time.Minute); err == nil {
+		t.Fatal("append-only direct execution must fail")
+	}
+	source.AppendOnlyStaging = true
+	spec, err := New().BuildExecSpec(source, defaults, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(spec.Args, " ")
+	for _, value := range []string{"--path " + source.TargetDir, "--name-format %(title).180B [%(id)s]", "--playlist-name-format %(title).180B [%(id)s]", "--no-playlist-folder"} {
+		if !strings.Contains(joined, value) {
+			t.Fatalf("missing isolation argument %q in %v", value, spec.Args)
+		}
+	}
+	if containsArg(spec.Args, "-f") {
+		t.Fatal("single-track staging appended likes mode")
+	}
+}
+
+func TestBuildExecSpecPreservesExplicitSoundCloudResourceURLs(t *testing.T) {
+	for _, path := range []string{"/example/likes", "/example/sets/sample", "/example/track"} {
+		t.Run(path, func(t *testing.T) {
+			source, defaults := setupSCDLTest(t)
+			source.URL = "https://soundcloud.com" + path
+			source.Adapter.ExtraArgs = []string{"-f"}
+			spec, err := New().BuildExecSpec(source, defaults, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if containsSCDLMode(spec.Args) {
+				t.Fatalf("explicit URL received a user-list mode: %v", spec.Args)
+			}
+		})
+	}
+}
+
+func TestBuildExecSpecDoesNotAddLikesToOtherUserModes(t *testing.T) {
+	source, defaults := setupSCDLTest(t)
+	source.Adapter.ExtraArgs = []string{"-r"}
+	spec, err := New().BuildExecSpec(source, defaults, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsArg(spec.Args, "-f") || !containsArg(spec.Args, "-r") {
+		t.Fatalf("user mode changed: %v", spec.Args)
+	}
+}
+
 func TestBuildExecSpecDoesNotDuplicateForceFlag(t *testing.T) {
 	t.Setenv("SCDL_CLIENT_ID", "secret-client-id")
 

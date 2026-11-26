@@ -31,6 +31,7 @@ type Source struct {
 	StateFile           string      `yaml:"state_file,omitempty"`
 	SelectedPlaylistIDs []int       `yaml:"-"`
 	DisableSyncMode     bool        `yaml:"-"`
+	AppendOnlyStaging   bool        `yaml:"-"`
 	DownloadArchivePath string      `yaml:"-"`
 	DeezerARL           string      `yaml:"-"`
 	SpotifyClientID     string      `yaml:"-"`
@@ -41,9 +42,11 @@ type Source struct {
 }
 
 type SyncPolicy struct {
-	BreakOnExisting *bool `yaml:"break_on_existing,omitempty"`
-	AskOnExisting   *bool `yaml:"ask_on_existing,omitempty"`
-	LocalIndexCache *bool `yaml:"local_index_cache,omitempty"`
+	BreakOnExisting *bool  `yaml:"break_on_existing,omitempty"`
+	AskOnExisting   *bool  `yaml:"ask_on_existing,omitempty"`
+	LocalIndexCache *bool  `yaml:"local_index_cache,omitempty"`
+	AppendOnly      bool   `yaml:"append_only,omitempty"`
+	DownloadOrder   string `yaml:"download_order,omitempty"`
 }
 
 type AdapterSpec struct {

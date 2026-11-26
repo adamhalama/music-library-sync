@@ -56,10 +56,21 @@ func (a *Adapter) Validate(source config.Source) error {
 	if source.Type != config.SourceTypeSoundCloud {
 		return fmt.Errorf("scdl adapter only supports soundcloud sources")
 	}
+	if source.Sync.AppendOnly {
+		return config.ValidateAppendOnlySource(source)
+	}
 	return nil
 }
 
 func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, timeout time.Duration) (engine.ExecSpec, error) {
+	if source.Sync.AppendOnly {
+		if err := config.ValidateAppendOnlySource(source); err != nil {
+			return engine.ExecSpec{}, err
+		}
+		if !source.AppendOnlyStaging {
+			return engine.ExecSpec{}, fmt.Errorf("sync.append_only requires isolated engine staging")
+		}
+	}
 	runtimeInfo := resolveRuntimeInfo()
 	targetDir, err := config.ExpandPath(source.TargetDir)
 	if err != nil {
@@ -76,7 +87,7 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 
 	args := []string{"-l", source.URL}
 	displayArgs := []string{"-l", sanitizeURL(source.URL)}
-	if !containsArg(source.Adapter.ExtraArgs, "-f") {
+	if !source.AppendOnlyStaging && !engine.SoundCloudURLHasResourcePath(source.URL) && !containsSCDLMode(source.Adapter.ExtraArgs) {
 		args = append(args, "-f")
 		displayArgs = append(displayArgs, "-f")
 	}
@@ -91,8 +102,28 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 	}
 
 	extraArgs := stripManagedArgs(source.Adapter.ExtraArgs)
+	if engine.SoundCloudURLHasResourcePath(source.URL) {
+		filtered := make([]string, 0, len(extraArgs))
+		for _, arg := range extraArgs {
+			switch arg {
+			case "-f", "-t", "-r", "-C", "-p", "-a":
+				continue
+			}
+			filtered = append(filtered, arg)
+		}
+		extraArgs = filtered
+	}
 	args = append(args, extraArgs...)
 	displayArgs = append(displayArgs, extraArgs...)
+	if source.Sync.AppendOnly {
+		// Override scdl.cfg's output paths and templates as well as CLI defaults.
+		managed := []string{"--path", targetDir, "--name-format", "%(title).180B [%(id)s]", "--playlist-name-format", "%(title).180B [%(id)s]"}
+		if !containsArg(extraArgs, "--no-playlist-folder") {
+			managed = append(managed, "--no-playlist-folder")
+		}
+		args = append(args, managed...)
+		displayArgs = append(displayArgs, managed...)
+	}
 
 	breakOnExisting := true
 	if source.Sync.BreakOnExisting != nil {
@@ -111,12 +142,15 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 	if !foundCustomYTDLP {
 		tokens := append([]string{}, defaultYTDLPArgTokens...)
 		tokens = append(tokens, "--download-archive", archivePath)
-		ytdlpArgs = strings.Join(tokens, " ")
+		ytdlpArgs = strings.Join(tokens[:len(tokens)-1], " ") + " " + quoteYTDLPArg(archivePath)
 	} else if !hasDownloadArchive(ytdlpArgs) {
 		ytdlpArgs = strings.TrimSpace(ytdlpArgs + " --download-archive " + archivePath)
 	}
 	ytdlpArgs = normalizeYTDLPBreakArgs(ytdlpArgs, breakOnExisting)
 	ytdlpArgs = normalizeYTDLPPlaylistItems(ytdlpArgs, source.SelectedPlaylistIDs)
+	if source.Sync.AppendOnly {
+		ytdlpArgs += " --ignore-config --no-overwrites --no-post-overwrites"
+	}
 	if !runtimeInfo.Compatible() {
 		return engine.ExecSpec{}, fmt.Errorf(
 			"scdl binary %q is incompatible: version=%s supports_yt_dlp_args=%t (requires scdl >= 3.0.0 with --yt-dlp-args); set PATH or UDL_SCDL_BIN to a compatible binary",
@@ -135,6 +169,13 @@ func (a *Adapter) BuildExecSpec(source config.Source, defaults config.Defaults, 
 		Timeout:        timeout,
 		DisplayCommand: formatCommand(runtimeInfo.Bin, displayArgs),
 	}, nil
+}
+
+func quoteYTDLPArg(value string) string {
+	if !strings.ContainsAny(value, " \t\r\n'\"\\") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func formatCommand(bin string, args []string) string {
@@ -156,6 +197,15 @@ func sanitizeURL(raw string) string {
 func containsArg(args []string, needle string) bool {
 	for _, candidate := range args {
 		if strings.TrimSpace(candidate) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSCDLMode(args []string) bool {
+	for _, mode := range []string{"-a", "-t", "-f", "-C", "-p", "-r"} {
+		if containsArg(args, mode) {
 			return true
 		}
 	}

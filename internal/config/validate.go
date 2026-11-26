@@ -135,6 +135,19 @@ func validate(cfg Config, scope validateScope) error {
 			}
 			supportsSyncPolicy := source.Type == SourceTypeSoundCloud ||
 				(source.Type == SourceTypeSpotify && source.Adapter.Kind == "deemix")
+			if source.Sync.AppendOnly {
+				if err := ValidateAppendOnlySource(source); err != nil {
+					problems = append(problems, fmt.Sprintf("source %q: %v", source.ID, err))
+				}
+			}
+			if order := source.Sync.DownloadOrder; order != "" {
+				if order != "newest_first" && order != "oldest_first" {
+					problems = append(problems, fmt.Sprintf("source %q sync.download_order must be newest_first or oldest_first", source.ID))
+				}
+				if source.Type != SourceTypeSoundCloud {
+					problems = append(problems, fmt.Sprintf("source %q sync.download_order is only supported for soundcloud", source.ID))
+				}
+			}
 			if !supportsSyncPolicy {
 				if source.Sync.BreakOnExisting != nil {
 					problems = append(problems, fmt.Sprintf("source %q sync.break_on_existing is only supported for soundcloud or spotify+deemix", source.ID))

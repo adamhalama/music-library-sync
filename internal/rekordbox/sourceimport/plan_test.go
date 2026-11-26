@@ -51,10 +51,10 @@ func rowsByPosition(plan Plan) map[int]Row {
 
 func TestBuildPlanOrdersOldestFirstAndKeepsOrderedTimestamps(t *testing.T) {
 	tracks := []SourceTrack{
-		{Position: 3, SpotifyID: "c", Title: "C", Path: "/music/src/A - C.mp3"},
-		{Position: 1, SpotifyID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
-		{Position: 2, SpotifyID: "b", Title: "B", Path: "/music/src/A - B.mp3"},
-		{Position: 4, SpotifyID: "d", Title: "D", Path: "/music/src/A - D.mp3"},
+		{Position: 3, ID: "c", Title: "C", Path: "/music/src/A - C.mp3"},
+		{Position: 1, ID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
+		{Position: 2, ID: "b", Title: "B", Path: "/music/src/A - B.mp3"},
+		{Position: 4, ID: "d", Title: "D", Path: "/music/src/A - D.mp3"},
 	}
 	contents := []Content{
 		// Imported in reverse order within the same tenth of a second.
@@ -93,10 +93,10 @@ func TestBuildPlanOrdersOldestFirstAndKeepsOrderedTimestamps(t *testing.T) {
 
 func TestBuildPlanNewTrackInsideExistingRunFollowsPreviousTrack(t *testing.T) {
 	tracks := []SourceTrack{
-		{Position: 1, SpotifyID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
-		{Position: 2, SpotifyID: "new", Title: "New", Path: "/music/src/A - New.mp3"},
-		{Position: 3, SpotifyID: "nd", Title: "Not downloaded"},
-		{Position: 4, SpotifyID: "b", Title: "B", Path: "/music/src/A - B.mp3"},
+		{Position: 1, ID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
+		{Position: 2, ID: "new", Title: "New", Path: "/music/src/A - New.mp3"},
+		{Position: 3, ID: "nd", Title: "Not downloaded"},
+		{Position: 4, ID: "b", Title: "B", Path: "/music/src/A - B.mp3"},
 	}
 	contents := []Content{
 		{ID: "1", FolderPath: "/music/src/A - A.mp3", CreatedAt: mustTime(t, "2026-09-25T19:03:36.447Z"), StockDate: "2026-09-25"},
@@ -120,9 +120,9 @@ func TestBuildPlanNewTrackInsideExistingRunFollowsPreviousTrack(t *testing.T) {
 
 func TestBuildPlanLeadingNewTracksSortBeforeFirstExisting(t *testing.T) {
 	tracks := []SourceTrack{
-		{Position: 1, SpotifyID: "n1", Title: "N1", Path: "/music/src/A - N1.mp3"},
-		{Position: 2, SpotifyID: "n2", Title: "N2", Path: "/music/src/A - N2.mp3"},
-		{Position: 3, SpotifyID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
+		{Position: 1, ID: "n1", Title: "N1", Path: "/music/src/A - N1.mp3"},
+		{Position: 2, ID: "n2", Title: "N2", Path: "/music/src/A - N2.mp3"},
+		{Position: 3, ID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
 	}
 	contents := []Content{
 		{ID: "1", FolderPath: "/music/src/A - A.mp3", CreatedAt: mustTime(t, "2026-09-25T19:03:36.447Z"), StockDate: "2026-09-25"},
@@ -139,9 +139,9 @@ func TestBuildPlanLeadingNewTracksSortBeforeFirstExisting(t *testing.T) {
 
 func TestBuildPlanIsStableOnRerun(t *testing.T) {
 	tracks := []SourceTrack{
-		{Position: 1, SpotifyID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
-		{Position: 2, SpotifyID: "b", Title: "B", Path: "/music/src/A - B.mp3"},
-		{Position: 3, SpotifyID: "c", Title: "C", Path: "/music/src/A - C.mp3"},
+		{Position: 1, ID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
+		{Position: 2, ID: "b", Title: "B", Path: "/music/src/A - B.mp3"},
+		{Position: 3, ID: "c", Title: "C", Path: "/music/src/A - C.mp3"},
 	}
 	contents := []Content{
 		{ID: "1", FolderPath: "/music/src/A - A.mp3", CreatedAt: mustTime(t, "2026-09-19T14:10:27.120Z"), StockDate: "2026-09-19"},
@@ -170,7 +170,7 @@ func TestBuildPlanIsStableOnRerun(t *testing.T) {
 func TestBuildPlanMatchesPathsAcrossUnicodeNormalization(t *testing.T) {
 	nfc := "/music/src/Howling - Signs (Rødhåd Remix).mp3"
 	nfd := "/music/src/Howling - Signs (Rødhåd Remix).mp3"
-	tracks := []SourceTrack{{Position: 1, SpotifyID: "a", Title: "Signs", Path: nfc}}
+	tracks := []SourceTrack{{Position: 1, ID: "a", Title: "Signs", Path: nfc}}
 	contents := []Content{{ID: "1", FolderPath: nfd, CreatedAt: mustTime(t, "2026-09-25T19:03:36.447Z"), StockDate: "2026-09-25"}}
 	plan, err := BuildPlan(context.Background(), baseInput(t, tracks, contents))
 	if err != nil {
@@ -183,9 +183,9 @@ func TestBuildPlanMatchesPathsAcrossUnicodeNormalization(t *testing.T) {
 
 func TestBuildPlanSkipsMissingAndDuplicateFilesAndOverridesGenre(t *testing.T) {
 	tracks := []SourceTrack{
-		{Position: 1, SpotifyID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
-		{Position: 2, SpotifyID: "a2", Title: "A again", Path: "/music/src/A - A.mp3"},
-		{Position: 3, SpotifyID: "gone", Title: "Missing", Path: "/music/src/Gone - Missing.mp3"},
+		{Position: 1, ID: "a", Title: "A", Path: "/music/src/A - A.mp3"},
+		{Position: 2, ID: "a2", Title: "A again", Path: "/music/src/A - A.mp3"},
+		{Position: 3, ID: "gone", Title: "Missing", Path: "/music/src/Gone - Missing.mp3"},
 	}
 	in := baseInput(t, tracks, nil)
 	in.GenreOverride = "electro techno"
@@ -221,5 +221,65 @@ func TestNormalizeTimestampKeepsNonZeroMilliseconds(t *testing.T) {
 	got = normalizeTimestamp(mustTime(t, "2026-11-21T00:30:00.123456Z"))
 	if FormatTimestamp(got) != "2026-11-21T00:30:00.123Z" {
 		t.Fatalf("got %s", FormatTimestamp(got))
+	}
+}
+
+func TestBuildAppendOnlyPlanPreservesExistingRowsAndAppendsAfterAllSourceRows(t *testing.T) {
+	tracks := []SourceTrack{
+		{Position: 1, ID: "new-a", Path: "/music/src/New A.mp3"},
+		{Position: 2, ID: "old-a", Path: "/music/src/Old A.mp3"},
+		{Position: 3, ID: "new-b", Path: "/music/src/New B.mp3"},
+		{Position: 4, ID: "old-b", Path: "/music/src/Old B.mp3"},
+	}
+	contents := []Content{
+		{ID: "1", FolderPath: tracks[1].Path, CreatedAt: mustTime(t, "2026-11-01T00:00:00.000Z"), StockDate: "2026-10-30"},
+		{ID: "2", FolderPath: tracks[3].Path, CreatedAt: mustTime(t, "2026-10-01T00:00:00.100Z"), StockDate: "2026-10-01"},
+		{ID: "3", FolderPath: "/music/src/No Longer Remote.mp3", CreatedAt: mustTime(t, "2027-01-01T00:00:00.500Z"), StockDate: "2027-01-01"},
+	}
+	in := baseInput(t, tracks, contents)
+	in.AppendOnly = true
+	in.LocalNotRemote = 1
+	plan, err := BuildPlan(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Rows[1].Changes() || plan.Rows[3].Changes() || plan.Rows[1].NewStockDate != "2026-10-30" || plan.Rows[1].NewCreatedAt != "2026-11-01T00:00:00.000Z" {
+		t.Fatalf("existing rows changed: %+v", plan.Rows)
+	}
+	if plan.Rows[0].NewCreatedAt != "2027-01-01T00:00:01.500Z" || plan.Rows[2].NewCreatedAt != "2027-01-01T00:00:02.500Z" {
+		t.Fatalf("wrong append timeline: %+v", plan.Rows)
+	}
+	if plan.Summary.CollectionExisting != 3 || plan.Summary.LocalNotRemote != 1 || plan.Summary.DateChanges != 0 || plan.Rows[0].Tags.Genre != "Electro" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	if err := VerifyTimeline(plan.TimelineRows()); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range plan.Rows {
+		if row.Status == StatusImport {
+			contents = append(contents, Content{ID: row.ID, FolderPath: row.Path, CreatedAt: mustTime(t, row.NewCreatedAt), StockDate: row.NewStockDate})
+		}
+	}
+	in.Contents = contents
+	in.ImportTime = in.ImportTime.Add(24 * time.Hour)
+	second, err := BuildPlan(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.HasChanges() {
+		t.Fatalf("second run changes existing rows: %+v", second)
+	}
+}
+
+func TestBuildAppendOnlyPlanNewImportsFollowNow(t *testing.T) {
+	in := baseInput(t, []SourceTrack{{Position: 1, ID: "new", Path: "/music/src/New.mp3"}}, nil)
+	in.AppendOnly = true
+	plan, err := BuildPlan(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := mustTime(t, plan.Rows[0].NewCreatedAt)
+	if !created.After(in.ImportTime) {
+		t.Fatalf("new import does not follow now: %v", created)
 	}
 }

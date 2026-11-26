@@ -26,7 +26,7 @@ func DefaultSelectedPlanIndices(rows []PlanRow) []int {
 	return selected
 }
 
-func BuildExecutionManifest(sourceID string, rows []PlanRow, selectedIndices []int, order DownloadOrder) (ExecutionManifest, error) {
+func BuildExecutionManifest(sourceID string, rows []PlanRow, selectedIndices []int, order DownloadOrder, enumerationOldestFirst ...bool) (ExecutionManifest, error) {
 	indexSet := map[int]struct{}{}
 	for _, idx := range selectedIndices {
 		if idx <= 0 {
@@ -60,7 +60,11 @@ func BuildExecutionManifest(sourceID string, rows []PlanRow, selectedIndices []i
 		}
 	}
 
-	executionIndices := orderForExecution(selected, NormalizeDownloadOrder(order))
+	nativeOldest := len(rows) > 0 && rows[0].EnumerationOldestFirst
+	if len(enumerationOldestFirst) > 0 {
+		nativeOldest = enumerationOldestFirst[0]
+	}
+	executionIndices := orderForExecution(selected, NormalizeDownloadOrder(order), nativeOldest)
 	execution := make([]ExecutionEntry, 0, len(executionIndices))
 	for i, idx := range executionIndices {
 		entry := entriesByIndex[idx]
@@ -76,14 +80,14 @@ func BuildExecutionManifest(sourceID string, rows []PlanRow, selectedIndices []i
 	}, nil
 }
 
-func CanonicalizeExecutionManifest(sourceID string, rows []PlanRow, manifest ExecutionManifest) (ExecutionManifest, error) {
+func CanonicalizeExecutionManifest(sourceID string, rows []PlanRow, manifest ExecutionManifest, enumerationOldestFirst ...bool) (ExecutionManifest, error) {
 	if manifest.SourceID != sourceID {
 		return ExecutionManifest{}, fmt.Errorf("execution manifest source %q does not match source %q", manifest.SourceID, sourceID)
 	}
 	if hasDuplicateIndices(manifest.SelectedIndices) {
 		return ExecutionManifest{}, fmt.Errorf("execution manifest contains duplicate selected indices")
 	}
-	canonical, err := BuildExecutionManifest(sourceID, rows, manifest.SelectedIndices, manifest.DownloadOrder)
+	canonical, err := BuildExecutionManifest(sourceID, rows, manifest.SelectedIndices, manifest.DownloadOrder, enumerationOldestFirst...)
 	if err != nil {
 		return ExecutionManifest{}, err
 	}
