@@ -1,4 +1,5 @@
 """Standard-library sqlite fixtures for analysis planning and publication."""
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import os
 from pathlib import Path
@@ -84,7 +85,7 @@ class AnalysisTests(unittest.TestCase):
         # A completed state and a non-NULL content link survive reanalysis.
         self.db.execute("UPDATE djmdContent SET Analysed=17, ContentLink=99 WHERE ID='1'")
         self.content.update(analysis_data_path=published["analysis_data_path"],analysed=17,anlz_exists=True)
-        publish_track(self.db,self.root,self.item,self.db.commit,self.db.rollback)
+        publish_track(self.db,self.root,self.item,self.db.commit,self.db.rollback,reanalyse=True)
         self.assertEqual(self.db.execute("SELECT Analysed,ContentLink,AnalysisUpdated FROM djmdContent WHERE ID='1'").fetchone(),(17,99,"2"))
 
     def test_lock_and_stale_plan_refusal(self):
@@ -121,7 +122,7 @@ class AnalysisTests(unittest.TestCase):
             replace(source,dest)
         with patch("analysis_helper.os.replace",side_effect=fail_second):
             with self.assertRaisesRegex(OSError,"disk full"):
-                publish_track(self.db,self.root,self.item,self.db.commit,self.db.rollback)
+                publish_track(self.db,self.root,self.item,self.db.commit,self.db.rollback,reanalyse=True)
         for ext in ("DAT","EXT","2EX"):
             self.assertEqual((target / f"ANLZ0000.{ext}").read_bytes(),b"PMAIold")
         self.assertEqual(self.db.execute("SELECT int_1 FROM agentRegistry").fetchone()[0],5)
@@ -145,7 +146,7 @@ class AnalysisTests(unittest.TestCase):
 
         with patch("analysis_helper.os.replace", side_effect=interrupt_after_ext):
             with self.assertRaises(KeyboardInterrupt):
-                publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback)
+                publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback, reanalyse=True)
         self.assertEqual((target / "ANLZ0000.DAT").read_bytes(), b"PMAIoldDAT")
         self.assertFalse((target / "ANLZ0000.EXT").exists())
         self.assertEqual((target / "ANLZ0000.2EX").read_bytes(), b"PMAIold2EX")
@@ -154,13 +155,19 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM djmdKey").fetchone()[0], 0)
 
     def test_interrupt_after_commit_keeps_files_and_database(self):
-        def interrupt_after_commit():
-            self.db.commit()
-            signal.raise_signal(signal.SIGINT)
+        previous_handler = signal.getsignal(signal.SIGINT)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            # Start the worker before publication so it can receive process signals.
+            executor.submit(os.getpid).result()
 
-        with self.assertRaises(KeyboardInterrupt):
-            publish_track(self.db, self.root, self.item, interrupt_after_commit, self.db.rollback)
+            def interrupt_after_commit():
+                self.db.commit()
+                executor.submit(os.kill, os.getpid(), signal.SIGINT).result(timeout=5)
 
+            with self.assertRaises(KeyboardInterrupt):
+                publish_track(self.db, self.root, self.item, interrupt_after_commit, self.db.rollback)
+
+        self.assertIs(signal.getsignal(signal.SIGINT), previous_handler)
         relative, bpm = self.db.execute("SELECT AnalysisDataPath, BPM FROM djmdContent WHERE ID='1'").fetchone()
         self.assertEqual(bpm, 12756)
         target = analysis_file(self.root / "share", relative).parent
@@ -173,7 +180,7 @@ class AnalysisTests(unittest.TestCase):
         dat.write_bytes(b"PMAIold")
 
         self.db.execute("BEGIN IMMEDIATE")
-        with self.assertRaisesRegex(ValueError, "analysis files appeared since planning; rerun, or use --reanalyse"):
+        with self.assertRaisesRegex(ValueError, "use --reanalyse"):
             publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback)
         self.assertEqual(dat.read_bytes(), b"PMAIold")
         self.assertEqual(self.db.execute("SELECT AnalysisDataPath FROM djmdContent WHERE ID='1'").fetchone()[0], "")
@@ -181,6 +188,21 @@ class AnalysisTests(unittest.TestCase):
         self.db.execute("BEGIN IMMEDIATE")
         publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback, reanalyse=True)
         self.assertEqual(dat.read_bytes(), b"PMAInewDAT")
+
+    def test_analysis_files_present_in_plan_require_reanalyse(self):
+        relative = "/PIONEER/USBANLZ/abc/def/ANLZ0000.DAT"
+        dat = analysis_file(self.root / "share", relative)
+        dat.parent.mkdir(parents=True)
+        dat.write_bytes(b"PMAIold")
+        self.db.execute("UPDATE djmdContent SET AnalysisDataPath=? WHERE ID='1'", (relative,))
+        self.db.commit()
+        self.content.update(analysis_data_path=relative, anlz_exists=True)
+
+        with self.assertRaisesRegex(ValueError, "use --reanalyse"):
+            publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback)
+
+        self.assertEqual(dat.read_bytes(), b"PMAIold")
+        self.assertIsNone(self.db.execute("SELECT BPM FROM djmdContent WHERE ID='1'").fetchone()[0])
 
     def test_missing_uuid_and_unsafe_paths_refused(self):
         self.content["uuid"]=""
