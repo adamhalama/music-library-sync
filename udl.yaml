@@ -13,6 +13,9 @@ sources:
     target_dir: "~/Music/downloaded/sc-likes"
     url: "https://soundcloud.com/janxadam"
     state_file: "soundcloud-likes.sync.scdl"
+    # Optional. Rekordbox imports only new tracks by default.
+    # rekordbox_import:
+    #   new_only: false
     sync:
       break_on_existing: true
       ask_on_existing: true

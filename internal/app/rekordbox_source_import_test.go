@@ -113,11 +113,13 @@ func sourceImportFixture(t *testing.T) (RekordboxSourceImportUseCase, *fakeSourc
 
 func TestRekordboxSourceImportPlanAndApplyWritesOrderedRows(t *testing.T) {
 	useCase, fake, events, req := sourceImportFixture(t)
+	fullReorder := false
+	req.Config.Sources[1].RekordboxImport.NewOnly = &fullReorder
 	plan, err := useCase.Plan(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Summary.Existing != 2 || plan.Summary.Import != 1 || plan.Summary.DateChanges != 1 || plan.Summary.NotDownloaded != 1 {
+	if plan.AppendOnly || plan.ModeReason != "rekordbox_import.new_only=false" || plan.Summary.Existing != 2 || plan.Summary.Import != 1 || plan.Summary.DateChanges != 1 || plan.Summary.NotDownloaded != 1 {
 		t.Fatalf("unexpected summary %+v", plan.Summary)
 	}
 	result, err := useCase.Apply(context.Background(), req, plan)
@@ -175,7 +177,7 @@ func TestRekordboxSourceImportRefusesWhileLibraryAppIsOpen(t *testing.T) {
 
 func TestRekordboxSourceImportDetectsReadBackMismatch(t *testing.T) {
 	useCase, fake, _, req := sourceImportFixture(t)
-	fake.tamperAt = 2
+	fake.tamperAt = 1
 	plan, err := useCase.Plan(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -389,32 +391,22 @@ func TestRekordboxSourceImportNewOnlyAppendsAfterExistingRowsAndNow(t *testing.T
 		return useCase, fake, req
 	}
 
-	useCase, _, req := configure(t)
-	plan, err := useCase.Plan(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.AppendOnly || plan.Summary.DateChanges != 1 || !plan.Rows[3].Changes() || plan.Rows[3].ContentID != "12" {
-		t.Fatalf("without new-only expected the out-of-order existing row to be redated: %+v", plan)
-	}
-
 	for _, tc := range []struct {
 		name string
 		now  time.Time
 		want [2]string
 	}{
-		{"after_latest_existing_row", useCase.Now(), [2]string{"2027-01-01T00:00:01.500Z", "2027-01-01T00:00:02.500Z"}},
+		{"after_latest_existing_row", time.Date(2026, 11, 21, 0, 30, 0, 0, time.UTC), [2]string{"2027-01-01T00:00:01.500Z", "2027-01-01T00:00:02.500Z"}},
 		{"after_run_time", time.Date(2028, 1, 1, 0, 0, 0, 500_000_000, time.UTC), [2]string{"2028-01-01T00:00:01.500Z", "2028-01-01T00:00:02.500Z"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useCase, fake, req := configure(t)
-			req.NewOnly = true
 			useCase.Now = func() time.Time { return tc.now }
 			plan, err := useCase.Plan(context.Background(), req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.Summary.DateChanges != 0 || plan.Rows[1].Changes() || plan.Rows[3].Changes() {
+			if !plan.AppendOnly || plan.ModeReason != "default" || plan.Summary.DateChanges != 0 || plan.Rows[1].Changes() || plan.Rows[3].Changes() {
 				t.Fatalf("new-only must preserve existing rows: %+v", plan)
 			}
 			if _, err := useCase.Apply(context.Background(), req, plan); err != nil {

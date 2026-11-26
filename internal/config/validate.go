@@ -139,6 +139,9 @@ func validate(cfg Config, scope validateScope) error {
 				if err := ValidateAppendOnlySource(source); err != nil {
 					problems = append(problems, fmt.Sprintf("source %q: %v", source.ID, err))
 				}
+				if newOnly := source.RekordboxImport.NewOnly; newOnly != nil && !*newOnly {
+					problems = append(problems, fmt.Sprintf("source %q cannot set rekordbox_import.new_only: false with sync.append_only: true", source.ID))
+				}
 			}
 			if order := source.Sync.DownloadOrder; order != "" {
 				if order != "newest_first" && order != "oldest_first" {

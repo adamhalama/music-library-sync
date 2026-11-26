@@ -17,6 +17,9 @@ sources:
     target_dir: "~/Music/downloaded/sc-likes"
     url: "https://soundcloud.com/your-user"
     state_file: "soundcloud-likes.sync.scdl"
+    # Optional. Rekordbox imports only new tracks by default.
+    # rekordbox_import:
+    #   new_only: false
     sync:
       break_on_existing: true
       ask_on_existing: false
@@ -45,6 +48,8 @@ sources:
     target_dir: "~/Music/downloaded/spotify-groove"
     url: "https://open.spotify.com/playlist/replace-me"
     state_file: "spotify-groove.sync.spotify"
+    # rekordbox_import:
+    #   new_only: false
     adapter:
       kind: "deemix"
       extra_args: []

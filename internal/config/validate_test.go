@@ -234,3 +234,13 @@ func TestValidateRejectsUnsafeAppendOnlyExtraArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRejectsFullReorderForAppendOnlySource(t *testing.T) {
+	cfg := validRekordboxConfigForTest()
+	cfg.Sources[0].Sync.AppendOnly = true
+	cfg.Sources[0].RekordboxImport.NewOnly = testBoolPtr(false)
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot set rekordbox_import.new_only: false with sync.append_only: true") {
+		t.Fatalf("expected append-only mode conflict, got %v", err)
+	}
+}

@@ -33,16 +33,15 @@ func newRekordboxImportSourceCommand(app *AppContext) *cobra.Command {
 		Short: "Import a Spotify or SoundCloud source into Rekordbox in source order",
 		Long: strings.TrimSpace(`
 Imports local files of a configured Spotify or SoundCloud (scdl) source into
-Rekordbox. Date Added follows Spotify playlist order or SoundCloud added order:
-likes, tracks and reposts are reversed; sets retain playlist position order.
-scdl-freedl sources are not supported.
+Rekordbox. New imports follow Spotify playlist order or SoundCloud added order.
+SoundCloud likes, tracks and reposts are reversed. Sets retain their position order.
 
-Existing tracks keep Date Added when correctly ordered; otherwise it moves by
-whole seconds. Trailing new tracks get the current time. With sync.append_only,
-existing collection rows remain untouched and new imports follow both the
-current time and every existing source row, one step apart. --new-only applies
-the same behavior for this run. Local tracks no longer listed remotely remain
-untouched. Re-running changes nothing.
+New-only mode is the default. Existing rows keep their Date Added and new
+imports follow the current time and every existing source row, one step apart.
+Set rekordbox_import.new_only: false on a source to allow Date Added to be
+reordered. Use --new-only or --new-only=false to override the saved setting
+for one run. Sources with sync.append_only: true always use new-only mode.
+Local tracks no longer listed remotely remain untouched.
 
 Use --dry-run to print the planned order without writing. A real run needs
 Rekordbox and RBxport closed and writes a full backup of the Rekordbox
@@ -73,7 +72,9 @@ directory first.`),
 				GenreOverride: flags.Genre,
 				Step:          time.Duration(flags.StepSeconds) * time.Second,
 				DryRun:        app.Opts.DryRun,
-				NewOnly:       flags.NewOnly,
+			}
+			if cmd.Flags().Changed("new-only") {
+				req.NewOnly = &flags.NewOnly
 			}
 			useCase := workflows.RekordboxSourceImportUseCase{}
 			plan, err := useCase.Plan(ctx, req)
@@ -121,7 +122,7 @@ directory first.`),
 	cmd.Flags().StringVar(&flags.Genre, "genre", "", "Genre written on newly imported tracks instead of the file's genre tag")
 	cmd.Flags().IntVar(&flags.StepSeconds, "step-seconds", 1, "Seconds between consecutive tracks' Date Added")
 	cmd.Flags().BoolVar(&flags.Force, "force", false, "Write without an interactive confirmation")
-	cmd.Flags().BoolVar(&flags.NewOnly, "new-only", false, "Import only tracks not already in the collection")
+	cmd.Flags().BoolVar(&flags.NewOnly, "new-only", true, "Override the source import mode for this run. Use --new-only=false to allow Date Added changes")
 	return cmd
 }
 
@@ -139,9 +140,14 @@ func printSourceImportPlan(app *AppContext, plan sourceimport.Plan, final bool) 
 	if plan.SourceType == "soundcloud" {
 		order = "SoundCloud added order (sets: position order; user streams: reversed)"
 	}
-	fmt.Fprintf(out, "Order: %s, oldest first; Date Added %ds apart\n", order, plan.StepMillis/1000)
+	fmt.Fprintf(out, "Order: %s, oldest first, with a %ds Date Added step\n", order, plan.StepMillis/1000)
+	mode := "full reorder"
 	if plan.AppendOnly {
-		fmt.Fprintln(out, "Existing collection rows remain unchanged; new imports follow all existing source rows and the current time.")
+		mode = "new-only"
+	}
+	fmt.Fprintf(out, "Import mode: %s (%s)\n", mode, plan.ModeReason)
+	if plan.AppendOnly {
+		fmt.Fprintln(out, "New imports follow all existing source rows and the current time.")
 	}
 	if plan.GenreOverride != "" {
 		fmt.Fprintf(out, "Genre for new tracks: %s\n", plan.GenreOverride)

@@ -126,6 +126,7 @@ type Plan struct {
 	Version       string   `json:"version"`
 	SourceType    string   `json:"source_type,omitempty"`
 	AppendOnly    bool     `json:"append_only,omitempty"`
+	ModeReason    string   `json:"mode_reason,omitempty"`
 	GeneratedAt   string   `json:"generated_at"`
 	SourceID      string   `json:"source_id"`
 	PlaylistURL   string   `json:"playlist_url"`

@@ -23,22 +23,23 @@ type Defaults struct {
 }
 
 type Source struct {
-	ID                  string      `yaml:"id"`
-	Type                SourceType  `yaml:"type"`
-	Enabled             bool        `yaml:"enabled"`
-	TargetDir           string      `yaml:"target_dir"`
-	URL                 string      `yaml:"url"`
-	StateFile           string      `yaml:"state_file,omitempty"`
-	SelectedPlaylistIDs []int       `yaml:"-"`
-	DisableSyncMode     bool        `yaml:"-"`
-	AppendOnlyStaging   bool        `yaml:"-"`
-	DownloadArchivePath string      `yaml:"-"`
-	DeezerARL           string      `yaml:"-"`
-	SpotifyClientID     string      `yaml:"-"`
-	SpotifyClientSecret string      `yaml:"-"`
-	DeemixRuntimeDir    string      `yaml:"-"`
-	Sync                SyncPolicy  `yaml:"sync,omitempty"`
-	Adapter             AdapterSpec `yaml:"adapter"`
+	ID                  string                `yaml:"id"`
+	Type                SourceType            `yaml:"type"`
+	Enabled             bool                  `yaml:"enabled"`
+	TargetDir           string                `yaml:"target_dir"`
+	URL                 string                `yaml:"url"`
+	StateFile           string                `yaml:"state_file,omitempty"`
+	SelectedPlaylistIDs []int                 `yaml:"-"`
+	DisableSyncMode     bool                  `yaml:"-"`
+	AppendOnlyStaging   bool                  `yaml:"-"`
+	DownloadArchivePath string                `yaml:"-"`
+	DeezerARL           string                `yaml:"-"`
+	SpotifyClientID     string                `yaml:"-"`
+	SpotifyClientSecret string                `yaml:"-"`
+	DeemixRuntimeDir    string                `yaml:"-"`
+	Sync                SyncPolicy            `yaml:"sync,omitempty"`
+	RekordboxImport     RekordboxImportPolicy `yaml:"rekordbox_import,omitempty"`
+	Adapter             AdapterSpec           `yaml:"adapter"`
 }
 
 type SyncPolicy struct {
@@ -47,6 +48,10 @@ type SyncPolicy struct {
 	LocalIndexCache *bool  `yaml:"local_index_cache,omitempty"`
 	AppendOnly      bool   `yaml:"append_only,omitempty"`
 	DownloadOrder   string `yaml:"download_order,omitempty"`
+}
+
+type RekordboxImportPolicy struct {
+	NewOnly *bool `yaml:"new_only,omitempty"`
 }
 
 type AdapterSpec struct {
