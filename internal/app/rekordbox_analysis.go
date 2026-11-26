@@ -169,6 +169,9 @@ func (u RekordboxAnalysisUseCase) Apply(ctx context.Context, req RekordboxAnalys
 	if err := u.checkClosedRequest(ctx, req); err != nil {
 		return planned, err
 	}
+	if err := checkAnalysisLibraryLinks(req.DBDir); err != nil {
+		return planned, err
+	}
 	analyser, err := resolveAnalyser(req.Analyser)
 	if err != nil {
 		return planned, err
@@ -185,7 +188,7 @@ func (u RekordboxAnalysisUseCase) Apply(ctx context.Context, req RekordboxAnalys
 		return planned, err
 	}
 	defer os.RemoveAll(tmpRoot)
-	apply := bridge.AnalysisApplyRequest{DBDir: req.DBDir}
+	apply := bridge.AnalysisApplyRequest{DBDir: req.DBDir, Reanalyse: req.Reanalyse}
 	for i := range planned.Tracks {
 		row := &planned.Tracks[i]
 		if row.Status != "ready" {
@@ -217,6 +220,9 @@ func (u RekordboxAnalysisUseCase) Apply(ctx context.Context, req RekordboxAnalys
 		return planned, err
 	}
 	if err := u.checkClosedRequest(ctx, req); err != nil {
+		return planned, err
+	}
+	if err := checkAnalysisLibraryLinks(req.DBDir); err != nil {
 		return planned, err
 	}
 	applied, err := client.AnalysisApply(ctx, apply)
@@ -268,6 +274,23 @@ func (u RekordboxAnalysisUseCase) runAnalyser(ctx context.Context, bin, audio, m
 	return result, nil
 }
 
+func checkAnalysisLibraryLinks(dbDir string) error {
+	for _, name := range []string{"master.db", "share"} {
+		path := filepath.Join(dbDir, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect analysis library path %q: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("cannot write analysis: %q is a symlink; the backup would store the link instead of its contents", path)
+		}
+	}
+	return nil
+}
+
 func resolveAnalyser(explicit string) (string, error) {
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
 		return exec.LookPath(explicit)
@@ -280,8 +303,10 @@ func resolveAnalyser(explicit string) (string, error) {
 		if runtime.GOOS == "windows" {
 			candidate += ".exe"
 		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			if p, err := exec.LookPath(candidate); err == nil {
+				return p, nil
+			}
 		}
 	}
 	if p, err := exec.LookPath("udl-rbl-analyse"); err == nil {

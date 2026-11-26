@@ -3,13 +3,15 @@ package app
 import (
 	"context"
 	"errors"
-	"github.com/jaa/update-downloads/internal/config"
-	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jaa/update-downloads/internal/config"
+	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 )
 
 type analysisBridgeFake struct {
@@ -57,6 +59,12 @@ func TestAnalysisPlanSkipsValidAnalysisUnlessReanalyse(t *testing.T) {
 	}
 	if p.Tracks[0].Status != "ready" {
 		t.Fatalf("expected ready: %+v", p.Tracks[0])
+	}
+	if _, err := u.Apply(context.Background(), r, p); err != nil {
+		t.Fatal(err)
+	}
+	if !b.applied.Reanalyse {
+		t.Fatal("bridge request omitted reanalysis")
 	}
 }
 func TestAnalysisModeAndSelectorValidation(t *testing.T) {
@@ -118,6 +126,65 @@ func TestAnalysisGuardAndDryRunPreventWrites(t *testing.T) {
 	}
 	if backups != 0 || len(b.applied.Rows) != 0 {
 		t.Fatal("guard/dry run permitted writes")
+	}
+}
+
+func TestAnalysisApplyRejectsSymlinksBeforeBackup(t *testing.T) {
+	for _, name := range []string{"master.db", "share"} {
+		t.Run(name, func(t *testing.T) {
+			b := &analysisBridgeFake{inspect: bridge.AnalysisInspectResponse{Contents: []bridge.AnalysisContent{{ID: "1", Path: "/tmp/a.mp3"}}}}
+			u, r := analysisReq(t, b)
+			u.CreateBackup = func(context.Context, string, string, time.Time) (string, error) {
+				t.Fatal("backup started with a symlink in the library")
+				return "", nil
+			}
+			path := filepath.Join(r.DBDir, name)
+			if err := os.Symlink(filepath.Join(t.TempDir(), name), path); err != nil {
+				t.Fatal(err)
+			}
+			p, err := u.Plan(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := u.Apply(context.Background(), r, p); err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "is a symlink") {
+				t.Fatalf("expected a library symlink error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveAnalyserRequiresExecutableSibling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix executable permissions")
+	}
+	t.Setenv("UDL_RBL_ANALYSE", "")
+	t.Setenv("PATH", t.TempDir())
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(filepath.Dir(exe), "udl-rbl-analyse")
+	if err := os.Mkdir(candidate, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(candidate) })
+	if _, err := resolveAnalyser(""); err == nil {
+		t.Fatal("resolved a directory as the analyser")
+	}
+	if err := os.Remove(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidate, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveAnalyser(""); err == nil {
+		t.Fatal("resolved a non-executable file as the analyser")
+	}
+	if err := os.Chmod(candidate, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveAnalyser(""); err != nil || got != candidate {
+		t.Fatalf("expected sibling %q, got %q (%v)", candidate, got, err)
 	}
 }
 

@@ -45,8 +45,9 @@ type AnalysisApplyRow struct {
 }
 
 type AnalysisApplyRequest struct {
-	DBDir string             `json:"db_dir"`
-	Rows  []AnalysisApplyRow `json:"rows"`
+	DBDir     string             `json:"db_dir"`
+	Rows      []AnalysisApplyRow `json:"rows"`
+	Reanalyse bool               `json:"reanalyse"`
 }
 
 type AnalysisAppliedRow struct {

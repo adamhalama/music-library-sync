@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import signal
 import tempfile
 import unicodedata
 import uuid
@@ -176,7 +177,7 @@ def write_metadata(conn, planned, result, relative):
     counter(conn, usn, stamp)
 
 
-def publish_track(conn, db_dir, item, commit, rollback):
+def publish_track(conn, db_dir, item, commit, rollback, *, reanalyse=False):
     planned = item["content"]
     relative = planned["analysis_data_path"]
     if not relative:
@@ -195,6 +196,7 @@ def publish_track(conn, db_dir, item, commit, rollback):
     staged = Path(tempfile.mkdtemp(prefix=".udl-analysis-", dir=target.parent))
     attempted = []
     keep_staged = False
+    previous_mask = None
     try:
         for ext in EXTENSIONS:
             name = f"ANLZ0000.{ext}"
@@ -202,6 +204,9 @@ def publish_track(conn, db_dir, item, commit, rollback):
             if (target / name).exists():
                 shutil.copyfile(target / name, staged / (name + ".previous"))
         write_metadata(conn, planned, item["result"], relative)
+        if not reanalyse and not planned["anlz_exists"] and (target / "ANLZ0000.DAT").exists():
+            raise ValueError("analysis files appeared since planning; rerun, or use --reanalyse")
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
         for ext in EXTENSIONS:
             name = f"ANLZ0000.{ext}"
             attempted.append(name)
@@ -231,8 +236,13 @@ def publish_track(conn, db_dir, item, commit, rollback):
             raise RuntimeError(f"{cause}; recovery failed ({'; '.join(recovery_errors)}); originals retained at {staged}; restore the full library backup before continuing") from cause
         raise
     finally:
-        if not keep_staged:
-            shutil.rmtree(staged)
+        try:
+            if not keep_staged:
+                shutil.rmtree(staged)
+        finally:
+            # A pending interrupt must arrive outside the file recovery handler.
+            if previous_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     return dict(id=planned["id"], analysis_data_path=relative)
 
 
@@ -250,7 +260,7 @@ def analysis_apply(req):
             try:
                 connection = db.session.connection().connection.driver_connection
                 connection.execute("BEGIN IMMEDIATE")
-                rows.append(publish_track(connection, db_dir, item, db.session.commit, db.rollback))
+                rows.append(publish_track(connection, db_dir, item, db.session.commit, db.rollback, reanalyse=req.get("reanalyse", False)))
             except Exception as exc:
                 db.rollback()
                 rows.append(dict(id=item["content"]["id"], error=str(exc)))

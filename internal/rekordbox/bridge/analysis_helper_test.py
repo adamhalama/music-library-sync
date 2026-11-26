@@ -2,6 +2,7 @@
 import copy
 import os
 from pathlib import Path
+import signal
 import sqlite3
 import tempfile
 import unittest
@@ -34,7 +35,7 @@ class AnalysisTests(unittest.TestCase):
                  ('2','/music-two/two.mp3','abcdef-234567','',1,7);
         """)
         self.db.commit()
-        self.content = dict(id="1", path="/music/one.mp3", uuid="abcdef-123456", analysis_data_path="", analysed=0)
+        self.content = dict(id="1", path="/music/one.mp3", uuid="abcdef-123456", analysis_data_path="", analysed=0, anlz_exists=False)
         self.result = dict(bpm=127.555, key="Ebm", duration_seconds=100.5)
         self.out = self.root / "out"
         self.out.mkdir()
@@ -82,7 +83,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"PMAInewDAT")
         # A completed state and a non-NULL content link survive reanalysis.
         self.db.execute("UPDATE djmdContent SET Analysed=17, ContentLink=99 WHERE ID='1'")
-        self.content.update(analysis_data_path=published["analysis_data_path"],analysed=17)
+        self.content.update(analysis_data_path=published["analysis_data_path"],analysed=17,anlz_exists=True)
         publish_track(self.db,self.root,self.item,self.db.commit,self.db.rollback)
         self.assertEqual(self.db.execute("SELECT Analysed,ContentLink,AnalysisUpdated FROM djmdContent WHERE ID='1'").fetchone(),(17,99,"2"))
 
@@ -110,7 +111,7 @@ class AnalysisTests(unittest.TestCase):
             (target / f"ANLZ0000.{ext}").write_bytes(b"PMAIold")
         self.db.execute("UPDATE djmdContent SET AnalysisDataPath=? WHERE ID='1'",(relative,))
         self.db.commit()
-        self.content["analysis_data_path"]=relative
+        self.content.update(analysis_data_path=relative, anlz_exists=True)
         replace = os.replace
         calls = []
         def fail_second(source, dest):
@@ -134,7 +135,7 @@ class AnalysisTests(unittest.TestCase):
         (target / "ANLZ0000.2EX").write_bytes(b"PMAIold2EX")
         self.db.execute("UPDATE djmdContent SET AnalysisDataPath=? WHERE ID='1'", (relative,))
         self.db.commit()
-        self.content["analysis_data_path"] = relative
+        self.content.update(analysis_data_path=relative, anlz_exists=True)
         replace = os.replace
 
         def interrupt_after_ext(source, dest):
@@ -151,6 +152,35 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT BPM FROM djmdContent WHERE ID='1'").fetchone()[0], None)
         self.assertEqual(self.db.execute("SELECT int_1 FROM agentRegistry").fetchone()[0], 5)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM djmdKey").fetchone()[0], 0)
+
+    def test_interrupt_after_commit_keeps_files_and_database(self):
+        def interrupt_after_commit():
+            self.db.commit()
+            signal.raise_signal(signal.SIGINT)
+
+        with self.assertRaises(KeyboardInterrupt):
+            publish_track(self.db, self.root, self.item, interrupt_after_commit, self.db.rollback)
+
+        relative, bpm = self.db.execute("SELECT AnalysisDataPath, BPM FROM djmdContent WHERE ID='1'").fetchone()
+        self.assertEqual(bpm, 12756)
+        target = analysis_file(self.root / "share", relative).parent
+        for ext in ("DAT", "EXT", "2EX"):
+            self.assertEqual((target / f"ANLZ0000.{ext}").read_bytes(), b"PMAInew" + ext.encode())
+
+    def test_analysis_files_appearing_after_plan_require_reanalyse(self):
+        dat = analysis_file(self.root / "share", "/PIONEER/USBANLZ/abc/def-123456/ANLZ0000.DAT")
+        dat.parent.mkdir(parents=True)
+        dat.write_bytes(b"PMAIold")
+
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(ValueError, "analysis files appeared since planning; rerun, or use --reanalyse"):
+            publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback)
+        self.assertEqual(dat.read_bytes(), b"PMAIold")
+        self.assertEqual(self.db.execute("SELECT AnalysisDataPath FROM djmdContent WHERE ID='1'").fetchone()[0], "")
+
+        self.db.execute("BEGIN IMMEDIATE")
+        publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback, reanalyse=True)
+        self.assertEqual(dat.read_bytes(), b"PMAInewDAT")
 
     def test_missing_uuid_and_unsafe_paths_refused(self):
         self.content["uuid"]=""

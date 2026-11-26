@@ -97,6 +97,9 @@ func (u RekordboxSourceImportUseCase) Apply(ctx context.Context, req RekordboxSo
 			if err := req.validateAnalysisOptions(); err != nil {
 				return result, err
 			}
+			if err := checkAnalysisLibraryLinks(plan.DBDir); err != nil {
+				return result, err
+			}
 			analyser, err := resolveAnalyser(req.Analyser)
 			if err != nil {
 				return result, fmt.Errorf("resolve analyser: %w", err)
