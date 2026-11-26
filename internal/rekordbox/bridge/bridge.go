@@ -10,10 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 //go:embed playlist_sync_helper.py
 var helperScript string
+
+//go:embed analysis_helper.py
+var analysisScript string
 
 type Client struct {
 	PythonBin  string
@@ -190,7 +194,7 @@ func (c Client) SourceImportApply(ctx context.Context, req SourceImportApplyRequ
 	return resp, err
 }
 
-func (c Client) run(ctx context.Context, payload any, out any) error {
+func (c Client) run(ctx context.Context, payload map[string]any, out any) error {
 	pythonBin := strings.TrimSpace(c.PythonBin)
 	if pythonBin == "" {
 		pythonBin = "python3"
@@ -207,12 +211,21 @@ func (c Client) run(ctx context.Context, payload any, out any) error {
 		return fmt.Errorf("write helper script: %w", err)
 	}
 
+	if err := os.WriteFile(filepath.Join(dir, "analysis_helper.py"), []byte(analysisScript), 0o600); err != nil {
+		return fmt.Errorf("write analysis bridge: %w", err)
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode helper request: %w", err)
 	}
 
 	cmd := exec.CommandContext(ctx, pythonBin, helperPath)
+	if payload["op"] == "analysis_apply" {
+		// Give the helper time to restore ANLZ files and roll back before killing it.
+		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+		cmd.WaitDelay = 10 * time.Second
+	}
 	cmd.Stdin = bytes.NewReader(body)
 	cmd.Env = c.env()
 	var stdout bytes.Buffer

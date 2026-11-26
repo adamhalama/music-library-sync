@@ -59,3 +59,7 @@ legacy-uninstall:
 
 clean:
 	@rm -f "$(OUT)"
+
+.PHONY: analyser
+analyser:
+	cargo build --release --locked --manifest-path tools/rbl-analyse/Cargo.toml

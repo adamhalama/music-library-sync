@@ -15,13 +15,18 @@ import (
 )
 
 type rekordboxImportSourceFlags struct {
-	DBDir       string
-	BackupDir   string
-	PythonBin   string
-	PythonPath  string
-	Genre       string
-	StepSeconds int
-	Force       bool
+	DBDir              string
+	BackupDir          string
+	PythonBin          string
+	PythonPath         string
+	Genre              string
+	StepSeconds        int
+	Analyse            bool
+	AnalysisMode       string
+	Analyser           string
+	KeyNotation        string
+	AllowRunningOnCopy bool
+	Force              bool
 }
 
 func newRekordboxImportSourceCommand(app *AppContext) *cobra.Command {
@@ -67,7 +72,8 @@ directory first.`),
 				PythonPath:    flags.PythonPath,
 				GenreOverride: flags.Genre,
 				Step:          time.Duration(flags.StepSeconds) * time.Second,
-				DryRun:        app.Opts.DryRun,
+				Analyse:       flags.Analyse, AnalysisMode: flags.AnalysisMode, Analyser: flags.Analyser, KeyNotation: flags.KeyNotation, AllowRunningOnCopy: flags.AllowRunningOnCopy,
+				DryRun: app.Opts.DryRun,
 			}
 			useCase := workflows.RekordboxSourceImportUseCase{}
 			plan, err := useCase.Plan(ctx, req)
@@ -105,6 +111,9 @@ directory first.`),
 				return withExitCode(exitcode.RuntimeFailure, err)
 			}
 			printSourceImportResult(app, result)
+			if result.Analysis != nil {
+				return analysisOutcomeError(*result.Analysis)
+			}
 			return nil
 		},
 	}
@@ -114,6 +123,11 @@ directory first.`),
 	cmd.Flags().StringVar(&flags.PythonPath, "python-path", "", "Extra PYTHONPATH used when running the pyrekordbox helper")
 	cmd.Flags().StringVar(&flags.Genre, "genre", "", "Genre written on newly imported tracks instead of the file's genre tag")
 	cmd.Flags().IntVar(&flags.StepSeconds, "step-seconds", 1, "Seconds between consecutive tracks' Date Added")
+	cmd.Flags().BoolVar(&flags.Analyse, "analyse", false, "Analyse only newly imported rows after import commits")
+	cmd.Flags().StringVar(&flags.AnalysisMode, "analysis-mode", "rbxport", "Analysis mode: rbxport or rekordbox")
+	cmd.Flags().StringVar(&flags.Analyser, "analyser", "", "Path to udl-rbl-analyse")
+	cmd.Flags().StringVar(&flags.KeyNotation, "key-notation", "auto", "Key notation: auto, classic, or alphanumeric")
+	cmd.Flags().BoolVar(&flags.AllowRunningOnCopy, "allow-running-on-copy", false, "Ignore writer processes for an independent library copy only (sidecars still refused)")
 	cmd.Flags().BoolVar(&flags.Force, "force", false, "Write without an interactive confirmation")
 	return cmd
 }
@@ -179,12 +193,16 @@ func printSourceImportResult(app *AppContext, result workflows.RekordboxSourceIm
 			"backup_path": result.BackupPath,
 			"plan":        result.Plan,
 			"rows":        result.AppliedRows,
+			"analysis":    result.Analysis,
 		})
 		return
 	}
 	fmt.Fprintf(app.IO.Out, "Backup written: %s\n", result.BackupPath)
 	fmt.Fprintf(app.IO.Out, "Imported %d tracks and updated Date Added on %d; verified %d rows.\n",
 		result.Plan.Summary.Import, result.Plan.Summary.DateChanges, len(result.AppliedRows))
+	if result.Analysis != nil {
+		printAnalysis(app, *result.Analysis)
+	}
 }
 
 // localDateAdded renders a planned created_at in local time, the way

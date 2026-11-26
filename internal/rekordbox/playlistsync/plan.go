@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net/url"
 	"os"
@@ -908,13 +909,26 @@ func ReadPlan(path string) (Plan, error) {
 	return plan, nil
 }
 
+// CheckRekordboxClosed refuses all writes while a library writer is running.
 func CheckRekordboxClosed(ctx context.Context, dbDir string) error {
-	processes, err := rekordboxProcesses(ctx)
-	if err != nil {
-		return err
-	}
-	if len(processes) > 0 {
-		return fmt.Errorf("Rekordbox or RBxport is running; close it before writing the Rekordbox library (%s)", strings.Join(processes, ", "))
+	return CheckRekordboxClosedForCopy(ctx, dbDir, false)
+}
+
+// CheckRekordboxClosedForCopy can ignore writer processes for an explicitly
+// selected independent copy. Sidecars are refused even for copies.
+func CheckRekordboxClosedForCopy(ctx context.Context, dbDir string, allowCopy bool) error {
+	if allowCopy {
+		if err := ValidateLibraryCopy(dbDir); err != nil {
+			return err
+		}
+	} else {
+		processes, err := rekordboxProcesses(ctx)
+		if err != nil {
+			return err
+		}
+		if len(processes) > 0 {
+			return fmt.Errorf("Rekordbox or RBxport is running; close it before writing the Rekordbox library (%s)", strings.Join(processes, ", "))
+		}
 	}
 	for _, name := range []string{"master.db-wal", "master.db-shm"} {
 		path := filepath.Join(dbDir, name)
@@ -925,6 +939,142 @@ func CheckRekordboxClosed(ctx context.Context, dbDir string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateLibraryCopy rejects default and configured live libraries, their
+// symlink aliases, and shared database files or analysis directories.
+func ValidateLibraryCopy(dbDir string) error {
+	libraries, err := liveRekordboxLibraries()
+	if err != nil {
+		return err
+	}
+	target, err := filepath.EvalSymlinks(dbDir)
+	if err != nil {
+		return err
+	}
+	target, err = filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	inside := func(root, path string) bool {
+		rel, e := filepath.Rel(root, path)
+		return e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	}
+	for _, live := range libraries {
+		if inside(live.dir, target) {
+			return fmt.Errorf("--allow-running-on-copy requires a library outside the live Rekordbox library %s", live.dir)
+		}
+		for _, name := range []string{"master.db", "share"} {
+			path := filepath.Join(target, name)
+			if resolved, e := filepath.EvalSymlinks(path); e == nil && inside(live.dir, resolved) {
+				return fmt.Errorf("copied library %s points into live library", name)
+			}
+			a, e1 := os.Stat(path)
+			livePath := filepath.Join(live.dir, name)
+			if name == "master.db" {
+				livePath = live.database
+			}
+			b, e2 := os.Stat(livePath)
+			if e1 == nil && e2 == nil && os.SameFile(a, b) {
+				return fmt.Errorf("copied library %s is shared with the live library", name)
+			}
+		}
+	}
+	return nil
+}
+
+type liveRekordboxLibrary struct {
+	dir      string
+	database string
+}
+
+// liveRekordboxLibraries returns the default library and the locations recorded
+// by Rekordbox and its agent.
+func liveRekordboxLibraries() ([]liveRekordboxLibrary, error) {
+	defaultDir, err := config.ExpandPath(DefaultRekordboxDBDir)
+	if err != nil {
+		return nil, err
+	}
+	databases := []string{filepath.Join(defaultDir, "master.db")}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	settingsPath := filepath.Join(home, "Library", "Application Support", "Pioneer", "rekordbox6", "rekordbox3.settings")
+	settings, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read Rekordbox settings %s: %w", settingsPath, err)
+	}
+	if err == nil {
+		var document struct {
+			XMLName xml.Name `xml:"PROPERTIES"`
+			Values  []struct {
+				Name  string `xml:"name,attr"`
+				Value string `xml:"val,attr"`
+			} `xml:"VALUE"`
+		}
+		if err := xml.Unmarshal(settings, &document); err != nil {
+			return nil, fmt.Errorf("parse Rekordbox settings %s: %w", settingsPath, err)
+		}
+		for _, value := range document.Values {
+			if value.Name != "masterDbDirectory" {
+				continue
+			}
+			if !filepath.IsAbs(value.Value) {
+				return nil, fmt.Errorf("Rekordbox masterDbDirectory must be absolute in %s", settingsPath)
+			}
+			databases = append(databases, filepath.Join(value.Value, "master.db"))
+		}
+	}
+	optionsPath := filepath.Join(home, "Library", "Application Support", "Pioneer", "rekordboxAgent", "storage", "options.json")
+	options, err := os.ReadFile(optionsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read Rekordbox options %s: %w", optionsPath, err)
+	}
+	if err == nil {
+		var document struct {
+			Options [][]json.RawMessage `json:"options"`
+		}
+		if err := json.Unmarshal(options, &document); err != nil {
+			return nil, fmt.Errorf("parse Rekordbox options %s: %w", optionsPath, err)
+		}
+		for _, pair := range document.Options {
+			if len(pair) == 0 {
+				continue
+			}
+			var key, value string
+			if json.Unmarshal(pair[0], &key) != nil || key != "db-path" {
+				continue
+			}
+			if len(pair) != 2 || json.Unmarshal(pair[1], &value) != nil || strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("invalid Rekordbox db-path in %s", optionsPath)
+			}
+			if !filepath.IsAbs(value) {
+				return nil, fmt.Errorf("Rekordbox db-path must be absolute in %s", optionsPath)
+			}
+			databases = append(databases, value)
+		}
+	}
+	for _, database := range databases {
+		if real, err := filepath.EvalSymlinks(database); err == nil && real != database {
+			databases = append(databases, real)
+		}
+	}
+	libraries := make([]liveRekordboxLibrary, 0, len(databases))
+	seen := map[liveRekordboxLibrary]struct{}{}
+	for _, database := range databases {
+		dir := filepath.Dir(database)
+		if real, e := filepath.EvalSymlinks(dir); e == nil {
+			dir = real
+		}
+		library := liveRekordboxLibrary{dir: dir, database: filepath.Join(dir, filepath.Base(database))}
+		if _, ok := seen[library]; ok {
+			continue
+		}
+		seen[library] = struct{}{}
+		libraries = append(libraries, library)
+	}
+	return libraries, nil
 }
 
 func CreateBackup(ctx context.Context, dbDir, backupRoot string, now time.Time) (string, error) {
