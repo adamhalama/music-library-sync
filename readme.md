@@ -165,8 +165,16 @@ Global flags:
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
 - `udl rekordbox import-source <spotify-source-id> [--genre <name>] [--step-seconds N] [--backup-dir <path>] [--force]`: import the source's downloaded files into the Rekordbox collection and set Date Added so it follows the Spotify playlist order, oldest (first in the playlist) to newest, one second apart. Order comes from the playlist's embed page and files from the source's sync state. Tracks already in the collection keep their Date Added when it already sorts correctly; re-running on an ordered collection writes nothing. `--genre` replaces the file's genre tag on newly imported tracks. `--dry-run` prints the planned order. A real run needs Rekordbox and RBxport closed and writes a full backup first.
-- `udl rekordbox analyse [--content-id <id> ... | --path-prefix <dir> ... | --playlist <name-or-id> | --all]`: analyse selected rows with the separate GPL `udl-rbl-analyse` helper. Existing ANLZ files are skipped unless `--reanalyse`; `--dry-run` plans without writing. Use `--mode rekordbox` for the Rekordbox preset, `--key-notation` to override detection, and `--allow-running-on-copy` only for a verified independent copy. A real run writes a full backup before publishing the three ANLZ files and updating the database.
+- `udl rekordbox analyse`: analyse selected collection tracks; see the analysis section below.
 - Rekordbox sorts Date Added by `created_at`; RBxport sorts by the day only (`StockDate`) and breaks ties by database row order, so tracks imported on the same day in another order keep that order in RBxport.
+
+### Rekordbox analysis
+
+Build the separate `udl-rbl-analyse` helper with `make analyser`, then pass `--analyser tools/rbl-analyse/target/release/udl-rbl-analyse` (or put it on `PATH`). Select tracks with repeatable `--content-id <id>` or `--path-prefix <dir>`, `--playlist <name-or-id>`, or `--all`. The default `--mode rbxport` follows tempo changes; `--mode rekordbox` uses one constant tempo. Both use RBxport's analyser. `import-source --analyse [--analysis-mode rbxport|rekordbox]` also analyses newly imported tracks.
+
+Existing valid analysis is skipped unless `--reanalyse` is supplied. `--dry-run` plans without writing; `--force` skips interactive confirmation. Key notation is detected from `djmdKey.ScaleName`; override it with `--key-notation classic|alphanumeric`. A real run refuses active Rekordbox/RBxport processes, writes a full backup first, then publishes `ANLZ0000.DAT/.EXT/.2EX` and updates metadata. `--allow-running-on-copy` bypasses the process check only for an independent copy outside both the default and configured live libraries; shared database files, analysis folders, and WAL/SHM sidecars are refused.
+
+### Free download promotion
 
 `promote-freedl` flags:
 - `--free-dl-dir <path>` (required)
@@ -415,8 +423,4 @@ Dual-run transition is supported:
 
 ## License
 
-MIT — see `LICENCE`.
-
-`tools/rbl-analyse` is a separate GPL-2.0-or-later program; see its own LICENSE.
-
-Rekordbox analysis: use `udl rekordbox analyse --content-id <id> --force` (or `--path-prefix`, `--playlist`, or `--all`) against a copied library. Planning is read-only; writes back up the library, publish `ANLZ0000.DAT/.EXT/.2EX`, and update its metadata in one transaction. Existing valid analysis is skipped unless `--reanalyse` is supplied. Key notation defaults to the convention detected from `djmdKey.ScaleName` rows; pass `--key-notation classic|alphanumeric` to override.
+The repository is MIT (see `LICENCE`) except `tools/rbl-analyse/`, which is a separate program licensed GPL-2.0-or-later (see its own `LICENSE`). It is built from RBxport's crates, run by `udl` only as a separate process, and is not included in the `udl` release archive.

@@ -940,19 +940,12 @@ func CheckRekordboxClosedForCopy(ctx context.Context, dbDir string, allowCopy bo
 	return nil
 }
 
-// ValidateLibraryCopy rejects the default installation, its symlink aliases,
-// hard-linked database files, and share directories pointing back into it.
+// ValidateLibraryCopy rejects default and configured live libraries, their
+// symlink aliases, and shared database files or analysis directories.
 func ValidateLibraryCopy(dbDir string) error {
-	live, err := config.ExpandPath(DefaultRekordboxDBDir)
+	libraries, err := liveRekordboxLibraries()
 	if err != nil {
 		return err
-	}
-	live, err = filepath.Abs(live)
-	if err != nil {
-		return err
-	}
-	if resolved, e := filepath.EvalSymlinks(live); e == nil {
-		live = resolved
 	}
 	target, err := filepath.EvalSymlinks(dbDir)
 	if err != nil {
@@ -962,25 +955,98 @@ func ValidateLibraryCopy(dbDir string) error {
 	if err != nil {
 		return err
 	}
-	inside := func(path string) bool {
-		rel, e := filepath.Rel(live, path)
+	inside := func(root, path string) bool {
+		rel, e := filepath.Rel(root, path)
 		return e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 	}
-	if inside(target) {
-		return fmt.Errorf("--allow-running-on-copy requires a library outside the live default %s", live)
-	}
-	for _, name := range []string{"master.db", "share"} {
-		path := filepath.Join(target, name)
-		if resolved, e := filepath.EvalSymlinks(path); e == nil && inside(resolved) {
-			return fmt.Errorf("copied library %s points into live library", name)
+	for _, live := range libraries {
+		if inside(live.dir, target) {
+			return fmt.Errorf("--allow-running-on-copy requires a library outside the live Rekordbox library %s", live.dir)
 		}
-		a, e1 := os.Stat(path)
-		b, e2 := os.Stat(filepath.Join(live, name))
-		if e1 == nil && e2 == nil && os.SameFile(a, b) {
-			return fmt.Errorf("copied library %s is shared with the live library", name)
+		for _, name := range []string{"master.db", "share"} {
+			path := filepath.Join(target, name)
+			if resolved, e := filepath.EvalSymlinks(path); e == nil && inside(live.dir, resolved) {
+				return fmt.Errorf("copied library %s points into live library", name)
+			}
+			a, e1 := os.Stat(path)
+			livePath := filepath.Join(live.dir, name)
+			if name == "master.db" {
+				livePath = live.database
+			}
+			b, e2 := os.Stat(livePath)
+			if e1 == nil && e2 == nil && os.SameFile(a, b) {
+				return fmt.Errorf("copied library %s is shared with the live library", name)
+			}
 		}
 	}
 	return nil
+}
+
+type liveRekordboxLibrary struct {
+	dir      string
+	database string
+}
+
+// liveRekordboxLibraries returns both the conventional library location and the
+// database location recorded by Rekordbox's agent. The latter is authoritative
+// when a user has moved the library away from the default path.
+func liveRekordboxLibraries() ([]liveRekordboxLibrary, error) {
+	defaultDir, err := config.ExpandPath(DefaultRekordboxDBDir)
+	if err != nil {
+		return nil, err
+	}
+	databases := []string{filepath.Join(defaultDir, "master.db")}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	optionsPath := filepath.Join(home, "Library", "Application Support", "Pioneer", "rekordboxAgent", "storage", "options.json")
+	options, err := os.ReadFile(optionsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read Rekordbox options %s: %w", optionsPath, err)
+	}
+	if err == nil {
+		var document struct {
+			Options [][]json.RawMessage `json:"options"`
+		}
+		if err := json.Unmarshal(options, &document); err != nil {
+			return nil, fmt.Errorf("parse Rekordbox options %s: %w", optionsPath, err)
+		}
+		for _, pair := range document.Options {
+			if len(pair) == 0 {
+				continue
+			}
+			var key, value string
+			if json.Unmarshal(pair[0], &key) != nil || key != "db-path" {
+				continue
+			}
+			if len(pair) != 2 || json.Unmarshal(pair[1], &value) != nil || strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("invalid Rekordbox db-path in %s", optionsPath)
+			}
+			if !filepath.IsAbs(value) {
+				return nil, fmt.Errorf("Rekordbox db-path must be absolute in %s", optionsPath)
+			}
+			databases = append(databases, value)
+			if real, e := filepath.EvalSymlinks(value); e == nil {
+				databases = append(databases, real)
+			}
+		}
+	}
+	libraries := make([]liveRekordboxLibrary, 0, len(databases))
+	seen := map[liveRekordboxLibrary]struct{}{}
+	for _, database := range databases {
+		dir := filepath.Dir(database)
+		if real, e := filepath.EvalSymlinks(dir); e == nil {
+			dir = real
+		}
+		library := liveRekordboxLibrary{dir: dir, database: filepath.Join(dir, filepath.Base(database))}
+		if _, ok := seen[library]; ok {
+			continue
+		}
+		seen[library] = struct{}{}
+		libraries = append(libraries, library)
+	}
+	return libraries, nil
 }
 
 func CreateBackup(ctx context.Context, dbDir, backupRoot string, now time.Time) (string, error) {
