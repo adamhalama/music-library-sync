@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import sys
 import unicodedata
 import uuid
@@ -255,22 +256,28 @@ def nfc(value: str) -> str:
     return unicodedata.normalize("NFC", value)
 
 
+def source_path_key(path: str) -> str:
+    # Resolve aliases even when the file is gone but its parent still exists.
+    return nfc(os.path.realpath(path) if os.path.isabs(path) else path)
+
+
+def source_folder_prefix(req: Dict[str, Any]) -> str:
+    folder = str(req.get("folder_prefix") or "")
+    if not folder:
+        raise RuntimeError("folder_prefix is required")
+    return source_path_key(folder).rstrip("/") + "/"
+
+
 def source_import_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
     db_dir = Path(str(req["db_dir"])).expanduser().resolve()
-    prefix = str(req.get("folder_prefix") or "")
-    if not prefix:
-        raise RuntimeError("folder_prefix is required")
-    if not prefix.endswith("/"):
-        prefix += "/"
+    prefix = source_folder_prefix(req)
     db = Rekordbox6Database(path=db_dir / "master.db", db_dir=db_dir)
     try:
-        # Filter in Python: SQLite compares bytes, and macOS paths can be
-        # stored NFC or NFD, so a SQL prefix filter can miss existing rows.
-        prefix_key = nfc(prefix)
+        # Stored paths can use a symlink alias or a different Unicode form.
         rows = [
             row
             for row in db.get_content().order_by(tables.DjmdContent.ID).all()
-            if nfc(str(row.FolderPath or "")).startswith(prefix_key)
+            if source_path_key(str(row.FolderPath or "")).startswith(prefix)
         ]
         contents = [
             {
@@ -343,11 +350,6 @@ def create_content(db: Rekordbox6Database, path: Path, **kwargs: Any):
     writes text, so the new row does too. Otherwise this matches add_content.
     """
     path_string = str(path)
-    path_key = nfc(path_string)
-    # Compare NFC forms: the same macOS path may be stored NFC or NFD.
-    existing = db.query(tables.DjmdContent.FolderPath).all()
-    if any(nfc(str(folder or "")) == path_key for (folder,) in existing):
-        raise RuntimeError(f"{path_string} is already in the Rekordbox collection")
     file_type_name = path.suffix.lstrip(".").upper()
     file_type = getattr(tables.FileType, file_type_name, None)
     if file_type is None:
@@ -399,22 +401,34 @@ def source_import_apply(req: Dict[str, Any]) -> Dict[str, Any]:
         if req.get("append_only"):
             if any(row["action"] != "import" for row in rows):
                 raise RuntimeError("append-only source import cannot update existing rows")
-            prefix = nfc(str(req.get("folder_prefix") or "").rstrip("/")) + "/"
+            prefix = source_folder_prefix(req)
             if prefix == "/":
-                raise RuntimeError("append-only source import needs folder_prefix")
+                raise RuntimeError("append-only source import needs a folder_prefix below the filesystem root")
             existing = [
                 content for content in db.get_content().all()
-                if nfc(str(content.FolderPath or "")).startswith(prefix)
+                if source_path_key(str(content.FolderPath or "")).startswith(prefix)
             ]
             latest = max((format_utc(content.created_at) for content in existing), default="")
             previous = datetime.datetime.fromisoformat(latest.replace("Z", "+00:00")) if latest else None
             for row in rows:
-                if not nfc(str(row["path"])).startswith(prefix):
+                if not source_path_key(str(row["path"])).startswith(prefix):
                     raise RuntimeError("append-only import path is outside the source folder")
                 created = parse_utc(row["created_at"])
                 if previous is not None and created <= previous:
                     raise RuntimeError("append-only Date Added must follow every existing source row")
                 previous = created
+
+        import_rows = [row for row in rows if row["action"] == "import"]
+        if import_rows:
+            existing_paths = {
+                source_path_key(str(folder or ""))
+                for (folder,) in db.query(tables.DjmdContent.FolderPath).all()
+            }
+            for row in import_rows:
+                path_key = source_path_key(str(row["path"]))
+                if path_key in existing_paths:
+                    raise RuntimeError(f"{row['path']} is already in the Rekordbox collection")
+                existing_paths.add(path_key)
 
         # pyrekordbox gives new rows integer primary keys while loaded rows
         # carry text keys, and SQLAlchemy cannot flush a mix of both for one

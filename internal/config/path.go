@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jaa/update-downloads/internal/fileops"
 )
 
 func UserConfigPath() (string, error) {
@@ -54,6 +56,18 @@ func ExpandPath(raw string) (string, error) {
 	}
 
 	return filepath.Clean(expanded), nil
+}
+
+// ResolveTargetDir gives downloads and imports the same source folder path.
+func ResolveTargetDir(raw string) (string, error) {
+	path, err := ExpandPath(raw)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("target_dir must be set")
+	}
+	return fileops.ResolveSymlinks(path)
 }
 
 func ResolveStateFile(defaultStateDir string, stateFile string) (string, error) {

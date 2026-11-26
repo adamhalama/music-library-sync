@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,12 +19,14 @@ import (
 )
 
 type fakeSourceImportBridge struct {
-	inspect  bridge.SourceImportInspectResponse
-	applied  []bridge.SourceImportApplyRequest
-	tamperAt int
+	inspect   bridge.SourceImportInspectResponse
+	inspected []bridge.SourceImportInspectRequest
+	applied   []bridge.SourceImportApplyRequest
+	tamperAt  int
 }
 
 func (f *fakeSourceImportBridge) SourceImportInspect(_ context.Context, req bridge.SourceImportInspectRequest) (bridge.SourceImportInspectResponse, error) {
+	f.inspected = append(f.inspected, req)
 	return f.inspect, nil
 }
 
@@ -279,6 +282,82 @@ func TestSoundCloudAppendOnlyImportSendsNoExistingRowUpdates(t *testing.T) {
 	}
 	if second.HasChanges() {
 		t.Fatalf("second run planned writes: %+v", second)
+	}
+}
+
+func TestSoundCloudAppendOnlyImportWithSymlinkedTarget(t *testing.T) {
+	useCase, fake, _, req := sourceImportFixture(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "music")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"old-on-disk.mp3", "new-canonical.mp3", "new-alias.mp3", "new-relative.mp3"} {
+		if err := os.WriteFile(filepath.Join(target, name), []byte("audio fixture"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req.SourceID = "sc"
+	source := &req.Config.Sources[0]
+	source.URL = "https://soundcloud.com/example/sets/sample"
+	source.Adapter.Kind = "scdl"
+	source.TargetDir = alias
+	source.StateFile = filepath.Join(root, "state.scdl")
+	source.Sync.AppendOnly = true
+	state := fmt.Sprintf("soundcloud 1 %s\nsoundcloud 2 %s\nsoundcloud 3 %s\nsoundcloud 4 %s\nsoundcloud 5 new-relative.mp3\n",
+		filepath.Join(target, "old-missing.mp3"), filepath.Join(alias, "old-on-disk.mp3"),
+		filepath.Join(target, "new-canonical.mp3"), filepath.Join(alias, "new-alias.mp3"))
+	if err := os.WriteFile(source.StateFile, []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	useCase.FileExists = nil
+	useCase.FetchSoundCloudOrder = func(context.Context, config.Source) ([]engine.SoundCloudRemoteTrack, error) {
+		return []engine.SoundCloudRemoteTrack{{ID: "1"}, {ID: "2"}, {ID: "3"}, {ID: "4"}, {ID: "5"}}, nil
+	}
+	fake.inspect.Contents = []bridge.SourceImportContent{
+		{ID: "old-alias", FolderPath: filepath.Join(alias, "old-missing.mp3"), CreatedAt: "2027-01-01T00:00:00.500Z", StockDate: "2027-01-01"},
+		{ID: "old-canonical", FolderPath: filepath.Join(target, "old-on-disk.mp3"), CreatedAt: "2026-01-01T00:00:00.500Z", StockDate: "2026-01-01"},
+	}
+
+	plan, err := useCase.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.TargetDir != target || len(fake.inspected) != 1 || fake.inspected[0].FolderPrefix != target {
+		t.Fatalf("expected canonical folder in plan and inspection: %q %+v", plan.TargetDir, fake.inspected)
+	}
+	if plan.Summary.Existing != 2 || plan.Summary.Import != 3 || plan.Summary.DateChanges != 0 {
+		t.Fatalf("unexpected summary: %+v", plan.Summary)
+	}
+	for i, old := range fake.inspect.Contents {
+		if row := plan.Rows[i]; row.ContentID != old.ID || row.Path != old.FolderPath || row.Changes() {
+			t.Fatalf("stored row lost or changed: %+v", row)
+		}
+	}
+	if _, err := useCase.Apply(context.Background(), req, plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.applied) != 1 {
+		t.Fatalf("expected one apply request, got %d", len(fake.applied))
+	}
+	sent := fake.applied[0]
+	if !sent.AppendOnly || sent.FolderPrefix != target || len(sent.Rows) != 3 {
+		t.Fatalf("unexpected apply request: %+v", sent)
+	}
+	for i, name := range []string{"new-canonical.mp3", "new-alias.mp3", "new-relative.mp3"} {
+		if row := sent.Rows[i]; row.Action != bridge.SourceImportActionImport || row.Path != filepath.Join(target, name) {
+			t.Fatalf("expected canonical import path for %s, got %+v", name, row)
+		}
+	}
+	if got, err := os.ReadFile(source.StateFile); err != nil || string(got) != state {
+		t.Fatalf("state changed: %q, %v", got, err)
 	}
 }
 

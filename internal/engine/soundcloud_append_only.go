@@ -46,12 +46,7 @@ func (s *Syncer) runSoundCloudAppendOnly(
 		_ = s.Emitter.Emit(output.Event{Timestamp: s.Now(), Level: output.LevelInfo, Event: output.EventSourceFinished, SourceID: source.ID, Message: fmt.Sprintf("[%s] append-only: %d new track(s) planned (download_order=%s)", source.ID, len(tracks), order)})
 		return sourceRunOutcome{Attempted: 1, Succeeded: 1}
 	}
-	target, err := config.ExpandPath(source.TargetDir)
-	if err != nil {
-		return fail(err)
-	}
-	// Resolve symlinks once: scdl writes absolute paths, including /private/tmp on macOS.
-	target, err = filepath.EvalSymlinks(target)
+	target, err := config.ResolveTargetDir(source.TargetDir)
 	if err != nil {
 		return fail(err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/fileops"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 	"github.com/jaa/update-downloads/internal/rekordbox/pyruntime"
@@ -138,7 +139,7 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 	if err != nil {
 		return sourceimport.Plan{}, nil, err
 	}
-	targetDir, err := config.ExpandPath(source.TargetDir)
+	targetDir, err := config.ResolveTargetDir(source.TargetDir)
 	if err != nil {
 		return sourceimport.Plan{}, nil, fmt.Errorf("resolve target_dir for %s: %w", source.ID, err)
 	}
@@ -273,7 +274,10 @@ func (u RekordboxSourceImportUseCase) sourceTracks(ctx context.Context, source c
 			return ""
 		}
 		if !filepath.IsAbs(path) {
-			return filepath.Join(targetDir, path)
+			path = filepath.Join(targetDir, path)
+		}
+		if resolved, err := fileops.ResolveSymlinks(path); err == nil {
+			return resolved
 		}
 		return path
 	}
