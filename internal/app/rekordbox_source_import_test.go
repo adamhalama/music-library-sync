@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -191,6 +192,11 @@ func TestSourceImportAnalysesOnlyNewRowsWithExistingBackup(t *testing.T) {
 	use, fake, _, req := sourceImportFixture(t)
 	req.Analyse = true
 	req.AnalysisMode = "rekordbox"
+	var err error
+	req.Analyser, err = os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	called := false
 	use.Analyse = func(_ context.Context, r RekordboxAnalysisRequest) (RekordboxAnalysisResult, error) {
 		called = true
@@ -215,5 +221,33 @@ func TestSourceImportAnalysesOnlyNewRowsWithExistingBackup(t *testing.T) {
 	}
 	if !called || result.Analysis == nil {
 		t.Fatal("new rows were not analysed")
+	}
+}
+
+func TestSourceImportRejectsInvalidAnalysisBeforeWriting(t *testing.T) {
+	use, fake, events, req := sourceImportFixture(t)
+	plan, err := use.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Analyse = true
+	req.Analyser = filepath.Join(t.TempDir(), "missing-analyser")
+	for _, tc := range []struct {
+		mode, notation, wantError string
+	}{
+		{wantError: "resolve analyser"},
+		{mode: "invalid", wantError: "--analysis-mode"},
+		{notation: "invalid", wantError: "invalid key notation"},
+	} {
+		t.Run(tc.wantError, func(t *testing.T) {
+			req.AnalysisMode, req.KeyNotation = tc.mode, tc.notation
+			result, err := use.Apply(context.Background(), req, plan)
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("expected %q, got %v", tc.wantError, err)
+			}
+			if result.Applied || result.BackupPath != "" || len(fake.applied) != 0 || strings.Contains(strings.Join(*events, ","), "backup") {
+				t.Fatalf("preflight failure wrote a backup or applied rows: events %v, writes %v", *events, fake.applied)
+			}
+		})
 	}
 }

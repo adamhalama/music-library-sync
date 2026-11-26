@@ -1,5 +1,6 @@
 """Standard-library sqlite fixtures for analysis planning and publication."""
 import copy
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -110,7 +111,6 @@ class AnalysisTests(unittest.TestCase):
         self.db.execute("UPDATE djmdContent SET AnalysisDataPath=? WHERE ID='1'",(relative,))
         self.db.commit()
         self.content["analysis_data_path"]=relative
-        import os
         replace = os.replace
         calls = []
         def fail_second(source, dest):
@@ -125,6 +125,32 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual((target / f"ANLZ0000.{ext}").read_bytes(),b"PMAIold")
         self.assertEqual(self.db.execute("SELECT int_1 FROM agentRegistry").fetchone()[0],5)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM djmdKey").fetchone()[0],0)
+
+    def test_interrupt_after_replace_restores_files_and_database(self):
+        relative = "/PIONEER/USBANLZ/abc/def/ANLZ0000.DAT"
+        target = analysis_file(self.root / "share", relative).parent
+        target.mkdir(parents=True)
+        (target / "ANLZ0000.DAT").write_bytes(b"PMAIoldDAT")
+        (target / "ANLZ0000.2EX").write_bytes(b"PMAIold2EX")
+        self.db.execute("UPDATE djmdContent SET AnalysisDataPath=? WHERE ID='1'", (relative,))
+        self.db.commit()
+        self.content["analysis_data_path"] = relative
+        replace = os.replace
+
+        def interrupt_after_ext(source, dest):
+            replace(source, dest)
+            if source.name == "ANLZ0000.EXT":
+                raise KeyboardInterrupt
+
+        with patch("analysis_helper.os.replace", side_effect=interrupt_after_ext):
+            with self.assertRaises(KeyboardInterrupt):
+                publish_track(self.db, self.root, self.item, self.db.commit, self.db.rollback)
+        self.assertEqual((target / "ANLZ0000.DAT").read_bytes(), b"PMAIoldDAT")
+        self.assertFalse((target / "ANLZ0000.EXT").exists())
+        self.assertEqual((target / "ANLZ0000.2EX").read_bytes(), b"PMAIold2EX")
+        self.assertEqual(self.db.execute("SELECT BPM FROM djmdContent WHERE ID='1'").fetchone()[0], None)
+        self.assertEqual(self.db.execute("SELECT int_1 FROM agentRegistry").fetchone()[0], 5)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM djmdKey").fetchone()[0], 0)
 
     def test_missing_uuid_and_unsafe_paths_refused(self):
         self.content["uuid"]=""

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net/url"
 	"os"
@@ -987,9 +988,8 @@ type liveRekordboxLibrary struct {
 	database string
 }
 
-// liveRekordboxLibraries returns both the conventional library location and the
-// database location recorded by Rekordbox's agent. The latter is authoritative
-// when a user has moved the library away from the default path.
+// liveRekordboxLibraries returns the default library and the locations recorded
+// by Rekordbox and its agent.
 func liveRekordboxLibraries() ([]liveRekordboxLibrary, error) {
 	defaultDir, err := config.ExpandPath(DefaultRekordboxDBDir)
 	if err != nil {
@@ -999,6 +999,32 @@ func liveRekordboxLibraries() ([]liveRekordboxLibrary, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	settingsPath := filepath.Join(home, "Library", "Application Support", "Pioneer", "rekordbox6", "rekordbox3.settings")
+	settings, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read Rekordbox settings %s: %w", settingsPath, err)
+	}
+	if err == nil {
+		var document struct {
+			XMLName xml.Name `xml:"PROPERTIES"`
+			Values  []struct {
+				Name  string `xml:"name,attr"`
+				Value string `xml:"val,attr"`
+			} `xml:"VALUE"`
+		}
+		if err := xml.Unmarshal(settings, &document); err != nil {
+			return nil, fmt.Errorf("parse Rekordbox settings %s: %w", settingsPath, err)
+		}
+		for _, value := range document.Values {
+			if value.Name != "masterDbDirectory" {
+				continue
+			}
+			if !filepath.IsAbs(value.Value) {
+				return nil, fmt.Errorf("Rekordbox masterDbDirectory must be absolute in %s", settingsPath)
+			}
+			databases = append(databases, filepath.Join(value.Value, "master.db"))
+		}
 	}
 	optionsPath := filepath.Join(home, "Library", "Application Support", "Pioneer", "rekordboxAgent", "storage", "options.json")
 	options, err := os.ReadFile(optionsPath)
@@ -1027,9 +1053,11 @@ func liveRekordboxLibraries() ([]liveRekordboxLibrary, error) {
 				return nil, fmt.Errorf("Rekordbox db-path must be absolute in %s", optionsPath)
 			}
 			databases = append(databases, value)
-			if real, e := filepath.EvalSymlinks(value); e == nil {
-				databases = append(databases, real)
-			}
+		}
+	}
+	for _, database := range databases {
+		if real, err := filepath.EvalSymlinks(database); err == nil && real != database {
+			databases = append(databases, real)
 		}
 	}
 	libraries := make([]liveRekordboxLibrary, 0, len(databases))

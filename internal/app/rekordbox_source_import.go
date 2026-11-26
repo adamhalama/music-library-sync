@@ -88,11 +88,27 @@ func (u RekordboxSourceImportUseCase) Apply(ctx context.Context, req RekordboxSo
 	if err := u.checkImportClosed(ctx, plan.DBDir, req.AllowRunningOnCopy); err != nil {
 		return result, err
 	}
+	applyReq := sourceImportApplyRequest(plan)
+	if req.Analyse {
+		for _, row := range applyReq.Rows {
+			if row.Action != bridge.SourceImportActionImport {
+				continue
+			}
+			if err := req.validateAnalysisOptions(); err != nil {
+				return result, err
+			}
+			analyser, err := resolveAnalyser(req.Analyser)
+			if err != nil {
+				return result, fmt.Errorf("resolve analyser: %w", err)
+			}
+			req.Analyser = analyser
+			break
+		}
+	}
 	client, err := u.bridge(ctx, req.Config, req)
 	if err != nil {
 		return result, err
 	}
-	applyReq := sourceImportApplyRequest(plan)
 	backupPath, err := u.createBackup(ctx, plan.DBDir, plan.BackupDir, u.now())
 	if err != nil {
 		return result, err
@@ -166,11 +182,8 @@ func sourceImportApplyRequest(plan sourceimport.Plan) bridge.SourceImportApplyRe
 
 func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSourceImportRequest) (sourceimport.Plan, RekordboxSourceImportBridge, error) {
 	if req.Analyse {
-		if req.AnalysisMode != "" && req.AnalysisMode != "rbxport" && req.AnalysisMode != "rekordbox" {
-			return sourceimport.Plan{}, nil, fmt.Errorf("--analysis-mode must be rbxport or rekordbox")
-		}
-		if req.KeyNotation != "" && req.KeyNotation != "auto" && req.KeyNotation != "classic" && req.KeyNotation != "alphanumeric" {
-			return sourceimport.Plan{}, nil, fmt.Errorf("invalid key notation")
+		if err := req.validateAnalysisOptions(); err != nil {
+			return sourceimport.Plan{}, nil, err
 		}
 	}
 	cfg := req.Config
@@ -399,11 +412,14 @@ func (u RekordboxSourceImportUseCase) now() time.Time {
 	return time.Now()
 }
 
-func (u RekordboxSourceImportUseCase) checkClosed(ctx context.Context, dbDir string) error {
-	if u.CheckClosed != nil {
-		return u.CheckClosed(ctx, dbDir)
+func (req RekordboxSourceImportRequest) validateAnalysisOptions() error {
+	if req.AnalysisMode != "" && req.AnalysisMode != "rbxport" && req.AnalysisMode != "rekordbox" {
+		return fmt.Errorf("--analysis-mode must be rbxport or rekordbox")
 	}
-	return playlistsync.CheckRekordboxClosed(ctx, dbDir)
+	if req.KeyNotation != "" && req.KeyNotation != "auto" && req.KeyNotation != "classic" && req.KeyNotation != "alphanumeric" {
+		return fmt.Errorf("invalid key notation")
+	}
+	return nil
 }
 
 func (u RekordboxSourceImportUseCase) createBackup(ctx context.Context, dbDir, backupRoot string, now time.Time) (string, error) {

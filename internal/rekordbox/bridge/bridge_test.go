@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stubPython writes an executable stand-in for the python interpreter. It records
@@ -205,5 +206,48 @@ func TestAnalysisSqliteFixtures(t *testing.T) {
 	cmd := exec.Command(python, "-m", "unittest", "discover", "-s", ".", "-p", "analysis_helper_test.py", "-v")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("sqlite fixtures: %v\n%s", err, out)
+	}
+}
+
+func TestAnalysisApplyInterruptsHelperOnCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("interrupt test requires POSIX signals")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-python")
+	ready := filepath.Join(dir, "ready")
+	script := "#!/bin/sh\n" +
+		"trap 'echo interrupted >&2; exit 1' INT\n" +
+		"cat >/dev/null\n" +
+		"touch " + shellQuote(ready) + "\n" +
+		"while :; do sleep 0.05; done\n"
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (Client{PythonBin: bin}).AnalysisApply(ctx, AnalysisApplyRequest{DBDir: dir})
+		done <- err
+	}()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("helper exited before it was ready: %v", err)
+		case <-ctx.Done():
+			t.Fatal("helper did not signal readiness")
+		case <-ticker.C:
+		}
+	}
+	cancel()
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("helper did not handle the interrupt: %v", err)
 	}
 }

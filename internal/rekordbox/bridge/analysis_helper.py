@@ -193,7 +193,7 @@ def publish_track(conn, db_dir, item, commit, rollback):
                 raise ValueError(f"invalid or missing ANLZ0000.{ext}")
     target.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=".udl-analysis-", dir=target.parent))
-    published = []
+    attempted = []
     keep_staged = False
     try:
         for ext in EXTENSIONS:
@@ -204,18 +204,21 @@ def publish_track(conn, db_dir, item, commit, rollback):
         write_metadata(conn, planned, item["result"], relative)
         for ext in EXTENSIONS:
             name = f"ANLZ0000.{ext}"
+            attempted.append(name)
             os.replace(staged / name, target / name)
-            published.append(name)
         commit()
-        return dict(id=planned["id"], analysis_data_path=relative)
-    except Exception as cause:
+    except BaseException as cause:
         recovery_errors = []
         try:
             rollback()
         except Exception as exc:
             recovery_errors.append(f"database rollback: {exc}")
-        for name in reversed(published):
+        for name in reversed(attempted):
             try:
+                # A successful replace consumes its source, even if interrupted
+                # before control returns to Python.
+                if (staged / name).exists():
+                    continue
                 previous = staged / (name + ".previous")
                 if previous.exists():
                     os.replace(previous, target / name)
@@ -230,6 +233,7 @@ def publish_track(conn, db_dir, item, commit, rollback):
     finally:
         if not keep_staged:
             shutil.rmtree(staged)
+    return dict(id=planned["id"], analysis_data_path=relative)
 
 
 def analysis_apply(req):

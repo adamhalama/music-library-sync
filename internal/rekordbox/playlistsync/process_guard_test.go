@@ -3,6 +3,7 @@ package playlistsync
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -129,7 +130,36 @@ func TestCopyOverrideRejectsInvalidRekordboxOptions(t *testing.T) {
 	}
 }
 
+func TestCopyOverrideChecksRekordboxSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configured := t.TempDir()
+	settings := filepath.Join(home, "Library", "Application Support", "Pioneer", "rekordbox6", "rekordbox3.settings")
+	if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload := `<?xml version="1.0" encoding="UTF-8"?><PROPERTIES><VALUE name="masterDbDirectory" val="` +
+		html.EscapeString(configured) + `"/></PROPERTIES>`
+	if err := os.WriteFile(settings, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateLibraryCopy(configured); err == nil || !strings.Contains(err.Error(), "outside the live Rekordbox library") {
+		t.Fatalf("configured library: got %v", err)
+	}
+	copyDir := t.TempDir()
+	if err := ValidateLibraryCopy(copyDir); err != nil {
+		t.Fatalf("rejected independent library: %v", err)
+	}
+	if err := os.WriteFile(settings, []byte("<PROPERTIES>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateLibraryCopy(copyDir); err == nil || !strings.Contains(err.Error(), "parse Rekordbox settings") {
+		t.Fatalf("malformed settings: got %v", err)
+	}
+}
+
 func TestCopyOverrideStillRejectsSidecars(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "master.db-wal"), nil, 0600); err != nil {
 		t.Fatal(err)
