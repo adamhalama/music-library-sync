@@ -21,8 +21,8 @@ type SpotifyStateEntry struct {
 }
 
 // FetchSpotifyPlaylistOrder returns every track of a public Spotify playlist in
-// the playlist's own order, read from the embed page (the Web API refuses
-// client-credentials tokens for playlist items).
+// the playlist's own order, read through the embed page and its anonymous
+// token (the Web API refuses client-credentials tokens for playlist items).
 func FetchSpotifyPlaylistOrder(ctx context.Context, playlistURL string) ([]SpotifyPlaylistTrack, error) {
 	playlistID, err := resolveSpotifyPlaylistID(playlistURL)
 	if err != nil {

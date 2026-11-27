@@ -266,14 +266,22 @@ func (s *Syncer) runSpotifyDeemix(
 					SourceID:  source.ID,
 					Message:   fmt.Sprintf("[%s] spotify metadata lookup failed for %s: %v", source.ID, trackID, metadataErr),
 				})
-			} else if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
-				_ = s.Emitter.Emit(output.Event{
-					Timestamp: s.Now(),
-					Level:     output.LevelWarn,
-					Event:     output.EventSourcePreflight,
-					SourceID:  source.ID,
-					Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
-				})
+			} else {
+				if trackLabel == "" {
+					// Tracks the embed page does not name (past its first 100)
+					// get their label from the per-track lookup, so status lines
+					// and the state file keep "Artist - Title".
+					trackLabel = spotifyTrackDisplayName(trackID, map[string]spotifyTrackMetadata{extractSpotifyTrackID(trackID): metadata})
+				}
+				if cacheErr := writeSpotifyTrackMetadataCache(runtimeDir, trackID, metadata); cacheErr != nil {
+					_ = s.Emitter.Emit(output.Event{
+						Timestamp: s.Now(),
+						Level:     output.LevelWarn,
+						Event:     output.EventSourcePreflight,
+						SourceID:  source.ID,
+						Message:   fmt.Sprintf("[%s] unable to prime deemix spotify cache for %s: %v", source.ID, trackID, cacheErr),
+					})
+				}
 			}
 		}
 
@@ -549,12 +557,13 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 			return plan, err
 		}
 	}
-	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
 	state, stateStore, err := loadSpotifySyncState(stateFilePath)
 	if err != nil {
 		return plan, fmt.Errorf("parse spotify sync state file: %w", err)
 	}
+	tracks = enrichUnnamedSpotifyTracks(ctx, tracks, state)
+	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 	plan.State = state
 	plan.Source.StateFile = stateStore.WritePath
 	plan.StateWritePath = stateStore.WritePath

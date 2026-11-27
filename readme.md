@@ -297,7 +297,9 @@ Notes:
 - Recommended Spotify path is `adapter.kind: deemix`; `spotdl` remains available as fallback/legacy.
 - Spotify+`deemix` supports the same preflight planning controls as SoundCloud (`break_on_existing`, `ask_on_existing`, `--scan-gaps`, `--no-preflight`) and tracks known Spotify IDs in the source state file.
 - Interactive `--plan` supports SoundCloud+`scdl` and Spotify+`deemix`. Spotify plans default to the latest remote window; use `--plan-window first` to inspect playlist order from the beginning.
-- Spotify's `latest` plan window sorts by Spotify `added_at` before applying `--plan-limit`. When the Web API is unavailable and public-page enumeration has no timestamps, it uses the playlist tail in reverse order as the deterministic fallback.
+- Spotify's `latest` plan window sorts by Spotify `added_at` before applying `--plan-limit`. When no added times are available, it uses the playlist tail in reverse order as the deterministic fallback.
+- Spotify `break_on_existing` walks the playlist from the newest track (latest `added_at`, else the playlist tail, since Spotify appends new tracks) back to the first track already on disk, so newly added tracks are found without `--scan-gaps`.
+- Without Web API access, Spotify playlists are read through the public embed page, which names the first 100 tracks; its anonymous session reads the full track list and added times. If the full list cannot be read and the embed page shows 100 tracks, the source fails instead of syncing a cut-off list.
 - Spotify+`deemix` preflight now treats known tracks missing from `target_dir` as `known_gaps` (SCDL-style), so deleted local files are re-planned automatically.
 - In default compact mode, Spotify+`deemix` progress is rendered as live per-track/global bars with persistent `[done]/[skip]/[fail]` lines. Raw deemix stack/progress chatter is suppressed; use `--verbose` for raw subprocess output.
 - Compact mode now preserves source preflight summary lines by default. Use `--preflight-summary never` to hide them.
