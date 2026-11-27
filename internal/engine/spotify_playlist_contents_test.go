@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -178,5 +181,44 @@ func TestMergeSpotifyPlaylistContentsSkipsNonTracksAndDuplicates(t *testing.T) {
 	}
 	if tracks[1].ID != testSpotifyTrackID(2) || tracks[1].Position != 4 {
 		t.Fatalf("expected second track at playlist position 4, got %+v", tracks[1])
+	}
+}
+
+func TestEnrichUnnamedSpotifyTracksLetsPreflightFindExistingFiles(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "Artist 101 - Title 101.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+	unnamed := testSpotifyTrackID(101)
+	withPath := testSpotifyTrackID(102)
+	tracks := []spotifyRemoteTrack{
+		{ID: testSpotifyTrackID(100), Title: "Title 100", Artist: "Artist 100", Position: 100},
+		{ID: unnamed, Title: unnamed, Position: 101},
+		{ID: withPath, Title: withPath, Position: 102},
+	}
+	// A v1 ID-only entry for the unnamed track; the newest track already has a path.
+	state := spotifySyncState{
+		KnownIDs: map[string]struct{}{unnamed: {}, withPath: {}},
+		Entries:  map[string]spotifyStateEntry{withPath: {LocalPath: "Artist 102 - Title 102.mp3"}},
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "Artist 102 - Title 102.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+
+	orig := fetchSpotifyTrackMetadataFn
+	t.Cleanup(func() { fetchSpotifyTrackMetadataFn = orig })
+	lookups := []string{}
+	fetchSpotifyTrackMetadataFn = func(ctx context.Context, id string) (spotifyTrackMetadata, error) {
+		lookups = append(lookups, id)
+		return spotifyTrackMetadata{Title: "Title 101", Artist: "Artist 101"}, nil
+	}
+
+	enriched := enrichUnnamedSpotifyTracks(context.Background(), tracks, state)
+	if !reflect.DeepEqual(lookups, []string{unnamed}) {
+		t.Fatalf("expected one lookup for the unnamed track without a path, got %v", lookups)
+	}
+	preflight, _, knownGaps, planned, _, _ := buildSpotifyPreflight(enriched, state, tmp, SoundCloudModeScanGaps)
+	if len(knownGaps) != 0 || len(planned) != 1 || planned[0] != testSpotifyTrackID(100) {
+		t.Fatalf("expected only the missing named track planned, got planned=%v knownGaps=%v preflight=%+v", planned, knownGaps, preflight)
 	}
 }

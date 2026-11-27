@@ -557,12 +557,13 @@ func (s *Syncer) prepareSpotifyDeemixExecutionPlan(
 			return plan, err
 		}
 	}
-	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 
 	state, stateStore, err := loadSpotifySyncState(stateFilePath)
 	if err != nil {
 		return plan, fmt.Errorf("parse spotify sync state file: %w", err)
 	}
+	tracks = enrichUnnamedSpotifyTracks(ctx, tracks, state)
+	plan.TrackMetadata = buildSpotifyTrackMetadataIndex(tracks)
 	plan.State = state
 	plan.Source.StateFile = stateStore.WritePath
 	plan.StateWritePath = stateStore.WritePath

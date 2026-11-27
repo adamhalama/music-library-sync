@@ -78,6 +78,36 @@ func enrichSpotifyRemoteTrackMetadata(ctx context.Context, tracks []spotifyRemot
 	return out
 }
 
+// enrichUnnamedSpotifyTracks looks up names only for tracks enumerated without
+// one (the title is the track ID, as past the embed page's first 100) whose
+// state entry has no local path, so preflight can still match their existing
+// "Artist - Title" files.
+func enrichUnnamedSpotifyTracks(ctx context.Context, tracks []spotifyRemoteTrack, state spotifySyncState) []spotifyRemoteTrack {
+	need := []int{}
+	for i, track := range tracks {
+		if strings.TrimSpace(track.Title) != track.ID {
+			continue
+		}
+		if strings.TrimSpace(state.Entries[track.ID].LocalPath) != "" {
+			continue
+		}
+		need = append(need, i)
+	}
+	if len(need) == 0 {
+		return tracks
+	}
+	subset := make([]spotifyRemoteTrack, 0, len(need))
+	for _, i := range need {
+		subset = append(subset, tracks[i])
+	}
+	enriched := enrichSpotifyRemoteTrackMetadata(ctx, subset)
+	out := append([]spotifyRemoteTrack(nil), tracks...)
+	for k, i := range need {
+		out[i] = enriched[k]
+	}
+	return out
+}
+
 func resolveSpotifyTrackMetadataForExecution(
 	ctx context.Context,
 	trackID string,
