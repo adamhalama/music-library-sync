@@ -1527,6 +1527,9 @@ func TestSyncerSpotifyDeemixTrackURLNoPreflightPrimesCacheAndAppendsState(t *tes
 	if _, ok := state.KnownIDs[trackID]; !ok {
 		t.Fatalf("expected track id to be appended to state, got %+v", state.KnownIDs)
 	}
+	if got := state.Entries[trackID].DisplayName; got != "The Killers - Mr. Brightside" {
+		t.Fatalf("expected state title from the per-track lookup, got %q", got)
+	}
 }
 
 func TestSyncerSpotifyDeemixNoPreflightPlaylistUsesPageEnumeration(t *testing.T) {
