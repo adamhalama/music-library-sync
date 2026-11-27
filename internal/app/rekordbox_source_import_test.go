@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,12 +19,14 @@ import (
 )
 
 type fakeSourceImportBridge struct {
-	inspect  bridge.SourceImportInspectResponse
-	applied  []bridge.SourceImportApplyRequest
-	tamperAt int
+	inspect   bridge.SourceImportInspectResponse
+	inspected []bridge.SourceImportInspectRequest
+	applied   []bridge.SourceImportApplyRequest
+	tamperAt  int
 }
 
 func (f *fakeSourceImportBridge) SourceImportInspect(_ context.Context, req bridge.SourceImportInspectRequest) (bridge.SourceImportInspectResponse, error) {
+	f.inspected = append(f.inspected, req)
 	return f.inspect, nil
 }
 
@@ -110,11 +113,13 @@ func sourceImportFixture(t *testing.T) (RekordboxSourceImportUseCase, *fakeSourc
 
 func TestRekordboxSourceImportPlanAndApplyWritesOrderedRows(t *testing.T) {
 	useCase, fake, events, req := sourceImportFixture(t)
+	fullReorder := false
+	req.Config.Sources[1].RekordboxImport.NewOnly = &fullReorder
 	plan, err := useCase.Plan(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Summary.Existing != 2 || plan.Summary.Import != 1 || plan.Summary.DateChanges != 1 || plan.Summary.NotDownloaded != 1 {
+	if plan.AppendOnly || plan.ModeReason != "rekordbox_import.new_only=false" || plan.Summary.Existing != 2 || plan.Summary.Import != 1 || plan.Summary.DateChanges != 1 || plan.Summary.NotDownloaded != 1 {
 		t.Fatalf("unexpected summary %+v", plan.Summary)
 	}
 	result, err := useCase.Apply(context.Background(), req, plan)
@@ -172,7 +177,7 @@ func TestRekordboxSourceImportRefusesWhileLibraryAppIsOpen(t *testing.T) {
 
 func TestRekordboxSourceImportDetectsReadBackMismatch(t *testing.T) {
 	useCase, fake, _, req := sourceImportFixture(t)
-	fake.tamperAt = 2
+	fake.tamperAt = 1
 	plan, err := useCase.Plan(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +287,82 @@ func TestSoundCloudAppendOnlyImportSendsNoExistingRowUpdates(t *testing.T) {
 	}
 }
 
+func TestSoundCloudAppendOnlyImportWithSymlinkedTarget(t *testing.T) {
+	useCase, fake, _, req := sourceImportFixture(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "music")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"old-on-disk.mp3", "new-canonical.mp3", "new-alias.mp3", "new-relative.mp3"} {
+		if err := os.WriteFile(filepath.Join(target, name), []byte("audio fixture"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req.SourceID = "sc"
+	source := &req.Config.Sources[0]
+	source.URL = "https://soundcloud.com/example/sets/sample"
+	source.Adapter.Kind = "scdl"
+	source.TargetDir = alias
+	source.StateFile = filepath.Join(root, "state.scdl")
+	source.Sync.AppendOnly = true
+	state := fmt.Sprintf("soundcloud 1 %s\nsoundcloud 2 %s\nsoundcloud 3 %s\nsoundcloud 4 %s\nsoundcloud 5 new-relative.mp3\n",
+		filepath.Join(target, "old-missing.mp3"), filepath.Join(alias, "old-on-disk.mp3"),
+		filepath.Join(target, "new-canonical.mp3"), filepath.Join(alias, "new-alias.mp3"))
+	if err := os.WriteFile(source.StateFile, []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	useCase.FileExists = nil
+	useCase.FetchSoundCloudOrder = func(context.Context, config.Source) ([]engine.SoundCloudRemoteTrack, error) {
+		return []engine.SoundCloudRemoteTrack{{ID: "1"}, {ID: "2"}, {ID: "3"}, {ID: "4"}, {ID: "5"}}, nil
+	}
+	fake.inspect.Contents = []bridge.SourceImportContent{
+		{ID: "old-alias", FolderPath: filepath.Join(alias, "old-missing.mp3"), CreatedAt: "2027-01-01T00:00:00.500Z", StockDate: "2027-01-01"},
+		{ID: "old-canonical", FolderPath: filepath.Join(target, "old-on-disk.mp3"), CreatedAt: "2026-01-01T00:00:00.500Z", StockDate: "2026-01-01"},
+	}
+
+	plan, err := useCase.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.TargetDir != target || len(fake.inspected) != 1 || fake.inspected[0].FolderPrefix != target {
+		t.Fatalf("expected canonical folder in plan and inspection: %q %+v", plan.TargetDir, fake.inspected)
+	}
+	if plan.Summary.Existing != 2 || plan.Summary.Import != 3 || plan.Summary.DateChanges != 0 {
+		t.Fatalf("unexpected summary: %+v", plan.Summary)
+	}
+	for i, old := range fake.inspect.Contents {
+		if row := plan.Rows[i]; row.ContentID != old.ID || row.Path != old.FolderPath || row.Changes() {
+			t.Fatalf("stored row lost or changed: %+v", row)
+		}
+	}
+	if _, err := useCase.Apply(context.Background(), req, plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.applied) != 1 {
+		t.Fatalf("expected one apply request, got %d", len(fake.applied))
+	}
+	sent := fake.applied[0]
+	if !sent.AppendOnly || sent.FolderPrefix != target || len(sent.Rows) != 3 {
+		t.Fatalf("unexpected apply request: %+v", sent)
+	}
+	for i, name := range []string{"new-canonical.mp3", "new-alias.mp3", "new-relative.mp3"} {
+		if row := sent.Rows[i]; row.Action != bridge.SourceImportActionImport || row.Path != filepath.Join(target, name) {
+			t.Fatalf("expected canonical import path for %s, got %+v", name, row)
+		}
+	}
+	if got, err := os.ReadFile(source.StateFile); err != nil || string(got) != state {
+		t.Fatalf("state changed: %q, %v", got, err)
+	}
+}
+
 func TestRekordboxSourceImportNewOnlyAppendsAfterExistingRowsAndNow(t *testing.T) {
 	configure := func(t *testing.T) (RekordboxSourceImportUseCase, *fakeSourceImportBridge, RekordboxSourceImportRequest) {
 		t.Helper()
@@ -310,32 +391,22 @@ func TestRekordboxSourceImportNewOnlyAppendsAfterExistingRowsAndNow(t *testing.T
 		return useCase, fake, req
 	}
 
-	useCase, _, req := configure(t)
-	plan, err := useCase.Plan(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.AppendOnly || plan.Summary.DateChanges != 1 || !plan.Rows[3].Changes() || plan.Rows[3].ContentID != "12" {
-		t.Fatalf("without new-only expected the out-of-order existing row to be redated: %+v", plan)
-	}
-
 	for _, tc := range []struct {
 		name string
 		now  time.Time
 		want [2]string
 	}{
-		{"after_latest_existing_row", useCase.Now(), [2]string{"2027-01-01T00:00:01.500Z", "2027-01-01T00:00:02.500Z"}},
+		{"after_latest_existing_row", time.Date(2026, 11, 21, 0, 30, 0, 0, time.UTC), [2]string{"2027-01-01T00:00:01.500Z", "2027-01-01T00:00:02.500Z"}},
 		{"after_run_time", time.Date(2028, 1, 1, 0, 0, 0, 500_000_000, time.UTC), [2]string{"2028-01-01T00:00:01.500Z", "2028-01-01T00:00:02.500Z"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useCase, fake, req := configure(t)
-			req.NewOnly = true
 			useCase.Now = func() time.Time { return tc.now }
 			plan, err := useCase.Plan(context.Background(), req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.Summary.DateChanges != 0 || plan.Rows[1].Changes() || plan.Rows[3].Changes() {
+			if !plan.AppendOnly || plan.ModeReason != "default" || plan.Summary.DateChanges != 0 || plan.Rows[1].Changes() || plan.Rows[3].Changes() {
 				t.Fatalf("new-only must preserve existing rows: %+v", plan)
 			}
 			if _, err := useCase.Apply(context.Background(), req, plan); err != nil {

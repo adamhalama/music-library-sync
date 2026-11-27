@@ -1,6 +1,6 @@
 // Package sourceimport plans importing a udl source's local files into the
 // Rekordbox collection so that Date Added follows the source's own order
-// (oldest first). Planning is pure; the app layer feeds it the remote order,
+// (oldest first). The app layer feeds it the remote order,
 // the sync state, the collection rows and file tags, and hands the plan to the
 // pyrekordbox bridge.
 package sourceimport
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jaa/update-downloads/internal/fileops"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -56,8 +57,7 @@ type Content struct {
 	StockDate  string
 }
 
-// Input is everything BuildPlan needs; it does no I/O beyond FileExists and
-// ReadTags.
+// Input is everything BuildPlan needs besides filesystem path resolution.
 type Input struct {
 	SourceID       string
 	SourceType     string
@@ -126,6 +126,7 @@ type Plan struct {
 	Version       string   `json:"version"`
 	SourceType    string   `json:"source_type,omitempty"`
 	AppendOnly    bool     `json:"append_only,omitempty"`
+	ModeReason    string   `json:"mode_reason,omitempty"`
 	GeneratedAt   string   `json:"generated_at"`
 	SourceID      string   `json:"source_id"`
 	PlaylistURL   string   `json:"playlist_url"`
@@ -202,6 +203,7 @@ func BuildPlan(ctx context.Context, in Input) (Plan, error) {
 
 	usedPaths := map[string]int{}
 	for _, track := range tracks {
+		key := pathKey(track.Path)
 		row := Row{
 			Position: track.Position,
 			ID:       track.ID,
@@ -212,13 +214,13 @@ func BuildPlan(ctx context.Context, in Input) (Plan, error) {
 		switch {
 		case strings.TrimSpace(track.Path) == "":
 			row.Status = StatusNotDownloaded
-		case usedPaths[pathKey(track.Path)] > 0:
+		case usedPaths[key] > 0:
 			row.Status = StatusDuplicatePath
-		case !fileExists(track.Path) && !(in.AppendOnly && byPath[pathKey(track.Path)].ID != ""):
+		case !fileExists(track.Path) && !(in.AppendOnly && byPath[key].ID != ""):
 			row.Status = StatusFileMissing
 		default:
-			usedPaths[pathKey(track.Path)] = track.Position
-			if content, ok := byPath[pathKey(track.Path)]; ok {
+			usedPaths[key] = track.Position
+			if content, ok := byPath[key]; ok {
 				row.Status = StatusExisting
 				row.ContentID = content.ID
 				row.Path = content.FolderPath
@@ -433,10 +435,15 @@ func VerifyTimeline(rows []Row) error {
 	return nil
 }
 
-// pathKey compares file paths the way the file system does on macOS: Unicode
-// normalization differs between tools (NFC from tags, NFD from Finder).
+// pathKey compares paths across symlink aliases and macOS Unicode forms.
 func pathKey(path string) string {
-	return norm.NFC.String(filepath.Clean(strings.TrimSpace(path)))
+	path = filepath.Clean(strings.TrimSpace(path))
+	if filepath.IsAbs(path) {
+		if resolved, err := fileops.ResolveSymlinks(path); err == nil {
+			path = resolved
+		}
+	}
+	return norm.NFC.String(path)
 }
 
 // SamePath reports whether two paths name the same file under pathKey rules.

@@ -34,14 +34,15 @@ type fileDefaults struct {
 }
 
 type fileSource struct {
-	ID        string          `yaml:"id"`
-	Type      SourceType      `yaml:"type"`
-	Enabled   *bool           `yaml:"enabled"`
-	TargetDir string          `yaml:"target_dir"`
-	URL       string          `yaml:"url"`
-	StateFile string          `yaml:"state_file"`
-	Sync      fileSyncPolicy  `yaml:"sync"`
-	Adapter   fileAdapterSpec `yaml:"adapter"`
+	ID              string                `yaml:"id"`
+	Type            SourceType            `yaml:"type"`
+	Enabled         *bool                 `yaml:"enabled"`
+	TargetDir       string                `yaml:"target_dir"`
+	URL             string                `yaml:"url"`
+	StateFile       string                `yaml:"state_file"`
+	Sync            fileSyncPolicy        `yaml:"sync"`
+	RekordboxImport RekordboxImportPolicy `yaml:"rekordbox_import"`
+	Adapter         fileAdapterSpec       `yaml:"adapter"`
 }
 
 type fileSyncPolicy struct {
@@ -199,6 +200,7 @@ func applyFileConfig(cfg *Config, fc fileConfig) {
 					AppendOnly:      fs.Sync.AppendOnly,
 					DownloadOrder:   strings.TrimSpace(fs.Sync.DownloadOrder),
 				},
+				RekordboxImport: RekordboxImportPolicy{NewOnly: copyBoolPtr(fs.RekordboxImport.NewOnly)},
 				Adapter: AdapterSpec{
 					Kind:       strings.TrimSpace(fs.Adapter.Kind),
 					ExtraArgs:  append([]string{}, fs.Adapter.ExtraArgs...),

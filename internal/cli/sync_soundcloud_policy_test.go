@@ -85,6 +85,13 @@ func newPolicyFixture(t *testing.T, appendOnly bool, order string) policyFixture
 			t.Fatal(err)
 		}
 	}
+	if appendOnly {
+		alias := filepath.Join(root, "target-alias")
+		if err := os.Symlink(f.target, alias); err != nil {
+			t.Fatal(err)
+		}
+		f.target = alias
+	}
 	old := filepath.Join(f.target, "vanished.m4a")
 	if err := os.WriteFile(old, []byte("original vanished audio"), 0o644); err != nil {
 		t.Fatal(err)

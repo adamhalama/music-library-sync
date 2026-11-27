@@ -10,6 +10,7 @@ import (
 
 	"github.com/jaa/update-downloads/internal/config"
 	"github.com/jaa/update-downloads/internal/engine"
+	"github.com/jaa/update-downloads/internal/fileops"
 	"github.com/jaa/update-downloads/internal/rekordbox/bridge"
 	"github.com/jaa/update-downloads/internal/rekordbox/playlistsync"
 	"github.com/jaa/update-downloads/internal/rekordbox/pyruntime"
@@ -51,7 +52,7 @@ type RekordboxSourceImportRequest struct {
 	GenreOverride string
 	Step          time.Duration
 	DryRun        bool
-	NewOnly       bool
+	NewOnly       *bool // nil uses the source setting or the default
 }
 
 type RekordboxSourceImportResult struct {
@@ -138,7 +139,7 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 	if err != nil {
 		return sourceimport.Plan{}, nil, err
 	}
-	targetDir, err := config.ExpandPath(source.TargetDir)
+	targetDir, err := config.ResolveTargetDir(source.TargetDir)
 	if err != nil {
 		return sourceimport.Plan{}, nil, fmt.Errorf("resolve target_dir for %s: %w", source.ID, err)
 	}
@@ -197,10 +198,20 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 	if step == 0 {
 		step = time.Second
 	}
+	newOnly, modeReason := true, "default"
+	switch {
+	case source.Sync.AppendOnly:
+		modeReason = "sync.append_only=true"
+	case req.NewOnly != nil:
+		newOnly, modeReason = *req.NewOnly, fmt.Sprintf("--new-only=%t", *req.NewOnly)
+	case source.RekordboxImport.NewOnly != nil:
+		newOnly = *source.RekordboxImport.NewOnly
+		modeReason = fmt.Sprintf("rekordbox_import.new_only=%t", newOnly)
+	}
 	plan, err := sourceimport.BuildPlan(ctx, sourceimport.Input{
 		SourceID:       source.ID,
 		SourceType:     string(source.Type),
-		AppendOnly:     source.Sync.AppendOnly || req.NewOnly,
+		AppendOnly:     newOnly,
 		LocalNotRemote: localNotRemote,
 		PlaylistURL:    source.URL,
 		TargetDir:      targetDir,
@@ -218,6 +229,7 @@ func (u RekordboxSourceImportUseCase) plan(ctx context.Context, req RekordboxSou
 	if err != nil {
 		return sourceimport.Plan{}, nil, err
 	}
+	plan.ModeReason = modeReason
 	if err := sourceimport.VerifyTimeline(plan.TimelineRows()); err != nil {
 		return sourceimport.Plan{}, nil, fmt.Errorf("internal planning error: %w", err)
 	}
@@ -273,7 +285,10 @@ func (u RekordboxSourceImportUseCase) sourceTracks(ctx context.Context, source c
 			return ""
 		}
 		if !filepath.IsAbs(path) {
-			return filepath.Join(targetDir, path)
+			path = filepath.Join(targetDir, path)
+		}
+		if resolved, err := fileops.ResolveSymlinks(path); err == nil {
+			return resolved
 		}
 		return path
 	}

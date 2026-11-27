@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -34,7 +35,11 @@ class Database:
     def get_content(self, **kwargs):
         if "ID" in kwargs:
             return next((row for row in self.rows if row.ID == kwargs["ID"]), None)
-        return types.SimpleNamespace(all=lambda: list(self.rows))
+        return types.SimpleNamespace(all=lambda: list(self.rows), order_by=lambda *_: self.get_content())
+
+    def query(self, column):
+        assert column == "FolderPath"
+        return types.SimpleNamespace(all=lambda: [(row.FolderPath,) for row in self.rows])
 
     def flush(self):
         pass
@@ -68,7 +73,8 @@ class SourceImportTests(unittest.TestCase):
             result.Genre = row["tags"]["genre"]
             db.rows.append(result)
             return result
-        with patch.object(helper, "Rekordbox6Database", return_value=self.db), patch.object(helper, "import_content", side_effect=import_content):
+        table = types.SimpleNamespace(FolderPath="FolderPath")
+        with patch.object(helper, "Rekordbox6Database", return_value=self.db), patch.object(helper, "import_content", side_effect=import_content), patch.object(helper.tables, "DjmdContent", table, create=True):
             return helper.source_import_apply(request)
 
     def test_append_only_import_preserves_existing_rows_byte_for_byte(self):
@@ -107,6 +113,46 @@ class SourceImportTests(unittest.TestCase):
                 self.apply(request)
             self.assertEqual(len(self.db.rows), 3)
             self.assertEqual(self.db.commits, 0)
+
+    def test_symlinked_source_inspects_both_paths_and_anchors_new_imports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "music"
+            target.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+            self.db.rows[0].FolderPath = str(target / "Old.m4a")
+            self.db.rows[1].FolderPath = str(alias / "Absent.m4a")
+            self.db.rows[2].FolderPath = str(root / "music-other" / "Other.m4a")
+            request = copy.deepcopy(self.request)
+            request["folder_prefix"] = str(target)
+            for row in request["rows"]:
+                row["path"] = str(target / Path(row["path"]).name)
+            table = types.SimpleNamespace(ID="ID")
+            with patch.object(helper, "Rekordbox6Database", return_value=self.db), patch.object(helper.tables, "DjmdContent", table, create=True):
+                inspected = helper.source_import_inspect(request)["contents"]
+            self.assertEqual([row["folder_path"] for row in inspected], [row.FolderPath for row in self.db.rows[:2]])
+
+            stale = copy.deepcopy(request)
+            stale["rows"][0]["created_at"] = "2026-12-01T00:00:00.900Z"
+            with self.assertRaisesRegex(RuntimeError, "must follow every existing"):
+                self.apply(stale)
+            outside = root / "outside.m4a"
+            outside.touch()
+            escape = target / "escape.m4a"
+            escape.symlink_to(outside)
+            escaping = copy.deepcopy(request)
+            escaping["rows"][0]["path"] = str(escape)
+            with self.assertRaisesRegex(RuntimeError, "outside the source folder"):
+                self.apply(escaping)
+            duplicate = copy.deepcopy(request)
+            duplicate["rows"][0]["path"] = str(target / "Absent.m4a")
+            with self.assertRaisesRegex(RuntimeError, "already in the Rekordbox collection"):
+                self.apply(duplicate)
+            result = self.apply(request)
+            self.assertEqual([row["path"] for row in result["rows"]], [row["path"] for row in request["rows"]])
+            self.assertEqual(self.db.rows[1].FolderPath, str(alias / "Absent.m4a"))
+            self.assertEqual(self.db.commits, 1)
 
 
 if __name__ == "__main__":

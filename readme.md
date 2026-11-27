@@ -164,7 +164,7 @@ Global flags:
 - Plan SHA-256 values are integrity checks, not cryptographic signatures.
 - Effective apply backup precedence is CLI `--backup-dir`, then the checksummed plan value, then standalone config/default. The default resolves from `~/Music/rb-library-export`.
 - Never run apply while Rekordbox is open. Use global `--dry-run` to validate a complete plan and report the effective backup location without writing a backup or database changes.
-- `udl rekordbox import-source <source-id> [--genre <name>] [--step-seconds N] [--backup-dir <path>] [--force] [--new-only]`: import downloaded files from a Spotify or SoundCloud `scdl` source into Rekordbox. Spotify uses playlist order. SoundCloud oldest first reverses likes, tracks, reposts, and other user streams that enumerate newest first, while sets/playlists keep their position order. Files come from the source state file. `scdl-freedl` is not supported. Existing rows are kept or redated as needed; append-only sources and `--new-only` never update existing rows and append new imports after every existing source row. `--genre` replaces file tags only when given. `--dry-run` prints status counts, first/last imports, genres, and existing/local-not-remote counts. A real run needs Rekordbox and RBxport closed and writes a full backup first.
+- `udl rekordbox import-source <source-id> [--genre <name>] [--step-seconds N] [--backup-dir <path>] [--force] [--new-only[=false]]` imports downloaded files from a Spotify or SoundCloud `scdl` source into Rekordbox. Spotify uses playlist order. SoundCloud oldest first reverses likes, tracks, reposts, and other user streams that enumerate newest first, while sets and playlists keep their position order. Files come from the source state file. By default, existing rows keep their Date Added and new imports follow every existing source row and the current time. `--new-only` selects this mode for one run. `--new-only=false` allows Date Added changes to put existing and new tracks in source order. Sources with `sync.append_only: true` always use new-only mode. `--genre` replaces file tags only when given. `--dry-run` prints the mode and its reason, status counts, first/last imports, genres, and existing/local-not-remote counts. A real run needs Rekordbox and RBxport closed and writes a full backup first.
 - Rekordbox sorts Date Added by `created_at`; RBxport sorts by the day only (`StockDate`) and breaks ties by database row order, so tracks imported on the same day in another order keep that order in RBxport.
 
 `promote-freedl` flags:
@@ -272,6 +272,9 @@ sources:
     target_dir: "~/Music/downloaded/spotify-groove"
     url: "https://open.spotify.com/playlist/replace-me"
     state_file: "spotify-groove.sync.spotify"
+    # Optional. Allow imports to reorder Date Added for this source.
+    # rekordbox_import:
+    #   new_only: false
     sync:
       break_on_existing: true
       ask_on_existing: false
@@ -294,6 +297,7 @@ sources:
 Notes:
 - Spotify sources must explicitly set `adapter.kind` (`deemix` or `spotdl`); there is no silent default for Spotify.
 - SoundCloud sources support `adapter.kind: scdl` (default stream-rip flow) and `adapter.kind: scdl-freedl` (separate free-download-link flow).
+- `rekordbox_import.new_only` defaults to `true` for Spotify and SoundCloud `scdl` sources. To allow full reordering, set `new_only: false` under `rekordbox_import` on the source. `udl validate` rejects this value when the source has `sync.append_only: true`.
 - Recommended Spotify path is `adapter.kind: deemix`; `spotdl` remains available as fallback/legacy.
 - Spotify+`deemix` supports the same preflight planning controls as SoundCloud (`break_on_existing`, `ask_on_existing`, `--scan-gaps`, `--no-preflight`) and tracks known Spotify IDs in the source state file.
 - Interactive `--plan` supports SoundCloud+`scdl` and Spotify+`deemix`. Spotify plans default to the latest remote window; use `--plan-window first` to inspect playlist order from the beginning.
