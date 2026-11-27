@@ -1326,9 +1326,10 @@ func TestSyncerSpotifyDeemixSkipsSubprocessWhenNoDownloadsPlanned(t *testing.T) 
 	resolveDeemixARLFn = func() (string, error) { return "arl", nil }
 	saveDeemixARLFn = func(string) error { return nil }
 	enumerateSpotifyTracksFn = func(ctx context.Context, source config.Source, creds auth.SpotifyCredentials) ([]spotifyRemoteTrack, error) {
+		// The downloaded track is the newest one, so break mode plans nothing.
 		return []spotifyRemoteTrack{
-			{ID: "1abc234def", Title: "track-1", Artist: "artist-1", Album: "album-1"},
-			{ID: "2abc234def", Title: "track-2", Artist: "artist-2", Album: "album-2"},
+			{ID: "2abc234def", Title: "track-2", Artist: "artist-2", Album: "album-2", Position: 1},
+			{ID: "1abc234def", Title: "track-1", Artist: "artist-1", Album: "album-1", Position: 2},
 		}, nil
 	}
 

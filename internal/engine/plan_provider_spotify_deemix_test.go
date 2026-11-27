@@ -122,16 +122,18 @@ func testSpotifyDeemixPlanSource(t *testing.T) (config.Config, config.Source, st
 
 func TestSpotifyDeemixPlanProviderBuildClassifiesRowsAndDefaultSelection(t *testing.T) {
 	cfg, source, targetDir, statePath := testSpotifyDeemixPlanSource(t)
-	if err := os.WriteFile(statePath, []byte("2abc234def\n3abc234def\ttitle=Artist 3 - Track 3\n"), 0o644); err != nil {
+	if err := os.WriteFile(statePath, []byte("2abc234def\n1abc234def\ttitle=Artist 1 - Track 1\n"), 0o644); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(targetDir, "Artist 2 - Track 2.mp3"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write local file: %v", err)
 	}
+	// Spotify appends new tracks, so Track 3 after the downloaded Track 2 is
+	// the new one; Track 1 is an older known gap.
 	withSpotifyDeemixPlanStubs(t, []spotifyRemoteTrack{
-		{ID: "1abc234def", Title: "Track 1", Artist: "Artist 1"},
-		{ID: "2abc234def", Title: "Track 2", Artist: "Artist 2"},
-		{ID: "3abc234def", Title: "Track 3", Artist: "Artist 3"},
+		{ID: "1abc234def", Title: "Track 1", Artist: "Artist 1", Position: 1},
+		{ID: "2abc234def", Title: "Track 2", Artist: "Artist 2", Position: 2},
+		{ID: "3abc234def", Title: "Track 3", Artist: "Artist 3", Position: 3},
 	})
 
 	plan, err := NewSpotifyDeemixPlanProvider().Build(context.Background(), cfg, source, SyncOptions{Plan: true, PlanLimit: 10, PlanWindow: PlanWindowFirst})
@@ -142,13 +144,13 @@ func TestSpotifyDeemixPlanProviderBuildClassifiesRowsAndDefaultSelection(t *test
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
 	}
-	if rows[0].Title != "Artist 1 - Track 1" || rows[0].Status != PlanRowMissingNew || !rows[0].Toggleable || !rows[0].SelectedByDefault {
+	if rows[0].Title != "Artist 1 - Track 1" || rows[0].Status != PlanRowMissingKnownGap || !rows[0].Toggleable || rows[0].SelectedByDefault {
 		t.Fatalf("unexpected first row: %+v", rows[0])
 	}
 	if rows[1].Status != PlanRowAlreadyDownloaded || rows[1].Toggleable || rows[1].SelectedByDefault {
 		t.Fatalf("unexpected second row: %+v", rows[1])
 	}
-	if rows[2].Status != PlanRowMissingKnownGap || !rows[2].Toggleable || rows[2].SelectedByDefault {
+	if rows[2].Title != "Artist 3 - Track 3" || rows[2].Status != PlanRowMissingNew || !rows[2].Toggleable || !rows[2].SelectedByDefault {
 		t.Fatalf("unexpected third row: %+v", rows[2])
 	}
 }

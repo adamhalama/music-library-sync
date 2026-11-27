@@ -3,7 +3,9 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestResolveSpotifyPlaylistID(t *testing.T) {
@@ -41,10 +43,12 @@ func TestBuildSpotifyPreflightBreakMode(t *testing.T) {
 		t.Fatalf("write local media: %v", err)
 	}
 
+	// No added times: playlist position decides, and Spotify appends new
+	// tracks, so track-3 is newest and track-1 is older than the local track.
 	remote := []spotifyRemoteTrack{
-		{ID: "1abc234def", Title: "track-1", Artist: "artist-1"},
-		{ID: "2abc234def", Title: "track-2", Artist: "artist-2"},
-		{ID: "3abc234def", Title: "track-3", Artist: "artist-3"},
+		{ID: "1abc234def", Title: "track-1", Artist: "artist-1", Position: 1},
+		{ID: "2abc234def", Title: "track-2", Artist: "artist-2", Position: 2},
+		{ID: "3abc234def", Title: "track-3", Artist: "artist-3", Position: 3},
 	}
 	state := spotifySyncState{
 		KnownIDs: map[string]struct{}{
@@ -57,13 +61,13 @@ func TestBuildSpotifyPreflightBreakMode(t *testing.T) {
 		t.Fatalf("unexpected preflight counts: %+v", preflight)
 	}
 	if preflight.FirstExistingIndex != 2 {
-		t.Fatalf("expected first existing index 2, got %d", preflight.FirstExistingIndex)
+		t.Fatalf("expected first existing index 2 counting from the newest track, got %d", preflight.FirstExistingIndex)
 	}
 	if preflight.ArchiveGapCount != 2 || preflight.KnownGapCount != 0 {
 		t.Fatalf("unexpected gap counts: %+v", preflight)
 	}
 	if preflight.PlannedDownloadCount != 1 {
-		t.Fatalf("expected one planned download before first known track, got %+v", preflight)
+		t.Fatalf("expected one planned download newer than the first existing track, got %+v", preflight)
 	}
 	if _, ok := archiveGaps["1abc234def"]; !ok {
 		t.Fatalf("expected archive gap id 1abc234def")
@@ -74,11 +78,55 @@ func TestBuildSpotifyPreflightBreakMode(t *testing.T) {
 	if len(knownGaps) != 0 {
 		t.Fatalf("did not expect known gaps when local file exists, got %+v", knownGaps)
 	}
-	if len(planned) != 1 || planned[0] != "1abc234def" {
+	if len(planned) != 1 || planned[0] != "3abc234def" {
 		t.Fatalf("unexpected planned ids: %v", planned)
 	}
 	if len(existing) != 1 || existing[0] != "2abc234def" {
 		t.Fatalf("expected one existing known id, got %v", existing)
+	}
+}
+
+func TestBuildSpotifyPreflightBreakModePlansTracksAppendedToPlaylist(t *testing.T) {
+	tmp := t.TempDir()
+	for _, name := range []string{"artist-1 - track-1.mp3", "artist-2 - track-2.mp3"} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write local media: %v", err)
+		}
+	}
+	day := func(d int) time.Time { return time.Date(2026, 11, d, 0, 0, 0, 0, time.UTC) }
+	remote := []spotifyRemoteTrack{
+		{ID: "1abc234def", Title: "track-1", Artist: "artist-1", Position: 1, AddedAt: day(1)},
+		{ID: "2abc234def", Title: "track-2", Artist: "artist-2", Position: 2, AddedAt: day(2)},
+		{ID: "3abc234def", Title: "track-3", Artist: "artist-3", Position: 3, AddedAt: day(20)},
+		{ID: "4abc234def", Title: "track-4", Artist: "artist-4", Position: 4, AddedAt: day(21)},
+	}
+	state := spotifySyncState{KnownIDs: map[string]struct{}{"1abc234def": {}, "2abc234def": {}}}
+
+	preflight, _, _, planned, _, _ := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
+	if preflight.FirstExistingIndex != 3 {
+		t.Fatalf("expected first existing index 3 counting from the newest track, got %+v", preflight)
+	}
+	if want := []string{"3abc234def", "4abc234def"}; !reflect.DeepEqual(planned, want) {
+		t.Fatalf("expected appended tracks %v in playlist order, got %v", want, planned)
+	}
+}
+
+func TestBuildSpotifyPreflightBreakModeUsesAddedAtOverPosition(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "artist-2 - track-2.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write local media: %v", err)
+	}
+	// A track moved to the top of a custom-ordered playlist is still newest by added time.
+	remote := []spotifyRemoteTrack{
+		{ID: "1abc234def", Title: "track-1", Artist: "artist-1", Position: 1, AddedAt: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)},
+		{ID: "2abc234def", Title: "track-2", Artist: "artist-2", Position: 2, AddedAt: time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)},
+		{ID: "3abc234def", Title: "track-3", Artist: "artist-3", Position: 3, AddedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	state := spotifySyncState{KnownIDs: map[string]struct{}{"2abc234def": {}}}
+
+	_, _, _, planned, _, _ := buildSpotifyPreflight(remote, state, tmp, SoundCloudModeBreak)
+	if want := []string{"1abc234def"}; !reflect.DeepEqual(planned, want) {
+		t.Fatalf("expected newest-added track %v, got %v", want, planned)
 	}
 }
 

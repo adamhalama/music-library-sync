@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -171,7 +172,8 @@ func enumerateSpotifyPlaylistTracksWithToken(
 }
 
 // enumerateSpotifyPlaylistTracksViaPage reads a public playlist without API
-// credentials. The embed page lists every track with title and artist; the
+// credentials. The embed page lists the first 100 tracks with title and
+// artist and carries an anonymous token that reads the full track list; the
 // regular playlist page only exposes the first 30, so it is the last resort.
 func enumerateSpotifyPlaylistTracksViaPage(
 	ctx context.Context,
@@ -180,6 +182,11 @@ func enumerateSpotifyPlaylistTracksViaPage(
 	tracks, embedErr := enumerateSpotifyPlaylistTracksViaEmbed(ctx, playlistID)
 	if embedErr == nil {
 		return tracks, nil
+	}
+	if errors.Is(embedErr, errSpotifyPlaylistIncomplete) {
+		// The playlist is longer than any public page shows; a shorter list
+		// would silently drop tracks.
+		return nil, embedErr
 	}
 	tracks, pageErr := enumerateSpotifyPlaylistTracksViaPlaylistPage(ctx, playlistID)
 	if pageErr != nil {
@@ -201,6 +208,11 @@ type spotifyEmbedPageData struct {
 						} `json:"trackList"`
 					} `json:"entity"`
 				} `json:"data"`
+				Settings struct {
+					Session struct {
+						AccessToken string `json:"accessToken"`
+					} `json:"session"`
+				} `json:"settings"`
 			} `json:"state"`
 		} `json:"pageProps"`
 	} `json:"props"`
@@ -208,46 +220,86 @@ type spotifyEmbedPageData struct {
 
 var spotifyNextDataPattern = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</script>`)
 
+// enumerateSpotifyPlaylistTracksViaEmbed returns every track of a public
+// playlist: the embed page names the first spotifyEmbedTrackLimit tracks and
+// the playlist contents endpoint, read with the embed page's anonymous token,
+// supplies the full order and added times. When the contents cannot be read,
+// a list that may be cut off at the embed limit is an error.
 func enumerateSpotifyPlaylistTracksViaEmbed(
 	ctx context.Context,
 	playlistID string,
 ) ([]spotifyRemoteTrack, error) {
-	embedURL := "https://open.spotify.com/embed/playlist/" + playlistID
+	embed, err := fetchSpotifyEmbedPlaylist(ctx, playlistID)
+	if err != nil {
+		return nil, err
+	}
+	items, contentsErr := fetchSpotifyPlaylistContentsFn(ctx, playlistID, embed.AccessToken)
+	if contentsErr == nil {
+		return mergeSpotifyPlaylistContents(items, embed.Tracks)
+	}
+	if embed.ListedCount < spotifyEmbedTrackLimit {
+		return embed.Tracks, nil
+	}
+	return nil, fmt.Errorf(
+		"%w: the embed page lists only the first %d tracks and the full track list could not be read: %v",
+		errSpotifyPlaylistIncomplete, spotifyEmbedTrackLimit, contentsErr,
+	)
+}
+
+type spotifyEmbedPlaylist struct {
+	Tracks      []spotifyRemoteTrack
+	ListedCount int
+	AccessToken string
+}
+
+func fetchSpotifyEmbedPlaylist(ctx context.Context, playlistID string) (spotifyEmbedPlaylist, error) {
+	embedURL := spotifyEmbedPlaylistBaseURL + playlistID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, embedURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create spotify embed request: %w", err)
+		return spotifyEmbedPlaylist{}, fmt.Errorf("create spotify embed request: %w", err)
 	}
 	req.Header.Set("User-Agent", "udl/spotify-deemix")
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("spotify embed request failed: %w", err)
+		return spotifyEmbedPlaylist{}, fmt.Errorf("spotify embed request failed: %w", err)
 	}
 	body, readErr := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if readErr != nil {
-		return nil, fmt.Errorf("read spotify embed response: %w", readErr)
+		return spotifyEmbedPlaylist{}, fmt.Errorf("read spotify embed response: %w", readErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("spotify embed request failed: status=%d", resp.StatusCode)
+		return spotifyEmbedPlaylist{}, fmt.Errorf("spotify embed request failed: status=%d", resp.StatusCode)
 	}
-	return parseSpotifyEmbedPlaylistHTML(string(body))
+	return parseSpotifyEmbedPlaylistPage(string(body))
 }
 
+// parseSpotifyEmbedPlaylistHTML returns the tracks the embed page lists, which
+// stop at spotifyEmbedTrackLimit.
 func parseSpotifyEmbedPlaylistHTML(document string) ([]spotifyRemoteTrack, error) {
+	embed, err := parseSpotifyEmbedPlaylistPage(document)
+	if err != nil {
+		return nil, err
+	}
+	return embed.Tracks, nil
+}
+
+func parseSpotifyEmbedPlaylistPage(document string) (spotifyEmbedPlaylist, error) {
 	match := spotifyNextDataPattern.FindStringSubmatch(document)
 	if len(match) < 2 {
-		return nil, fmt.Errorf("spotify embed page has no __NEXT_DATA__ payload")
+		return spotifyEmbedPlaylist{}, fmt.Errorf("spotify embed page has no __NEXT_DATA__ payload")
 	}
 	var data spotifyEmbedPageData
 	if err := json.Unmarshal([]byte(match[1]), &data); err != nil {
-		return nil, fmt.Errorf("decode spotify embed payload: %w", err)
+		return spotifyEmbedPlaylist{}, fmt.Errorf("decode spotify embed payload: %w", err)
 	}
 
-	tracks := make([]spotifyRemoteTrack, 0)
+	listed := data.Props.PageProps.State.Data.Entity.TrackList
+	tracks := make([]spotifyRemoteTrack, 0, len(listed))
 	seen := map[string]struct{}{}
-	for i, item := range data.Props.PageProps.State.Data.Entity.TrackList {
+	for i, item := range listed {
 		if !strings.HasPrefix(item.URI, "spotify:track:") {
 			continue
 		}
@@ -272,9 +324,13 @@ func parseSpotifyEmbedPlaylistHTML(document string) ([]spotifyRemoteTrack, error
 		})
 	}
 	if len(tracks) == 0 {
-		return nil, fmt.Errorf("spotify embed page did not expose track IDs")
+		return spotifyEmbedPlaylist{}, fmt.Errorf("spotify embed page did not expose track IDs")
 	}
-	return tracks, nil
+	return spotifyEmbedPlaylist{
+		Tracks:      tracks,
+		ListedCount: len(listed),
+		AccessToken: strings.TrimSpace(data.Props.PageProps.State.Settings.Session.AccessToken),
+	}, nil
 }
 
 func enumerateSpotifyPlaylistTracksViaPlaylistPage(
@@ -450,9 +506,9 @@ func buildSpotifyPreflight(
 	backfillEntries := []spotifyStateBackfillEntry{}
 
 	knownCount := 0
-	firstExisting := 0
+	localIDs := map[string]struct{}{}
 
-	for i, track := range remoteTracks {
+	for _, track := range remoteTracks {
 		_, known := state.KnownIDs[track.ID]
 		entry := state.Entries[track.ID]
 		if known {
@@ -471,9 +527,7 @@ func buildSpotifyPreflight(
 		}
 		if hasLocal {
 			existingKnownIDs = append(existingKnownIDs, track.ID)
-			if firstExisting == 0 {
-				firstExisting = i + 1
-			}
+			localIDs[track.ID] = struct{}{}
 			if !known {
 				backfillEntries = append(backfillEntries, spotifyStateBackfillEntry{
 					ID:          track.ID,
@@ -490,6 +544,18 @@ func buildSpotifyPreflight(
 		knownGapIDs[track.ID] = struct{}{}
 	}
 
+	// Spotify appends new tracks to the end of a playlist, so break mode walks
+	// from the newest track back to the first one already on disk. Planned IDs
+	// keep playlist order either way.
+	newestFirst := spotifyTracksNewestFirst(remoteTracks)
+	firstExisting := 0
+	for i, track := range newestFirst {
+		if _, ok := localIDs[track.ID]; ok {
+			firstExisting = i + 1
+			break
+		}
+	}
+
 	planned := make([]string, 0, len(remoteTracks))
 	switch mode {
 	case SoundCloudModeScanGaps:
@@ -503,12 +569,19 @@ func buildSpotifyPreflight(
 			}
 		}
 	default:
-		limit := len(remoteTracks)
+		limit := len(newestFirst)
 		if firstExisting > 0 {
 			limit = firstExisting - 1
 		}
-		for i := 0; i < limit; i++ {
-			id := remoteTracks[i].ID
+		newerThanExisting := make(map[string]struct{}, limit)
+		for _, track := range newestFirst[:limit] {
+			newerThanExisting[track.ID] = struct{}{}
+		}
+		for _, track := range remoteTracks {
+			id := track.ID
+			if _, ok := newerThanExisting[id]; !ok {
+				continue
+			}
 			if _, ok := archiveGapIDs[id]; ok {
 				planned = append(planned, id)
 				continue
